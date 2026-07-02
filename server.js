@@ -4654,34 +4654,64 @@ function noteSyncError(key) {
 //      abort the rest of the range.
 let isSyncingChain = false;
 
+// Throttled operator notice (at most once per minute) that the RPC cannot
+// serve historical metadata at the heights being backfilled, so pre-upgrade
+// blocks are being indexed without their events.
+let _noHistEventsWarnAt = 0;
+function warnNoHistoricalEvents(blockNumber) {
+    const now = Date.now();
+    if (now - _noHistEventsWarnAt < 60000) return;
+    _noHistEventsWarnAt = now;
+    console.warn(`[chain-index] indexing blocks without events (e.g. #${blockNumber}) — the RPC has pruned historical metadata at that height; point POLKADEX_WS at an archive node for full event history.`);
+}
+
 // Fetch a single block by number, returning { block, events } records ready
 // for db.insertBlocks / db.insertEvents. Throws on RPC failure so the caller
 // can decide whether to mark as a gap.
 async function scanSingleBlock(blockNumber) {
-    // Guard up-front so the post-hash derive.chain.getBlock call doesn't
-    // dereference a null globalApi after a disconnect that lands between the
-    // two awaits. The catch in scanChainRange treats this as a per-block fail.
+    // Guard up-front so a disconnect landing between awaits doesn't dereference
+    // a null globalApi. The catch in scanChainRange treats this as a per-block fail.
     if (!isRpcReady()) throw new Error('rpc not ready (disconnected mid-fetch)');
     const hash = await getBlockHashCached(blockNumber);
     if (!isRpcReady()) throw new Error('rpc not ready (disconnected mid-fetch)');
-    const derived = await globalApi.derive.chain.getBlock(hash);
-    if (!derived) return null;
-    const blockHash = derived.block.header.hash.toHex();
-    const timestamp = getBlockTimestamp(derived);
-    const authorAddr = derived.author ? derived.author.toString() : 'System';
-    // `derived.events` is decoded with the CURRENT runtime metadata, which
-    // breaks on every block produced before the latest runtime upgrade
-    // ("createType(Lookup26): Decoded input doesn't match input, 64 vs 67
-    // bytes"). Re-fetch via the block's own ApiDecoration — see
-    // getEventsAtBlock for the full rationale. Fall back to derived.events
-    // only if the historical read fails (e.g. archive node pruned the state).
-    const allEvents = (await getEventsAtBlock(hash)) || derived.events || [];
+
+    // Fetch the raw signed block — this gives us extrinsic *envelopes* and does
+    // NOT decode system.events. We then decode events against the block's OWN
+    // runtime metadata via getEventsAtBlock (api.at(hash)).
+    //
+    // We deliberately avoid derive.chain.getBlock here: it eagerly decodes
+    // system.events with the CURRENT chain-tip metadata, so it throws on every
+    // block produced under an older runtime whose EventRecord (Lookup26) shape
+    // differs ("Decoded input doesn't match input, 64 vs 67 bytes"). That throw
+    // aborted the whole block and re-queued it forever, stalling the backfill —
+    // and meant the getEventsAtBlock mitigation below was never even reached.
+    const signedBlock = await globalApi.rpc.chain.getBlock(hash);
+    if (!signedBlock || !signedBlock.block) return null;
+    const header = signedBlock.block.header;
+    const blockHash = header.hash.toHex();
+    const extrinsics = signedBlock.block.extrinsics;
+    const timestamp = getBlockTimestamp(signedBlock);
+
+    // Events via the block's own ApiDecoration. On a NON-archive node that has
+    // pruned historical metadata, api.at() fails and getEventsAtBlock returns
+    // null; we then index the block with zero events (best-effort) instead of
+    // throwing. Full historical event backfill requires an archive RPC.
+    const allEvents = (await getEventsAtBlock(hash)) || [];
+    if (!allEvents.length && extrinsics.length > 1) warnNoHistoricalEvents(blockNumber);
+
+    // Author is best-effort — derived from the consensus digest via
+    // derive.chain.getHeader, which does NOT decode events (safe on old blocks).
+    let authorAddr = 'System';
+    try {
+        const h = await globalApi.derive.chain.getHeader(hash);
+        if (h && h.author) authorAddr = h.author.toString();
+    } catch (_e) { /* leave as System */ }
     const block = {
         number: blockNumber,
         hash: blockHash,
         authorAddress: authorAddr,
         authorName: await getIdentity(globalApi, authorAddr),
-        extrinsicsCount: derived.block.extrinsics.length,
+        extrinsicsCount: extrinsics.length,
         eventsCount: allEvents.length,
         timestamp
     };
@@ -4690,7 +4720,7 @@ async function scanSingleBlock(blockNumber) {
         const record = allEvents[eventIndex];
         const eventId = `${blockHash}-${eventIndex}`;
         const extrinsicIndex = record.phase.isApplyExtrinsic ? record.phase.asApplyExtrinsic.toNumber() : null;
-        const extrinsic = extrinsicIndex !== null ? derived.block.extrinsics[extrinsicIndex] : null;
+        const extrinsic = extrinsicIndex !== null ? extrinsics[extrinsicIndex] : null;
         const signerAddress = extrinsic && extrinsic.isSigned ? extrinsic.signer.toString() : 'System';
         const txHash = extrinsic ? extrinsic.hash.toHex() : '';
         const status = record.event.section === 'system' && record.event.method === 'ExtrinsicFailed' ? 'failed' : 'success';
