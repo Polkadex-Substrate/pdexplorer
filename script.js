@@ -11886,7 +11886,19 @@ let analyticsRangeDays = 30;
 async function fetchAnalyticsData() {
     const el = document.getElementById('analytics-content');
     if (!el) return;
-    el.innerHTML = '<div style="padding:48px;text-align:center;color:var(--text-secondary);"><i class="bx bx-loader-alt bx-spin" style="font-size:32px;"></i><div style="margin-top:10px;">Loading analytics…</div></div>';
+    // Layout-matching skeleton (KPI cards + chart grid) so the page has shape
+    // instantly and doesn't jump when data lands — better perceived load than a
+    // bare spinner. The real data usually arrives from the pre-warmed cache.
+    const skelKpis = Array(6).fill('<div class="skel skel-kpi"></div>').join('');
+    const skelCharts = Array(6).fill('<div class="skel skel-chart"></div>').join('');
+    el.innerHTML =
+        '<div class="list-container glass analytics-skeleton" aria-busy="true">' +
+            '<div class="list-header"><h2>Network Analytics</h2>' +
+                '<span style="color:var(--text-muted);font-size:0.78rem;">Loading…</span></div>' +
+            '<div class="skel-kpis">' + skelKpis + '</div>' +
+            '<div style="padding:14px 24px;"><div class="skel" style="height:32px;width:280px;max-width:70%;"></div></div>' +
+            '<div class="skel-charts">' + skelCharts + '</div>' +
+        '</div>';
 
     try {
         // Price history lives behind a separate endpoint (it predates the

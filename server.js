@@ -273,6 +273,15 @@ const BLOCKS_FORWARD_MAX = readPositiveInteger(process.env.BLOCKS_FORWARD_MAX, 5
 const BLOCKS_BACKFILL_CHUNK = readPositiveInteger(process.env.BLOCKS_BACKFILL_CHUNK, 200);
 const BLOCKS_GAP_FILL_CHUNK = readPositiveInteger(process.env.BLOCKS_GAP_FILL_CHUNK, 100);
 const BLOCKS_MIN_BLOCK = readPositiveInteger(process.env.BLOCKS_MIN_BLOCK, 1);
+// Gap-scan cadence. Running the getBlockGaps window scan every chain-index tick
+// (12s) over a multi-million-row blocks table was the dominant steady-state CPU
+// cost. Instead: scan a bounded recent window at most every CHAIN_GAP_SCAN_MS,
+// a full-history scan at most every CHAIN_FULL_GAP_SCAN_MS (to catch deep holes),
+// and always immediately after a tick that had block-fetch failures. A late gap
+// repair is harmless for an explorer, so these can be generous.
+const CHAIN_GAP_SCAN_MS = readPositiveInteger(process.env.CHAIN_GAP_SCAN_MS, 5 * 60 * 1000);
+const CHAIN_FULL_GAP_SCAN_MS = readPositiveInteger(process.env.CHAIN_FULL_GAP_SCAN_MS, 60 * 60 * 1000);
+const CHAIN_GAP_SCAN_WINDOW = readPositiveInteger(process.env.CHAIN_GAP_SCAN_WINDOW, 5000);
 // Per-tick parallelism for block fetches. Each Promise.all batch hits the RPC
 // node with this many concurrent block-hash + derived-block requests. Higher
 // = faster catch-up but more RPC load; lower = gentler but slower. 8 is a
@@ -751,6 +760,34 @@ function refreshAnalyticsCountsInBackground() {
         console.warn('[analytics] counts refresh failed:', err && err.message ? err.message : err);
     } finally {
         isRefreshingAnalyticsCounts = false;
+    }
+}
+
+// Pre-warm the analytics daily time-series for the ranges the UI actually uses
+// (the 7d / 30d / 90d / Year pills). getDailyAnalytics runs GROUP-BY aggregates
+// over transactions/blocks; computing it inline on every /api/analytics/timeseries
+// request was the main reason the analytics page took a few seconds to load.
+// Here the indexer worker computes it on a timer and stashes each range in KV,
+// so the HTTP endpoint becomes a single fast key-value read. (The timestamp
+// indexes added in initDb keep this refresh itself cheap.)
+const ANALYTICS_TS_RANGES = [7, 30, 90, 365];
+let isRefreshingAnalyticsTs = false;
+function refreshAnalyticsTimeseriesInBackground() {
+    if (isRefreshingAnalyticsTs) return;
+    isRefreshingAnalyticsTs = true;
+    const t0 = Date.now();
+    try {
+        for (const days of ANALYTICS_TS_RANGES) {
+            const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
+            const series = db.getDailyAnalytics(sinceTs);
+            db.setKv('analytics_ts_' + days, { days, since: sinceTs, series, computedAt: Date.now() });
+        }
+        const ms = Date.now() - t0;
+        if (ms > 3000) console.log(`[analytics] timeseries pre-warm in ${ms}ms`);
+    } catch (err) {
+        console.warn('[analytics] timeseries refresh failed:', err && err.message ? err.message : err);
+    } finally {
+        isRefreshingAnalyticsTs = false;
     }
 }
 
@@ -3441,9 +3478,14 @@ app.get('/api/discussions', (req, res) => {
 app.get('/api/analytics/timeseries', (req, res) => {
     try {
         const days = Math.min(Math.max(parseInt(req.query.days || '30', 10) || 30, 1), 365);
-        const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
         cacheMedium(res);
-        res.json({ days, since: sinceTs, series: db.getDailyAnalytics(sinceTs) });
+        // Standard UI ranges are pre-warmed into KV by the indexer — serve those
+        // instantly. Any non-standard window falls back to a live aggregate
+        // (rare; the UI only ever asks for 7/30/90/365).
+        const cached = db.getKv('analytics_ts_' + days);
+        if (cached && cached.series) return res.json(cached);
+        const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
+        res.json({ days, since: sinceTs, series: db.getDailyAnalytics(sinceTs), computedAt: Date.now() });
     } catch (err) {
         console.error('API Error /api/analytics/timeseries:', err);
         res.status(500).json({ error: err.message });
@@ -4653,6 +4695,10 @@ function noteSyncError(key) {
 //   5. Per-block try/catch + N-concurrent batches — one bad block doesn't
 //      abort the rest of the range.
 let isSyncingChain = false;
+// Throttle state for the gap scan (see CHAIN_GAP_SCAN_MS). Module-scoped so it
+// persists across ticks on the indexer worker.
+let lastRecentGapScanAt = 0;
+let lastFullGapScanAt = 0;
 
 // Throttled operator notice (at most once per minute) that the RPC cannot
 // serve historical metadata at the heights being backfilled, so pre-upgrade
@@ -4794,6 +4840,10 @@ async function syncChainIndex() {
             backfillComplete = (head - 1) < BLOCKS_MIN_BLOCK;
         }
 
+        // Set when a fetch fails this tick, so the gap-fill pass runs
+        // immediately instead of waiting for its throttled cadence.
+        let tickHadFailures = false;
+
         // 1) FORWARD PASS — index everything new since the last tick.
         if (head > latestScannedBlock) {
             if (head - latestScannedBlock > BLOCKS_FORWARD_MAX) {
@@ -4802,6 +4852,7 @@ async function syncChainIndex() {
             const forward = await scanChainRange(latestScannedBlock + 1, head, BLOCKS_FORWARD_MAX);
             if (forward.blocks.length) db.insertBlocks(forward.blocks);
             if (forward.events.length) db.insertEvents(forward.events);
+            if (forward.failedNumbers && forward.failedNumbers.length) tickHadFailures = true;
             // Advance the watermark to head even if individual blocks failed —
             // the gap-fill pass will pick those up by name on subsequent ticks.
             latestScannedBlock = head;
@@ -4815,22 +4866,46 @@ async function syncChainIndex() {
             const back = await scanChainRange(stop, backfillCursor, BLOCKS_BACKFILL_CHUNK);
             if (back.blocks.length) db.insertBlocks(back.blocks);
             if (back.events.length) db.insertEvents(back.events);
+            if (back.failedNumbers && back.failedNumbers.length) tickHadFailures = true;
             oldestScannedBlock = Math.min(oldestScannedBlock || backfillCursor, stop);
             backfillCursor = stop - 1;
             if (backfillCursor < BLOCKS_MIN_BLOCK) backfillComplete = true;
         }
 
-        // 3) GAP-FILL PASS — repair holes inside the indexed range. The DB
-        // query returns newest gaps first, which is what users care about most.
-        const gaps = db.getBlockGaps(1);
-        if (gaps.length) {
-            const g = gaps[0];
-            const chunkEnd = g.gapEnd;
-            const chunkStart = Math.max(g.gapStart, g.gapEnd - BLOCKS_GAP_FILL_CHUNK + 1);
-            const fill = await scanChainRange(chunkStart, chunkEnd, BLOCKS_GAP_FILL_CHUNK);
-            if (fill.blocks.length) db.insertBlocks(fill.blocks);
-            if (fill.events.length) db.insertEvents(fill.events);
-            console.log(`[chain-index] gap-fill ${chunkStart}-${chunkEnd} (gap of ${g.gapSize}): ${fill.succeeded}/${fill.attempts} repaired`);
+        // 3) GAP-FILL PASS — repair holes inside the indexed range. The window
+        // scan (getBlockGaps) used to run on EVERY tick over the whole blocks
+        // table — the dominant steady-state CPU cost. Now it's throttled:
+        //   * while backfilling, holes can be deep, so use a full scan but only
+        //     every CHAIN_GAP_SCAN_MS (the backfill pass makes the real progress);
+        //   * once backfill is complete, new holes only appear near the head, so
+        //     scan a bounded recent window every CHAIN_GAP_SCAN_MS, with a full
+        //     scan every CHAIN_FULL_GAP_SCAN_MS as a safety net;
+        //   * a tick that had fetch failures forces a scan immediately.
+        const nowTs = Date.now();
+        let doScan = false, fullScan = false;
+        if (tickHadFailures) { doScan = true; fullScan = !backfillComplete; }
+        if (!backfillComplete) {
+            if (nowTs - lastFullGapScanAt >= CHAIN_GAP_SCAN_MS) { doScan = true; fullScan = true; }
+        } else {
+            if (nowTs - lastRecentGapScanAt >= CHAIN_GAP_SCAN_MS) doScan = true;
+            if (nowTs - lastFullGapScanAt >= CHAIN_FULL_GAP_SCAN_MS) { doScan = true; fullScan = true; }
+        }
+
+        let gaps = [];
+        if (doScan) {
+            const sinceBlock = fullScan ? null : Math.max(BLOCKS_MIN_BLOCK, head - CHAIN_GAP_SCAN_WINDOW);
+            gaps = db.getBlockGaps(1, sinceBlock);
+            lastRecentGapScanAt = nowTs;
+            if (fullScan) lastFullGapScanAt = nowTs;
+            if (gaps.length) {
+                const g = gaps[0];
+                const chunkEnd = g.gapEnd;
+                const chunkStart = Math.max(g.gapStart, g.gapEnd - BLOCKS_GAP_FILL_CHUNK + 1);
+                const fill = await scanChainRange(chunkStart, chunkEnd, BLOCKS_GAP_FILL_CHUNK);
+                if (fill.blocks.length) db.insertBlocks(fill.blocks);
+                if (fill.events.length) db.insertEvents(fill.events);
+                console.log(`[chain-index] gap-fill ${chunkStart}-${chunkEnd} (gap of ${g.gapSize}): ${fill.succeeded}/${fill.attempts} repaired`);
+            }
         }
 
         db.setSyncState('chain_index', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Synced' });
@@ -5713,7 +5788,10 @@ function runWorker({ indexer }) {
     // unclean reboot). Catch it so the process doesn't exit-loop under
     // `restart: unless-stopped`; the operator can then exec in and inspect.
     try {
-        db.initDb(DATA_DIR);
+        // Only the indexer worker seeds the O(1) row counters — it's the sole
+        // writer, and seeding does a one-time COUNT(*) we don't want N workers
+        // each repeating on a 20 GB+ database at startup.
+        db.initDb(DATA_DIR, !!indexer);
     } catch (err) {
         console.error('FATAL: database init failed at ' + DATA_DIR + ' — serving may be degraded:', err && err.message ? err.message : err);
     }
@@ -5805,6 +5883,10 @@ function startIndexerLoops() {
     // cache is warm by the time anyone hits /analytics for the first time.
     setTimeout(refreshAnalyticsCountsInBackground, 20_000);
     setInterval(refreshAnalyticsCountsInBackground, ANALYTICS_COUNTS_REFRESH_MS);
+    // Pre-warm the analytics time-series (7/30/90/365d) so /api/analytics/timeseries
+    // is a KV read instead of a live GROUP-BY on every page load.
+    setTimeout(refreshAnalyticsTimeseriesInBackground, 22_000);
+    setInterval(refreshAnalyticsTimeseriesInBackground, ANALYTICS_COUNTS_REFRESH_MS);
     // Refresh the totalUnlocking figure on its own slower cadence — it's the
     // expensive `staking.ledger.entries()` scan that the network-info compute
     // used to do every time.

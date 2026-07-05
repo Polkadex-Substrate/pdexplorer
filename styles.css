@@ -1827,6 +1827,34 @@ h1, h2, h3 { font-weight: 600; }
     0% { background-position: 100% 0; }
     100% { background-position: -100% 0; }
 }
+
+/* Analytics page loading skeleton — mirrors the real KPI + chart layout so the
+   page has structure immediately and doesn't jump when data arrives. Reuses
+   the wallet-shimmer animation. */
+.analytics-skeleton .skel {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 25%, rgba(255, 255, 255, 0.09) 37%, rgba(255, 255, 255, 0.04) 63%);
+    background-size: 400% 100%;
+    animation: wallet-shimmer 1.5s ease infinite;
+    border-radius: 8px;
+}
+.analytics-skeleton .skel-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+    padding: 22px 24px;
+    border-bottom: 1px solid var(--border-color);
+}
+.analytics-skeleton .skel-kpi { height: 64px; }
+.analytics-skeleton .skel-charts {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+    padding: 20px 24px;
+}
+.analytics-skeleton .skel-chart { height: 220px; }
+@media (max-width: 720px) {
+    .analytics-skeleton .skel-charts { grid-template-columns: 1fr; }
+}
 .wallet-skel-summary {
     display: grid;
     grid-template-columns: repeat(4, 1fr);

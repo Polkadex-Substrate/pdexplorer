@@ -316,6 +316,26 @@ CREATE TABLE IF NOT EXISTS email_dispatches (
 );
 CREATE INDEX IF NOT EXISTS idx_email_dispatches_subscriber
     ON email_dispatches(subscriber_id, dispatched_at DESC);
+
+-- O(1) row counters for the high-volume, ever-growing tables. A plain
+-- SELECT COUNT(*) on events/transactions is a full-table scan that becomes
+-- untenable as the chain (and, post-orderbook, transaction volume) grows.
+-- These triggers keep an exact running count maintained by the single writer
+-- (the indexer worker). Both tables insert with OR IGNORE, so AFTER INSERT
+-- fires only for genuinely new rows — the counter stays exact. The count is
+-- seeded once from a real COUNT(*) on startup (see initDb).
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TRIGGER IF NOT EXISTS trg_events_count_ai AFTER INSERT ON events
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'events'; END;
+CREATE TRIGGER IF NOT EXISTS trg_events_count_ad AFTER DELETE ON events
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'events'; END;
+CREATE TRIGGER IF NOT EXISTS trg_tx_count_ai AFTER INSERT ON transactions
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'transactions'; END;
+CREATE TRIGGER IF NOT EXISTS trg_tx_count_ad AFTER DELETE ON transactions
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'transactions'; END;
 `;
 
 // Idempotent ALTER TABLE ADD COLUMN — checks PRAGMA table_info first so it
@@ -333,7 +353,7 @@ function ensureColumn(table, column, definition) {
     }
 }
 
-export function initDb(dataDir) {
+export function initDb(dataDir, seedCounts = false) {
     fs.mkdirSync(dataDir, { recursive: true });
     db = new DatabaseSync(path.join(dataDir, 'explorer.db'));
 
@@ -391,6 +411,45 @@ export function initDb(dataDir) {
 
     try { migrateFromJson(dataDir); }
     catch (e) { console.warn('JSON -> SQLite migration skipped:', e.message); }
+
+    // Seed the O(1) row counters once (writer/indexer worker only, to avoid N
+    // workers each running the same expensive COUNT(*) at startup). This is the
+    // only place a full COUNT(*) on events/transactions runs; thereafter the
+    // triggers keep the numbers exact. Runs before the indexer loops start, so
+    // no inserts can slip in between the COUNT and the first trigger fire.
+    if (seedCounts) {
+        // Indexer-only heavy migrations, built once by the sole writer so N
+        // workers don't race to CREATE INDEX on a multi-GB table at startup.
+        // These timestamp indexes power the analytics daily aggregates — without
+        // them getDailyAnalytics's `WHERE timestamp >= ?` is a full table scan
+        // that gets progressively slower as the chain grows. First build on a
+        // large existing DB can take a while; it's a one-time startup cost.
+        for (const ddl of [
+            'CREATE INDEX IF NOT EXISTS idx_tx_timestamp ON transactions(timestamp)',
+            'CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp)',
+        ]) {
+            try {
+                const t0 = Date.now();
+                db.exec(ddl);
+                const ms = Date.now() - t0;
+                if (ms > 1000) console.log(`[db] ${ddl.match(/idx_\w+/)[0]} built in ${ms}ms`);
+            } catch (e) {
+                console.warn('[db] analytics index build failed:', e.message);
+            }
+        }
+        for (const t of ['events', 'transactions']) {
+            try {
+                const has = db.prepare('SELECT 1 FROM table_counts WHERE name = ?').get(t);
+                if (!has) {
+                    const c = db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get().c;
+                    db.prepare('INSERT OR IGNORE INTO table_counts(name, n) VALUES(?, ?)').run(t, c);
+                    console.log(`[db] seeded ${t} row counter = ${c}`);
+                }
+            } catch (e) {
+                console.warn(`[db] count seed for ${t} failed:`, e.message);
+            }
+        }
+    }
 
     // Gather index/table statistics so the query planner makes good choices
     // after the DB grows. Cheap to run, only meaningful on startup.
@@ -477,7 +536,11 @@ export function getTransactionsByAddress(address, limit) {
     return db.prepare(`SELECT ${TX_COLS} FROM transactions WHERE from_addr = ? OR to_addr = ? ORDER BY block DESC LIMIT ?`).all(address, address, limit);
 }
 export function countTransactions() {
-    return db.prepare('SELECT COUNT(*) AS c FROM transactions').get().c;
+    // O(1) via the trigger-maintained counter; falls back to a real scan only
+    // if the counter hasn't been seeded yet (e.g. an HTTP-only worker that
+    // started before the indexer seeded it).
+    const row = db.prepare("SELECT n FROM table_counts WHERE name = 'transactions'").get();
+    return row && row.n != null ? row.n : db.prepare('SELECT COUNT(*) AS c FROM transactions').get().c;
 }
 
 // --- blocks ---
@@ -585,19 +648,28 @@ export function getDailyAnalytics(sinceTs) {
     };
 }
 
-export function getBlockGaps(limit = 50) {
-    return db.prepare(`
+// Find gaps in the indexed block range. The LEAD() window walks the blocks
+// table in primary-key order, so an unbounded call is O(rows) — fine during a
+// one-off audit, but far too expensive to run every indexer tick once the
+// table has millions of rows. Pass `sinceBlock` to bound the scan to a recent
+// window (WHERE number >= sinceBlock uses the PK index): steady-state holes only
+// ever appear near the head, so that's all we need to scan most of the time.
+export function getBlockGaps(limit = 50, sinceBlock = null) {
+    const bounded = sinceBlock != null;
+    const stmt = db.prepare(`
         SELECT (number + 1) AS gapStart,
                (next_num - 1) AS gapEnd,
                (next_num - number - 1) AS gapSize
         FROM (
             SELECT number, LEAD(number) OVER (ORDER BY number) AS next_num
             FROM blocks
+            ${bounded ? 'WHERE number >= ?' : ''}
         )
         WHERE next_num IS NOT NULL AND next_num - number > 1
         ORDER BY number DESC
         LIMIT ?
-    `).all(limit);
+    `);
+    return bounded ? stmt.all(sinceBlock, limit) : stmt.all(limit);
 }
 
 // --- events ---
@@ -626,7 +698,10 @@ export function getEventsByAddress(address, limit) {
     return db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE signer_address = ? ORDER BY block DESC LIMIT ?`).all(address, limit).map(mapEventRow);
 }
 export function countEvents() {
-    return db.prepare('SELECT COUNT(*) AS c FROM events').get().c;
+    // O(1) via the trigger-maintained counter (see table_counts); falls back to
+    // a full scan only if the counter hasn't been seeded yet.
+    const row = db.prepare("SELECT n FROM table_counts WHERE name = 'events'").get();
+    return row && row.n != null ? row.n : db.prepare('SELECT COUNT(*) AS c FROM events').get().c;
 }
 
 // --- validator history & triggers ---
