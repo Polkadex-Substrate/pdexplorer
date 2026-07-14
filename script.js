@@ -2707,7 +2707,7 @@ const ROUTE_SEO = {
     // Full-screen PDEX price chart — landing for anyone scanning "PDEX price"
     // intent. Surfaced from the sidebar price ticker.
     'price':              { title: 'PDEX Price Chart — Polkadex Mainnet Explorer',
-                            description: 'Full PDEX price history with 24-hour, 7-day, 30-day, 90-day, 1-year, and all-time views. Data sourced from AscendEX (native PDEX/USDT) for accurate native-chain market reality.' },
+                            description: 'Full PDEX price history with 24-hour, 7-day, 30-day, 90-day, 1-year, and all-time views. Live price from CoinMarketCap; historical native-market data is retained.' },
     // Developer-facing API reference. Targets searches like "Polkadex API",
     // "Polkadex mobile app integration", "Polkadex JSON endpoints".
     'developers':         { title: 'Developers — Polkadex Explorer API Reference',
@@ -3419,7 +3419,7 @@ const HELP_TOPICS = [
         slug: 'price-chart',
         title: 'PDEX price chart',
         category: 'tools',
-        keywords: 'price chart pdex history graph ascendex usd usdt 7 day 30 day 90 day all-time',
+        keywords: 'price chart pdex history graph coinmarketcap cmc usd usdt 7 day 30 day 90 day all-time',
         body: `
             <p class="lead">A full-screen view of the PDEX/USD price, reached by clicking the price in the bottom-left corner of the sidebar.</p>
             <h3>What you see</h3>
@@ -3427,7 +3427,7 @@ const HELP_TOPICS = [
             <h3>Choosing a time period</h3>
             <p>Pick from <strong>7D · 30D · 90D · 1Y · ALL</strong> with the pills above the chart. Your choice is remembered between visits via a small <code>pdex_price_period</code> entry in your browser's local storage (no cookies, never sent to our server — see <a href="/cookies" class="item-link">/cookies</a>).</p>
             <h3>Where the data comes from</h3>
-            <p>Live price polls come from <strong>AscendEX</strong>'s PDEX/USDT pair (currently the most liquid native-chain market for PDEX). Historical data going back to PDEX's first trading day (March 2022) is sourced from the same exchange's daily klines. We also poll CoinMarketCap if a key is configured — both feeds write to the same on-disk price history, so the chart is a single continuous series.</p>
+            <p>Live price polls come from <strong>CoinMarketCap</strong> (requires an API key). AscendEX polling was removed after the exchange shut down in 2026; the historical PDEX/USDT data it provided (back to PDEX's first trading day in March 2022) is retained on disk, so the chart stays a single continuous series across the old and current sources.</p>
             <h3>Closing</h3>
             <p>Click the <strong>×</strong> in the top-right of the chart page to return to wherever you were before opening it.</p>
         `
@@ -4838,10 +4838,10 @@ function renderDevelopersPage() {
         <section class="developers-section" id="price">
             <h2>Price feed (multi-provider)</h2>
             <ul class="developers-endpoints">
-                <li><code>GET /api/price-latest</code> — current price, last-sync, plus a <strong>bySource</strong> map with one entry per active provider (<code>ascendex</code>, <code>cmc</code>, plus <code>ascendex-backfill</code> and <code>defillama-backfill</code> after the one-shot history import). Each entry: <code>{ label, configured, lastSync, status, error, latest, count }</code>.</li>
+                <li><code>GET /api/price-latest</code> — current price, last-sync, plus a <strong>bySource</strong> map with one entry per provider (<code>cmc</code> live, plus historical <code>ascendex</code> / <code>ascendex-backfill</code> rows retained from before AscendEX shut down). Each entry: <code>{ label, configured, lastSync, status, error, latest, count }</code>.</li>
                 <li><code>GET /api/price-history?days=N</code> — daily series for the last N days (capped at 4000). Each row carries a <code>source</code> tag identifying which provider supplied it. Response also includes the same <code>bySource</code> rollup.</li>
             </ul>
-            <p>Providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>ascendex,cmc</code>). CMC requires <code>CMC_API_KEY</code>; AscendEX is keyless. Historical backfill lives in <code>backfill-price-history.mjs</code> at the repo root.</p>
+            <p>Providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>cmc</code>). CMC requires <code>CMC_API_KEY</code>. AscendEX was removed after the exchange shut down.</p>
         </section>
 
         <section class="developers-section" id="governance">
