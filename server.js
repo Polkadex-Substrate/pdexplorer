@@ -5810,14 +5810,32 @@ function runWorker({ indexer }) {
     connectRpc({ kickSyncsOnConnect: !!indexer })
         .catch(err => console.error('[RPC] connect bootstrap error:', err && err.message ? err.message : err));
 
-    // Start the HTTP server FIRST so the API is reachable (serving cached
-    // SQLite data, and so nginx's /api proxy gets 200s instead of 502s) even
-    // while the chain RPC is still connecting in the background.
-    app.listen(PORT, () => {
-        const tag = indexer ? 'http+indexer' : 'http-only';
+    // HTTP serving vs indexing isolation. node:sqlite is SYNCHRONOUS, so the
+    // indexer's heavy passes (backfill scans, aggregate pre-warms, bulk inserts,
+    // one-time index builds) block the event loop for their entire duration. If
+    // the indexer worker also served user requests, any request cluster
+    // round-robined to it during a heavy pass would stall — often long enough to
+    // trip the nginx/Cloudflare gateway timeout (the 504s seen on data-heavy
+    // pages like /treasury). So in clustered mode we keep the indexer OUT of the
+    // HTTP rotation: the HTTP-only workers (each with its own globalApi for the
+    // RPC-backed detail endpoints) serve every request and only ever do light
+    // KV / indexed reads, while the indexer is free to block on its synchronous
+    // work in isolation. Single-process mode (WORKERS<=1) has no other worker,
+    // so it must still serve.
+    const serveHttp = !indexer || WORKERS <= 1;
+    if (serveHttp) {
+        // Start the HTTP server FIRST so the API is reachable (serving cached
+        // SQLite data, and so nginx's /api proxy gets 200s instead of 502s) even
+        // while the chain RPC is still connecting in the background.
+        app.listen(PORT, () => {
+            const tag = indexer ? (WORKERS <= 1 ? 'http+indexer (standalone)' : 'http+indexer') : 'http-only';
+            const wid = cluster.worker ? `worker ${cluster.worker.id}` : 'standalone';
+            console.log(`Backend listening on port ${PORT} (${wid}, role=${tag})`);
+        });
+    } else {
         const wid = cluster.worker ? `worker ${cluster.worker.id}` : 'standalone';
-        console.log(`Backend listening on port ${PORT} (${wid}, role=${tag})`);
-    });
+        console.log(`Backend ${wid} is the dedicated indexer — not serving HTTP, so its synchronous indexing can't stall user requests.`);
+    }
 
     // RPC resilience watchdog. Runs in every worker (not just the indexer) so
     // HTTP-only workers also recover their detail-endpoint RPC access after a
