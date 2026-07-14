@@ -40,6 +40,15 @@
 
 set -euo pipefail
 
+# ---- Site overrides --------------------------------------------------------
+# Optional per-host config, sourced with auto-export so a plain `KEY=value`
+# file works for both the cron job and manual runs. Put DEST (e.g. a dedicated
+# backup volume), MIN_INTERVAL_HOURS, INTEGRITY_CHECK, IO_NICE, etc. here so you
+# never have to edit the cron entry. Root-owned 0644.
+if [ -f /etc/default/pdexplorer-backup ]; then
+    set -a; . /etc/default/pdexplorer-backup; set +a
+fi
+
 # ---- Configuration (override via env) --------------------------------------
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
 SRC="${SRC:-$DEPLOY_DIR/data/explorer.db}"
@@ -57,6 +66,23 @@ LOCKFILE="${LOCKFILE:-/var/lock/pdexplorer-backup.lock}"
 # Set FORCE=1 to bypass the interval check (e.g. to take an ad-hoc snapshot
 # right before a risky operation).
 FORCE="${FORCE:-0}"
+# I/O throttling. The .backup copy + integrity_check + compression are all
+# heavy sequential/random I/O; on a shared or slow volume they can starve the
+# live indexer/serving (this actually took the site down once — a 33h
+# integrity_check pinned a SATA disk). IO_NICE=1 runs them in the idle I/O
+# class (ionice -c3) + lowest CPU priority so they yield to everything else.
+IO_NICE="${IO_NICE:-1}"
+# integrity_check on the copy: on|off. It re-reads the entire backup, which is
+# minutes on SSD but hours on a slow disk. Default on; set off (and verify
+# out-of-band / on the SSD backup host) if the source volume can't absorb it.
+INTEGRITY_CHECK="${INTEGRITY_CHECK:-on}"
+
+# Build the throttling prefix once (empty if disabled or tools absent).
+IONICE=""
+if [ "$IO_NICE" = "1" ]; then
+    command -v ionice >/dev/null 2>&1 && IONICE="ionice -c3 "
+    command -v nice   >/dev/null 2>&1 && IONICE="${IONICE}nice -n19 "
+fi
 
 log()  { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die()  { log "FATAL: $*" >&2; exit 1; }
@@ -105,32 +131,37 @@ log "Starting online backup: $SRC -> $TMP"
 START=$(date +%s)
 
 # `.backup` uses SQLite's online backup API: WAL-safe, page-by-page copy,
-# brief shared locks per page, leaves the source DB untouched.
-sqlite3 "$SRC" ".backup '$TMP'"
+# brief shared locks per page, leaves the source DB untouched. Run under the
+# idle I/O class so it never starves the live indexer/serving.
+${IONICE}sqlite3 "$SRC" ".backup '$TMP'"
 
 ELAPSED=$(( $(date +%s) - START ))
 SIZE_HUMAN=$(du -h "$TMP" | cut -f1)
 log "Backup written in ${ELAPSED}s ($SIZE_HUMAN)"
 
 # ---- Verify ---------------------------------------------------------------
-log "Running integrity_check on the copy"
-RESULT="$(sqlite3 "$TMP" 'PRAGMA integrity_check;' || true)"
-if [ "$RESULT" != "ok" ]; then
-    mv "$TMP" "$TMP.CORRUPT"
-    log "integrity_check FAILED: $RESULT"
-    log "Bad copy retained at: $TMP.CORRUPT (no rotation performed)"
-    exit 2
+if [ "$INTEGRITY_CHECK" != "off" ]; then
+    log "Running integrity_check on the copy"
+    RESULT="$(${IONICE}sqlite3 "$TMP" 'PRAGMA integrity_check;' || true)"
+    if [ "$RESULT" != "ok" ]; then
+        mv "$TMP" "$TMP.CORRUPT"
+        log "integrity_check FAILED: $RESULT"
+        log "Bad copy retained at: $TMP.CORRUPT (no rotation performed)"
+        exit 2
+    fi
+    log "integrity_check ok"
+else
+    log "integrity_check skipped (INTEGRITY_CHECK=off) — verify a copy out-of-band"
 fi
-log "integrity_check ok"
 
 # ---- Compress -------------------------------------------------------------
 case "$COMPRESS" in
     gzip)
-        gzip -9 "$TMP"
+        ${IONICE}gzip -9 "$TMP"
         FINAL="$TMP.gz"
         ;;
     zstd)
-        zstd -q -19 --rm "$TMP" -o "$TMP.zst"
+        ${IONICE}zstd -q -19 --rm "$TMP" -o "$TMP.zst"
         FINAL="$TMP.zst"
         ;;
     none)

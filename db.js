@@ -381,8 +381,15 @@ export function initDb(dataDir, seedCounts = false) {
     //     `sqlite3 .backup` we run from cron is also a checkpoint trigger.
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA busy_timeout = 5000');
-    db.exec('PRAGMA cache_size = -65536');
-    db.exec('PRAGMA mmap_size = 268435456');
+    // Page cache + mmap window are env-tunable (see .env.example → "SQLite
+    // storage tuning"). Both are PER connection/process, so total RAM scales
+    // with the worker count. Conservative defaults keep a small VPS safe; raise
+    // SQLITE_CACHE_MB / SQLITE_MMAP_MB on a well-provisioned box to serve more
+    // of the DB from RAM instead of disk.
+    const cacheMb = Math.max(2, parseInt(process.env.SQLITE_CACHE_MB || '128', 10) || 128);
+    const mmapMb = Math.max(0, parseInt(process.env.SQLITE_MMAP_MB || '1024', 10));
+    db.exec(`PRAGMA cache_size = ${-(cacheMb * 1024)}`); // negative = KiB
+    db.exec(`PRAGMA mmap_size = ${mmapMb * 1024 * 1024}`);
     db.exec('PRAGMA synchronous = NORMAL');
     db.exec('PRAGMA temp_store = MEMORY');
     db.exec('PRAGMA wal_autocheckpoint = 1000');
