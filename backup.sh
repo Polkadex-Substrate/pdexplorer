@@ -3,9 +3,11 @@
 # Polkadex Explorer — SQLite online backup
 # =============================================================================
 #
-# Runs SQLite's online backup against the live explorer.db, integrity-checks
-# the copy, gzips it, and rotates old backups by age. WAL-safe — the indexer
-# can keep writing while this runs.
+# Takes a consistent snapshot of the live explorer.db via `VACUUM INTO`,
+# integrity-checks the copy, compresses it, keeps the newest N locally, and
+# (optionally) pushes a copy off-box. WAL-safe — the indexer keeps writing
+# while this runs, and unlike the `.backup` online-backup API, VACUUM INTO does
+# NOT restart when the source is written, so it actually finishes on a busy DB.
 #
 # Cadence: by default the script will only TAKE a fresh backup if at least
 # MIN_INTERVAL_HOURS (default 48 = every other day) have elapsed since the
@@ -172,10 +174,14 @@ TMP="$DEST/explorer-$TS.db"
 log "Starting online backup: $SRC -> $TMP"
 START=$(date +%s)
 
-# `.backup` uses SQLite's online backup API: WAL-safe, page-by-page copy,
-# brief shared locks per page, leaves the source DB untouched. Run under the
-# idle I/O class so it never starves the live indexer/serving.
-${IONICE}sqlite3 "$SRC" ".backup '$TMP'"
+# Use VACUUM INTO, NOT the `.backup` online-backup API. `.backup` RESTARTS the
+# copy from scratch whenever another connection writes the source — and the
+# indexer writes every ~12s, so `.backup` thrashes and can take hours or never
+# finish on a busy multi-GB DB. VACUUM INTO reads ONE consistent WAL snapshot
+# (writers proceed uninterrupted), never restarts, and emits a compacted,
+# single-file copy (no -wal/-shm to ship). Requires SQLite >= 3.27 (2019).
+# Run under the idle I/O class so it never starves serving.
+${IONICE}sqlite3 "$SRC" "VACUUM INTO '$TMP'"
 
 ELAPSED=$(( $(date +%s) - START ))
 SIZE_HUMAN=$(du -h "$TMP" | cut -f1)
