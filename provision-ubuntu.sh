@@ -148,10 +148,24 @@ EOF
         cat /tmp/sshd-test.err >&2
         die "sshd config check failed — refusing to restart SSH"
     fi
-    # Ubuntu 24.04 ships the unit as ssh.service (sshd is only sometimes an
-    # alias); try both so the reload works regardless.
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd
-    ok "SSH locked down (port $SSH_PORT, key-only, no root password)"
+    # Apply it. Ubuntu 22.10+/24.04 use SOCKET ACTIVATION: ssh.socket is the
+    # listener and ssh.service stays inactive, so `systemctl reload ssh` errors
+    # with "not active" — AND the Port we set above is ignored, because under
+    # socket activation the listening port comes from ssh.socket, not sshd_config.
+    # Make ssh.service the authoritative listener so both the port and the
+    # hardening take effect. Established SSH sessions survive a restart, and UFW
+    # already allows $SSH_PORT, so new logins keep working.
+    if systemctl list-unit-files ssh.socket >/dev/null 2>&1; then
+        systemctl disable --now ssh.socket >/dev/null 2>&1 || true
+    fi
+    systemctl enable ssh.service >/dev/null 2>&1 || systemctl enable sshd.service >/dev/null 2>&1 || true
+    if systemctl restart ssh.service 2>/dev/null || systemctl restart sshd.service 2>/dev/null; then
+        ok "SSH locked down (port $SSH_PORT, key-only, no root password)"
+    else
+        warn "SSH config written and validated (sshd -t passed), but the SSH unit"
+        warn "could not be (re)started automatically. Your current session is safe."
+        warn "Apply manually: sudo systemctl restart ssh"
+    fi
 
     log "Configuring UFW firewall (allow $SSH_PORT, 80, 443; deny everything else)"
     ufw --force reset >/dev/null
