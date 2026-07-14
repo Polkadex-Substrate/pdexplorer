@@ -36,13 +36,18 @@ if ! command -v docker &> /dev/null
 then
     echo "--> Docker not found. Installing Docker..."
     if [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
-        curl -fsSL https://download.docker.com/linux/$OS/gpg | sudo apt-key add -
-        sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/$OS $(lsb_release -cs) stable" -y
+        # Modern keyring method. `apt-key` was removed in Ubuntu 24.04 /
+        # Debian 12+, so the old `apt-key add` path fails on any current box.
+        sudo install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL "https://download.docker.com/linux/$OS/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        sudo chmod a+r /etc/apt/keyrings/docker.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS $(lsb_release -cs) stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
         sudo apt-get update -y
-        sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     elif [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || [ "$OS" = "almalinux" ] || [ "$OS" = "rocky" ]; then
         sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-        sudo yum install -y docker-ce docker-ce-cli containerd.io
+        sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     fi
     
     sudo systemctl enable docker
@@ -54,16 +59,20 @@ else
     echo "--> Docker is already installed."
 fi
 
-# 3. Install Docker Compose if not installed
-if ! command -v docker-compose &> /dev/null
-then
-    echo "--> Docker Compose not found. Installing Docker Compose..."
-    # Downloading a stable release of Docker Compose
-    sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
-    echo "--> Docker Compose installed successfully."
+# 3. Ensure Docker Compose is available. Prefer the v2 plugin (`docker compose`,
+#    installed above via docker-compose-plugin); fall back to the legacy
+#    standalone binary only if neither is present.
+if docker compose version &> /dev/null; then
+    echo "--> Docker Compose plugin present (docker compose)."
+elif command -v docker-compose &> /dev/null; then
+    echo "--> Legacy docker-compose binary present."
 else
-    echo "--> Docker Compose is already installed."
+    echo "--> Installing Docker Compose plugin..."
+    sudo apt-get install -y docker-compose-plugin 2>/dev/null || {
+        echo "--> Plugin unavailable; installing standalone docker-compose binary."
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+    }
 fi
 
 # 4. Clone or Pull repository
@@ -92,7 +101,7 @@ echo "--> Initializing Let's Encrypt certificates..."
 chmod +x init-letsencrypt.sh
 ./init-letsencrypt.sh
 
-DC=$(command -v docker-compose || echo "docker-compose")
+if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
 
 echo "--> Building and starting full Docker stack..."
 sudo $DC down || true

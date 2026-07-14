@@ -48,7 +48,7 @@ if [ ! -e "$data_path/conf/options-ssl-nginx.conf" ] || [ ! -e "$data_path/conf/
   echo
 fi
 
-DC=$(command -v docker-compose || echo "docker-compose")
+if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
 
 echo "### Creating Self-Signed certificate for $domains ..."
 path="/etc/letsencrypt/live/$domains"
