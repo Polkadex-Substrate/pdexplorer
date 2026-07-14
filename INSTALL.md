@@ -80,7 +80,7 @@ automatically by both cron and manual runs):
 ```bash
 # /etc/default/pdexplorer-backup   (exported into backup.sh; root-owned 0644)
 DEST=/var/backup                 # local staging dir (or a dedicated volume)
-KEEP_DAYS=7                      # keep fewer locally if you rely on off-box
+MAX_BACKUPS=7                    # keep newest N locally (count-based, not age)
 MIN_INTERVAL_HOURS=24            # daily
 INTEGRITY_CHECK=on               # set 'off' only if the disk can't absorb a re-read
 
@@ -90,8 +90,13 @@ REMOTE_HOST=storage.example.com
 REMOTE_USER=pdexbackup           # non-root SSH user on the storage box
 REMOTE_PATH=pdexplorer-backups
 SSH_KEY=/root/.ssh/pdex_backup_ed25519
-REMOTE_KEEP_DAYS=30
+REMOTE_MAX_BACKUPS=14            # keep newest N off-box
 ```
+
+Retention is **count-based** (newest N), not age-based: the DB is a rebuildable
+index of on-chain data, so backups exist to restore fast — a few recent
+generations guard against restoring a silently-corrupted copy, and that's all
+you need. Lower the counts to save more storage (avoid `1` — no fallback).
 
 One-time key setup (passphrase-less key, key auth only — cron never prompts):
 

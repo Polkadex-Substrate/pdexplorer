@@ -30,7 +30,10 @@
 #     REMOTE_USER=pdexbackup            # non-root SSH user on the storage box
 #     REMOTE_PATH=pdexplorer-backups
 #     SSH_KEY=/root/.ssh/pdex_backup_ed25519   # passphrase-less, key auth only
-#     REMOTE_KEEP_DAYS=30
+#     REMOTE_MAX_BACKUPS=14                     # keep newest N off-box
+# Retention is count-based (keep newest MAX_BACKUPS locally / REMOTE_MAX_BACKUPS
+# off-box) — the DB is a rebuildable chain index, so a few recent generations
+# is all you need; lower the counts to save more storage.
 # One-time key setup:
 #     ssh-keygen -t ed25519 -N '' -f /root/.ssh/pdex_backup_ed25519
 #     ssh-copy-id -i /root/.ssh/pdex_backup_ed25519.pub -p 22 pdexbackup@storage.example.com
@@ -73,7 +76,14 @@ SRC="${SRC:-$DEPLOY_DIR/data/explorer.db}"
 # inside the Docker build context, the repo, or anything that gets pruned by
 # accident. /var/backup is the conventional Linux location for system backups.
 DEST="${DEST:-/var/backup}"
-KEEP_DAYS="${KEEP_DAYS:-14}"          # delete *.db.gz older than this
+# Retention is COUNT-based, not age-based. The explorer DB is a derived index
+# of on-chain data (the chain is the source of truth), so backups exist to
+# restore FAST after disk failure / corruption / a bad deploy — not to keep
+# deep point-in-time history. Keep the newest N generations: enough to roll
+# back if the latest backup itself captured a corrupted DB, without hoarding
+# months of copies. Lower it to save more storage; 1 is discouraged (no
+# fallback if the newest backup is bad).
+MAX_BACKUPS="${MAX_BACKUPS:-7}"       # local generations to keep (newest N)
 # Minimum hours between successful backups. The default of 48 hours implements
 # the "every other day" rotation: a daily cron invocation will take a backup
 # only on alternating days. Set to 0 to disable the throttle.
@@ -106,7 +116,7 @@ REMOTE_USER="${REMOTE_USER:-}"                         # non-root SSH user on th
 REMOTE_PATH="${REMOTE_PATH:-pdexplorer-backups}"       # dir on the box (rel. to home, or absolute)
 REMOTE_PORT="${REMOTE_PORT:-22}"
 SSH_KEY="${SSH_KEY:-/root/.ssh/pdex_backup_ed25519}"   # dedicated key, no passphrase
-REMOTE_KEEP_DAYS="${REMOTE_KEEP_DAYS:-$KEEP_DAYS}"     # remote retention (age-based)
+REMOTE_MAX_BACKUPS="${REMOTE_MAX_BACKUPS:-14}"         # off-box generations to keep (newest N)
 SSH_EXTRA_OPTS="${SSH_EXTRA_OPTS:-}"                   # any extra `ssh` flags
 
 # Build the throttling prefix once (empty if disabled or tools absent).
@@ -202,17 +212,21 @@ case "$COMPRESS" in
 esac
 log "Compressed: $FINAL ($(du -h "$FINAL" | cut -f1))"
 
-# ---- Rotate ---------------------------------------------------------------
-# Rotate by file age, not count — survives missed cron runs without
-# accidentally pruning recent backups.
-log "Rotating backups older than $KEEP_DAYS days from $DEST"
-DELETED=$(find "$DEST" \
-    -maxdepth 1 -type f \
-    \( -name 'explorer-*.db' \
-       -o -name 'explorer-*.db.gz' \
-       -o -name 'explorer-*.db.zst' \) \
-    -mtime +"$KEEP_DAYS" -print -delete | wc -l)
-log "Rotated $DELETED file(s)"
+# ---- Rotate (keep newest MAX_BACKUPS) -------------------------------------
+# Count-based: list backups newest-first (the embedded UTC timestamp sorts
+# lexically = chronologically) and delete everything past MAX_BACKUPS. The
+# newest is always retained; missed cron runs never over-prune because we key
+# off count, not age.
+mapfile -t ALL_LOCAL < <(find "$DEST" -maxdepth 1 -type f \
+    \( -name 'explorer-*.db' -o -name 'explorer-*.db.gz' -o -name 'explorer-*.db.zst' \) \
+    ! -name '*.CORRUPT' -printf '%f\n' | sort -r)
+DELETED=0
+if [ "${#ALL_LOCAL[@]}" -gt "$MAX_BACKUPS" ]; then
+    for f in "${ALL_LOCAL[@]:$MAX_BACKUPS}"; do
+        rm -f -- "$DEST/$f" && DELETED=$((DELETED + 1))
+    done
+fi
+log "Rotation: kept newest $(( ${#ALL_LOCAL[@]} - DELETED )) of ${#ALL_LOCAL[@]} (MAX_BACKUPS=$MAX_BACKUPS), removed $DELETED"
 
 # ---- Push to external storage (rsync over SSH) ----------------------------
 # The local copy above is the fast-restore tier; this pushes a verified copy
@@ -238,11 +252,22 @@ if [ "$REMOTE_ENABLED" = "1" ]; then
         # is already compressed so we don't add rsync -z. Throttled with ionice.
         if ${IONICE}rsync -a --partial --timeout=900 -e "$SSH_CMD" "$FINAL" "$REMOTE_DEST"; then
             log "Off-box push ok"
-            # Age-based remote rotation (best-effort — needs SSH command exec).
-            $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" \
-                "find '$REMOTE_PATH' -maxdepth 1 -type f \\( -name 'explorer-*.db' -o -name 'explorer-*.db.gz' -o -name 'explorer-*.db.zst' \\) -mtime +$REMOTE_KEEP_DAYS -delete" \
-                2>/dev/null && log "Remote rotation ok (older than ${REMOTE_KEEP_DAYS}d pruned)" \
-                || log "Remote rotation skipped (SSH command exec not permitted?) — prune on the box"
+            # Remote rotation: keep newest REMOTE_MAX_BACKUPS (best-effort — needs
+            # SSH command exec). List → filter to our strict filename pattern →
+            # drop the newest N → delete the rest. The grep guarantees only our
+            # own timestamped backups are ever passed to rm.
+            REMOTE_DEL="$($SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "ls -1 '$REMOTE_PATH' 2>/dev/null" 2>/dev/null \
+                | grep -E '^explorer-[0-9]{8}T[0-9]{6}Z\.db(\.gz|\.zst)?$' \
+                | sort -r | tail -n +"$((REMOTE_MAX_BACKUPS + 1))" || true)"
+            if [ -n "$REMOTE_DEL" ]; then
+                if printf '%s\n' "$REMOTE_DEL" | $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "cd '$REMOTE_PATH' && xargs -r rm -f --" 2>/dev/null; then
+                    log "Remote rotation ok (removed $(printf '%s\n' "$REMOTE_DEL" | grep -c .) beyond newest $REMOTE_MAX_BACKUPS)"
+                else
+                    log "Remote rotation skipped (SSH command exec not permitted?) — prune on the box"
+                fi
+            else
+                log "Remote rotation: nothing to prune (<= $REMOTE_MAX_BACKUPS off-box)"
+            fi
         else
             log "Off-box push FAILED — local backup is intact; check SSH key / host / path"
             REMOTE_OK=0
