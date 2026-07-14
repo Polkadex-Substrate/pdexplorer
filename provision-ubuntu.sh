@@ -140,11 +140,17 @@ LoginGraceTime 30
 AllowAgentForwarding no
 AllowTcpForwarding no
 EOF
+    # `sshd -t` fails with "Missing privilege separation directory: /run/sshd"
+    # when that runtime dir doesn't exist yet — normal on a fresh boot before
+    # ssh.service's ExecStartPre creates it. Create it so the check can run.
+    install -d -m 0755 /run/sshd
     if ! sshd -t 2>/tmp/sshd-test.err; then
         cat /tmp/sshd-test.err >&2
         die "sshd config check failed — refusing to restart SSH"
     fi
-    systemctl reload sshd
+    # Ubuntu 24.04 ships the unit as ssh.service (sshd is only sometimes an
+    # alias); try both so the reload works regardless.
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd
     ok "SSH locked down (port $SSH_PORT, key-only, no root password)"
 
     log "Configuring UFW firewall (allow $SSH_PORT, 80, 443; deny everything else)"
