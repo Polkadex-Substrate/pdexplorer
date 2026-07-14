@@ -427,7 +427,7 @@ EOF
                 -out "certbot/conf/live/$DOMAIN/fullchain.pem" \
                 -subj "/CN=$DOMAIN" >/dev/null 2>&1
             warn "Replace with a real cert via certbot once the stack is up:"
-            warn "  docker compose run --rm certbot certonly --webroot -w /var/www/certbot -d $DOMAIN -m $LETSENCRYPT_EMAIL --agree-tos --non-interactive"
+            warn "  docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d $DOMAIN -m $LETSENCRYPT_EMAIL --agree-tos --non-interactive"
             warn "  docker compose exec frontend nginx -s reload"
         fi
     else

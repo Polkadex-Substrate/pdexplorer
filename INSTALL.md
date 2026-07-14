@@ -184,6 +184,30 @@ sudo chown -R 1000:1000 /opt/pdexplorer/data
 cd /opt/pdexplorer && sudo docker compose up -d
 ```
 
+### Issue a real origin TLS cert (do this before cutover)
+
+`provision`/`init-letsencrypt.sh` leave a **self-signed placeholder** at
+`certbot/conf/live/<domain>/` so nginx can boot. Cloudflare on **Full (Strict)**
+rejects a self-signed origin cert with **error 526**, so replace it with a real
+one on the new box before pointing DNS at it:
+
+```bash
+cd /opt/pdexplorer
+# NOTE: --entrypoint certbot is required — the compose certbot service's
+# entrypoint is overridden to a renew-loop, so without it 'certonly' never runs.
+sudo docker compose run --rm --entrypoint certbot certbot \
+  certonly --webroot -w /var/www/certbot \
+  -d explorer.polkadex.ee -m business@polkadex.ee --agree-tos --non-interactive
+sudo docker compose exec frontend nginx -s reload
+# verify issuer is Let's Encrypt (not self-signed):
+echo | openssl s_client -connect 127.0.0.1:443 -servername explorer.polkadex.ee 2>/dev/null | openssl x509 -noout -issuer
+```
+
+The ACME challenge is plain HTTP on :80, so it works through the Cloudflare
+proxy. Alternatively install a **Cloudflare Origin Certificate** (15-year, no
+renewal) into those two files. The compose `certbot` service auto-renews LE
+certs every 12h thereafter.
+
 ### After cutover
 
 1. Build the analytics indexes off-peak (step 5) once the DB is warm on SSD.
