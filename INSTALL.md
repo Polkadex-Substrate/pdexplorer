@@ -68,21 +68,42 @@ Two options:
 - **Index from genesis** — just start the stack; the chain indexer backfills
   toward genesis on its own (slower, but hands-off).
 
-## 4. Backups → separate storage
+## 4. Backups → local + off-box (external storage)
 
 The nightly cron (`/etc/cron.d/pdexplorer-backup`) runs `backup.sh`, which is
-throttled with `ionice`/`nice` so it can't starve serving. To land backups on a
-dedicated volume, either **mount that volume at `/var/backup`** (default
-`DEST`), or set overrides in `/etc/default/pdexplorer-backup`:
+throttled with `ionice`/`nice` so it can't starve serving. It keeps a local copy
+for fast restore and (recommended) pushes a verified copy **off-box to external
+storage via rsync over SSH** — the mature backup target (encrypted, resumable,
+incremental). All settings live in `/etc/default/pdexplorer-backup` (sourced
+automatically by both cron and manual runs):
 
 ```bash
-# /etc/default/pdexplorer-backup   (values are exported into backup.sh)
-DEST=/mnt/backups
-MIN_INTERVAL_HOURS=24      # daily
-INTEGRITY_CHECK=on         # set 'off' if the source volume can't absorb a full re-read
+# /etc/default/pdexplorer-backup   (exported into backup.sh; root-owned 0644)
+DEST=/var/backup                 # local staging dir (or a dedicated volume)
+KEEP_DAYS=7                      # keep fewer locally if you rely on off-box
+MIN_INTERVAL_HOURS=24            # daily
+INTEGRITY_CHECK=on               # set 'off' only if the disk can't absorb a re-read
+
+# --- off-box copy to the external storage box (SSH + rsync) ---
+REMOTE_ENABLED=1
+REMOTE_HOST=storage.example.com
+REMOTE_USER=pdexbackup           # non-root SSH user on the storage box
+REMOTE_PATH=pdexplorer-backups
+SSH_KEY=/root/.ssh/pdex_backup_ed25519
+REMOTE_KEEP_DAYS=30
 ```
 
-Restore is documented in the header of `backup.sh`.
+One-time key setup (passphrase-less key, key auth only — cron never prompts):
+
+```bash
+ssh-keygen -t ed25519 -N '' -f /root/.ssh/pdex_backup_ed25519
+ssh-copy-id -i /root/.ssh/pdex_backup_ed25519.pub pdexbackup@storage.example.com
+sudo FORCE=1 /opt/pdexplorer/backup.sh     # test: writes local + pushes off-box
+```
+
+`backup.sh` exits `3` if the local backup succeeded but the off-box push failed
+(the on-disk copy is intact) so monitoring can alert. Restore (from the local
+copy or by pulling from the box first) is documented in `backup.sh`'s header.
 
 ## 5. Post-install: build analytics indexes (off-peak, one-off)
 
@@ -109,6 +130,61 @@ docker compose logs --tail=50 backend | grep listening   # "Backend listening on
 curl -fsS http://127.0.0.1/api/network-info | head  # backend reachable via nginx
 iostat -x 2 3                                        # %util low, r_await single-digit ms on SSD
 ```
+
+## Migrating from an existing server
+
+Moving the DB to a new box (e.g. SATA → SSD). Golden rule: **never copy the
+SQLite file while it's being written — stop the writer and fold the WAL in
+first.** Choose based on whether you can tolerate a short data gap.
+
+**Before you start:** whitelist the new server's egress IP in the RPC origins'
+rate-limit exemption (`geo $rate_limit_exempt` on each origin behind
+`rpc.polkadex.ee`) and reload nginx there. Otherwise the new indexer gets
+429-throttled during catch-up.
+
+### Option A — Consistent snapshot (zero data gap; maintenance window)
+
+On the **old** server, quiesce and checkpoint:
+
+```bash
+cd /opt/pdexplorer
+sudo docker compose stop backend                                 # stop the only writer
+sudo sqlite3 data/explorer.db 'PRAGMA wal_checkpoint(TRUNCATE);'  # fold WAL into the main file
+```
+
+On the **new** server, pull it (`-z` compresses in transit, `--partial`
+resumes if the link drops), verify, fix ownership, start:
+
+```bash
+sudo rsync -avz --progress --partial olduser@OLD_IP:/opt/pdexplorer/data/explorer.db /opt/pdexplorer/data/explorer.db
+sudo rm -f /opt/pdexplorer/data/explorer.db-wal /opt/pdexplorer/data/explorer.db-shm
+sqlite3 /opt/pdexplorer/data/explorer.db 'PRAGMA quick_check;'    # expect "ok" (fast on SSD)
+sudo chown -R 1000:1000 /opt/pdexplorer/data
+cd /opt/pdexplorer && sudo docker compose up -d
+```
+
+Reading tens of GB off a slow old disk can take hours, and the old site is down
+during the copy — plan the window.
+
+### Option B — Restore latest backup + let the indexer catch up (fast)
+
+Transfer the existing compressed backup (small) instead of re-reading the whole
+DB; the indexer backfills the gap from the watermarks stored in the DB:
+
+```bash
+# on the NEW server:
+sudo rsync -avz --progress --partial 'olduser@OLD_IP:/var/backup/explorer-*.db.gz' /tmp/
+gunzip -c /tmp/explorer-YYYYMMDDTHHMMSSZ.db.gz > /opt/pdexplorer/data/explorer.db
+sudo chown -R 1000:1000 /opt/pdexplorer/data
+cd /opt/pdexplorer && sudo docker compose up -d
+```
+
+### After cutover
+
+1. Build the analytics indexes off-peak (step 5) once the DB is warm on SSD.
+2. Confirm catch-up: `docker compose logs -f backend | grep chain-index` (no 429s).
+3. Point DNS (`explorer.polkadex.ee`) at the new box; decommission the old one
+   and remove its IP from the RPC exemption list.
 
 ## Why storage matters
 
