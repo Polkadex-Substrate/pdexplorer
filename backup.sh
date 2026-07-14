@@ -95,7 +95,7 @@ LOCKFILE="${LOCKFILE:-/var/lock/pdexplorer-backup.lock}"
 # Set FORCE=1 to bypass the interval check (e.g. to take an ad-hoc snapshot
 # right before a risky operation).
 FORCE="${FORCE:-0}"
-# I/O throttling. The .backup copy + integrity_check + compression are all
+# I/O throttling. The snapshot copy + integrity_check + compression are all
 # heavy sequential/random I/O; on a shared or slow volume they can starve the
 # live indexer/serving (this actually took the site down once — a 33h
 # integrity_check pinned a SATA disk). IO_NICE=1 runs them in the idle I/O
