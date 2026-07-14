@@ -11,7 +11,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev && chown -R node:node /app
 
-COPY --chown=node:node server.js db.js email.js backfill-price-history.mjs backfill-transactions-from-events.mjs ./
+COPY --chown=node:node server.js db.js email.js backfill-price-history.mjs backfill-transactions-from-events.mjs migrate-add-indexes.mjs ./
 
 USER node
 

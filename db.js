@@ -418,25 +418,15 @@ export function initDb(dataDir, seedCounts = false) {
     // triggers keep the numbers exact. Runs before the indexer loops start, so
     // no inserts can slip in between the COUNT and the first trigger fire.
     if (seedCounts) {
-        // Indexer-only heavy migrations, built once by the sole writer so N
-        // workers don't race to CREATE INDEX on a multi-GB table at startup.
-        // These timestamp indexes power the analytics daily aggregates — without
-        // them getDailyAnalytics's `WHERE timestamp >= ?` is a full table scan
-        // that gets progressively slower as the chain grows. First build on a
-        // large existing DB can take a while; it's a one-time startup cost.
-        for (const ddl of [
-            'CREATE INDEX IF NOT EXISTS idx_tx_timestamp ON transactions(timestamp)',
-            'CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp)',
-        ]) {
-            try {
-                const t0 = Date.now();
-                db.exec(ddl);
-                const ms = Date.now() - t0;
-                if (ms > 1000) console.log(`[db] ${ddl.match(/idx_\w+/)[0]} built in ${ms}ms`);
-            } catch (e) {
-                console.warn('[db] analytics index build failed:', e.message);
-            }
-        }
+        // IMPORTANT: do NOT build indexes here. On a large existing DB a
+        // synchronous CREATE INDEX holds the SQLite write lock for minutes (and
+        // can spike memory enough to OOM the container). That jams every worker's
+        // db.exec(SCHEMA) DDL on the write lock, so no worker ever reaches
+        // app.listen — i.e. it takes the whole site down at boot. The analytics
+        // timestamp indexes are built out-of-band instead, via the one-off
+        // `migrate-add-indexes.mjs` script (safe to run against a live DB).
+        // The count seed below is read-only (a COUNT scan holds no write lock),
+        // so it can't block the other workers.
         for (const t of ['events', 'transactions']) {
             try {
                 const has = db.prepare('SELECT 1 FROM table_counts WHERE name = ?').get(t);
