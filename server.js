@@ -333,24 +333,30 @@ const CMC_API_KEY = process.env.CMC_API_KEY || '';
 const CMC_SYMBOL = process.env.CMC_SYMBOL || 'PDEX';
 // Multi-provider price feed. Comma-separated names in PRICE_PROVIDERS select
 // which live pollers run. AscendEX was removed after the exchange shut down
-// (Jul 2026); CoinMarketCap is the live source now (requires CMC_API_KEY). The
-// design stays multi-provider so another source can be added by name later
-// without code changes. Historical rows already tagged 'ascendex' /
-// 'ascendex-backfill' remain in price_history and still render — we simply no
-// longer poll AscendEX.
-const PRICE_PROVIDERS = (process.env.PRICE_PROVIDERS || 'cmc')
+// (Jul 2026); the default live source is now CoinGecko — a keyless public API
+// that aggregates PDEX across its real markets (KuCoin, Poloniex, Gate, …)
+// rather than a single venue or the stale Ethereum-bridged Uniswap pool.
+// CoinMarketCap remains available (add 'cmc' + CMC_API_KEY). Historical rows
+// tagged 'ascendex'/'ascendex-backfill' stay in price_history and still render.
+const PRICE_PROVIDERS = (process.env.PRICE_PROVIDERS || 'coingecko')
     .split(',')
     .map(s => s.trim().toLowerCase())
     .filter(Boolean);
+// CoinGecko: keyless is fine at 10-min polling; set COINGECKO_API_KEY to a free
+// "demo" key for higher limits. COINGECKO_ID is the coin id, i.e. the slug in
+// coingecko.com/en/coins/<id>.
+const COINGECKO_ID = process.env.COINGECKO_ID || 'polkadex';
+const COINGECKO_API_KEY = process.env.COINGECKO_API_KEY || '';
 const PRICE_SYNC_INTERVAL = readPositiveInteger(process.env.PRICE_SYNC_INTERVAL_MS, 10 * 60 * 1000);
 function isPriceProviderEnabled(name) {
     return PRICE_PROVIDERS.includes(name);
 }
 function isPriceProviderConfigured(name) {
     if (name === 'cmc') return !!CMC_API_KEY;
+    if (name === 'coingecko') return true; // public endpoint; API key optional
     return false;
 }
-const PRICE_PROVIDER_LABELS = { cmc: 'CoinMarketCap', ascendex: 'AscendEX', 'defillama-backfill': 'DefiLlama (historical)' };
+const PRICE_PROVIDER_LABELS = { coingecko: 'CoinGecko', cmc: 'CoinMarketCap', ascendex: 'AscendEX', 'defillama-backfill': 'DefiLlama (historical)' };
 function priceProviderLabel(name) {
     return PRICE_PROVIDER_LABELS[name] || name;
 }
@@ -5331,13 +5337,43 @@ async function fetchCmcQuote() {
     };
 }
 
+// CoinGecko simple/price — keyless public API that aggregates PDEX across its
+// real markets. One call returns price + market cap + 24h volume + 24h change.
+// A free "demo" key (COINGECKO_API_KEY) raises rate limits but isn't required
+// at the explorer's 10-min cadence. USD is already fiat, no oracle needed.
+async function fetchCoinGeckoQuote() {
+    const params = new URLSearchParams({
+        ids: COINGECKO_ID,
+        vs_currencies: 'usd',
+        include_market_cap: 'true',
+        include_24hr_vol: 'true',
+        include_24hr_change: 'true',
+    });
+    const url = `https://api.coingecko.com/api/v3/simple/price?${params.toString()}`;
+    const headers = { Accept: 'application/json' };
+    if (COINGECKO_API_KEY) headers['x-cg-demo-api-key'] = COINGECKO_API_KEY;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) throw new Error(`CoinGecko HTTP ${resp.status}`);
+    const json = await resp.json();
+    const d = json && json[COINGECKO_ID];
+    if (!d || typeof d.usd !== 'number' || !(d.usd > 0)) {
+        throw new Error(`CoinGecko response missing a valid price for id '${COINGECKO_ID}'`);
+    }
+    return {
+        price: d.usd,
+        marketCap: Number.isFinite(d.usd_market_cap) ? d.usd_market_cap : null,
+        volume24h: Number.isFinite(d.usd_24h_vol) ? d.usd_24h_vol : null,
+        pctChange24h: Number.isFinite(d.usd_24h_change) ? d.usd_24h_change : null,
+    };
+}
+
 // Per-provider deterministic offset (in ms) so when two providers' fetchers
 // race to the same wall-clock millisecond, their rows don't collide on the
 // price_history(timestamp) primary key. The offset is below visual resolution
 // on any chart and avoids a destructive schema migration to a composite PK.
 // Treat backfill rows as authoritative (offset 0) so daily-granularity
 // CoinGecko timestamps sit cleanly at midnight UTC.
-const PRICE_PROVIDER_TS_OFFSET = { 'defillama-backfill': 0, 'ascendex': 1, 'cmc': 2 };
+const PRICE_PROVIDER_TS_OFFSET = { 'defillama-backfill': 0, 'ascendex': 1, 'cmc': 2, 'coingecko': 3 };
 
 // Poll one provider and append one row to price_history tagged with its
 // source. Records per-provider sync state under `price:<provider>` so the
@@ -5369,7 +5405,8 @@ async function syncPrice() {
     isSyncingPrice = true;
     try {
         const jobs = [];
-        if (isPriceProviderEnabled('cmc')) jobs.push(syncPriceProvider('cmc', fetchCmcQuote));
+        if (isPriceProviderEnabled('coingecko')) jobs.push(syncPriceProvider('coingecko', fetchCoinGeckoQuote));
+        if (isPriceProviderEnabled('cmc'))       jobs.push(syncPriceProvider('cmc', fetchCmcQuote));
         await Promise.allSettled(jobs);
         // Roll-up state for the legacy /api/price-latest "status" string:
         // success if ANY enabled provider succeeded this tick, error if ALL failed.
