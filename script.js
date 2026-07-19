@@ -4770,9 +4770,11 @@ function renderDevelopersPage() {
         </div>
 
         <nav class="developers-toc" aria-label="API sections">
+            <a href="#overview">Start here</a>
             <a href="#cors">CORS</a>
             <a href="#caching">Caching</a>
             <a href="#chain">Chain data</a>
+            <a href="#schema">network-info schema</a>
             <a href="#price">Price feed</a>
             <a href="#governance">Governance</a>
             <a href="#email">Email alerts</a>
@@ -4782,6 +4784,22 @@ function renderDevelopersPage() {
             <a href="#addresses">Addresses</a>
             <a href="#examples">Examples</a>
         </nav>
+
+        <section class="developers-section" id="overview">
+            <h2>Start here — use the JSON API, not the HTML</h2>
+            <p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint.</p>
+            <p>Two things trip up automated clients, and how to handle them:</p>
+            <div class="developers-table-wrap">
+                <table class="developers-table">
+                    <thead><tr><th>Behavior</th><th>What to do</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>HTML pages sit behind Cloudflare</strong>, which may challenge or block clients that look like abusive bots. A naive server-side fetch of an HTML page can come back empty or challenged.</td><td>Request the <code>/api/*</code> JSON endpoints instead — they are the supported, un-gated path for automated clients. Send a descriptive <code>User-Agent</code> and respect the <code>Cache-Control</code> headers.</td></tr>
+                        <tr><td><strong>The API itself is open to non-browser clients.</strong> CORS is a browser-only mechanism, so a caller that sends no <code>Origin</code> header (native app, server, script, AI agent) is always allowed.</td><td>Call the API directly from servers and native apps with no configuration. Only browser callers from other web origins need to be added to <code>ALLOWED_ORIGINS</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>A concise machine-readable index of the whole API — including the exact <code>/api/network-info</code> schema — lives at <a href="/llms.txt" class="item-link">/llms.txt</a>.</p>
+        </section>
 
         <section class="developers-section" id="cors">
             <h2>CORS — who can call the API</h2>
@@ -4835,10 +4853,44 @@ function renderDevelopersPage() {
             </ul>
         </section>
 
+        <section class="developers-section" id="schema">
+            <h2>Schema — <code>GET /api/network-info</code></h2>
+            <p>The home-page network panel in one call. Top-level response:</p>
+            <pre><code>{
+  "networkInfo": {
+    "activeEra": number,              // current staking era index
+    "avgValidatorCommission": number, // mean active-validator commission, %
+    "avgApy": number,                 // headline AVG APY %, commission-adjusted
+    "avg_apy": number,                // snake_case alias of avgApy
+    "validators":  { "active": number, "total": number },
+    "nominators":  { "active": number, "total": number },
+    "maxActiveStake": number,         // largest active-validator total stake, PDEX
+    "minStake": number,               // minimum active stake, PDEX
+    "averageStake": number,           // mean active-validator stake, PDEX
+    "avgStakePerAccount": number,     // total bonded / staking accounts, PDEX
+    "totalIssuance": number,          // total PDEX issuance
+    "totalBonding": number,           // total PDEX bonded for staking
+    "totalBondingPercent": number,    // totalBonding / totalIssuance, %
+    "totalUnbonding": number,         // total PDEX currently unbonding
+    "totalStakeChange": number,       // net stake change vs previous era, PDEX
+    "lastEraRewardsTotal": number     // total rewards paid last era, PDEX
+  },
+  "lastSync": number,                 // epoch ms when networkInfo was computed
+  "status": "Synced" | "Stale" | "Initializing" | "Error",
+  "chainHead": {
+    "value": number,                  // best block number
+    "lastAdvanceAt": number,          // epoch ms the head last advanced
+    "staleSeconds": number,           // seconds since the head last advanced
+    "isStale": boolean                // true if the head looks stuck
+  }
+}</code></pre>
+            <p><strong>AVG APY</strong> is now returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias) so you don't have to recompute it. It's derived as <code>avgApy = 23.09 × (1 − avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>
+        </section>
+
         <section class="developers-section" id="price">
             <h2>Price feed (multi-provider)</h2>
             <ul class="developers-endpoints">
-                <li><code>GET /api/price-latest</code> — current price, last-sync, plus a <strong>bySource</strong> map with one entry per provider (<code>cmc</code> live, plus historical <code>ascendex</code> / <code>ascendex-backfill</code> rows retained from before AscendEX shut down). Each entry: <code>{ label, configured, lastSync, status, error, latest, count }</code>.</li>
+                <li><code>GET /api/price-latest</code> — current price, last-sync, plus a <strong>bySource</strong> map with one entry per provider (<code>coingecko</code> live by default, plus historical <code>ascendex</code> / <code>ascendex-backfill</code> rows retained from before AscendEX shut down). Each entry: <code>{ label, configured, lastSync, status, error, latest, count }</code>.</li>
                 <li><code>GET /api/price-history?days=N</code> — daily series for the last N days (capped at 4000). Each row carries a <code>source</code> tag identifying which provider supplied it. Response also includes the same <code>bySource</code> rollup.</li>
             </ul>
             <p>Providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>coingecko</code>). CoinGecko is keyless (optional <code>COINGECKO_API_KEY</code> for higher limits); CoinMarketCap needs <code>CMC_API_KEY</code>. AscendEX was removed after the exchange shut down.</p>

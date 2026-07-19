@@ -881,9 +881,18 @@ async function computeNetworkInfo() {
     const totalIssuance = formatPDEX(totalIssuanceRaw);
     const totalStake = formatPDEX(totalStakeRaw);
     const previousTotalStake = formatPDEX(previousTotalStakeRaw);
+    const avgCommissionPct = average(commissions);
+    // Headline "AVG APY": the chain's nominal max APY (23.09% — its target at
+    // the ~50% staking ratio, the same base used for per-validator APY above)
+    // discounted by the mean validator commission. Exposed server-side so API
+    // consumers get the number the home page shows without recomputing it.
+    const MAX_APY_BASE = 23.09;
+    const avgApy = MAX_APY_BASE * (1 - avgCommissionPct / 100);
     const networkInfo = {
         activeEra,
-        avgValidatorCommission: average(commissions),
+        avgValidatorCommission: avgCommissionPct,
+        avgApy,                 // headline AVG APY (%), commission-adjusted
+        avg_apy: avgApy,        // snake_case alias for external integrators
         validators: {
             active: validators.length,
             total: Number(counterForValidators)
@@ -1605,9 +1614,12 @@ app.get('/robots.txt', (req, res) => {
         // root Allow can't be mis-parsed by older or stricter crawlers.
         'Allow: /help',
         'Allow: /help/',
+        'Allow: /developers',
         'Allow: /brand',
         'Allow: /privacy',
         'Allow: /cookies',
+        // Machine-readable API index for crawlers / AI assistants.
+        'Allow: /llms.txt',
         '',
         'Sitemap: ' + SITE_URL + '/sitemap.xml',
         ''

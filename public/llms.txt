@@ -1,0 +1,167 @@
+# Polkadex Mainnet Explorer
+
+> The official block explorer, wallet, and governance dashboard for the
+> Polkadex Mainnet — a Polkadot-SDK (Substrate) Layer-1 blockchain. It indexes
+> blocks, extrinsics, events, transactions, accounts, validators, staking
+> rewards, and on-chain governance (council, treasury, democracy) into an
+> off-chain SQLite index, and exposes all of it through a public read-only JSON
+> API. This explorer is a static single-page app served from
+> explorer.polkadex.ee; the JSON API is the machine-readable interface and is
+> the recommended way for bots, AI assistants, and integrators to consume data.
+
+Site: https://explorer.polkadex.ee
+Sitemap: https://explorer.polkadex.ee/sitemap.xml
+Robots: https://explorer.polkadex.ee/robots.txt
+API base: https://explorer.polkadex.ee/api
+Human-readable API reference: https://explorer.polkadex.ee/developers
+Native token: PDEX. Addresses use SS58 prefix 88 (they start with `e…`).
+
+## For AI assistants and integrators — read this first
+
+The website's HTML pages (/, /blocks, /wallet/<addr>, …) are a client-rendered
+single-page app: the initial HTML is a shell and the content is filled in by
+JavaScript in the browser. A non-browser client that fetches an HTML page will
+NOT see the data. **Do not scrape the HTML. Call the JSON API instead.** Every
+figure shown on the site comes from an `/api/*` endpoint listed below, and those
+endpoints return plain JSON.
+
+Access notes:
+- The `/api/*` endpoints are open to non-browser clients (native apps, servers,
+  scripts, AI agents). CORS is a browser-only mechanism, so a caller that sends
+  no `Origin` header is always allowed. Browser callers from other web origins
+  must be added to the operator's `ALLOWED_ORIGINS` allowlist.
+- The public site sits behind Cloudflare, which may challenge or block clients
+  that look like abusive bots when they request HTML pages. This is why a naive
+  server-side fetch of an HTML page can come back empty or challenged. The JSON
+  API is the supported, un-gated path for automated clients — prefer it.
+- Be a well-behaved client: send a descriptive `User-Agent`, respect the
+  `Cache-Control` headers (don't poll faster than `max-age`), and back off on
+  HTTP 503 (`{"error":"rpc not connected"}`) rather than hammering.
+
+## Public JSON API — chain data (read-only)
+
+- GET /api/blocks — most recent blocks
+- GET /api/block/:number — single block with extrinsics + events
+- GET /api/events — most recent on-chain events
+- GET /api/transactions — most recent transactions (balance transfers)
+- GET /api/transactions/older?before=<n> — pagination further back
+- GET /api/extrinsic/:block/:txHash — single-extrinsic detail
+- GET /api/validators — full validator set with stake + commission
+- GET /api/validator/:address — per-validator era history
+- GET /api/holders — top-balance accounts
+- GET /api/account/:address — account-level summary
+- GET /api/network-info — network metrics (schema below)
+- GET /api/search/:query — block / extrinsic / account lookup
+- GET /api/staking-rewards/:address — per-address reward history
+- GET /api/staking-rewards-status — reward-backfill progress
+- GET /api/wallet/:address — wallet dashboard payload (balances, staking
+  incl. `activeStakedPlanck` u128 string, unpaid rewards, recent activity)
+
+## Public JSON API — price feed
+
+- GET /api/price-latest — current PDEX price, last-sync, and a `bySource` map
+  (one entry per configured price provider)
+- GET /api/price-history?days=N — daily price series (N capped at 4000); each
+  row is tagged with the `source` provider that supplied it
+
+Price providers are pluggable via the `PRICE_PROVIDERS` env var. Default source
+is CoinGecko (keyless public API).
+
+## Public JSON API — governance
+
+- GET /api/council — council members, motions, runners-up
+- GET /api/treasury — treasury balance and proposals (open + historical)
+- GET /api/democracy — referenda and public proposals
+- GET /api/governance/latest — most-recent OPEN referendum / proposal
+- GET /api/governance/calendar — unified governance timeline
+- GET /api/discussions — discussion threads on governance items
+- GET /api/discussions/:id — single thread with posts
+
+## Public JSON API — email alerts
+
+- POST /api/email/subscribe — double opt-in signup (rate-limited per IP)
+- GET /api/email/confirm?token=<t> — confirm subscription
+- GET /api/email/unsubscribe?token=<t> — one-click unsubscribe
+- GET /api/email/preferences?token=<t> — read event preferences
+- POST /api/email/preferences — update preferences (token in body)
+
+## Authenticated (wallet sign-in, for posting to discussions)
+
+Wallet-signed nonce login; sessions are 192-bit random tokens with a TTL.
+
+- POST /api/auth/challenge — request a sign-in nonce
+- POST /api/auth/verify — submit { address, signature, nonce }, get a token
+- POST /api/auth/logout
+- POST /api/discussions/:id/posts — post to a discussion (requires session)
+
+## Schema: GET /api/network-info
+
+Top-level response:
+
+```
+{
+  "networkInfo": {
+    "activeEra": <number>,                 // current staking era index
+    "avgValidatorCommission": <number>,    // mean active-validator commission, %
+    "avgApy": <number>,                    // headline AVG APY %, commission-adjusted
+    "avg_apy": <number>,                   // snake_case alias of avgApy
+    "validators":  { "active": <number>, "total": <number> },
+    "nominators":  { "active": <number>, "total": <number> },
+    "maxActiveStake":    <number>,         // largest active-validator total stake, PDEX
+    "minStake":          <number>,         // minimum active stake, PDEX
+    "averageStake":      <number>,         // mean active-validator stake, PDEX
+    "avgStakePerAccount":<number>,         // total bonded / staking accounts, PDEX
+    "totalIssuance":     <number>,         // total PDEX issuance
+    "totalBonding":      <number>,         // total PDEX bonded for staking
+    "totalBondingPercent":<number>,        // totalBonding / totalIssuance, %
+    "totalUnbonding":    <number>,         // total PDEX currently unbonding
+    "totalStakeChange":  <number>,         // net stake change vs previous era, PDEX
+    "lastEraRewardsTotal":<number>         // total rewards paid last era, PDEX
+  },
+  "lastSync": <number>,                    // epoch ms when networkInfo was computed
+  "status": "Synced" | "Stale" | "Initializing" | "Error",
+  "chainHead": {
+    "value": <number>,                     // best block number
+    "lastAdvanceAt": <number>,             // epoch ms the head last advanced
+    "staleSeconds": <number>,              // seconds since head last advanced
+    "isStale": <boolean>                   // true if the head looks stuck
+  }
+}
+```
+
+AVG APY is derived as `avgApy = 23.09 × (1 − avgValidatorCommission / 100)`,
+where 23.09% is the chain's nominal maximum APY at its target staking ratio.
+
+## Error handling
+
+Failures return a 4xx/5xx status with `{ "error": "<message>" }`. Endpoints that
+depend on the chain RPC return HTTP 503 with `{ "error": "rpc not connected" }`
+during RPC outages — treat 503 as "retry with backoff", not a permanent error.
+
+## Caching tiers (respect the Cache-Control headers)
+
+- Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events):
+  public, max-age=5, s-maxage=10, stale-while-revalidate=30
+- Medium — wallet, validators, network-info, /api/price-latest:
+  public, max-age=30, s-maxage=60, stale-while-revalidate=300
+- Long — historical (/api/price-history, /api/staking-rewards/:addr, holders,
+  sitemap): public, max-age=300, s-maxage=600, stale-while-revalidate=3600
+
+## Addresses
+
+Paths that take an `:address` expect Polkadex SS58 (prefix 88, `e…`). The server
+normalizes via `toPolkadexAddress()`, so prefix-42/0 forms usually resolve too.
+
+## Key site routes (all client-rendered — use the API for data)
+
+/ (home) · /blocks · /transactions · /events · /validators · /staking ·
+/accounts (holders) · /wallet/<address> · /treasury · /council · /democracy ·
+/calendar · /developers (API reference) · /help (help center) · /brand ·
+/privacy · /cookies
+
+## More
+
+- API reference (human-readable): https://explorer.polkadex.ee/developers
+- Help center: https://explorer.polkadex.ee/help
+- Polkadex project: https://polkadex.ee
+- Source / issues: https://github.com/Polkadex-Substrate
