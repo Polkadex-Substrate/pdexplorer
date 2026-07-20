@@ -3427,7 +3427,7 @@ const HELP_TOPICS = [
             <h3>Choosing a time period</h3>
             <p>Pick from <strong>7D · 30D · 90D · 1Y · ALL</strong> with the pills above the chart. Your choice is remembered between visits via a small <code>pdex_price_period</code> entry in your browser's local storage (no cookies, never sent to our server — see <a href="/cookies" class="item-link">/cookies</a>).</p>
             <h3>Where the data comes from</h3>
-            <p>Live price polls come from <strong>CoinGecko</strong>, which aggregates PDEX across its real markets — no API key required. (CoinMarketCap can be added as an extra source with a key.) AscendEX polling was removed after the exchange shut down in 2026; the historical PDEX/USDT data it provided (back to PDEX's first trading day in March 2022) is retained on disk, so the chart stays a single continuous series across the old and current sources.</p>
+            <p>Live price polls come from <strong>CoinGecko</strong>, which aggregates PDEX across its real markets — no API key required. (CoinMarketCap can be added as an extra source with a key.) Historical PDEX/USDT data going back to PDEX's first trading day in March 2022 is retained on disk, so the chart stays a single continuous series.</p>
             <h3>Closing</h3>
             <p>Click the <strong>×</strong> in the top-right of the chart page to return to wherever you were before opening it.</p>
         `
@@ -4890,10 +4890,10 @@ function renderDevelopersPage() {
         <section class="developers-section" id="price">
             <h2>Price feed (multi-provider)</h2>
             <ul class="developers-endpoints">
-                <li><code>GET /api/price-latest</code> — current price, last-sync, plus a <strong>bySource</strong> map with one entry per provider (<code>coingecko</code> live by default, plus historical <code>ascendex</code> / <code>ascendex-backfill</code> rows retained from before AscendEX shut down). Each entry: <code>{ label, configured, lastSync, status, error, latest, count }</code>.</li>
+                <li><code>GET /api/price-latest</code> — current price, last-sync, plus a <strong>bySource</strong> map with one entry per configured provider (<code>coingecko</code> live by default). Each entry: <code>{ label, configured, lastSync, status, error, latest, count }</code>.</li>
                 <li><code>GET /api/price-history?days=N</code> — daily series for the last N days (capped at 4000). Each row carries a <code>source</code> tag identifying which provider supplied it. Response also includes the same <code>bySource</code> rollup.</li>
             </ul>
-            <p>Providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>coingecko</code>). CoinGecko is keyless (optional <code>COINGECKO_API_KEY</code> for higher limits); CoinMarketCap needs <code>CMC_API_KEY</code>. AscendEX was removed after the exchange shut down.</p>
+            <p>Providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>coingecko</code>). CoinGecko is keyless (optional <code>COINGECKO_API_KEY</code> for higher limits); CoinMarketCap needs <code>CMC_API_KEY</code>.</p>
         </section>
 
         <section class="developers-section" id="governance">

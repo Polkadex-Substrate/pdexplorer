@@ -1628,6 +1628,175 @@ app.get('/robots.txt', (req, res) => {
     res.type('text/plain').send(lines.join('\n'));
 });
 
+// --- /developers — SERVER-RENDERED API reference -----------------------------
+// The rest of the site is a client-rendered SPA, but the developer docs must be
+// readable by crawlers, AI assistants, and non-browser integrators that don't
+// run JavaScript. So — exactly like /robots.txt and /sitemap.xml — nginx
+// forwards `/developers` to the backend, which returns a complete, self-
+// contained HTML document (no JS bundle, no Cloudflare HTML-cache dependency).
+// In-app client-side navigation to /developers still renders via
+// renderDevelopersPage() in script.js; only direct hits / refreshes reach here.
+// Keep this in sync with renderDevelopersPage() (script.js) and public/llms.txt.
+const DEVELOPERS_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Developers — Polkadex Explorer API Reference</title>
+<meta name="description" content="Public read-only JSON API for the Polkadex Mainnet blockchain explorer: blocks, transactions, validators, staking rewards, governance, and the /api/network-info schema. Server-rendered, JavaScript-free reference.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="${SITE_URL}/developers">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Developers — Polkadex Explorer API Reference">
+<meta property="og:description" content="Public read-only JSON API for the Polkadex Mainnet: chain data, governance, price feed, and the exact /api/network-info schema.">
+<meta property="og:url" content="${SITE_URL}/developers">
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#08080C;color:#E6E6F0;font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#8B7CFF;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:920px;margin:0 auto;padding:32px 20px 80px}
+header.site{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:20px;border-bottom:1px solid #23232E;margin-bottom:28px;flex-wrap:wrap}
+header.site nav a{margin-left:16px;color:#B9B9C9;font-size:.92rem}
+h1{font-size:1.9rem;margin:.2em 0}
+h2{font-size:1.3rem;margin:2em 0 .5em;padding-top:.4em;border-top:1px solid #1C1C26}
+h3{font-size:1.05rem;margin:1.4em 0 .4em}
+.tag{color:#B9B9C9;font-size:1.02rem}
+code{font-family:"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;background:#15151F;border:1px solid #23232E;border-radius:4px;padding:1px 5px}
+pre{background:#101018;border:1px solid #23232E;border-radius:8px;padding:16px;overflow:auto}
+pre code{background:none;border:none;padding:0;font-size:.82rem;line-height:1.5}
+ul.endpoints{list-style:none;padding:0;margin:0}
+ul.endpoints li{padding:7px 0;border-bottom:1px solid #15151F}
+ul.endpoints li code{color:#9FE6C0}
+table{border-collapse:collapse;width:100%;margin:.6em 0}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #23232E;vertical-align:top;font-size:.93rem}
+th{color:#B9B9C9;font-weight:600}
+.note{background:#12121C;border:1px solid #23232E;border-left:3px solid #8B7CFF;border-radius:6px;padding:12px 16px;margin:1em 0}
+footer{margin-top:48px;padding-top:20px;border-top:1px solid #23232E;color:#8A8A9A;font-size:.9rem}
+footer a{margin-right:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="site">
+  <strong><a href="${SITE_URL}/">Polkadex Mainnet Explorer</a></strong>
+  <nav>
+    <a href="${SITE_URL}/">Home</a>
+    <a href="${SITE_URL}/llms.txt">llms.txt</a>
+    <a href="${SITE_URL}/help">Help</a>
+  </nav>
+</header>
+
+<main>
+<h1>Developers — Polkadex Mainnet Explorer API</h1>
+<p class="tag">Public read-only JSON API for the Polkadex Mainnet (a Polkadot-SDK / Substrate Layer-1). Used by this explorer and freely consumable by external apps, native mobile clients, servers, and AI assistants.</p>
+<div class="note">This is a <strong>server-rendered, JavaScript-free</strong> reference so any client can read it. There is also a machine-readable index at <a href="${SITE_URL}/llms.txt">/llms.txt</a>, and an interactive version inside the app at <a href="${SITE_URL}/developers">/developers</a>.</div>
+
+<h2>Start here — use the JSON API, not the HTML</h2>
+<p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint. (This developer page is the exception: it is server-rendered on purpose.)</p>
+<table>
+<thead><tr><th>Behavior</th><th>What to do</th></tr></thead>
+<tbody>
+<tr><td>HTML pages sit behind Cloudflare, which may challenge or block clients that look like abusive bots. A naive server-side fetch of an HTML page can come back empty or challenged.</td><td>Request the <code>/api/*</code> JSON endpoints instead — the supported path for automated clients. Send a descriptive <code>User-Agent</code> and respect the <code>Cache-Control</code> headers.</td></tr>
+<tr><td>The API is open to non-browser clients at the origin. CORS is a browser-only mechanism, so a caller that sends no <code>Origin</code> header (native app, server, script, AI agent) is always allowed by the app.</td><td>Call the API directly from servers and native apps. Only browser callers from other web origins need to be added to <code>ALLOWED_ORIGINS</code>.</td></tr>
+</tbody>
+</table>
+
+<h2>Chain data (read-only, public)</h2>
+<ul class="endpoints">
+<li><code>GET /api/blocks</code> — most recent blocks</li>
+<li><code>GET /api/block/:number</code> — single block with extrinsics + events</li>
+<li><code>GET /api/events</code> — most recent on-chain events</li>
+<li><code>GET /api/transactions</code> — most recent transactions</li>
+<li><code>GET /api/transactions/older?before=&lt;n&gt;</code> — pagination further back</li>
+<li><code>GET /api/extrinsic/:block/:txHash</code> — single-extrinsic detail</li>
+<li><code>GET /api/validators</code> — full validator set with stake + commission</li>
+<li><code>GET /api/validator/:address</code> — per-validator era history</li>
+<li><code>GET /api/holders</code> — top-balance accounts</li>
+<li><code>GET /api/account/:address</code> — account-level summary</li>
+<li><code>GET /api/network-info</code> — network metrics (schema below)</li>
+<li><code>GET /api/search/:query</code> — block / extrinsic / account lookup</li>
+<li><code>GET /api/staking-rewards/:address</code> — per-address reward history</li>
+<li><code>GET /api/staking-rewards-status</code> — reward-backfill progress</li>
+<li><code>GET /api/wallet/:address</code> — wallet dashboard payload (balances, staking incl. <code>activeStakedPlanck</code> u128 string, unpaid rewards, recent activity)</li>
+</ul>
+
+<h2>Price feed, governance &amp; email</h2>
+<ul class="endpoints">
+<li><code>GET /api/price-latest</code> — current PDEX price, last-sync, and a <code>bySource</code> map (one entry per configured provider; <code>coingecko</code> live by default)</li>
+<li><code>GET /api/price-history?days=N</code> — daily price series (N capped at 4000); each row tagged with its <code>source</code></li>
+<li><code>GET /api/council</code> — council members, motions, runners-up</li>
+<li><code>GET /api/treasury</code> — treasury balance + proposals (open + historical)</li>
+<li><code>GET /api/democracy</code> — referenda + public proposals</li>
+<li><code>GET /api/governance/latest</code> — most-recent OPEN referendum / proposal</li>
+<li><code>GET /api/governance/calendar</code> — unified governance timeline</li>
+<li><code>GET /api/discussions</code>, <code>GET /api/discussions/:id</code> — governance discussion threads</li>
+<li><code>POST /api/email/subscribe</code>, <code>GET /api/email/confirm</code>, <code>GET /api/email/unsubscribe</code>, <code>GET|POST /api/email/preferences</code> — email alerts</li>
+</ul>
+<p>Price providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>coingecko</code>, a keyless public API).</p>
+
+<h2>Schema — GET /api/network-info</h2>
+<pre><code>{
+  "networkInfo": {
+    "activeEra": number,              // current staking era index
+    "avgValidatorCommission": number, // mean active-validator commission, %
+    "avgApy": number,                 // headline AVG APY %, commission-adjusted
+    "avg_apy": number,                // snake_case alias of avgApy
+    "validators":  { "active": number, "total": number },
+    "nominators":  { "active": number, "total": number },
+    "maxActiveStake": number,         // largest active-validator total stake, PDEX
+    "minStake": number,               // minimum active stake, PDEX
+    "averageStake": number,           // mean active-validator stake, PDEX
+    "avgStakePerAccount": number,     // total bonded / staking accounts, PDEX
+    "totalIssuance": number,          // total PDEX issuance
+    "totalBonding": number,           // total PDEX bonded for staking
+    "totalBondingPercent": number,    // totalBonding / totalIssuance, %
+    "totalUnbonding": number,         // total PDEX currently unbonding
+    "totalStakeChange": number,       // net stake change vs previous era, PDEX
+    "lastEraRewardsTotal": number     // total rewards paid last era, PDEX
+  },
+  "lastSync": number,                 // epoch ms when networkInfo was computed
+  "status": "Synced" | "Stale" | "Initializing" | "Error",
+  "chainHead": {
+    "value": number,                  // best block number
+    "lastAdvanceAt": number,          // epoch ms the head last advanced
+    "staleSeconds": number,           // seconds since the head last advanced
+    "isStale": boolean                // true if the head looks stuck
+  }
+}</code></pre>
+<p><strong>AVG APY</strong> is returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias), derived as <code>avgApy = 23.09 &times; (1 &minus; avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>
+
+<h2>Errors &amp; addresses</h2>
+<p>Failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. Endpoints that depend on the chain RPC return <strong>503</strong> with <code>{ "error": "rpc not connected" }</code> during RPC outages — treat 503 as "retry with backoff", not permanent. Paths that take an <code>:address</code> expect Polkadex SS58 (prefix 88, addresses start with <code>e&hellip;</code>); the server normalizes via <code>toPolkadexAddress()</code>, so prefix-42/0 forms usually resolve too.</p>
+
+<h2>Caching tiers</h2>
+<p>Hot endpoints carry <code>Cache-Control</code> in three tiers — don't poll faster than <code>max-age</code>: <strong>short</strong> (blocks/transactions/events: max-age=5), <strong>medium</strong> (wallet/validators/network-info/price-latest: max-age=30), <strong>long</strong> (price-history/staking-rewards/holders: max-age=300).</p>
+
+<h2>Quick examples</h2>
+<pre><code>curl ${SITE_URL}/api/network-info
+curl ${SITE_URL}/api/price-latest
+curl '${SITE_URL}/api/price-history?days=30'</code></pre>
+</main>
+
+<footer>
+<a href="${SITE_URL}/">Explorer</a>
+<a href="${SITE_URL}/llms.txt">llms.txt</a>
+<a href="${SITE_URL}/help">Help center</a>
+<a href="https://github.com/Polkadex-Substrate" rel="noopener">GitHub</a>
+<div style="margin-top:10px">Found a bug or a missing endpoint? Open an issue on GitHub or reach the team via <a href="https://polkadex.ee" rel="noopener">polkadex.ee</a>.</div>
+</footer>
+</div>
+</body>
+</html>`;
+
+app.get('/developers', (req, res) => {
+    // Static content — safe to cache at the edge, but keep it short enough that
+    // a docs update propagates without a manual Cloudflare purge.
+    res.set('Cache-Control', 'public, max-age=600');
+    res.type('html').send(DEVELOPERS_HTML);
+});
+
 // Diagnostic: worker-local RPC cache stats. Useful for confirming the
 // LRU is doing what we think during a load test or post-deploy. Each
 // cluster worker has its own caches, so hitting this endpoint multiple

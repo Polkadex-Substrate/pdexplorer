@@ -1088,107 +1088,17 @@
                 <div id="price-page-content"></div>
             </div>
 
-            <!-- /developers — API reference for external apps + mobile
-                 developers. renderDevelopersPage() in script.js hydrates the
-                 rich interactive version into #developers-page-content. The
-                 STATIC reference below ships in the served HTML so crawlers, AI
-                 assistants, and non-browser integrators (curl, native apps)
-                 can read the API without executing JavaScript — JS replaces it
-                 in place on load. Keep this fallback in sync with
-                 renderDevelopersPage() and /llms.txt when endpoints change. -->
+            <!-- /developers — served SERVER-SIDE by the backend: see
+                 app.get('/developers') in server.js + the nginx `location =
+                 /developers` proxy. A direct hit / crawler / curl / AI client
+                 gets full server-rendered HTML with NO JavaScript required, so
+                 it's immune to SPA client-rendering and Cloudflare HTML caching.
+                 This empty container is only used for in-app client-side
+                 navigation, hydrated by renderDevelopersPage(). Keep the SSR
+                 page (server.js), renderDevelopersPage() (script.js), and
+                 /llms.txt in sync when endpoints change. -->
             <div class="developers-page page-section" data-page="developers" style="display: none;">
-                <div id="developers-page-content">
-                    <div class="developers-hero">
-                        <h1>Developers — Polkadex Mainnet Explorer API</h1>
-                        <p class="developers-tagline">Public read-only JSON API for the Polkadex Mainnet Layer-1 blockchain. Used by this explorer and freely consumable by external apps, native mobile clients, servers, and AI assistants.</p>
-                    </div>
-
-                    <section class="developers-section">
-                        <h2>Read this first — use the JSON API, not the HTML</h2>
-                        <p>This site is a client-rendered single-page app: HTML pages are a shell filled in by JavaScript in the browser, so a non-browser client that fetches an HTML page will not see the data. <strong>Do not scrape the HTML — call the JSON API</strong>, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint below.</p>
-                        <ul class="developers-endpoints">
-                            <li>The <code>/api/*</code> endpoints are open to non-browser clients. CORS is browser-only, so a caller that sends no <code>Origin</code> header is always allowed; browser callers from other web origins must be added to the operator's <code>ALLOWED_ORIGINS</code> allowlist.</li>
-                            <li>The public site sits behind Cloudflare, which may challenge or block clients that look like abusive bots when they request <em>HTML pages</em>. That is why a naive server-side fetch of an HTML page can come back empty. The JSON API is the supported, un-gated path for automated clients — prefer it.</li>
-                            <li>Be a well-behaved client: send a descriptive <code>User-Agent</code>, respect the <code>Cache-Control</code> headers (don't poll faster than <code>max-age</code>), and back off on HTTP 503 rather than retrying tightly.</li>
-                        </ul>
-                        <p>A concise machine-readable index of the whole API lives at <a href="/llms.txt" class="item-link">/llms.txt</a>.</p>
-                    </section>
-
-                    <section class="developers-section">
-                        <h2>Chain data (read-only, public)</h2>
-                        <ul class="developers-endpoints">
-                            <li><code>GET /api/blocks</code> — most recent blocks</li>
-                            <li><code>GET /api/block/:number</code> — single block with extrinsics + events</li>
-                            <li><code>GET /api/events</code> — most recent on-chain events</li>
-                            <li><code>GET /api/transactions</code> — most recent transactions</li>
-                            <li><code>GET /api/transactions/older?before=&lt;n&gt;</code> — pagination further back</li>
-                            <li><code>GET /api/extrinsic/:block/:txHash</code> — single-extrinsic detail</li>
-                            <li><code>GET /api/validators</code> — full validator set with stake + commission</li>
-                            <li><code>GET /api/validator/:address</code> — per-validator era history</li>
-                            <li><code>GET /api/holders</code> — top-balance accounts</li>
-                            <li><code>GET /api/account/:address</code> — account-level summary</li>
-                            <li><code>GET /api/network-info</code> — network metrics (schema below)</li>
-                            <li><code>GET /api/search/:query</code> — block / extrinsic / account lookup</li>
-                            <li><code>GET /api/staking-rewards/:address</code> — per-address reward history</li>
-                            <li><code>GET /api/staking-rewards-status</code> — reward-backfill progress</li>
-                            <li><code>GET /api/wallet/:address</code> — wallet dashboard payload</li>
-                        </ul>
-                    </section>
-
-                    <section class="developers-section">
-                        <h2>Price feed, governance &amp; email</h2>
-                        <ul class="developers-endpoints">
-                            <li><code>GET /api/price-latest</code> — current PDEX price + per-provider <code>bySource</code> map</li>
-                            <li><code>GET /api/price-history?days=N</code> — daily price series (N capped at 4000)</li>
-                            <li><code>GET /api/council</code> — council members, motions, runners-up</li>
-                            <li><code>GET /api/treasury</code> — treasury balance + proposals (open + historical)</li>
-                            <li><code>GET /api/democracy</code> — referenda + public proposals</li>
-                            <li><code>GET /api/governance/latest</code> — most-recent OPEN referendum / proposal</li>
-                            <li><code>GET /api/governance/calendar</code> — unified governance timeline</li>
-                            <li><code>GET /api/discussions</code>, <code>GET /api/discussions/:id</code> — governance discussion threads</li>
-                            <li><code>POST /api/email/subscribe</code>, <code>GET /api/email/confirm</code>, <code>GET /api/email/unsubscribe</code>, <code>GET|POST /api/email/preferences</code> — email alerts</li>
-                        </ul>
-                    </section>
-
-                    <section class="developers-section">
-                        <h2>Schema — GET /api/network-info</h2>
-                        <pre><code>{
-  "networkInfo": {
-    "activeEra": number,              // current staking era index
-    "avgValidatorCommission": number, // mean active-validator commission, %
-    "avgApy": number,                 // headline AVG APY %, commission-adjusted
-    "avg_apy": number,                // snake_case alias of avgApy
-    "validators":  { "active": number, "total": number },
-    "nominators":  { "active": number, "total": number },
-    "maxActiveStake": number,         // largest active-validator total stake, PDEX
-    "minStake": number,               // minimum active stake, PDEX
-    "averageStake": number,           // mean active-validator stake, PDEX
-    "avgStakePerAccount": number,     // total bonded / staking accounts, PDEX
-    "totalIssuance": number,          // total PDEX issuance
-    "totalBonding": number,           // total PDEX bonded for staking
-    "totalBondingPercent": number,    // totalBonding / totalIssuance, %
-    "totalUnbonding": number,         // total PDEX currently unbonding
-    "totalStakeChange": number,       // net stake change vs previous era, PDEX
-    "lastEraRewardsTotal": number     // total rewards paid last era, PDEX
-  },
-  "lastSync": number,                 // epoch ms when networkInfo was computed
-  "status": "Synced" | "Stale" | "Initializing" | "Error",
-  "chainHead": {
-    "value": number,                  // best block number
-    "lastAdvanceAt": number,          // epoch ms the head last advanced
-    "staleSeconds": number,           // seconds since the head last advanced
-    "isStale": boolean                // true if the head looks stuck
-  }
-}</code></pre>
-                        <p>AVG APY is derived as <code>avgApy = 23.09 × (1 − avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>
-                    </section>
-
-                    <section class="developers-section">
-                        <h2>Errors &amp; addresses</h2>
-                        <p>Failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. Endpoints that depend on the chain RPC return <strong>503</strong> with <code>{ "error": "rpc not connected" }</code> during RPC outages — treat 503 as "retry with backoff", not permanent. Paths that take an <code>:address</code> expect Polkadex SS58 (prefix 88, addresses start with <code>e…</code>).</p>
-                        <pre><code>curl https://explorer.polkadex.ee/api/network-info</code></pre>
-                    </section>
-                </div>
+                <div id="developers-page-content"></div>
             </div>
 
             <!-- Help Center -->
