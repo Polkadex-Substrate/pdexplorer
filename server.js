@@ -442,6 +442,11 @@ function isRpcReady() {
 function requireRpc(res) {
     if (!globalApi || !globalApi.isConnected) {
         res.set('Retry-After', '5');
+        // Never let a transient "RPC not ready" 503 be cached — a CDN/edge cache
+        // (e.g. a Cloudflare rule that makes /api/* eligible for cache) could
+        // otherwise pin this empty-data error and serve it to every client long
+        // after the RPC recovered. no-store defeats that regardless of TTL.
+        res.set('Cache-Control', 'no-store');
         res.status(503).json({
             error: 'Live blockchain data is not available right now — the explorer is still connecting to the Polkadex node. Please refresh in a few seconds.',
             code: 'RPC_NOT_READY'
@@ -2030,8 +2035,12 @@ app.get('/api/network-info', async (req, res) => {
             }
         });
     } catch (err) {
-        // Note: no cache header on the error fallback — Cloudflare must not
-        // pin "Error" status. Browsers retry naturally on the next interval.
+        // Explicit no-store on the error fallback — a CDN/edge cache (e.g. a
+        // Cloudflare rule that makes /api/* eligible for cache) must never pin
+        // this "Error" / empty-data response and serve it to every client.
+        // Merely omitting Cache-Control isn't enough if the edge applies a
+        // default TTL; no-store is unambiguous.
+        res.set('Cache-Control', 'no-store');
         const cacheData = db.getKv('network_info') || { networkInfo: null, lastSync: 0, status: 'Initializing' };
         res.json({ ...cacheData, status: 'Error', error: err.message });
     }
