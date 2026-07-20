@@ -1677,7 +1677,6 @@ ul.endpoints li code{color:#9FE6C0}
 table{border-collapse:collapse;width:100%;margin:.6em 0}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #23232E;vertical-align:top;font-size:.93rem}
 th{color:#B9B9C9;font-weight:600}
-.note{background:#12121C;border:1px solid #23232E;border-left:3px solid #8B7CFF;border-radius:6px;padding:12px 16px;margin:1em 0}
 footer{margin-top:48px;padding-top:20px;border-top:1px solid #23232E;color:#8A8A9A;font-size:.9rem}
 footer a{margin-right:16px}
 </style>
@@ -1696,7 +1695,6 @@ footer a{margin-right:16px}
 <main>
 <h1>Developers — Polkadex Mainnet Explorer API</h1>
 <p class="tag">Public read-only JSON API for the Polkadex Mainnet (a Polkadot-SDK / Substrate Layer-1). Used by this explorer and freely consumable by external apps, native mobile clients, servers, and AI assistants.</p>
-<div class="note">This is a <strong>server-rendered, JavaScript-free</strong> reference so any client can read it. There is also a machine-readable index at <a href="${SITE_URL}/llms.txt">/llms.txt</a>, and an interactive version inside the app at <a href="${SITE_URL}/developers">/developers</a>.</div>
 
 <h2>Start here — use the JSON API, not the HTML</h2>
 <p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint. (This developer page is the exception: it is server-rendered on purpose.)</p>
