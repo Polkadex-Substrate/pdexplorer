@@ -91,6 +91,12 @@ MAX_BACKUPS="${MAX_BACKUPS:-7}"       # local generations to keep (newest N)
 # only on alternating days. Set to 0 to disable the throttle.
 MIN_INTERVAL_HOURS="${MIN_INTERVAL_HOURS:-48}"
 COMPRESS="${COMPRESS:-gzip}"          # gzip | zstd | none
+# Compression level. The old -9 / -19 defaults cost enormous CPU time for a few
+# percent of size on a multi-GB snapshot — gzip -9 on a 19 GB DB is tens of
+# minutes, single-threaded, every single night. 6 is the sane trade. Note the
+# script prefers `pigz` (parallel gzip, byte-identical .gz output) and passes
+# zstd -T0, so this work uses all cores when the tools are available.
+COMPRESS_LEVEL="${COMPRESS_LEVEL:-6}"
 LOCKFILE="${LOCKFILE:-/var/lock/pdexplorer-backup.lock}"
 # Set FORCE=1 to bypass the interval check (e.g. to take an ad-hoc snapshot
 # right before a risky operation).
@@ -330,11 +336,19 @@ fi
 # ---- Compress -------------------------------------------------------------
 case "$COMPRESS" in
     gzip)
-        ${IONICE}gzip -9 "$TMP"
+        # pigz is a drop-in parallel gzip producing byte-identical .gz output,
+        # so it's safe to prefer transparently — on a multi-core box it turns
+        # tens of minutes into a couple, and `gunzip` still restores it.
+        if command -v pigz >/dev/null 2>&1; then
+            ${IONICE}pigz -"$COMPRESS_LEVEL" "$TMP"
+        else
+            ${IONICE}gzip -"$COMPRESS_LEVEL" "$TMP"
+        fi
         FINAL="$TMP.gz"
         ;;
     zstd)
-        ${IONICE}zstd -q -19 --rm "$TMP" -o "$TMP.zst"
+        # -T0 = use all cores.
+        ${IONICE}zstd -q -T0 -"$COMPRESS_LEVEL" --rm "$TMP" -o "$TMP.zst"
         FINAL="$TMP.zst"
         ;;
     none)
