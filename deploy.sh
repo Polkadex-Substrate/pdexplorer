@@ -103,9 +103,31 @@ chmod +x init-letsencrypt.sh
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
 
+# ---- Compose project identity ---------------------------------------------
+# Compose derives its project name from the DIRECTORY it runs in, but our
+# services pin explicit container_name values (pdexplorer-backend, ...), which
+# are GLOBAL to the Docker daemon. Run this script from a different path than
+# the original deployment and Compose decides it is a brand-new project: it
+# creates a fresh network, then collides on the container names it doesn't
+# think it owns —
+#     Conflict. The container name "/pdexplorer-backend" is already in use
+# and the `down` above silently tears down the new empty project instead of
+# the real stack. Pinning the project name makes down/up always target the
+# SAME stack regardless of where this script is invoked from.
+#
+# If your running stack used a different project name, override it:
+#   COMPOSE_PROJECT_NAME=<name> ./deploy.sh
+# Find the current one with:
+#   docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' pdexplorer-backend
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-pdexplorer}"
+echo "--> Compose project: $COMPOSE_PROJECT (pinned; independent of cwd)"
+
 echo "--> Building and starting full Docker stack..."
-sudo $DC down || true
-sudo $DC up -d --build
+# Pass -p explicitly rather than exporting the variable: `sudo` strips the
+# environment by default, so an exported COMPOSE_PROJECT_NAME would not reach
+# the compose process and the bug would silently return.
+sudo $DC -p "$COMPOSE_PROJECT" down || true
+sudo $DC -p "$COMPOSE_PROJECT" up -d --build
 
 # 6. Cleanup unused docker images
 echo "--> Cleaning up dangling images to save space..."
