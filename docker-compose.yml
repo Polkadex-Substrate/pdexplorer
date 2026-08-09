@@ -39,8 +39,14 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+      # RELATIVE paths here resolve against the directory Compose runs in, so
+      # deploying from a different checkout silently hands nginx an EMPTY cert
+      # dir — it then fails to load fullchain.pem, exits, and Cloudflare
+      # returns 521 (nothing listening). Set CERTBOT_PATH to an absolute path
+      # in .env so the certs are pinned to one location, exactly like DATA_PATH
+      # pins the SQLite index.
+      - ${CERTBOT_PATH:-./certbot}/conf:/etc/letsencrypt
+      - ${CERTBOT_PATH:-./certbot}/www:/var/www/certbot
     depends_on:
       - backend
 
@@ -48,6 +54,12 @@ services:
     image: certbot/certbot
     container_name: certbot
     volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+      # RELATIVE paths here resolve against the directory Compose runs in, so
+      # deploying from a different checkout silently hands nginx an EMPTY cert
+      # dir — it then fails to load fullchain.pem, exits, and Cloudflare
+      # returns 521 (nothing listening). Set CERTBOT_PATH to an absolute path
+      # in .env so the certs are pinned to one location, exactly like DATA_PATH
+      # pins the SQLite index.
+      - ${CERTBOT_PATH:-./certbot}/conf:/etc/letsencrypt
+      - ${CERTBOT_PATH:-./certbot}/www:/var/www/certbot
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"

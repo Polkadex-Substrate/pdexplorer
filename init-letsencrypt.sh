@@ -18,7 +18,10 @@ if [ -z "$DOMAIN_VALUE" ]; then
 fi
 domains=($DOMAIN_VALUE)
 rsa_key_size=4096
-data_path="./certbot"
+# Must match the CERTBOT_PATH used by docker-compose.yml, or certbot writes
+# certs to one directory while nginx mounts another — nginx then fails to start
+# and Cloudflare serves 521. Defaults to ./certbot for backwards compatibility.
+data_path="${CERTBOT_PATH:-./certbot}"
 email="$LETSENCRYPT_EMAIL" # Adding a valid address is strongly recommended
 staging=0 # Set to 1 if you're testing your setup to avoid hitting request limits
 
