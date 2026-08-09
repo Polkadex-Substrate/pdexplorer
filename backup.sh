@@ -171,6 +171,22 @@ push_offbox() {
         log "REMOTE_ENABLED=1 but REMOTE_HOST/REMOTE_USER unset — cannot push off-box"
         return 1
     fi
+    # A .pub file is the PUBLIC key; `ssh -i` needs the PRIVATE key. Pointing
+    # SSH_KEY at the .pub is an easy mistake AND a silent one — the file is
+    # readable, so it sails past the check below and ssh then fails auth under
+    # BatchMode with a confusing error. Correct it here and say so.
+    case "$SSH_KEY" in
+        *.pub)
+            if [ -r "${SSH_KEY%.pub}" ]; then
+                log "NOTE: SSH_KEY pointed at the PUBLIC key ($SSH_KEY) — using the private key ${SSH_KEY%.pub} instead."
+                log "      Fix /etc/default/pdexplorer-backup: SSH_KEY=${SSH_KEY%.pub}"
+                SSH_KEY="${SSH_KEY%.pub}"
+            else
+                log "WARNING: SSH_KEY=$SSH_KEY is a PUBLIC key and no private key exists at ${SSH_KEY%.pub}"
+                log "         ssh -i needs the PRIVATE key. Authentication will fail."
+            fi
+            ;;
+    esac
     if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then
         log "WARNING: SSH_KEY=$SSH_KEY missing or unreadable by $(id -un) — falling back to default keys."
         log "         With BatchMode=yes this fails unless another key already authenticates."
