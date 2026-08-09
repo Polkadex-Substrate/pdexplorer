@@ -149,6 +149,105 @@ fi
 exec 9>"$LOCKFILE"
 flock -n 9 || { log "Another backup is already running — exiting."; exit 0; }
 
+# ---- Off-box push (rsync over SSH) ----------------------------------------
+# Pushes EVERY local backup the remote doesn't already have — not just the one
+# this run produced. Rationale: if a push ever fails (bad key, box offline, dir
+# missing), that copy would otherwise be stranded forever, because the interval
+# throttle below exits before the push on every subsequent run. Syncing the
+# whole local set makes each run self-healing. rsync skips files already present
+# with matching size+mtime, so the steady-state cost is one cheap file-list
+# exchange, not a re-upload.
+#
+# Returns 0 on success (or when deliberately disabled), 1 on failure — the
+# caller maps that to exit 3 so monitoring notices while the local copy stays
+# intact.
+push_offbox() {
+    if [ "$REMOTE_ENABLED" != "1" ]; then
+        log "Off-box push disabled (REMOTE_ENABLED=0) — backups exist ONLY on this machine."
+        log "To enable: set REMOTE_ENABLED=1 plus REMOTE_HOST/REMOTE_USER in /etc/default/pdexplorer-backup"
+        return 0
+    fi
+    if [ -z "$REMOTE_HOST" ] || [ -z "$REMOTE_USER" ]; then
+        log "REMOTE_ENABLED=1 but REMOTE_HOST/REMOTE_USER unset — cannot push off-box"
+        return 1
+    fi
+    if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then
+        log "WARNING: SSH_KEY=$SSH_KEY missing or unreadable by $(id -un) — falling back to default keys."
+        log "         With BatchMode=yes this fails unless another key already authenticates."
+    fi
+
+    # Newest N only — matches the off-box retention, so we never upload copies
+    # the remote rotation is about to delete.
+    mapfile -t PUSH_FILES < <(find "$DEST" -maxdepth 1 -type f \
+        \( -name 'explorer-*.db' -o -name 'explorer-*.db.gz' -o -name 'explorer-*.db.zst' \) \
+        ! -name '*.CORRUPT' | sort -r | head -n "$REMOTE_MAX_BACKUPS")
+    if [ "${#PUSH_FILES[@]}" -eq 0 ]; then
+        log "No local backups to push"
+        return 0
+    fi
+
+    # BatchMode=yes: never prompt (cron-safe) — key auth is required.
+    # accept-new: trust-on-first-use for the host key, no interactive prompt.
+    SSH_CMD="ssh -p $REMOTE_PORT -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+    [ -n "$SSH_KEY" ] && [ -r "$SSH_KEY" ] && SSH_CMD="$SSH_CMD -i $SSH_KEY"
+    [ -n "$SSH_EXTRA_OPTS" ] && SSH_CMD="$SSH_CMD $SSH_EXTRA_OPTS"
+    REMOTE_DEST="$REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH/"
+
+    log "Pushing ${#PUSH_FILES[@]} backup(s) to $REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH (port $REMOTE_PORT)"
+
+    # Ensure the remote dir exists. Managed storage boxes frequently refuse
+    # arbitrary SSH command exec, so prefer rsync's own --mkpath (rsync >=
+    # 3.2.3) which creates the path over the rsync protocol, and fall back to
+    # a best-effort mkdir.
+    # NB: capture the help text into a variable rather than piping it to
+    # `grep -q`. Under `set -o pipefail`, grep -q closes the pipe on its first
+    # match, rsync dies with SIGPIPE (141), and the pipeline reports failure
+    # even though the option IS supported — which would silently disable
+    # --mkpath, the very thing that creates the remote dir on a box whose
+    # shell won't run mkdir.
+    MKPATH=""
+    RSYNC_HELP="$(rsync --help 2>/dev/null || true)"
+    if [ -n "$RSYNC_HELP" ] && [ "${RSYNC_HELP#*--mkpath}" != "$RSYNC_HELP" ]; then
+        MKPATH="--mkpath"
+    else
+        $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "mkdir -p '$REMOTE_PATH'" >/dev/null 2>&1 \
+            || log "Note: could not mkdir '$REMOTE_PATH' over SSH (restricted shell?) — it must already exist on the box"
+    fi
+
+    # --partial-dir keeps resumable chunks OUT of the final filename, so an
+    # interrupted transfer never leaves a truncated file that later looks
+    # complete to --ignore-existing style checks or to a restore.
+    if ${IONICE}rsync -a --partial-dir=.pdex-partial $MKPATH --timeout=900 \
+            -e "$SSH_CMD" "${PUSH_FILES[@]}" "$REMOTE_DEST"; then
+        log "Off-box push ok"
+    else
+        rc=$?
+        log "Off-box push FAILED (rsync exit $rc) — local backup is intact."
+        log "  Check: (1) key auth works as $(id -un): $SSH_CMD $REMOTE_USER@$REMOTE_HOST true"
+        log "         (2) port $REMOTE_PORT is correct for this host"
+        log "         (3) '$REMOTE_PATH' exists and is writable on the box"
+        return 1
+    fi
+
+    # Remote rotation: keep newest REMOTE_MAX_BACKUPS (best-effort — needs SSH
+    # command exec, which some storage boxes disallow). List → filter to our
+    # strict filename pattern → drop the newest N → delete the rest. The grep
+    # guarantees only our own timestamped backups are ever passed to rm.
+    REMOTE_DEL="$($SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "ls -1 '$REMOTE_PATH' 2>/dev/null" 2>/dev/null \
+        | grep -E '^explorer-[0-9]{8}T[0-9]{6}Z\.db(\.gz|\.zst)?$' \
+        | sort -r | tail -n +"$((REMOTE_MAX_BACKUPS + 1))" || true)"
+    if [ -n "$REMOTE_DEL" ]; then
+        if printf '%s\n' "$REMOTE_DEL" | $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "cd '$REMOTE_PATH' && xargs -r rm -f --" 2>/dev/null; then
+            log "Remote rotation ok (removed $(printf '%s\n' "$REMOTE_DEL" | grep -c .) beyond newest $REMOTE_MAX_BACKUPS)"
+        else
+            log "Remote rotation skipped (SSH command exec not permitted?) — prune on the box"
+        fi
+    else
+        log "Remote rotation: nothing to prune (<= $REMOTE_MAX_BACKUPS off-box)"
+    fi
+    return 0
+}
+
 # ---- Interval throttle (every-other-day cadence by default) ---------------
 # `find ... -mmin -N` returns files modified in the last N minutes. If any
 # existing backup is younger than MIN_INTERVAL_HOURS, skip — cron will retry
@@ -162,8 +261,18 @@ if [ "$FORCE" != "1" ] && [ "$MIN_INTERVAL_HOURS" -gt 0 ]; then
     if [ -n "$RECENT" ]; then
         AGE_HOURS=$(( ( $(date +%s) - $(stat -c %Y "$RECENT" 2>/dev/null || stat -f %m "$RECENT") ) / 3600 ))
         log "Recent backup exists (${AGE_HOURS}h old): $(basename "$RECENT")"
-        log "Skipping — next backup in ~$(( MIN_INTERVAL_HOURS - AGE_HOURS ))h. Set FORCE=1 to override."
-        exit 0
+        log "Skipping new snapshot — next backup in ~$(( MIN_INTERVAL_HOURS - AGE_HOURS ))h. Set FORCE=1 to override."
+        # Still attempt the off-box push before exiting. A previous run may have
+        # written a local backup whose upload failed; without this the throttle
+        # would exit first on every subsequent run and that copy would never be
+        # retried — so one transient SSH error could mean weeks of backups that
+        # exist only on the machine being backed up.
+        if push_offbox; then
+            exit 0
+        else
+            log "WARNING: off-box push did not complete."
+            exit 3
+        fi
     fi
 fi
 
@@ -239,47 +348,7 @@ log "Rotation: kept newest $(( ${#ALL_LOCAL[@]} - DELETED )) of ${#ALL_LOCAL[@]}
 # off-box for durability. A remote failure does NOT fail the local backup —
 # it exits 3 so monitoring notices while the on-disk backup stays intact.
 REMOTE_OK=1
-if [ "$REMOTE_ENABLED" = "1" ]; then
-    if [ -z "$REMOTE_HOST" ] || [ -z "$REMOTE_USER" ]; then
-        log "REMOTE_ENABLED=1 but REMOTE_HOST/REMOTE_USER unset — skipping off-box push"
-        REMOTE_OK=0
-    else
-        # BatchMode=yes: never prompt (cron-safe) — key auth is required.
-        # accept-new: trust-on-first-use for the host key, no interactive prompt.
-        SSH_CMD="ssh -p $REMOTE_PORT -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
-        [ -n "$SSH_KEY" ] && [ -r "$SSH_KEY" ] && SSH_CMD="$SSH_CMD -i $SSH_KEY"
-        [ -n "$SSH_EXTRA_OPTS" ] && SSH_CMD="$SSH_CMD $SSH_EXTRA_OPTS"
-        REMOTE_DEST="$REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH/"
-
-        log "Pushing $(basename "$FINAL") to $REMOTE_USER@$REMOTE_HOST:$REMOTE_PATH"
-        # Ensure the remote dir exists (best-effort; rsync also creates the leaf).
-        $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "mkdir -p '$REMOTE_PATH'" 2>/dev/null || true
-        # --partial keeps a half-sent file for resume on the next run; the file
-        # is already compressed so we don't add rsync -z. Throttled with ionice.
-        if ${IONICE}rsync -a --partial --timeout=900 -e "$SSH_CMD" "$FINAL" "$REMOTE_DEST"; then
-            log "Off-box push ok"
-            # Remote rotation: keep newest REMOTE_MAX_BACKUPS (best-effort — needs
-            # SSH command exec). List → filter to our strict filename pattern →
-            # drop the newest N → delete the rest. The grep guarantees only our
-            # own timestamped backups are ever passed to rm.
-            REMOTE_DEL="$($SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "ls -1 '$REMOTE_PATH' 2>/dev/null" 2>/dev/null \
-                | grep -E '^explorer-[0-9]{8}T[0-9]{6}Z\.db(\.gz|\.zst)?$' \
-                | sort -r | tail -n +"$((REMOTE_MAX_BACKUPS + 1))" || true)"
-            if [ -n "$REMOTE_DEL" ]; then
-                if printf '%s\n' "$REMOTE_DEL" | $SSH_CMD "$REMOTE_USER@$REMOTE_HOST" "cd '$REMOTE_PATH' && xargs -r rm -f --" 2>/dev/null; then
-                    log "Remote rotation ok (removed $(printf '%s\n' "$REMOTE_DEL" | grep -c .) beyond newest $REMOTE_MAX_BACKUPS)"
-                else
-                    log "Remote rotation skipped (SSH command exec not permitted?) — prune on the box"
-                fi
-            else
-                log "Remote rotation: nothing to prune (<= $REMOTE_MAX_BACKUPS off-box)"
-            fi
-        else
-            log "Off-box push FAILED — local backup is intact; check SSH key / host / path"
-            REMOTE_OK=0
-        fi
-    fi
-fi
+push_offbox || REMOTE_OK=0
 
 # ---- Summary --------------------------------------------------------------
 COUNT=$(find "$DEST" -maxdepth 1 -type f -name 'explorer-*.db*' ! -name '*.CORRUPT' | wc -l)
