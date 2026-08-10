@@ -75,18 +75,36 @@ else
     }
 fi
 
-# 4. Clone or Pull repository
-REPO_URL="https://github.com/polkadexaj/pdexscan.git"
-REPO_DIR="pdexscan"
+# 4. Clone or pull the repository into ONE canonical, ABSOLUTE location.
+#
+# This used to be a RELATIVE `REPO_DIR="pdexscan"`, which made the deployment
+# location depend on your shell's cwd. Running the script from inside an
+# existing checkout at /opt/pdexplorer found no ./pdexscan and cloned a SECOND
+# full copy at /opt/pdexplorer/pdexscan. Two checkouts meant two certbot
+# directories, two .env files, and a Compose project name that changed with cwd
+# — between them the cause of a container-name conflict, a cert-path mixup, and
+# a 521 outage, all in one day.
+#
+# DEPLOY_DIR is absolute and overridable; the script always operates there
+# regardless of where it is invoked from.
+REPO_URL="${REPO_URL:-https://github.com/polkadexaj/pdexscan.git}"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
 
-if [ -d "$REPO_DIR" ]; then
-    echo "--> Repository exists. Pulling latest changes..."
-    cd $REPO_DIR
+if [ -d "$DEPLOY_DIR/.git" ]; then
+    echo "--> Repository exists at $DEPLOY_DIR. Pulling latest changes..."
+    cd "$DEPLOY_DIR"
     git pull origin main
+elif [ -e "$DEPLOY_DIR" ] && [ -n "$(ls -A "$DEPLOY_DIR" 2>/dev/null)" ]; then
+    # Non-empty but not a git checkout — refuse rather than clone into it or
+    # clone a nested copy beside it. Both are how the duplicate arose.
+    echo "ERROR: $DEPLOY_DIR exists, is not empty, and is not a git checkout."
+    echo "       Refusing to guess. Either make it a checkout of $REPO_URL,"
+    echo "       or set DEPLOY_DIR=/path/to/checkout and re-run."
+    exit 1
 else
-    echo "--> Cloning repository..."
-    git clone $REPO_URL $REPO_DIR
-    cd $REPO_DIR
+    echo "--> Cloning repository into $DEPLOY_DIR..."
+    git clone "$REPO_URL" "$DEPLOY_DIR"
+    cd "$DEPLOY_DIR"
 fi
 
 # 4.5 Ensure .env exists
@@ -98,16 +116,34 @@ fi
 
 # 5. Build and deploy Docker containers
 echo "--> Initializing Let's Encrypt certificates..."
-# Invoke via `bash` rather than chmod +x && ./script.
+# ---- TLS certificates ------------------------------------------------------
+# Only bootstrap certs when there ISN'T already a usable one.
 #
-# init-letsencrypt.sh is committed mode 100644, so `chmod +x` flipped it to
-# 100755 on every deploy. Git tracks the executable bit, so that counted as a
-# local modification and aborted the NEXT `git pull`:
-#     error: Your local changes to the following files would be overwritten by
-#     merge: init-letsencrypt.sh
-# i.e. running the deploy script made the next deploy impossible. Calling bash
-# directly needs no exec bit and leaves the working tree clean.
-bash ./init-letsencrypt.sh
+# This deployment serves a CLOUDFLARE ORIGIN certificate, installed by the
+# `cf-origin-cert` phase of provision-ubuntu.sh — certbot never runs. Executing
+# init-letsencrypt.sh on top of that is destructive in two ways:
+#   1. it re-downloads options-ssl-nginx.conf + ssl-dhparams.pem from certbot's
+#      repo. Those URLs now 404, and the old `curl -s` wrote the literal body
+#      "404: Not Found" over the good files provision had generated — nginx
+#      then died with `[emerg] unexpected end of file` and the site returned
+#      Cloudflare 521;
+#   2. answering "y" at its prompt replaces the origin cert with a SELF-SIGNED
+#      placeholder, which Cloudflare Full (Strict) rejects with 526.
+# Neither is recoverable by re-running the deploy, so skip the whole step when
+# a certificate is already in place. Set RUN_LETSENCRYPT=1 to force it.
+#
+# Invoked via `bash` rather than `chmod +x && ./script`: the file is committed
+# mode 100644, so chmod flipped it to 100755, which git counts as a local
+# modification and which aborted the NEXT `git pull` — running the deploy made
+# the next deploy impossible.
+CERT_GLOB="${CERTBOT_PATH:-./certbot}/conf/live/*/fullchain.pem"
+if [ "${RUN_LETSENCRYPT:-0}" != "1" ] && compgen -G "$CERT_GLOB" >/dev/null 2>&1; then
+    echo "--> Existing certificate found — skipping init-letsencrypt.sh."
+    echo "    (Cloudflare Origin cert setup. Use RUN_LETSENCRYPT=1 to force Let's Encrypt bootstrap.)"
+else
+    echo "--> No certificate found; bootstrapping..."
+    bash ./init-letsencrypt.sh
+fi
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
 

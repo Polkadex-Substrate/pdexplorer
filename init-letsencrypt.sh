@@ -46,8 +46,44 @@ fi
 if [ ! -e "$data_path/conf/options-ssl-nginx.conf" ] || [ ! -e "$data_path/conf/ssl-dhparams.pem" ]; then
   echo "### Downloading recommended TLS parameters ..."
   mkdir -p "$data_path/conf"
-  curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf > "$data_path/conf/options-ssl-nginx.conf"
-  curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot/certbot/ssl-dhparams.pem > "$data_path/conf/ssl-dhparams.pem"
+
+  # These downloads were previously `curl -s URL > file` with no -f and no
+  # validation. `curl -s` still exits 0 on an HTTP 404 and writes the error
+  # body to the target file, so an upstream path change silently produced a
+  # junk options-ssl-nginx.conf. nginx then died at startup with
+  #   [emerg] unexpected end of file, expecting ";" or "}" in
+  #   /etc/letsencrypt/options-ssl-nginx.conf:1
+  # which took the whole site down (Cloudflare 521) with no obvious cause.
+  #
+  # Now: -f makes curl fail on HTTP errors, we download to a temp file, sanity
+  # check the CONTENT, and only then move it into place. A failed download
+  # leaves any existing good file untouched and aborts loudly.
+  fetch_verified() {
+    url="$1"; dest="$2"; must_contain="$3"; tmp="$dest.tmp.$$"
+    if ! curl -fsS --retry 3 --retry-delay 2 "$url" -o "$tmp"; then
+      rm -f "$tmp"
+      echo "ERROR: failed to download $(basename "$dest") from $url" >&2
+      return 1
+    fi
+    if [ ! -s "$tmp" ] || ! grep -q "$must_contain" "$tmp"; then
+      rm -f "$tmp"
+      echo "ERROR: downloaded $(basename "$dest") failed validation (expected to contain '$must_contain')." >&2
+      echo "       Refusing to install it — nginx would fail to start." >&2
+      return 1
+    fi
+    mv "$tmp" "$dest"
+    echo "  ok: $(basename "$dest")"
+  }
+
+  fetch_verified \
+    "https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf" \
+    "$data_path/conf/options-ssl-nginx.conf" \
+    "ssl_protocols" || exit 1
+
+  fetch_verified \
+    "https://raw.githubusercontent.com/certbot/certbot/master/certbot/certbot/ssl-dhparams.pem" \
+    "$data_path/conf/ssl-dhparams.pem" \
+    "BEGIN DH PARAMETERS" || exit 1
   echo
 fi
 
