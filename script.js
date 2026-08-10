@@ -1302,6 +1302,11 @@ function getLiveExtrinsicAmountSummary(ex) {
 
 // --- Rendering ---
 
+// Blocks reach this list from two sources that name the same field
+// differently: the live WS path sets `extrinsics` (see newBlock above), while
+// rows loaded from the indexer API set `extrinsicsCount`. Reading only the
+// former rendered a literal "Extrinsics: undefined" on every API-sourced row,
+// which is what the home page showed for all but the newest block.
 function renderBlocks() {
     blocksListEl.innerHTML = '';
     blocks.forEach((block, index) => {
@@ -1316,7 +1321,7 @@ function renderBlocks() {
                         Hash: <a href="/block/${block.hash}" class="item-link">${block.hash.substring(0, 10)}...</a>
                     </div>
                     <div class="item-sub">
-                        Extrinsics: ${block.extrinsics}
+                        Extrinsics: ${block.extrinsics ?? block.extrinsicsCount ?? '—'}
                     </div>
                 </div>
             </div>
