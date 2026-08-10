@@ -98,8 +98,16 @@ fi
 
 # 5. Build and deploy Docker containers
 echo "--> Initializing Let's Encrypt certificates..."
-chmod +x init-letsencrypt.sh
-./init-letsencrypt.sh
+# Invoke via `bash` rather than chmod +x && ./script.
+#
+# init-letsencrypt.sh is committed mode 100644, so `chmod +x` flipped it to
+# 100755 on every deploy. Git tracks the executable bit, so that counted as a
+# local modification and aborted the NEXT `git pull`:
+#     error: Your local changes to the following files would be overwritten by
+#     merge: init-letsencrypt.sh
+# i.e. running the deploy script made the next deploy impossible. Calling bash
+# directly needs no exec bit and leaves the working tree clean.
+bash ./init-letsencrypt.sh
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
 
