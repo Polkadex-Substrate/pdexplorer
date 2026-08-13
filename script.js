@@ -390,12 +390,24 @@ function makeTable(config) {
 
     render();
     return {
-        setData(newRows) {
+        // setData(rows, { resetPagination: true }) to explicitly jump back to
+        // the start; by default the user's position is PRESERVED.
+        //
+        // This used to reset unconditionally. The recent-views poller
+        // (refreshRecentViews, on a setInterval) calls setData on the
+        // transactions/blocks/events tables every cycle, so anyone reading
+        // page 3 was yanked back to page 1 a few seconds later — and clicking
+        // "Load Older 100 Financial Tx" scrolled you to the top instead of
+        // showing what you just loaded. Pagination looked broken because it
+        // effectively was.
+        //
+        // Preserving is safe: render() already clamps `page` to totalPages and
+        // caps the show-more window with Math.min(expandedCount, matched), so
+        // stale state can never produce an out-of-range slice — which is the
+        // problem the original reset was guarding against.
+        setData(newRows, opts) {
             rows = Array.isArray(newRows) ? newRows : [];
-            // Fresh data means stale row indices — reset pagination so the
-            // user lands on the first page / first 50 rows instead of an
-            // accidentally-out-of-range slice.
-            resetPaginationState();
+            if (opts && opts.resetPagination) resetPaginationState();
             render();
         },
         refresh()        { render(); },
@@ -2388,8 +2400,45 @@ if (deepSearchBtn) {
     });
 }
 
+// True only for something the user meant as an ACCOUNT, so search can redirect
+// to /account/<addr>.
+//
+// isValidPolkadexAddress() alone is not enough: decodeAddress() also accepts a
+// 0x-prefixed 32-byte hex string as a raw public key, so a block hash or an
+// extrinsic hash would decode "successfully" and send someone searching for a
+// block to a bogus account page. In this UI 0x-prefixed values are always
+// hashes, and a bare number is always a block height — exclude both, and
+// require the base58 length range an SS58 address actually falls in.
+function isSearchableAddress(value) {
+    const s = String(value || '').trim();
+    if (!s) return false;
+    if (s.startsWith('0x')) return false;      // block / extrinsic hash
+    if (/^\d+$/.test(s)) return false;         // block number
+    if (s.length < 46 || s.length > 50) return false;
+    return isValidPolkadexAddress(s);
+}
+
 async function performSearch(query) {
     currentSearchQuery = query;
+
+    // An SS58 address goes straight to its account page.
+    //
+    // Local search only scans the RECENT cached transactions/blocks/events and
+    // matches by exact string equality, so searching a wallet address usually
+    // found nothing (or a stray hit or two) and reported "No results found in
+    // recent local history" — for an address the explorer has full indexed
+    // history on. /account/<addr> is that history: balances, staking, and
+    // paginated transactions and events.
+    //
+    // The address is normalised to the Polkadex SS58 prefix (88) first, so a
+    // prefix-42 or prefix-0 form of the SAME account lands on one canonical
+    // URL instead of a second page that looks like a different account.
+    const addrCandidate = String(query || '').trim();
+    if (isSearchableAddress(addrCandidate)) {
+        navigateTo(`/account/${encodeURIComponent(toPolkadexAddress(addrCandidate))}`, { replace: true });
+        return;
+    }
+
     // Always reset the deep-search button to its default state when a fresh
     // local search starts. If a previous deep-search result had left the
     // button in "Back to search" mode (or the empty-state prompt had hidden
@@ -2411,13 +2460,36 @@ async function performSearch(query) {
     let html = '';
     let found = false;
 
+    // Results are rendered as real tables (makeTable), matching every other
+    // listing in the app: sortable, filterable, paginated, with links through
+    // to detail pages. They used to be emitted as raw <div>/<br> blobs — a
+    // wall of unlinked text that made a wallet-address search unusable.
+    // Containers are laid out first, then hydrated after innerHTML lands.
+    const pendingTables = [];
+
     // Search Blocks (by number or hash)
     const matchingBlocks = fullBlocks.filter(b => b.number.toString() === query || b.hash.toLowerCase() === query.toLowerCase());
     if (matchingBlocks.length > 0) {
         found = true;
-        html += `<h3 style="margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Matching Blocks</h3>`;
-        matchingBlocks.forEach(b => {
-            html += `<div style="padding: 10px 0;">Block <strong>${b.number}</strong> (${b.hash}) - ${b.extrinsicsCount} extrinsics, ${b.eventsCount} events</div>`;
+        html += `<h3 class="search-result-heading">Matching Blocks <span class="search-result-count">${matchingBlocks.length}</span></h3>
+                 <div id="search-blocks-table"></div>`;
+        pendingTables.push({
+            id: 'search-blocks-table',
+            rows: matchingBlocks,
+            columns: [
+                { key: 'number', label: 'Block', searchable: true,
+                  sort: (a, b) => (a.number || 0) - (b.number || 0),
+                  format: r => `<a href="/block/${r.number}" class="item-link">${stakingEscapeHtml(String(r.number))}</a>` },
+                { key: 'hash', label: 'Hash', searchable: true,
+                  format: r => `<a href="/block/${r.hash}" class="item-link mono">${stakingEscapeHtml(String(r.hash).slice(0, 18))}…</a>` },
+                { key: 'extrinsicsCount', label: 'Extrinsics',
+                  sort: (a, b) => (a.extrinsicsCount || 0) - (b.extrinsicsCount || 0) },
+                { key: 'eventsCount', label: 'Events',
+                  sort: (a, b) => (a.eventsCount || 0) - (b.eventsCount || 0) },
+                { key: 'timestamp', label: 'Time',
+                  format: r => stakingEscapeHtml(r.timestamp ? timeAgo(r.timestamp) : '—') }
+            ],
+            defaultSort: { key: 'number', dir: 'desc' }
         });
     }
 
@@ -2425,9 +2497,30 @@ async function performSearch(query) {
     const matchingTx = transactions.filter(t => t.hash.toLowerCase() === query.toLowerCase() || t.from.toLowerCase() === query.toLowerCase() || t.to.toLowerCase() === query.toLowerCase());
     if (matchingTx.length > 0) {
         found = true;
-        html += `<h3 style="margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Matching Transactions</h3>`;
-        matchingTx.forEach(t => {
-            html += `<div style="padding: 10px 0;">Tx Hash: <strong>${t.hash}</strong><br>From: ${t.from}<br>To: ${t.to}<br>Amount: ${t.numericAmount} PDEX</div>`;
+        html += `<h3 class="search-result-heading">Matching Transactions <span class="search-result-count">${matchingTx.length}</span></h3>
+                 <div id="search-tx-table"></div>`;
+        pendingTables.push({
+            id: 'search-tx-table',
+            rows: matchingTx,
+            columns: [
+                { key: 'hash', label: 'Tx hash', searchable: true,
+                  format: r => r.block
+                      ? `<a href="/extrinsic/${r.block}/${r.hash}" class="item-link mono">${stakingEscapeHtml(String(r.hash).slice(0, 18))}…</a>`
+                      : `<span class="mono">${stakingEscapeHtml(String(r.hash).slice(0, 18))}…</span>` },
+                { key: 'from', label: 'From', searchable: true,
+                  format: r => shortAddressLink(r.from) },
+                { key: 'to', label: 'To', searchable: true,
+                  format: r => shortAddressLink(r.to) },
+                { key: 'numericAmount', label: 'Amount (PDEX)',
+                  sort: (a, b) => (Number(a.numericAmount) || 0) - (Number(b.numericAmount) || 0),
+                  format: r => stakingEscapeHtml(String(r.amount != null ? r.amount : r.numericAmount)) },
+                { key: 'block', label: 'Block',
+                  sort: (a, b) => (a.block || 0) - (b.block || 0),
+                  format: r => r.block ? `<a href="/block/${r.block}" class="item-link">${stakingEscapeHtml(String(r.block))}</a>` : '—' },
+                { key: 'timestamp', label: 'Time',
+                  format: r => stakingEscapeHtml(r.timestamp ? timeAgo(r.timestamp) : '—') }
+            ],
+            defaultSort: { key: 'block', dir: 'desc' }
         });
     }
 
@@ -2435,9 +2528,25 @@ async function performSearch(query) {
     const matchingEvents = fullEvents.filter(e => e.hash.toLowerCase() === query.toLowerCase() || (e.txHash && e.txHash.toLowerCase() === query.toLowerCase()) || e.signerAddress.toLowerCase() === query.toLowerCase() || e.block.toString() === query);
     if (matchingEvents.length > 0) {
         found = true;
-        html += `<h3 style="margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Matching Events</h3>`;
-        matchingEvents.forEach(e => {
-            html += `<div style="padding: 10px 0;">Event: <strong>${e.section} -> ${e.method}</strong> in Block ${e.block}<br>Signer: ${e.signerName !== 'Unknown' ? e.signerName : e.signerAddress}</div>`;
+        html += `<h3 class="search-result-heading">Matching Events <span class="search-result-count">${matchingEvents.length}</span></h3>
+                 <div id="search-events-table"></div>`;
+        pendingTables.push({
+            id: 'search-events-table',
+            rows: matchingEvents,
+            columns: [
+                { key: 'section', label: 'Event', searchable: true,
+                  format: r => `<strong>${stakingEscapeHtml(r.section)}</strong>.${stakingEscapeHtml(r.method)}` },
+                { key: 'block', label: 'Block',
+                  sort: (a, b) => (a.block || 0) - (b.block || 0),
+                  format: r => `<a href="/block/${r.block}" class="item-link">${stakingEscapeHtml(String(r.block))}</a>` },
+                { key: 'signerAddress', label: 'Signer', searchable: true,
+                  format: r => (r.signerName && r.signerName !== 'Unknown')
+                      ? stakingEscapeHtml(r.signerName)
+                      : shortAddressLink(r.signerAddress) },
+                { key: 'timestamp', label: 'Time',
+                  format: r => stakingEscapeHtml(r.timestamp ? timeAgo(r.timestamp) : '—') }
+            ],
+            defaultSort: { key: 'block', dir: 'desc' }
         });
     }
 
@@ -2445,7 +2554,33 @@ async function performSearch(query) {
         html = '<div style="text-align:center; padding: 20px; color: orange;">No results found in recent local history. Try deep search.</div>';
     }
 
-    if (searchResultsContainer) searchResultsContainer.innerHTML = html;
+    if (searchResultsContainer) {
+        searchResultsContainer.innerHTML = html;
+        // Hydrate after the containers exist in the DOM.
+        for (const t of pendingTables) {
+            const container = document.getElementById(t.id);
+            if (!container) continue;
+            makeTable({
+                container,
+                rows: t.rows,
+                columns: t.columns,
+                defaultSort: t.defaultSort,
+                globalSearch: false,               // the page already has a search box
+                pagination: { pageSize: 25, showMoreMax: 100 },
+                emptyMessage: 'No matching rows.'
+            });
+        }
+    }
+}
+
+// Address cell: short, monospaced, and linked through to the account page.
+// Search results are frequently a wallet address, and a full 48-character SS58
+// string rendered as bare text is both unreadable and unclickable.
+function shortAddressLink(addr) {
+    if (!addr) return '—';
+    const s = String(addr);
+    const short = s.length > 16 ? `${s.slice(0, 8)}…${s.slice(-6)}` : s;
+    return `<a href="/account/${encodeURIComponent(s)}" class="item-link mono" title="${stakingEscapeHtml(s)}">${stakingEscapeHtml(short)}</a>`;
 }
 
 // Parse a fetch Response that we *expect* to be JSON, but might not be when

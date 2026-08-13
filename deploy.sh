@@ -196,9 +196,16 @@ echo "--> Compose project: $COMPOSE_PROJECT (pinned; independent of cwd)"
 # be asked what it is and the answer compared to this checkout. `-dirty` marks
 # uncommitted changes, in which case the SHA alone does not identify the code.
 GIT_SHA="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+# --untracked-files=no is essential: a deployment directory ALWAYS contains
+# untracked runtime state (certbot/ holding the origin cert, data/, an old
+# pdexscan/ checkout). Counting those marked every single build "-dirty",
+# which makes the flag meaningless — a warning that is always on is not a
+# warning. Only MODIFIED TRACKED files mean the running code differs from the
+# commit, which is the thing this flag is supposed to tell you.
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
     GIT_SHA="${GIT_SHA}-dirty"
-    echo "--> WARNING: working tree has uncommitted changes; tagging build as $GIT_SHA"
+    echo "--> WARNING: tracked files differ from HEAD; tagging build as $GIT_SHA"
+    git status --short --untracked-files=no | sed 's/^/      /'
 fi
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "--> Building $GIT_SHA at $BUILD_TIME"

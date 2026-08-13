@@ -3868,6 +3868,35 @@ h1, h2, h3 { font-weight: 600; }
 }
 
 /* =============================================================================
+   Search results
+   =============================================================================
+   Results render through makeTable now (sortable, paginated, linked). These
+   cover the section headings and the monospaced hash/address cells. */
+.search-result-heading {
+    margin: 24px 0 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 1.05rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.search-result-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.06);
+    color: var(--text-secondary);
+}
+/* Hashes and SS58 addresses: monospaced so truncated values stay comparable
+   at a glance (proportional fonts make two different hashes look alike). */
+.mono {
+    font-family: "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+}
+
+/* =============================================================================
    /chain-state — runtime storage inspector
    ========================================================================== */
 .cs-hero { margin-bottom: 18px; }
