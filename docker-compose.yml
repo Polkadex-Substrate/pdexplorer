@@ -4,6 +4,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
+      # Build provenance — deploy.sh exports these. Defaults keep a bare
+      # `docker compose build` working outside the deploy script.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     container_name: pdexplorer-backend
     restart: unless-stopped
     ports:
@@ -33,6 +38,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     container_name: pdexplorer-frontend
     restart: unless-stopped
     ports:

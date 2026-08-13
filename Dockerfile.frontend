@@ -7,7 +7,17 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 COPY . .
-RUN npm run build
+
+# Build provenance. deploy.sh passes the git SHA of the tree it built from (with
+# a `-dirty` suffix when the working tree had uncommitted changes). Emitting it
+# as a static file means you can ask the RUNNING site what it is built from:
+#     curl https://explorer.polkadex.ee/version.json
+# and compare against `git rev-parse --short=12 HEAD`. Several outages today
+# were "the fix isn't deployed" wearing the costume of "the fix doesn't work".
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+RUN npm run build \
+ && printf '{"component":"frontend","gitSha":"%s","builtAt":"%s"}\n' "$GIT_SHA" "$BUILD_TIME" > /app/dist/version.json
 
 # Pin nginx to a specific minor too; the floating `nginx:alpine` tag breaks
 # reproducible builds whenever upstream cuts a release.

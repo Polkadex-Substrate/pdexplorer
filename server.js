@@ -1940,6 +1940,38 @@ app.get('/api/decode/:block', async (req, res) => {
     }
 });
 
+// ---- GET /api/version -------------------------------------------------------
+// What is this process actually running? Baked in at image build time by
+// deploy.sh (see the ARG/ENV pair in Dockerfile.backend).
+//
+// This exists because "the fix doesn't work" and "the fix isn't deployed" look
+// identical from the outside, and we burned real time today on the second while
+// debugging as if it were the first — a `git pull` that silently aborted, a
+// `docker compose up` that reported "Running" instead of "Recreated", and a
+// browser holding a cached bundle. Compare against your checkout with:
+//     curl -s https://explorer.polkadex.ee/api/version | jq -r .gitSha
+//     git rev-parse --short=12 HEAD
+//
+// NEVER cached: a cached answer to "what version are you?" is worse than no
+// answer, because it is confidently wrong.
+app.get('/api/version', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({
+        component: 'backend',
+        gitSha: process.env.GIT_SHA || 'unknown',
+        builtAt: process.env.BUILD_TIME || 'unknown',
+        // `-dirty` means the tree had uncommitted changes when the image was
+        // built, so the SHA alone does NOT identify the running code.
+        dirty: /-dirty$/.test(process.env.GIT_SHA || ''),
+        node: process.version,
+        pid: process.pid,
+        startedAt: new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString(),
+        uptimeSeconds: Math.round(process.uptime()),
+        specVersion: globalApi && globalApi.runtimeVersion ? globalApi.runtimeVersion.specVersion.toNumber() : null,
+        rpcConnected: !!(globalApi && globalApi.isConnected)
+    });
+});
+
 // --- SEO endpoints (robots, sitemap) -----------------------------------------
 // These are served by the backend so the sitemap can be generated dynamically
 // from the SQLite index (top validators, recent blocks, top holders). nginx

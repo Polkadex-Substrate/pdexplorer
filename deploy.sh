@@ -191,12 +191,66 @@ if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="do
 COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-pdexplorer}"
 echo "--> Compose project: $COMPOSE_PROJECT (pinned; independent of cwd)"
 
+# ---- Build provenance ------------------------------------------------------
+# Stamp the image with the exact tree it was built from, so the running site can
+# be asked what it is and the answer compared to this checkout. `-dirty` marks
+# uncommitted changes, in which case the SHA alone does not identify the code.
+GIT_SHA="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    GIT_SHA="${GIT_SHA}-dirty"
+    echo "--> WARNING: working tree has uncommitted changes; tagging build as $GIT_SHA"
+fi
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "--> Building $GIT_SHA at $BUILD_TIME"
+
 echo "--> Building and starting full Docker stack..."
-# Pass -p explicitly rather than exporting the variable: `sudo` strips the
-# environment by default, so an exported COMPOSE_PROJECT_NAME would not reach
-# the compose process and the bug would silently return.
+# Pass -p and the build args explicitly rather than exporting them: `sudo`
+# strips the environment by default, so exported variables would not reach the
+# compose process and the stamp would silently read "unknown".
 sudo $DC -p "$COMPOSE_PROJECT" down || true
-sudo $DC -p "$COMPOSE_PROJECT" up -d --build
+sudo GIT_SHA="$GIT_SHA" BUILD_TIME="$BUILD_TIME" $DC -p "$COMPOSE_PROJECT" up -d --build
+
+# ---- Verify what actually came up ------------------------------------------
+# A deploy that "succeeded" while leaving the old code running is the failure
+# mode this whole mechanism exists to catch, so check rather than assume.
+echo "--> Verifying deployed build..."
+DEPLOYED=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    DEPLOYED="$(curl -s --max-time 3 http://127.0.0.1:3001/api/version 2>/dev/null \
+        | sed -n 's/.*"gitSha":"\([^"]*\)".*/\1/p')"
+    [ -n "$DEPLOYED" ] && break
+    sleep 2
+done
+
+if [ -z "$DEPLOYED" ]; then
+    echo "    ! Backend did not answer /api/version — check: sudo docker logs pdexplorer-backend --tail 50"
+elif [ "$DEPLOYED" = "$GIT_SHA" ]; then
+    echo "    ✓ backend is running $DEPLOYED (matches this checkout)"
+else
+    echo "    ! MISMATCH: backend reports '$DEPLOYED' but this checkout built '$GIT_SHA'"
+    echo "      The old container is probably still running. Try:"
+    echo "        sudo $DC -p $COMPOSE_PROJECT up -d --build --force-recreate backend"
+fi
+# Frontend check hits nginx locally, bypassing Cloudflare — otherwise a cached
+# edge response would tell you about a build from hours ago.
+FE_VER="$(curl -sk --max-time 3 https://127.0.0.1/version.json 2>/dev/null \
+    | sed -n 's/.*"gitSha":"\([^"]*\)".*/\1/p')"
+if [ -z "$FE_VER" ]; then
+    FE_VER="$(curl -s --max-time 3 http://127.0.0.1/version.json 2>/dev/null \
+        | sed -n 's/.*"gitSha":"\([^"]*\)".*/\1/p')"
+fi
+if [ -z "$FE_VER" ]; then
+    echo "    ! Frontend did not serve /version.json — check: sudo docker logs pdexplorer-frontend --tail 30"
+elif [ "$FE_VER" = "$GIT_SHA" ]; then
+    echo "    ✓ frontend is running $FE_VER (matches this checkout)"
+else
+    echo "    ! MISMATCH: frontend reports '$FE_VER' but this checkout built '$GIT_SHA'"
+fi
+
+DOMAIN_HINT="$(grep -E '^DOMAIN=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'"' | tr -d ' ')"
+echo "    Public check (may lag until Cloudflare is purged):"
+echo "      curl -s https://${DOMAIN_HINT:-your-domain}/api/version | jq -r .gitSha"
+echo "      curl -s https://${DOMAIN_HINT:-your-domain}/version.json | jq -r .gitSha"
 
 # 6. Cleanup unused docker images
 echo "--> Cleaning up dangling images to save space..."

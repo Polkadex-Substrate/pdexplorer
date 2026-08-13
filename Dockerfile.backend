@@ -13,6 +13,13 @@ RUN npm install --omit=dev && chown -R node:node /app
 
 COPY --chown=node:node server.js db.js email.js backfill-transactions-from-events.mjs migrate-add-indexes.mjs ./
 
+# Build provenance, surfaced by GET /api/version. Declared AFTER npm install so
+# a new SHA doesn't invalidate the dependency layer on every deploy.
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV GIT_SHA=$GIT_SHA
+ENV BUILD_TIME=$BUILD_TIME
+
 USER node
 
 # Expose backend API port
