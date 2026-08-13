@@ -1540,11 +1540,24 @@ app.get('/api/rpc/metadata', async (req, res) => {
             return res.json(devMetadataCache.payload);
         }
 
+        // Resolve a metadata pallet name to the key polkadot-js actually uses on
+        // api.query / api.consts / api.tx.
+        //
+        // Naively lowercasing the first character is WRONG for all-caps pallet
+        // names: "OCEX" becomes "oCEX", but polkadot-js camelCases it to "ocex".
+        // The lookup then misses and the pallet is reported as having ZERO
+        // storage items — so OCEX, the very pallet under investigation, was
+        // invisible in the metadata while /api/state/ocex/... worked fine.
+        // Match against the real key list instead of guessing at the spelling.
+        const queryKeyIndex = new Map();
+        const normKey = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+        for (const k of Object.keys(globalApi.query)) queryKeyIndex.set(normKey(k), k);
+
         const pallets = [];
         for (const p of globalApi.runtimeMetadata.asLatest.pallets) {
             const name = p.name.toString();
-            // api.query/api.consts key pallets by lowerCamelCase name.
-            const q = name.charAt(0).toLowerCase() + name.slice(1);
+            const q = queryKeyIndex.get(normKey(name))
+                   || (name.charAt(0).toLowerCase() + name.slice(1));
             const storage = [];
             if (globalApi.query[q]) {
                 for (const item of Object.keys(globalApi.query[q]).sort()) {
