@@ -1811,6 +1811,92 @@ app.post('/api/rpc/call', async (req, res) => {
     }
 });
 
+// ---- GET /api/decode/:block -------------------------------------------------
+// Every extrinsic in a block, decoded argument by argument, with each argument's
+// NAME, declared TYPE, human form, JSON form AND raw hex.
+//
+// Why the raw hex is non-negotiable here: toHuman() is a presentation layer. It
+// groups big integers with separators and abbreviates long hashes to
+// "0x0000…0000", so an all-zero H256 and a mostly-zero one look identical, and
+// a u64 of 2^63 reads as an innocuous "9,223,372,036,854,775,808". Anyone
+// verifying a claim about a call needs the bytes, not the formatting.
+//
+// Vec-typed arguments also report a `count`, because "how many signatures were
+// attached" is usually the actual question and counting a rendered array is a
+// poor way to answer it.
+//
+// Filters: ?section=ocex&method=submit_snapshot&index=2
+app.get('/api/decode/:block', async (req, res) => {
+    if (!devApiGate(req, res)) return;
+    try {
+        const blockId = String(req.params.block).trim();
+        let blockHash = blockId;
+        if (/^\d+$/.test(blockId)) {
+            const h = await withTimeout(globalApi.rpc.chain.getBlockHash(parseInt(blockId, 10)), DEV_API_TIMEOUT_MS, 'getBlockHash');
+            if (h.isEmpty) return res.status(404).json({ error: `Block ${blockId} not found` });
+            blockHash = h.toHex();
+        } else if (!/^0x[0-9a-fA-F]{64}$/.test(blockHash)) {
+            return res.status(400).json({ error: 'Expected a block number or a 0x-prefixed 32-byte block hash.' });
+        }
+
+        const signedBlock = await withTimeout(globalApi.rpc.chain.getBlock(blockHash), DEV_API_TIMEOUT_MS, 'getBlock');
+        if (!signedBlock) return res.status(404).json({ error: 'Block not found' });
+
+        const wantSection = req.query.section ? String(req.query.section).toLowerCase() : null;
+        const wantMethod = req.query.method ? String(req.query.method).toLowerCase() : null;
+        const wantIndex = req.query.index !== undefined ? parseInt(req.query.index, 10) : null;
+
+        const out = [];
+        const extrinsics = signedBlock.block.extrinsics || [];
+        for (let i = 0; i < extrinsics.length; i++) {
+            if (wantIndex !== null && i !== wantIndex) continue;
+            const ex = extrinsics[i];
+            const call = ex.method;
+            const section = call.section, method = call.method;
+            if (wantSection && section.toLowerCase() !== wantSection) continue;
+            if (wantMethod && method.toLowerCase() !== wantMethod) continue;
+
+            // Pair each decoded value with its declared name and type from the
+            // call metadata — positional args alone are near-useless for audit.
+            const argMeta = (call.meta && call.meta.args) || [];
+            const args = call.args.map((v, ai) => {
+                const m = argMeta[ai];
+                const s = serialiseCodec(v);
+                return {
+                    name: m ? m.name.toString() : `arg${ai}`,
+                    type: m ? (m.typeName ? m.typeName.toString() : typeName(m.type)) : null,
+                    ...s
+                };
+            });
+
+            out.push({
+                index: i,
+                hash: ex.hash.toHex(),
+                section, method,
+                isSigned: ex.isSigned,
+                signer: ex.isSigned ? ex.signer.toString() : null,
+                nonce: ex.isSigned ? ex.nonce.toNumber() : null,
+                args,
+                // Full SCALE-encoded call, so a reader can re-decode independently.
+                callHex: call.toHex(),
+                callLength: call.toU8a().length
+            });
+        }
+
+        cacheLong(res); // historical blocks are immutable
+        res.json({
+            block: signedBlock.block.header.number.toNumber(),
+            blockHash,
+            extrinsicCount: extrinsics.length,
+            returned: out.length,
+            extrinsics: out
+        });
+    } catch (err) {
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ error: archiveHint(err, { block: req.params.block }) });
+    }
+});
+
 // --- SEO endpoints (robots, sitemap) -----------------------------------------
 // These are served by the backend so the sitemap can be generated dynamically
 // from the SQLite index (top validators, recent blocks, top holders). nginx
@@ -1842,6 +1928,7 @@ const SITEMAP_STATIC_ROUTES = [
     // Developer-facing API reference — targets searches like "Polkadex API"
     // or "Polkadex mobile app integration".
     { path: '/developers',        changefreq: 'monthly', priority: '0.6' },
+    { path: '/chain-state',       changefreq: 'monthly', priority: '0.6' },
     // Static legal pages — low changefreq but want them indexed so users
     // searching for "Polkadex explorer privacy" land on the right page.
     { path: '/privacy',           changefreq: 'yearly',  priority: '0.4' },
@@ -2023,6 +2110,7 @@ app.get('/robots.txt', (req, res) => {
         'Allow: /help',
         'Allow: /help/',
         'Allow: /developers',
+        'Allow: /chain-state',
         'Allow: /brand',
         'Allow: /privacy',
         'Allow: /cookies',

@@ -3868,6 +3868,82 @@ h1, h2, h3 { font-weight: 600; }
 }
 
 /* =============================================================================
+   /chain-state — runtime storage inspector
+   ========================================================================== */
+.cs-hero { margin-bottom: 18px; }
+.cs-hero h1 { font-size: 1.6rem; margin-bottom: 6px; }
+.cs-tagline { color: var(--text-secondary); }
+
+.cs-panel { padding: 20px; border-radius: var(--radius-sm); }
+.cs-controls,
+.cs-keys {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+}
+.cs-keys:not(:empty) { margin-top: 14px; }
+.cs-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cs-field > span { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); }
+.cs-field > span em { text-transform: none; letter-spacing: 0; color: var(--brand-secondary, #8B7CFF); font-style: normal; }
+.cs-field select,
+.cs-field input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    background: rgba(255,255,255,0.04);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 0.92rem;
+}
+.cs-field input { font-family: "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+.cs-nokeys { grid-column: 1 / -1; color: var(--text-secondary); font-size: 0.85rem; }
+.cs-actions { display: flex; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.cs-status { color: var(--text-secondary); font-size: 0.88rem; }
+.cs-err { color: var(--danger, #ff5c5c); }
+.cs-warn { color: #f0b429; }
+.cs-count { color: var(--success, #3ddc97); font-weight: 600; }
+.cs-docs { margin-top: 12px; color: var(--text-secondary); font-size: 0.85rem; }
+
+.cs-result { margin-top: 18px; }
+.cs-result-head { margin-bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+/* The verbatim echo of the key that was sent. Deliberately prominent: it is
+   how a reader confirms no numeric coercion happened to a large u64 key. */
+.cs-echo { font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 10px; }
+.cs-tabs { display: flex; gap: 6px; margin-bottom: -1px; }
+.cs-tab {
+    padding: 6px 14px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+.cs-tab.active { color: var(--text-primary); background: rgba(255,255,255,0.05); border-bottom-color: transparent; }
+.cs-result pre,
+.cs-entry pre {
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    overflow: auto;
+    max-height: 60vh;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.cs-entries { display: flex; flex-direction: column; gap: 10px; }
+.cs-entry-key { font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 4px; }
+
+@media (max-height: 900px) {
+    .cs-panel { padding: 14px; }
+    .cs-hero { margin-bottom: 12px; }
+}
+
+/* =============================================================================
    Laptop / short-viewport adaptation
    =============================================================================
    Every other breakpoint in this file keys off max-WIDTH. A 14" MacBook Pro at

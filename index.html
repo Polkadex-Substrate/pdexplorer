@@ -197,6 +197,7 @@
 
                 <div class="nav-section-title">Build</div>
                 <a href="/developers" class="nav-item" data-target="developers"><i class='bx bx-code-alt'></i> Developers</a>
+                <a href="/chain-state" class="nav-item" data-target="chain-state"><i class='bx bx-data'></i> Chain State</a>
             </nav>
             <div class="sidebar-footer">
                 <!-- Sidebar price ticker. Polled by pollPriceTicker() in script.js
@@ -1099,6 +1100,15 @@
                  /llms.txt in sync when endpoints change. -->
             <div class="developers-page page-section" data-page="developers" style="display: none;">
                 <div id="developers-page-content"></div>
+            </div>
+
+            <!-- /chain-state — generic runtime storage inspector (polkadot.js
+                 Apps "Chain state" parity). Populated by renderChainStatePage()
+                 in script.js from /api/rpc/metadata + /api/state/:pallet/:item.
+                 Read-only; supports querying any storage item at any historical
+                 block, which is what makes on-chain forensics reproducible. -->
+            <div class="chain-state-page page-section" data-page="chain-state" style="display: none;">
+                <div id="chain-state-page-content"></div>
             </div>
 
             <!-- Help Center -->

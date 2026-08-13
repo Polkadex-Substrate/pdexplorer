@@ -2716,7 +2716,11 @@ const ROUTE_SEO = {
     // Developer-facing API reference. Targets searches like "Polkadex API",
     // "Polkadex mobile app integration", "Polkadex JSON endpoints".
     'developers':         { title: 'Developers — Polkadex Explorer API Reference',
-                            description: 'JSON API reference for the Polkadex Mainnet Explorer: blocks, transactions, validators, accounts, wallets, governance, price, and email alerts. CORS rules for mobile and web. Caching tiers, error envelopes, address format.' }
+                            description: 'JSON API reference for the Polkadex Mainnet Explorer: blocks, transactions, validators, accounts, wallets, governance, price, and email alerts. CORS rules for mobile and web. Caching tiers, error envelopes, address format.' },
+    // Chain-state inspector. Targets "polkadex chain state", "query polkadex
+    // storage", "polkadex historical state" — the polkadot.js Apps audience.
+    'chain-state':        { title: 'Chain State — Query Polkadex Runtime Storage at Any Block',
+                            description: 'Read any Polkadex Mainnet runtime storage item at the current head or any historical block. Pallet and storage dropdowns from live runtime metadata, typed keys, and Human/JSON/Hex output for reproducible on-chain verification.' }
 };
 
 // Update <title>, meta[description], canonical, and Open Graph / Twitter tags
@@ -4285,6 +4289,12 @@ function routeTo(target) {
                 // server-side proxies, third-party web apps). Static content,
                 // SEO-indexable, no data fetch.
                 renderDevelopersPage();
+            } else if (mainTarget === 'chain-state') {
+                // /chain-state — generic runtime storage inspector
+                // (polkadot.js "Chain state" parity). Loads metadata once,
+                // then queries on demand; supports ?pallet=&item=&args=&at=
+                // deep links so a finding can be shared and re-verified.
+                renderChainStatePage();
             }
         } else {
             page.style.display = 'none';
@@ -4754,6 +4764,262 @@ function buildPriceStatsHtml(history, days) {
             <div class="staking-summary-card"><div class="label">${periodLabel} volume</div><div class="value">${totalVol > 0 ? fmtBig(totalVol) : '—'}</div></div>
         </div>
     `;
+}
+
+// Escape a value for safe interpolation into an innerHTML template.
+// The chain-state inspector renders arbitrary runtime data (storage keys,
+// type names, node error strings) into HTML, and any of it can contain
+// angle brackets — SCALE type names like `Vec<AccountId32>` would otherwise be
+// parsed as tags and silently mangle the output, quite apart from the
+// injection risk. Defined here because the codebase had no such helper.
+function escapeHtml(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// ─── /chain-state ────────────────────────────────────────────────────────────
+// Generic runtime storage inspector — the explorer's replacement for
+// polkadot.js Apps → Developer → Chain state.
+//
+// Design notes that matter for forensic use:
+//   * Keys are kept as STRINGS the whole way. A u64 key like 2^63
+//     (9223372036854775808) is past Number.MAX_SAFE_INTEGER, so touching it
+//     with Number() silently queries a different key. The input value is sent
+//     verbatim and the response echoes `args` back so it can be confirmed.
+//   * Results show Human / JSON / Hex. toHuman() prettifies big integers and
+//     truncates hashes, which is precisely how an anomalous value (an all-zero
+//     state_hash, a 2^63 id) escapes a reviewer's notice.
+//   * Every query is deep-linkable, so a finding can be pasted into a report
+//     and re-run by anyone.
+let chainStateMeta = null;      // cached /api/rpc/metadata payload
+let chainStateBusy = false;
+
+async function renderChainStatePage() {
+    const root = document.getElementById('chain-state-page-content');
+    if (!root) return;
+
+    root.innerHTML = `
+        <div class="cs-hero">
+            <h1>Chain state</h1>
+            <p class="cs-tagline">Read any runtime storage item, at the current head or at any historical block. Read-only.</p>
+        </div>
+        <div class="cs-panel glass">
+            <div class="cs-controls">
+                <label class="cs-field">
+                    <span>Pallet</span>
+                    <select id="cs-pallet"><option>Loading…</option></select>
+                </label>
+                <label class="cs-field">
+                    <span>Storage item</span>
+                    <select id="cs-item"><option>—</option></select>
+                </label>
+                <label class="cs-field cs-field-at">
+                    <span>At block <em>(optional — blank = latest)</em></span>
+                    <input id="cs-at" type="text" inputmode="numeric" placeholder="e.g. 12250870 or 0x…" autocomplete="off">
+                </label>
+            </div>
+            <div id="cs-keys" class="cs-keys"></div>
+            <div class="cs-actions">
+                <button id="cs-run" class="wallet-action-btn primary" type="button">Query</button>
+                <button id="cs-entries" class="wallet-action-btn" type="button" title="List the first entries of a map">List entries</button>
+                <button id="cs-copy" class="wallet-action-btn" type="button">Copy link</button>
+                <span id="cs-status" class="cs-status"></span>
+            </div>
+            <div id="cs-docs" class="cs-docs"></div>
+        </div>
+        <div id="cs-result" class="cs-result"></div>
+    `;
+
+    const $ = id => document.getElementById(id);
+    const palletSel = $('cs-pallet'), itemSel = $('cs-item');
+
+    // ---- load metadata (cached across visits) ----
+    try {
+        if (!chainStateMeta) {
+            $('cs-status').textContent = 'Loading runtime metadata…';
+            const r = await fetch('/api/rpc/metadata');
+            if (!r.ok) throw new Error(`metadata ${r.status}`);
+            chainStateMeta = await r.json();
+        }
+        $('cs-status').textContent = '';
+    } catch (e) {
+        $('cs-status').innerHTML = `<span class="cs-err">Could not load metadata: ${escapeHtml(e.message)}</span>`;
+        return;
+    }
+
+    const pallets = (chainStateMeta.pallets || []).filter(p => p.storage && p.storage.length);
+    palletSel.innerHTML = pallets.map(p => `<option value="${p.queryKey}">${escapeHtml(p.name)}</option>`).join('');
+
+    function currentPallet() { return pallets.find(p => p.queryKey === palletSel.value); }
+    function currentItem() {
+        const p = currentPallet();
+        return p && p.storage.find(s => s.item === itemSel.value);
+    }
+
+    function fillItems(preselect) {
+        const p = currentPallet();
+        if (!p) return;
+        itemSel.innerHTML = p.storage.map(s => `<option value="${s.item}">${escapeHtml(s.item)}</option>`).join('');
+        if (preselect && p.storage.some(s => s.item === preselect)) itemSel.value = preselect;
+        fillKeys();
+    }
+
+    // Render one input per storage key, labelled with its SCALE type so the
+    // user knows whether an AccountId, an EraIndex or a u64 is expected.
+    function fillKeys(values) {
+        const s = currentItem();
+        const box = $('cs-keys');
+        const docs = $('cs-docs');
+        if (!s) { box.innerHTML = ''; docs.textContent = ''; return; }
+        docs.innerHTML = s.docs && s.docs.length
+            ? `<i class='bx bx-info-circle'></i> ${escapeHtml(s.docs.join(' '))}`
+            : '';
+        if (!s.keyCount) {
+            box.innerHTML = `<div class="cs-nokeys">No keys — this is a plain storage value. Returns <code>${escapeHtml(s.valueType || '')}</code>.</div>`;
+            return;
+        }
+        box.innerHTML = s.keyTypes.map((t, i) => `
+            <label class="cs-field">
+                <span>Key ${s.keyCount > 1 ? i + 1 : ''} <em>${escapeHtml(t)}</em></span>
+                <input class="cs-key" data-i="${i}" type="text" autocomplete="off"
+                       value="${values && values[i] ? escapeHtml(values[i]) : ''}"
+                       placeholder="${escapeHtml(t)}">
+            </label>`).join('')
+            + `<div class="cs-nokeys">Returns <code>${escapeHtml(s.valueType || '')}</code></div>`;
+    }
+
+    function readKeys() {
+        // Values are taken as typed. No parsing, no Number() — see the note at
+        // the top of this section.
+        return Array.from(document.querySelectorAll('.cs-key'))
+            .map(i => i.value.trim()).filter(v => v !== '');
+    }
+
+    async function runQuery(entries) {
+        if (chainStateBusy) return;
+        const s = currentItem();
+        if (!s) return;
+        const args = readKeys();
+        const at = $('cs-at').value.trim();
+
+        if (!entries && s.keyCount && args.length !== s.keyCount) {
+            $('cs-status').innerHTML = `<span class="cs-err">This item needs ${s.keyCount} key(s); ${args.length} supplied.</span>`;
+            return;
+        }
+
+        const qs = new URLSearchParams();
+        if (args.length) qs.set('args', args.join(','));
+        if (at) qs.set('at', at);
+        if (entries) qs.set('entries', '1');
+        const url = `/api/state/${palletSel.value}/${itemSel.value}?${qs}`;
+
+        chainStateBusy = true;
+        $('cs-status').textContent = 'Querying…';
+        $('cs-result').innerHTML = '';
+        try {
+            const r = await fetch(url);
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+            $('cs-status').textContent = '';
+            renderChainStateResult(data);
+            // Reflect the query in the URL so it can be shared/bookmarked.
+            const share = new URLSearchParams({ pallet: palletSel.value, item: itemSel.value });
+            if (args.length) share.set('args', args.join(','));
+            if (at) share.set('at', at);
+            history.replaceState({}, '', `/chain-state?${share}`);
+        } catch (e) {
+            $('cs-status').innerHTML = `<span class="cs-err">${escapeHtml(e.message)}</span>`;
+        } finally {
+            chainStateBusy = false;
+        }
+    }
+
+    palletSel.addEventListener('change', () => fillItems());
+    itemSel.addEventListener('change', () => fillKeys());
+    $('cs-run').addEventListener('click', () => runQuery(false));
+    $('cs-entries').addEventListener('click', () => runQuery(true));
+    $('cs-copy').addEventListener('click', () => {
+        navigator.clipboard.writeText(window.location.href);
+        $('cs-status').textContent = 'Link copied.';
+        setTimeout(() => { $('cs-status').textContent = ''; }, 1500);
+    });
+
+    // ---- restore from query string (deep link) ----
+    const params = new URLSearchParams(window.location.search || '');
+    const qp = params.get('pallet'), qi = params.get('item');
+    if (qp && pallets.some(p => p.queryKey === qp)) {
+        palletSel.value = qp;
+        fillItems(qi);
+        const qargs = params.get('args');
+        if (qargs) fillKeys(qargs.split(','));
+        if (params.get('at')) $('cs-at').value = params.get('at');
+        if (qi) runQuery(false);
+    } else {
+        fillItems();
+    }
+}
+
+// Render a /api/state result. Always shows Human, JSON and Hex — never just
+// the friendly rendering.
+function renderChainStateResult(d) {
+    const box = document.getElementById('cs-result');
+    if (!box) return;
+
+    const atLabel = d.at
+        ? `block <a href="/block/${d.at.block}" class="item-link">${d.at.block}</a> <code>${escapeHtml(String(d.at.hash).slice(0, 18))}…</code>`
+        : 'latest (chain head)';
+
+    if (d.entries) {
+        box.innerHTML = `
+            <div class="cs-result-head">
+                <strong>${escapeHtml(d.pallet)}.${escapeHtml(d.item)}</strong> — ${d.entriesTotal} entr${d.entriesTotal === 1 ? 'y' : 'ies'} at ${atLabel}
+                ${d.truncated ? `<span class="cs-warn">showing first ${d.limit}</span>` : ''}
+            </div>
+            <div class="cs-entries">${d.entries.map(e => `
+                <div class="cs-entry">
+                    <div class="cs-entry-key"><code>${escapeHtml(JSON.stringify(e.key))}</code></div>
+                    <pre>${escapeHtml(JSON.stringify(e.value.json, null, 2))}</pre>
+                </div>`).join('')}</div>`;
+        return;
+    }
+
+    // A Vec result's length is the headline fact ("empty" vs "200 validators"),
+    // so state it plainly instead of making the user count a JSON array.
+    const countLine = (d.count !== undefined && d.count !== null)
+        ? `<span class="cs-count">${d.count} item${d.count === 1 ? '' : 's'}</span>` : '';
+    const emptyLine = d.isEmpty
+        ? `<span class="cs-warn">empty / default value</span>` : '';
+
+    box.innerHTML = `
+        <div class="cs-result-head">
+            <strong>${escapeHtml(d.pallet)}.${escapeHtml(d.item)}${d.args && d.args.length ? '(' + d.args.map(escapeHtml).join(', ') + ')' : ''}</strong>
+            — at ${atLabel} ${countLine} ${emptyLine}
+        </div>
+        ${d.args && d.args.length ? `<div class="cs-echo">Key sent verbatim: ${d.args.map(a => `<code>${escapeHtml(a)}</code>`).join(', ')}</div>` : ''}
+        <div class="cs-tabs">
+            <button class="cs-tab active" data-t="human">Human</button>
+            <button class="cs-tab" data-t="json">JSON</button>
+            <button class="cs-tab" data-t="hex">Hex</button>
+        </div>
+        <pre id="cs-out">${escapeHtml(JSON.stringify(d.human, null, 2))}</pre>`;
+
+    const views = {
+        human: JSON.stringify(d.human, null, 2),
+        json:  JSON.stringify(d.json, null, 2),
+        hex:   d.hex || '(not representable as hex)'
+    };
+    box.querySelectorAll('.cs-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            box.querySelectorAll('.cs-tab').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('cs-out').textContent = views[btn.dataset.t];
+        });
+    });
 }
 
 // ─── /developers ─────────────────────────────────────────────────────────────

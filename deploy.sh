@@ -107,11 +107,36 @@ else
     cd "$DEPLOY_DIR"
 fi
 
-# 4.5 Ensure .env exists
+# 4.5 Require a REAL .env — never fall back to example defaults.
+#
+# This used to `cp .env.example .env` and carry on. That converted a
+# misconfiguration into a SILENT one: a fresh checkout received a template
+# .env and the whole stack came up looking perfectly healthy while
+#   * EMAIL_PROVIDER / POSTMARK_TOKEN sat commented out, so governance email
+#     alerts stopped going out with no error anywhere, and
+#   * ALLOWED_ORIGINS lacked the production origins, so polkadex.ee was
+#     CORS-blocked from calling the API.
+# Nothing crashed, so nothing got noticed. Failing loudly at deploy time is far
+# cheaper than discovering it from user reports days later.
 if [ ! -f .env ]; then
-    echo "--> .env file not found. Copying from .env.example..."
-    cp .env.example .env
-    echo "PLEASE EDIT .env file with your actual domain and email if different, then re-run deploy.sh."
+    echo "ERROR: no .env found in $(pwd) — refusing to start with example defaults."
+    echo
+    echo "  A template lives at .env.example. Create a real config with:"
+    echo "      cp .env.example .env && \${EDITOR:-nano} .env"
+    echo
+    echo "  At minimum set: DOMAIN, LETSENCRYPT_EMAIL, DATA_PATH, ALLOWED_ORIGINS."
+    echo "  DATA_PATH matters most: pointing it at the wrong directory makes the"
+    echo "  backend re-index the entire chain from scratch."
+    exit 1
+fi
+
+# An UNEDITED copy of the template is the same failure wearing a disguise —
+# the file exists, so the check above passes, but every value is a default.
+if [ -f .env.example ] && cmp -s .env .env.example; then
+    echo "ERROR: .env is byte-identical to .env.example — refusing to start with example defaults."
+    echo "       Edit .env with this deployment's real values first"
+    echo "       (DOMAIN, DATA_PATH, ALLOWED_ORIGINS, email provider credentials)."
+    exit 1
 fi
 
 # 5. Build and deploy Docker containers
