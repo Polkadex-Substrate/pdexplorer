@@ -1408,6 +1408,409 @@ async function loadValidatorHistory(address) {
     return { history, triggers };
 }
 
+// =============================================================================
+// Developer / chain-inspection API  ("polkadot.js Apps parity")
+// =============================================================================
+// Generic, READ-ONLY access to runtime metadata, storage and constants at any
+// block, so the explorer can replace polkadot.js Apps for chain forensics —
+// e.g. reading OCEX.Authorities(6280) at block 12,250,870 and comparing it
+// against OCEX.Authorities(9223372036854775808).
+//
+// Three invariants hold everywhere below:
+//
+//  1. READ ONLY. Only api.query / api.consts / an allowlisted set of read RPCs
+//     are reachable. api.tx is never touched, so no endpoint here can submit an
+//     extrinsic no matter what it's fed.
+//
+//  2. ARGUMENTS STAY STRINGS. Storage keys are passed to polkadot-js exactly as
+//     the client sent them, never via JSON.parse or Number(). A u64 key like
+//     9223372036854775808 (2^63) is far beyond Number.MAX_SAFE_INTEGER
+//     (9007199254740991) — parsing it as a JS number silently returns
+//     9223372036854776000 and you'd query the WRONG key while the UI showed the
+//     right one. That failure mode is invisible and would quietly corrupt
+//     exactly the forensic answers this API exists to provide.
+//
+//  3. BOUNDED. Public and unauthenticated, so every path is rate limited, time
+//     limited, and size capped — an arbitrary storage query is otherwise a
+//     first-class DoS vector against the chain RPC node.
+// =============================================================================
+
+// Per-IP rate limit for the developer endpoints. Mirrors the email-signup
+// limiter's approach (sliding window in memory, per worker).
+const DEV_API_RATE_LIMIT_PER_MIN = readPositiveInteger(process.env.DEV_API_RATE_LIMIT_PER_MIN, 60);
+const devApiHits = new Map(); // ip -> [timestamps]
+
+function devApiRateOk(ip) {
+    const cutoff = Date.now() - 60 * 1000;
+    const arr = (devApiHits.get(ip) || []).filter(t => t > cutoff);
+    if (arr.length >= DEV_API_RATE_LIMIT_PER_MIN) {
+        devApiHits.set(ip, arr);
+        return false;
+    }
+    arr.push(Date.now());
+    devApiHits.set(ip, arr);
+    return true;
+}
+// Keep the map from growing without bound on a long-lived process.
+setInterval(() => {
+    const cutoff = Date.now() - 60 * 1000;
+    for (const [ip, arr] of devApiHits) {
+        const live = arr.filter(t => t > cutoff);
+        if (live.length) devApiHits.set(ip, live); else devApiHits.delete(ip);
+    }
+}, 5 * 60 * 1000).unref();
+
+function clientIp(req) {
+    return (req.headers['x-forwarded-for'] || req.ip || 'unknown').toString().split(',')[0].trim();
+}
+
+// Gate shared by every developer endpoint: rate limit + live RPC.
+function devApiGate(req, res) {
+    if (!devApiRateOk(clientIp(req))) {
+        res.set('Cache-Control', 'no-store');
+        res.status(429).json({ error: `Too many requests — the developer API allows ${DEV_API_RATE_LIMIT_PER_MIN} queries per minute per IP.` });
+        return false;
+    }
+    return requireRpc(res);
+}
+
+const DEV_API_TIMEOUT_MS = readPositiveInteger(process.env.DEV_API_TIMEOUT_MS, 20000);
+
+// Chain queries can hang when the node is unhealthy; never let one pin a
+// worker (these are synchronous-ish awaits on a shared event loop).
+function withTimeout(promise, ms = DEV_API_TIMEOUT_MS, label = 'query') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms).unref())
+    ]);
+}
+
+// Human-readable type name for a metadata type id.
+function typeName(typeId) {
+    try { return globalApi.registry.lookup.getTypeDef(typeId).type; }
+    catch (e) { return 'unknown'; }
+}
+
+// Describe one storage entry: how many keys it needs and of what types. The
+// UI uses this to render the right number of typed inputs, and the query
+// endpoint uses keyCount to reject malformed calls before touching the node.
+function describeStorageEntry(pallet, item) {
+    const entry = globalApi.query[pallet] && globalApi.query[pallet][item];
+    if (!entry || !entry.creator || !entry.creator.meta) return null;
+    const meta = entry.creator.meta;
+    const out = {
+        pallet, item,
+        modifier: meta.modifier ? meta.modifier.toString() : null,
+        docs: (meta.docs || []).map(d => d.toString().trim()).filter(Boolean),
+        keyCount: 0,
+        keyTypes: [],
+        valueType: null
+    };
+    try {
+        if (meta.type.isPlain) {
+            out.valueType = typeName(meta.type.asPlain.toNumber());
+        } else if (meta.type.isMap) {
+            const map = meta.type.asMap;
+            // V14+ metadata models single/double/N maps uniformly: the number
+            // of hashers is the number of keys.
+            out.keyCount = map.hashers.length;
+            const keyTypeName = typeName(map.key.toNumber());
+            out.keyTypes = out.keyCount > 1
+                ? keyTypeName.replace(/^\(|\)$/g, '').split(',').map(s => s.trim())
+                : [keyTypeName];
+            out.valueType = typeName(map.value.toNumber());
+        }
+    } catch (e) { /* leave partial description */ }
+    return out;
+}
+
+// ---- GET /api/rpc/metadata --------------------------------------------------
+// Everything the UI needs to build polkadot.js-style dropdowns: pallets, their
+// storage entries (with key arity + types), constants, calls, events, errors.
+// Cached per runtime spec version — metadata only changes on a runtime upgrade.
+let devMetadataCache = { specVersion: null, payload: null };
+
+app.get('/api/rpc/metadata', async (req, res) => {
+    if (!devApiGate(req, res)) return;
+    try {
+        const specVersion = globalApi.runtimeVersion.specVersion.toNumber();
+        if (devMetadataCache.specVersion === specVersion && devMetadataCache.payload) {
+            cacheLong(res);
+            return res.json(devMetadataCache.payload);
+        }
+
+        const pallets = [];
+        for (const p of globalApi.runtimeMetadata.asLatest.pallets) {
+            const name = p.name.toString();
+            // api.query/api.consts key pallets by lowerCamelCase name.
+            const q = name.charAt(0).toLowerCase() + name.slice(1);
+            const storage = [];
+            if (globalApi.query[q]) {
+                for (const item of Object.keys(globalApi.query[q]).sort()) {
+                    const d = describeStorageEntry(q, item);
+                    if (d) storage.push(d);
+                }
+            }
+            const constants = [];
+            if (globalApi.consts[q]) {
+                for (const c of Object.keys(globalApi.consts[q]).sort()) constants.push(c);
+            }
+            pallets.push({
+                name, queryKey: q,
+                storage, constants,
+                calls:  p.calls.isSome  ? (globalApi.tx[q]  ? Object.keys(globalApi.tx[q]).sort()  : []) : [],
+                events: p.events.isSome ? (globalApi.events[q] ? Object.keys(globalApi.events[q]).sort() : []) : [],
+                errors: p.errors.isSome ? (globalApi.errors[q] ? Object.keys(globalApi.errors[q]).sort() : []) : []
+            });
+        }
+
+        const payload = {
+            chain: (await globalApi.rpc.system.chain()).toString(),
+            specName: globalApi.runtimeVersion.specName.toString(),
+            specVersion,
+            ss58Prefix: chainSS58,
+            palletCount: pallets.length,
+            pallets
+        };
+        devMetadataCache = { specVersion, payload };
+        cacheLong(res);
+        res.json(payload);
+    } catch (err) {
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Resolve an ?at= parameter (block number or hash) to a block hash, or null
+// for "current head". Kept separate so every endpoint treats `at` identically.
+async function resolveAtBlock(at) {
+    if (at === undefined || at === null || at === '') return null;
+    const raw = String(at).trim();
+    if (/^\d+$/.test(raw)) {
+        const hash = await globalApi.rpc.chain.getBlockHash(parseInt(raw, 10));
+        if (hash.isEmpty) throw new Error(`Block ${raw} not found`);
+        return { hash: hash.toHex(), block: parseInt(raw, 10) };
+    }
+    if (/^0x[0-9a-fA-F]{64}$/.test(raw)) {
+        const header = await globalApi.rpc.chain.getHeader(raw);
+        return { hash: raw, block: header.number.toNumber() };
+    }
+    throw new Error(`Invalid 'at' value: expected a block number or 0x-prefixed 32-byte hash, got "${raw}"`);
+}
+
+// Historical state reads need an ARCHIVE node. A pruned node keeps only the
+// last ~256 blocks of state and fails with "State already discarded". Turn
+// that into an explanation rather than a raw RPC error.
+function archiveHint(err, at) {
+    const msg = String(err && err.message || err);
+    if (/state already discarded|unknown block|not available|pruned/i.test(msg) && at) {
+        return `${msg} — block ${at.block} is outside this node's pruning window. Historical state queries require an ARCHIVE node; point POLKADEX_WS at one.`;
+    }
+    return msg;
+}
+
+// Serialise a codec value into every representation a forensic user needs.
+// `human` can hide anomalies (it formats big numbers with separators and
+// shortens hashes), so `json` and `hex` are always returned alongside it.
+function serialiseCodec(value) {
+    const out = { isEmpty: undefined, human: undefined, json: undefined, hex: undefined, count: undefined };
+    try { out.isEmpty = value.isEmpty; } catch (e) { /* not all codecs expose it */ }
+    try { out.human = value.toHuman(); } catch (e) { out.human = null; }
+    try { out.json = value.toJSON(); } catch (e) { out.json = null; }
+    try { out.hex = value.toHex(); } catch (e) { out.hex = null; }
+    // Vec-like results (e.g. a validator set) — surface the length directly so
+    // "is this empty or does it hold 200 validators?" is answerable at a glance.
+    if (Array.isArray(out.json)) out.count = out.json.length;
+    return out;
+}
+
+// ---- GET /api/state/:pallet/:item -------------------------------------------
+// Generic storage read. Examples:
+//   /api/state/ocex/authorities?args=6280&at=12250870
+//   /api/state/ocex/authorities?args=9223372036854775808&at=12250870
+//   /api/state/staking/activeEra
+//   /api/state/system/account?args=esoEt6...
+// Multiple keys: repeat ?args= or pass a comma-separated list.
+const DEV_API_MAX_ENTRIES = readPositiveInteger(process.env.DEV_API_MAX_ENTRIES, 100);
+
+app.get('/api/state/:pallet/:item', async (req, res) => {
+    if (!devApiGate(req, res)) return;
+    let at = null;
+    try {
+        const pallet = String(req.params.pallet).trim();
+        const item = String(req.params.item).trim();
+
+        if (!globalApi.query[pallet]) {
+            return res.status(404).json({ error: `Unknown pallet "${pallet}".`, hint: 'GET /api/rpc/metadata lists every queryable pallet.' });
+        }
+        if (!globalApi.query[pallet][item]) {
+            return res.status(404).json({
+                error: `Unknown storage item "${pallet}.${item}".`,
+                available: Object.keys(globalApi.query[pallet]).sort().slice(0, 50)
+            });
+        }
+
+        const desc = describeStorageEntry(pallet, item);
+
+        // Args arrive as raw strings and STAY strings — see invariant 2 at the
+        // top of this section. Passing 9223372036854775808 through Number()
+        // would silently query 9223372036854776000 instead.
+        let args = [];
+        if (req.query.args !== undefined) {
+            const raw = Array.isArray(req.query.args) ? req.query.args : [req.query.args];
+            args = raw.flatMap(a => String(a).split(',')).map(s => s.trim()).filter(s => s !== '');
+        }
+
+        at = await resolveAtBlock(req.query.at);
+        const q = at ? (await withTimeout(globalApi.at(at.hash), DEV_API_TIMEOUT_MS, 'api.at')).query : globalApi.query;
+        const entry = q[pallet] && q[pallet][item];
+        if (!entry) {
+            return res.status(404).json({ error: `"${pallet}.${item}" does not exist in the runtime at that block.` });
+        }
+
+        // No keys supplied for a map → that's an .entries() scan. Genuinely
+        // useful, but unbounded on a large map, so it must be asked for
+        // explicitly and is hard-capped.
+        if (desc && desc.keyCount > 0 && args.length === 0) {
+            if (String(req.query.entries) !== '1') {
+                return res.status(400).json({
+                    error: `${pallet}.${item} is a map needing ${desc.keyCount} key(s); none were supplied.`,
+                    keyTypes: desc.keyTypes,
+                    hint: `Pass ?args=<key>, or ?entries=1 to list the first ${DEV_API_MAX_ENTRIES} entries.`
+                });
+            }
+            const all = await withTimeout(entry.entries(), DEV_API_TIMEOUT_MS, 'entries');
+            const truncated = all.length > DEV_API_MAX_ENTRIES;
+            const rows = all.slice(0, DEV_API_MAX_ENTRIES).map(([k, v]) => ({
+                key: k.toHuman(),
+                keyHex: k.toHex(),
+                value: serialiseCodec(v)
+            }));
+            cacheShort(res);
+            return res.json({
+                pallet, item, at, storage: desc,
+                entriesTotal: all.length, truncated,
+                limit: DEV_API_MAX_ENTRIES, entries: rows
+            });
+        }
+
+        if (desc && desc.keyCount > 0 && args.length !== desc.keyCount) {
+            return res.status(400).json({
+                error: `${pallet}.${item} expects ${desc.keyCount} key(s), received ${args.length}.`,
+                keyTypes: desc.keyTypes
+            });
+        }
+
+        const value = await withTimeout(entry(...args), DEV_API_TIMEOUT_MS, 'storage read');
+        // Historical reads are immutable; current head is not.
+        if (at) cacheLong(res); else cacheShort(res);
+        res.json({
+            pallet, item,
+            args,                       // echoed verbatim so the caller can confirm no coercion happened
+            at,                         // null = current head
+            storage: desc,
+            ...serialiseCodec(value)
+        });
+    } catch (err) {
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ error: archiveHint(err, at) });
+    }
+});
+
+// ---- GET /api/consts/:pallet/:item ------------------------------------------
+// Runtime constants (api.consts). Constants are baked into the runtime, so
+// "at a block" means "the runtime active at that block".
+app.get('/api/consts/:pallet/:item', async (req, res) => {
+    if (!devApiGate(req, res)) return;
+    let at = null;
+    try {
+        const pallet = String(req.params.pallet).trim();
+        const item = String(req.params.item).trim();
+        at = await resolveAtBlock(req.query.at);
+        const consts = at ? (await withTimeout(globalApi.at(at.hash), DEV_API_TIMEOUT_MS, 'api.at')).consts : globalApi.consts;
+        if (!consts[pallet] || consts[pallet][item] === undefined) {
+            return res.status(404).json({
+                error: `Unknown constant "${pallet}.${item}".`,
+                available: consts[pallet] ? Object.keys(consts[pallet]).sort() : undefined
+            });
+        }
+        if (at) cacheLong(res); else cacheMedium(res);
+        res.json({ pallet, item, at, ...serialiseCodec(consts[pallet][item]) });
+    } catch (err) {
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ error: archiveHint(err, at) });
+    }
+});
+
+// ---- GET /api/runtime -------------------------------------------------------
+// Runtime version at head or at ?at=. Essential context for any historical
+// decode: a call's argument layout is only meaningful against the runtime that
+// was live at that block.
+app.get('/api/runtime', async (req, res) => {
+    if (!devApiGate(req, res)) return;
+    let at = null;
+    try {
+        at = await resolveAtBlock(req.query.at);
+        const rv = at
+            ? await withTimeout(globalApi.rpc.state.getRuntimeVersion(at.hash), DEV_API_TIMEOUT_MS, 'runtimeVersion')
+            : globalApi.runtimeVersion;
+        if (at) cacheLong(res); else cacheMedium(res);
+        res.json({
+            at,
+            specName: rv.specName.toString(),
+            implName: rv.implName.toString(),
+            specVersion: rv.specVersion.toNumber(),
+            implVersion: rv.implVersion.toNumber(),
+            transactionVersion: rv.transactionVersion ? rv.transactionVersion.toNumber() : null
+        });
+    } catch (err) {
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ error: archiveHint(err, at) });
+    }
+});
+
+// ---- POST /api/rpc/call -----------------------------------------------------
+// polkadot.js's "RPC calls" tab, restricted to an explicit allowlist of
+// READ-ONLY methods. Everything that submits, signs, mutates or touches the
+// node's keystore/offchain storage (author_*, offchain_*, system_addReservedPeer,
+// ...) is absent by construction — an allowlist, never a denylist, so a new
+// upstream RPC method can't quietly become reachable.
+const RPC_ALLOWLIST = new Set([
+    'chain_getBlock', 'chain_getBlockHash', 'chain_getFinalizedHead', 'chain_getHeader',
+    'state_getRuntimeVersion', 'state_getStorage', 'state_getKeysPaged', 'state_queryStorageAt', 'state_getStorageHash', 'state_getStorageSize',
+    'system_chain', 'system_chainType', 'system_health', 'system_name', 'system_properties', 'system_version', 'system_syncState',
+    'payment_queryInfo'
+]);
+
+app.post('/api/rpc/call', async (req, res) => {
+    if (!devApiGate(req, res)) return;
+    try {
+        const method = String((req.body && req.body.method) || '').trim();
+        const params = Array.isArray(req.body && req.body.params) ? req.body.params : [];
+        if (!RPC_ALLOWLIST.has(method)) {
+            return res.status(400).json({
+                error: `RPC method "${method}" is not permitted.`,
+                hint: 'This console is read-only.',
+                allowed: [...RPC_ALLOWLIST].sort()
+            });
+        }
+        if (params.length > 8) return res.status(400).json({ error: 'Too many parameters (max 8).' });
+
+        const [section, ...rest] = method.split('_');
+        const fn = rest.join('_').replace(/_(.)/g, (_, c) => c.toUpperCase());
+        const target = globalApi.rpc[section] && globalApi.rpc[section][fn];
+        if (!target) return res.status(400).json({ error: `RPC method "${method}" is not available on this node.` });
+
+        const value = await withTimeout(target(...params), DEV_API_TIMEOUT_MS, method);
+        res.set('Cache-Control', 'no-store');
+        res.json({ method, params, ...serialiseCodec(value) });
+    } catch (err) {
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // --- SEO endpoints (robots, sitemap) -----------------------------------------
 // These are served by the backend so the sitemap can be generated dynamically
 // from the SQLite index (top validators, recent blocks, top holders). nginx
