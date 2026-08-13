@@ -8,6 +8,19 @@ data/
 *.db-shm
 *.db-wal
 .env
+
+# TLS material. certbot/conf/live/<domain>/privkey.pem is the PRIVATE KEY for
+# the Cloudflare Origin certificate. It lives inside the deployment directory
+# because docker-compose bind-mounts it into nginx, which means a stray
+# `git add -A` run from the deploy directory would stage a production private
+# key — this very nearly happened. Never track it.
+certbot/
+
+# A second, nested checkout that older versions of deploy.sh created by cloning
+# into a RELATIVE "pdexscan" directory. Kept ignored so it can be retired
+# without git ever trying to treat it as an embedded repository.
+pdexscan/
+
 .DS_Store
 CLAUDE.md
 polkadex-explorer-user-guide.pdf
