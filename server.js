@@ -1702,6 +1702,20 @@ app.get('/api/state/:pallet/:item', async (req, res) => {
             });
         }
 
+        // Keys supplied for a PLAIN (unkeyed) storage value. polkadot-js simply
+        // ignores the extra arguments and returns the single stored value — so
+        // every key you try returns an identical result, which reads exactly
+        // like "this key and that key both hold the same thing" when in truth
+        // neither key was ever used. That is a false confirmation, and this API
+        // exists to prevent precisely that class of mistake. Fail loudly.
+        if (desc && desc.keyCount === 0 && args.length > 0) {
+            return res.status(400).json({
+                error: `${pallet}.${item} is a plain (unkeyed) storage value, but ${args.length} key(s) were supplied.`,
+                hint: 'The keys would have been silently ignored and the same value returned for any key. Drop ?args=, or you may be looking for a different storage item.',
+                storage: desc
+            });
+        }
+
         const value = await withTimeout(entry(...args), DEV_API_TIMEOUT_MS, 'storage read');
         // Historical reads are immutable; current head is not.
         if (at) cacheLong(res); else cacheShort(res);
@@ -1842,8 +1856,15 @@ app.get('/api/decode/:block', async (req, res) => {
         const signedBlock = await withTimeout(globalApi.rpc.chain.getBlock(blockHash), DEV_API_TIMEOUT_MS, 'getBlock');
         if (!signedBlock) return res.status(404).json({ error: 'Block not found' });
 
-        const wantSection = req.query.section ? String(req.query.section).toLowerCase() : null;
-        const wantMethod = req.query.method ? String(req.query.method).toLowerCase() : null;
+        // Match section/method loosely. polkadot-js exposes calls in
+        // lowerCamelCase (`submitSnapshot`) while the runtime source, docs and
+        // every bug report write snake_case (`submit_snapshot`). Comparing the
+        // two verbatim silently matches nothing and returns an empty list —
+        // indistinguishable from "that call isn't in this block", which is a
+        // dangerously wrong answer for an audit tool. Normalise both sides.
+        const norm = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const wantSection = req.query.section ? norm(req.query.section) : null;
+        const wantMethod = req.query.method ? norm(req.query.method) : null;
         const wantIndex = req.query.index !== undefined ? parseInt(req.query.index, 10) : null;
 
         const out = [];
@@ -1853,8 +1874,8 @@ app.get('/api/decode/:block', async (req, res) => {
             const ex = extrinsics[i];
             const call = ex.method;
             const section = call.section, method = call.method;
-            if (wantSection && section.toLowerCase() !== wantSection) continue;
-            if (wantMethod && method.toLowerCase() !== wantMethod) continue;
+            if (wantSection && norm(section) !== wantSection) continue;
+            if (wantMethod && norm(method) !== wantMethod) continue;
 
             // Pair each decoded value with its declared name and type from the
             // call metadata — positional args alone are near-useless for audit.
@@ -1884,13 +1905,22 @@ app.get('/api/decode/:block', async (req, res) => {
         }
 
         cacheLong(res); // historical blocks are immutable
-        res.json({
+        const body = {
             block: signedBlock.block.header.number.toNumber(),
             blockHash,
             extrinsicCount: extrinsics.length,
             returned: out.length,
             extrinsics: out
-        });
+        };
+        // A filter that matches nothing returns [], which reads identically to
+        // "that call is not in this block". For an audit tool those are very
+        // different statements, so when a filter eliminated everything, list
+        // what the block actually contains.
+        if (!out.length && (wantSection || wantMethod || wantIndex !== null)) {
+            body.note = 'No extrinsic in this block matched the filter. Section/method matching ignores case and underscores, so submit_snapshot and submitSnapshot are equivalent.';
+            body.present = extrinsics.map((ex, i) => `${i}: ${ex.method.section}.${ex.method.method}`);
+        }
+        res.json(body);
     } catch (err) {
         res.set('Cache-Control', 'no-store');
         res.status(500).json({ error: archiveHint(err, { block: req.params.block }) });
