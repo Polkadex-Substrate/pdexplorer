@@ -5045,6 +5045,7 @@ function renderDevelopersPage() {
             <a href="#cors">CORS</a>
             <a href="#caching">Caching</a>
             <a href="#chain">Chain data</a>
+            <a href="#inspect">Chain inspection</a>
             <a href="#schema">network-info schema</a>
             <a href="#price">Price feed</a>
             <a href="#governance">Governance</a>
@@ -5122,6 +5123,26 @@ function renderDevelopersPage() {
                 <li><code>GET /api/staking-rewards-status</code> — backfill progress</li>
                 <li><code>GET /api/wallet/:address</code> — wallet dashboard payload (balances, staking incl. <strong>activeStakedPlanck</strong> — the u128 active-stake value as a string for precision-safe full-unbonds — unpaid rewards, recent activity)</li>
             </ul>
+        </section>
+
+        <section class="developers-section" id="inspect">
+            <h2>Chain inspection (read-only, polkadot.js-style)</h2>
+            <p>Generic access to runtime metadata, storage and constants at <strong>any block</strong> — the endpoints behind <a href="/chain-state" class="item-link">/chain-state</a>. Backed by an archive node, so historical queries work.</p>
+            <ul class="developers-endpoints">
+                <li><code>GET /api/rpc/metadata</code> — every pallet with its storage items (key arity + types), constants, calls, events, errors</li>
+                <li><code>GET /api/state/:pallet/:item</code> — read any storage item. <code>?args=</code> keys, <code>?at=</code> block number/hash, <code>?entries=1</code> to list a map (capped)</li>
+                <li><code>GET /api/consts/:pallet/:item</code> — runtime constants; <code>?at=</code> supported</li>
+                <li><code>GET /api/runtime</code> — runtime spec/impl version; <code>?at=</code> supported</li>
+                <li><code>GET /api/decode/:block</code> — every extrinsic decoded argument by argument (name, type, human, JSON, raw hex). Filters <code>?section=</code> <code>?method=</code> <code>?index=</code>; matching ignores case and underscores, so <code>submit_snapshot</code> and <code>submitSnapshot</code> both work</li>
+                <li><code>POST /api/rpc/call</code> — allowlisted read-only RPC methods</li>
+            </ul>
+            <p><strong>Read-only by construction.</strong> Only <code>api.query</code>, <code>api.consts</code> and allowlisted read RPCs are reachable — nothing here can submit an extrinsic.</p>
+            <p><strong>Send storage keys as strings.</strong> A u64 key such as <code>9223372036854775808</code> (2⁶³) is past JavaScript's <code>MAX_SAFE_INTEGER</code>, so a client that parses it as a number silently queries <code>9223372036854776000</code> — a different key whose empty result looks like confirmation. Responses echo <code>args</code> back so you can verify nothing was coerced.</p>
+            <p><strong>Check <code>hex</code>, not <code>human</code>.</strong> <code>toHuman()</code> abbreviates hashes (an all-zero H256 renders as <code>0x0000…0000</code>, indistinguishable from a mostly-zero one) and group-separates large integers. Every response therefore carries human, JSON and hex together, plus a <code>count</code> for Vec-valued results.</p>
+            <p>Note that <code>ValueQuery</code> maps return a <em>default-constructed</em> value for an absent key, so <code>isEmpty</code> can be <code>false</code> for a key that was never set — judge emptiness from the decoded contents.</p>
+            <pre><code>curl 'https://explorer.polkadex.ee/api/decode/12250870?method=submit_snapshot'
+curl 'https://explorer.polkadex.ee/api/state/ocex/validatorSetId?at=12250870'
+curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></pre>
         </section>
 
         <section class="developers-section" id="schema">

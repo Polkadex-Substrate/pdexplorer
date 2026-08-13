@@ -2259,6 +2259,24 @@ footer a{margin-right:16px}
 <li><code>GET /api/wallet/:address</code> — wallet dashboard payload (balances, staking incl. <code>activeStakedPlanck</code> u128 string, unpaid rewards, recent activity)</li>
 </ul>
 
+<h2>Chain inspection (read-only, polkadot.js-style)</h2>
+<p>Generic access to runtime metadata, storage and constants at <strong>any block</strong>, so on-chain claims can be verified independently. Backed by an archive node, so historical queries work.</p>
+<ul class="endpoints">
+<li><code>GET /api/rpc/metadata</code> — every pallet with its storage items (key arity + types), constants, calls, events, errors</li>
+<li><code>GET /api/state/:pallet/:item</code> — read any storage item. <code>?args=</code> keys, <code>?at=</code> block number/hash, <code>?entries=1</code> to list a map (capped)</li>
+<li><code>GET /api/consts/:pallet/:item</code> — runtime constants; <code>?at=</code> supported</li>
+<li><code>GET /api/runtime</code> — runtime spec/impl version; <code>?at=</code> supported</li>
+<li><code>GET /api/decode/:block</code> — every extrinsic decoded argument by argument (name, type, human, JSON, raw hex). Filters <code>?section=</code> <code>?method=</code> <code>?index=</code>; matching ignores case and underscores</li>
+<li><code>POST /api/rpc/call</code> — allowlisted read-only RPC methods</li>
+</ul>
+<p><strong>Read-only by construction</strong> — only <code>api.query</code>, <code>api.consts</code> and allowlisted read RPCs are reachable; nothing here can submit an extrinsic.</p>
+<p><strong>Send storage keys as strings.</strong> A u64 key like <code>9223372036854775808</code> (2&#8311;&#179;) exceeds JavaScript's <code>MAX_SAFE_INTEGER</code>; a client that parses it as a number queries <code>9223372036854776000</code> instead — a different key whose empty result reads like confirmation. Responses echo <code>args</code> back so you can check.</p>
+<p><strong>Verify against <code>hex</code>, not <code>human</code>.</strong> <code>toHuman()</code> abbreviates hashes (an all-zero H256 shows as <code>0x0000…0000</code>) and group-separates integers, so every response carries human, JSON and hex together, plus a <code>count</code> for Vec results.</p>
+<p>There is an interactive UI for this at <a href="${SITE_URL}/chain-state">/chain-state</a>, with shareable deep links (<code>?pallet=&amp;item=&amp;args=&amp;at=</code>).</p>
+<pre><code>curl '${SITE_URL}/api/decode/12250870?method=submit_snapshot'
+curl '${SITE_URL}/api/state/ocex/validatorSetId?at=12250870'
+curl '${SITE_URL}/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></pre>
+
 <h2>Price feed, governance &amp; email</h2>
 <ul class="endpoints">
 <li><code>GET /api/price-latest</code> — current PDEX price, last-sync, and a <code>bySource</code> map (one entry per configured provider; <code>coingecko</code> live by default)</li>

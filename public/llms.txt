@@ -57,6 +57,49 @@ Access notes:
 - GET /api/wallet/:address — wallet dashboard payload (balances, staking
   incl. `activeStakedPlanck` u128 string, unpaid rewards, recent activity)
 
+## Public JSON API — chain inspection (polkadot.js-style, read-only)
+
+Generic access to runtime metadata, storage and constants at ANY block. This is
+what makes on-chain claims independently verifiable without polkadot.js Apps.
+
+- GET /api/rpc/metadata — every pallet with its storage items (key arity and
+  key types), constants, calls, events and errors
+- GET /api/state/:pallet/:item — read any storage item.
+  `?args=` storage keys (repeat, or comma-separate, for multi-key maps)
+  `?at=` block number or block hash (omit for current head)
+  `?entries=1` list a map's entries instead of one key (capped)
+- GET /api/consts/:pallet/:item — runtime constants; `?at=` supported
+- GET /api/runtime — runtime spec/impl version; `?at=` supported
+- GET /api/decode/:block — every extrinsic in a block decoded argument by
+  argument, each with name, declared type, human, JSON and raw hex.
+  Filters: `?section=` `?method=` `?index=`. Section/method matching ignores
+  case and underscores, so submit_snapshot and submitSnapshot are equivalent.
+- POST /api/rpc/call — `{ "method": "...", "params": [...] }` against an
+  explicit allowlist of read-only RPC methods
+
+Notes for automated clients:
+- READ ONLY by construction. Only api.query, api.consts and allowlisted read
+  RPCs are reachable; no endpoint can submit an extrinsic.
+- Storage keys are passed through as STRINGS and echoed back in the response.
+  A u64 key such as 9223372036854775808 (2^63) exceeds JavaScript's
+  MAX_SAFE_INTEGER, so a client that parses it as a number will query
+  9223372036854776000 instead — a different key that returns an empty result
+  which reads like confirmation. Send keys as strings and check the echoed
+  `args`.
+- Responses carry human + json + hex together. toHuman() abbreviates hashes
+  (an all-zero H256 renders as "0x0000…0000") and group-separates large
+  integers, so verify against `hex`, not the formatted form.
+- Vec-valued results include a `count`.
+- Historical queries (`at=` older than the pruning window) require an ARCHIVE
+  node. explorer.polkadex.ee is backed by one.
+- Rate limited per IP; queries are time- and size-capped.
+
+Example — verifying a call and the state around it at a historical block:
+
+    curl 'https://explorer.polkadex.ee/api/decode/12250870?method=submit_snapshot'
+    curl 'https://explorer.polkadex.ee/api/state/ocex/validatorSetId?at=12250870'
+    curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&at=12250870'
+
 ## Public JSON API — price feed
 
 - GET /api/price-latest — current PDEX price, last-sync, and a `bySource` map
