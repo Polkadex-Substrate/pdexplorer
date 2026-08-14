@@ -3987,6 +3987,37 @@ h1, h2, h3 { font-weight: 600; }
     .cs-hero { margin-bottom: 12px; }
 }
 
+/* ---- /decode, /runtime, /utilities ---------------------------------------- */
+.rt-h2 { font-size: 1.05rem; margin-bottom: 14px; }
+.dec-ext {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    margin-bottom: 14px;
+    background: rgba(255,255,255,0.02);
+}
+.dec-ext-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.dec-ext-idx { color: var(--text-secondary); font-size: 0.8rem; }
+.dec-args { width: 100%; border-collapse: collapse; }
+.dec-args th, .dec-args td {
+    text-align: left; padding: 8px 10px; vertical-align: top;
+    border-bottom: 1px solid var(--border-color); font-size: 0.88rem;
+}
+.dec-args th { color: var(--text-secondary); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.4px; }
+.dec-args pre { margin: 0; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 0.78rem; }
+/* Raw hex is the evidence column — give it room but keep it scannable. */
+.dec-hex { max-width: 320px; }
+.dec-callhex { margin-top: 10px; }
+.dec-callhex summary { cursor: pointer; color: var(--text-secondary); font-size: 0.85rem; }
+.dec-callhex pre { margin-top: 8px; max-height: 200px; overflow: auto; word-break: break-all; white-space: pre-wrap; font-size: 0.75rem; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; }
+
+@media (max-width: 900px) {
+    .dec-args, .dec-args thead, .dec-args tbody, .dec-args tr, .dec-args th, .dec-args td { display: block; }
+    .dec-args thead { display: none; }
+    .dec-args tr { border-bottom: 1px solid var(--border-color); padding: 8px 0; }
+    .dec-hex { max-width: none; }
+}
+
 /* =============================================================================
    Laptop / short-viewport adaptation
    =============================================================================

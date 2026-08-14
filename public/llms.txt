@@ -29,11 +29,13 @@ Access notes:
 - The `/api/*` endpoints are open to non-browser clients (native apps, servers,
   scripts, AI agents). CORS is a browser-only mechanism, so a caller that sends
   no `Origin` header is always allowed. Browser callers from other web origins
-  must be added to the operator's `ALLOWED_ORIGINS` allowlist.
-- The public site sits behind Cloudflare, which may challenge or block clients
-  that look like abusive bots when they request HTML pages. This is why a naive
-  server-side fetch of an HTML page can come back empty or challenged. The JSON
-  API is the supported, un-gated path for automated clients — prefer it.
+  must be added to the operator's `ALLOWED_ORIGINS` allowlist. Verified: a
+  plain `curl` receives HTTP 200 with `cf-cache-status: BYPASS`.
+- The site sits behind Cloudflare. Requests originating from cloud/datacenter
+  IP ranges are sometimes challenged, so a call from a CI runner or a hosted
+  backend may come back empty where the same call from a laptop succeeds. If
+  that happens, send a descriptive `User-Agent` and contact the operator to be
+  allowlisted — it is an edge policy, not an API restriction.
 - Be a well-behaved client: send a descriptive `User-Agent`, respect the
   `Cache-Control` headers (don't poll faster than `max-age`), and back off on
   HTTP 503 (`{"error":"rpc not connected"}`) rather than hammering.
@@ -74,8 +76,15 @@ what makes on-chain claims independently verifiable without polkadot.js Apps.
   argument, each with name, declared type, human, JSON and raw hex.
   Filters: `?section=` `?method=` `?index=`. Section/method matching ignores
   case and underscores, so submit_snapshot and submitSnapshot are equivalent.
-- POST /api/rpc/call — `{ "method": "...", "params": [...] }` against an
-  explicit allowlist of read-only RPC methods
+- GET  /api/rpc/call — the allowlist of permitted read-only RPC methods
+- POST /api/rpc/call — `{ "method": "...", "params": [...] }` against that
+  allowlist
+
+Interactive UIs for the above:
+- /chain-state — storage inspector, deep-linkable, JSON/CSV export
+- /decode      — per-argument extrinsic decoder for any block
+- /runtime     — runtime version, constants browser, read-only RPC console
+- /utilities   — SS58 conversion, hashing, signature verification (offline)
 
 Notes for automated clients:
 - READ ONLY by construction. Only api.query, api.consts and allowlisted read

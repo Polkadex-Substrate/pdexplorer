@@ -1810,6 +1810,14 @@ const RPC_ALLOWLIST = new Set([
     'payment_queryInfo'
 ]);
 
+// Discoverable allowlist, so the UI can populate its method picker without
+// firing a deliberately-invalid POST just to read the list out of a 400 body.
+app.get('/api/rpc/call', (req, res) => {
+    if (!devApiGate(req, res)) return;
+    cacheLong(res);
+    res.json({ readOnly: true, allowed: [...RPC_ALLOWLIST].sort() });
+});
+
 app.post('/api/rpc/call', async (req, res) => {
     if (!devApiGate(req, res)) return;
     try {
@@ -2004,6 +2012,9 @@ const SITEMAP_STATIC_ROUTES = [
     // or "Polkadex mobile app integration".
     { path: '/developers',        changefreq: 'monthly', priority: '0.6' },
     { path: '/chain-state',       changefreq: 'monthly', priority: '0.6' },
+    { path: '/decode',            changefreq: 'monthly', priority: '0.6' },
+    { path: '/runtime',           changefreq: 'monthly', priority: '0.5' },
+    { path: '/utilities',         changefreq: 'monthly', priority: '0.5' },
     // Static legal pages — low changefreq but want them indexed so users
     // searching for "Polkadex explorer privacy" land on the right page.
     { path: '/privacy',           changefreq: 'yearly',  priority: '0.4' },
@@ -2186,6 +2197,9 @@ app.get('/robots.txt', (req, res) => {
         'Allow: /help/',
         'Allow: /developers',
         'Allow: /chain-state',
+        'Allow: /decode',
+        'Allow: /runtime',
+        'Allow: /utilities',
         'Allow: /brand',
         'Allow: /privacy',
         'Allow: /cookies',
@@ -2267,7 +2281,7 @@ footer a{margin-right:16px}
 <table>
 <thead><tr><th>Behavior</th><th>What to do</th></tr></thead>
 <tbody>
-<tr><td>HTML pages sit behind Cloudflare, which may challenge or block clients that look like abusive bots. A naive server-side fetch of an HTML page can come back empty or challenged.</td><td>Request the <code>/api/*</code> JSON endpoints instead — the supported path for automated clients. Send a descriptive <code>User-Agent</code> and respect the <code>Cache-Control</code> headers.</td></tr>
+<tr><td>The site sits behind Cloudflare. Requests from cloud/datacenter IP ranges are sometimes challenged, so a call from a CI runner or hosted backend can come back empty where the same call from a laptop succeeds.</td><td>It is an edge policy, not an API restriction — a plain <code>curl</code> receives HTTP 200. Send a descriptive <code>User-Agent</code>, respect the <code>Cache-Control</code> headers, and ask the operator to allowlist your range if you call from a data centre.</td></tr>
 <tr><td>The API is open to non-browser clients at the origin. CORS is a browser-only mechanism, so a caller that sends no <code>Origin</code> header (native app, server, script, AI agent) is always allowed by the app.</td><td>Call the API directly from servers and native apps. Only browser callers from other web origins need to be added to <code>ALLOWED_ORIGINS</code>.</td></tr>
 </tbody>
 </table>

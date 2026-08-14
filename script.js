@@ -1,5 +1,7 @@
 import { ApiPromise, WsProvider } from '@polkadot/api';
-import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses } from '@polkadot/util-crypto';
+import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses,
+         blake2AsHex, xxhashAsHex, keccakAsHex, signatureVerify } from '@polkadot/util-crypto';
+import { u8aToHex, hexToU8a, stringToU8a, isHex } from '@polkadot/util';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -2855,7 +2857,13 @@ const ROUTE_SEO = {
     // Chain-state inspector. Targets "polkadex chain state", "query polkadex
     // storage", "polkadex historical state" — the polkadot.js Apps audience.
     'chain-state':        { title: 'Chain State — Query Polkadex Runtime Storage at Any Block',
-                            description: 'Read any Polkadex Mainnet runtime storage item at the current head or any historical block. Pallet and storage dropdowns from live runtime metadata, typed keys, and Human/JSON/Hex output for reproducible on-chain verification.' }
+                            description: 'Read any Polkadex Mainnet runtime storage item at the current head or any historical block. Pallet and storage dropdowns from live runtime metadata, typed keys, and Human/JSON/Hex output for reproducible on-chain verification.' },
+    'decode':             { title: 'Extrinsic Decoder — Decode Any Polkadex Block',
+                            description: 'Decode every extrinsic in a Polkadex Mainnet block argument by argument: names, declared SCALE types, decoded values and raw hex, plus the full encoded call. Read-only chain forensics.' },
+    'runtime':            { title: 'Runtime & RPC — Polkadex Mainnet Explorer',
+                            description: 'Polkadex runtime spec version at any block, on-chain constants browser, and an allowlisted read-only RPC console.' },
+    'utilities':          { title: 'Developer Utilities — SS58, Hashing & Signature Verification',
+                            description: 'Convert Polkadex SS58 addresses between prefixes, compute blake2 / keccak / xxhash digests, and verify sr25519 and ed25519 signatures. Runs entirely in your browser.' }
 };
 
 // Update <title>, meta[description], canonical, and Open Graph / Twitter tags
@@ -4424,6 +4432,16 @@ function routeTo(target) {
                 // server-side proxies, third-party web apps). Static content,
                 // SEO-indexable, no data fetch.
                 renderDevelopersPage();
+            } else if (mainTarget === 'decode') {
+                // /decode — per-argument extrinsic decoder for any block.
+                renderDecodePage();
+            } else if (mainTarget === 'runtime') {
+                // /runtime — runtime version, constants, read-only RPC console.
+                renderRuntimePage();
+            } else if (mainTarget === 'utilities') {
+                // /utilities — offline helpers; no chain calls, so these keep
+                // working even when the RPC is down.
+                renderUtilitiesPage();
             } else if (mainTarget === 'chain-state') {
                 // /chain-state — generic runtime storage inspector
                 // (polkadot.js "Chain state" parity). Loads metadata once,
@@ -5282,6 +5300,435 @@ function renderChainStateResult(d) {
     });
 }
 
+// ─── /decode ─────────────────────────────────────────────────────────────────
+// Per-argument extrinsic decoder for any block. The UI half of
+// /api/decode/:block, and the second half of a chain-forensics workflow: read
+// what a call CLAIMED (here) and what the chain STORED (/chain-state).
+//
+// Every argument shows name, declared type, decoded value and RAW HEX side by
+// side. The hex is not decoration — toHuman() abbreviates an H256 to
+// "0x0000…0000", so an all-zero hash and a mostly-zero one look identical, and
+// renders 2^63 as a comfortable-looking "9,223,372,036,854,775,808".
+let decodeLastResult = null;
+
+async function renderDecodePage() {
+    const root = document.getElementById('decode-page-content');
+    if (!root) return;
+
+    const params = new URLSearchParams(window.location.search || '');
+    const qBlock = params.get('block') || '';
+    const qMethod = params.get('method') || '';
+
+    root.innerHTML = `
+        <div class="cs-hero">
+            <h1>Extrinsic decoder</h1>
+            <p class="cs-tagline">Decode every extrinsic in a block, argument by argument, with raw hex alongside the decoded value. Read-only.</p>
+        </div>
+        <div class="cs-panel glass">
+            <div class="cs-controls">
+                <label class="cs-field">
+                    <span>Block <em>number or hash</em></span>
+                    <input id="dec-block" type="text" placeholder="e.g. 12250870 or 0x…" value="${stakingEscapeHtml(qBlock)}" autocomplete="off">
+                </label>
+                <label class="cs-field">
+                    <span>Filter by method <em>optional</em></span>
+                    <input id="dec-method" type="text" placeholder="e.g. submit_snapshot" value="${stakingEscapeHtml(qMethod)}" autocomplete="off">
+                </label>
+            </div>
+            <div class="cs-actions">
+                <button id="dec-run" class="wallet-action-btn primary" type="button">Decode</button>
+                <button id="dec-copy" class="wallet-action-btn" type="button">Copy link</button>
+                <span class="cs-export" id="dec-export" hidden>
+                    <span class="cs-export-label">Export</span>
+                    <button id="dec-dl-json" class="staking-download-btn" type="button">JSON</button>
+                </span>
+                <span id="dec-status" class="cs-status"></span>
+            </div>
+            <div class="cs-docs"><i class='bx bx-info-circle'></i> Method matching ignores case and underscores — <code>submit_snapshot</code> and <code>submitSnapshot</code> both work.</div>
+        </div>
+        <div id="dec-result" class="cs-result"></div>
+    `;
+
+    const $ = id => document.getElementById(id);
+
+    async function run() {
+        const block = $('dec-block').value.trim();
+        if (!block) { $('dec-status').innerHTML = '<span class="cs-err">Enter a block number or hash.</span>'; return; }
+        const method = $('dec-method').value.trim();
+        const qs = new URLSearchParams();
+        if (method) qs.set('method', method);
+
+        $('dec-status').textContent = 'Decoding…';
+        $('dec-result').innerHTML = '';
+        try {
+            const r = await fetch(`/api/decode/${encodeURIComponent(block)}?${qs}`);
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+            $('dec-status').textContent = '';
+            decodeLastResult = data;
+            $('dec-export').hidden = false;
+            renderDecodeResult(data);
+            const share = new URLSearchParams({ block });
+            if (method) share.set('method', method);
+            history.replaceState({}, '', `/decode?${share}`);
+        } catch (e) {
+            $('dec-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`;
+        }
+    }
+
+    $('dec-run').addEventListener('click', run);
+    $('dec-block').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+    $('dec-method').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+    $('dec-copy').addEventListener('click', () => {
+        navigator.clipboard.writeText(window.location.href);
+        $('dec-status').textContent = 'Link copied.';
+        setTimeout(() => { $('dec-status').textContent = ''; }, 1500);
+    });
+    $('dec-dl-json').addEventListener('click', () => {
+        if (!decodeLastResult) return;
+        const d = decodeLastResult;
+        downloadStakingBlob(`extrinsics-block${d.block}.json`, JSON.stringify({
+            _provenance: {
+                source: 'Polkadex Mainnet Explorer — extrinsic decoder',
+                site: window.location.origin,
+                apiUrl: `${window.location.origin}/api/decode/${d.block}`,
+                pageUrl: window.location.href,
+                block: d.block, blockHash: d.blockHash,
+                retrievedAt: new Date().toISOString()
+            },
+            extrinsics: d.extrinsics
+        }, null, 2), 'application/json');
+        $('dec-status').textContent = 'JSON exported.';
+        setTimeout(() => { $('dec-status').textContent = ''; }, 1500);
+    });
+
+    if (qBlock) run();
+}
+
+function renderDecodeResult(d) {
+    const box = document.getElementById('dec-result');
+    if (!box) return;
+
+    if (!d.extrinsics || !d.extrinsics.length) {
+        // An empty filter result reads as "that call isn't here" — say which it
+        // is, and list what the block does contain.
+        box.innerHTML = `<div class="cs-result-head">
+                <strong>Block ${d.block}</strong> — ${d.extrinsicCount} extrinsic(s), none matched the filter
+            </div>
+            ${d.present ? `<div class="cs-echo">Present in this block: ${d.present.map(p => `<code>${stakingEscapeHtml(p)}</code>`).join(' ')}</div>` : ''}`;
+        return;
+    }
+
+    box.innerHTML = `
+        <div class="cs-result-head">
+            <strong>Block <a href="/block/${d.block}" class="item-link">${d.block}</a></strong>
+            <code class="mono">${stakingEscapeHtml(String(d.blockHash).slice(0, 18))}…</code>
+            <span class="cs-count">${d.returned} of ${d.extrinsicCount} extrinsic(s)</span>
+        </div>
+        ${d.extrinsics.map(x => `
+            <div class="dec-ext">
+                <div class="dec-ext-head">
+                    <span class="dec-ext-idx">#${x.index}</span>
+                    <strong>${stakingEscapeHtml(x.section)}.${stakingEscapeHtml(x.method)}</strong>
+                    <span class="${x.isSigned ? 'cs-count' : 'cs-warn'}">${x.isSigned ? 'signed' : 'UNSIGNED'}</span>
+                    ${x.signer ? `<span class="cs-echo">by ${shortAddressLink(x.signer)}</span>` : ''}
+                </div>
+                <table class="dec-args">
+                    <thead><tr><th>Argument</th><th>Type</th><th>Value</th><th>Raw hex</th></tr></thead>
+                    <tbody>
+                    ${x.args.map(a => `
+                        <tr>
+                            <td><strong>${stakingEscapeHtml(a.name)}</strong></td>
+                            <td class="mono">${stakingEscapeHtml(a.type || '')}</td>
+                            <td>
+                                ${a.count !== undefined && a.count !== null ? `<span class="cs-count">${a.count} item(s)</span><br>` : ''}
+                                <pre>${stakingEscapeHtml(JSON.stringify(a.json, null, 2))}</pre>
+                            </td>
+                            <td><pre class="mono dec-hex">${stakingEscapeHtml(a.hex || '—')}</pre></td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+                <details class="dec-callhex">
+                    <summary>Full SCALE-encoded call (${x.callLength} bytes)</summary>
+                    <pre class="mono">${stakingEscapeHtml(x.callHex)}</pre>
+                </details>
+            </div>`).join('')}
+    `;
+}
+
+// ─── /runtime ────────────────────────────────────────────────────────────────
+// Runtime version, constants browser, and the read-only RPC console.
+// Constants and runtime version accept ?at= because a historical decode is only
+// meaningful against the runtime that was live at that block.
+async function renderRuntimePage() {
+    const root = document.getElementById('runtime-page-content');
+    if (!root) return;
+
+    root.innerHTML = `
+        <div class="cs-hero">
+            <h1>Runtime &amp; RPC</h1>
+            <p class="cs-tagline">Runtime version, on-chain constants, and an allowlisted read-only RPC console.</p>
+        </div>
+
+        <div class="cs-panel glass">
+            <h2 class="rt-h2">Runtime version</h2>
+            <div class="cs-controls">
+                <label class="cs-field">
+                    <span>At block <em>optional — blank = latest</em></span>
+                    <input id="rt-at" type="text" placeholder="e.g. 12250870" autocomplete="off">
+                </label>
+            </div>
+            <div class="cs-actions">
+                <button id="rt-run" class="wallet-action-btn primary" type="button">Fetch</button>
+                <span id="rt-status" class="cs-status"></span>
+            </div>
+            <div id="rt-result" class="cs-result"></div>
+        </div>
+
+        <div class="cs-panel glass" style="margin-top:18px;">
+            <h2 class="rt-h2">Constants</h2>
+            <div class="cs-controls">
+                <label class="cs-field"><span>Pallet</span><select id="rt-pallet"><option>Loading…</option></select></label>
+                <label class="cs-field"><span>Constant</span><select id="rt-const"><option>—</option></select></label>
+            </div>
+            <div class="cs-actions">
+                <button id="rt-const-run" class="wallet-action-btn primary" type="button">Read</button>
+                <span id="rt-const-status" class="cs-status"></span>
+            </div>
+            <div id="rt-const-result" class="cs-result"></div>
+        </div>
+
+        <div class="cs-panel glass" style="margin-top:18px;">
+            <h2 class="rt-h2">RPC console <span class="cs-echo">read-only</span></h2>
+            <div class="cs-controls">
+                <label class="cs-field"><span>Method</span><select id="rpc-method"><option>Loading…</option></select></label>
+                <label class="cs-field cs-field-at">
+                    <span>Params <em>JSON array</em></span>
+                    <input id="rpc-params" type="text" placeholder='e.g. [12250870]' value="[]" autocomplete="off">
+                </label>
+            </div>
+            <div class="cs-actions">
+                <button id="rpc-run" class="wallet-action-btn primary" type="button">Call</button>
+                <span id="rpc-status" class="cs-status"></span>
+            </div>
+            <div id="rpc-result" class="cs-result"></div>
+        </div>
+    `;
+
+    const $ = id => document.getElementById(id);
+    const show = (el, obj) => { el.innerHTML = `<pre>${stakingEscapeHtml(JSON.stringify(obj, null, 2))}</pre>`; };
+
+    // ---- runtime version ----
+    async function runRuntime() {
+        const at = $('rt-at').value.trim();
+        $('rt-status').textContent = 'Loading…';
+        try {
+            const r = await fetch(`/api/runtime${at ? `?at=${encodeURIComponent(at)}` : ''}`);
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+            $('rt-status').textContent = '';
+            show($('rt-result'), d);
+        } catch (e) { $('rt-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`; }
+    }
+    $('rt-run').addEventListener('click', runRuntime);
+    runRuntime();
+
+    // ---- constants (reuses the cached metadata) ----
+    try {
+        if (!chainStateMeta) {
+            const r = await fetch('/api/rpc/metadata');
+            if (r.ok) chainStateMeta = await r.json();
+        }
+    } catch (e) { /* handled below */ }
+
+    const constPallets = (chainStateMeta && chainStateMeta.pallets || []).filter(p => p.constants && p.constants.length);
+    $('rt-pallet').innerHTML = constPallets.length
+        ? constPallets.map(p => `<option value="${p.queryKey}">${stakingEscapeHtml(p.name)}</option>`).join('')
+        : '<option value="">(metadata unavailable)</option>';
+
+    function fillConsts() {
+        const p = constPallets.find(x => x.queryKey === $('rt-pallet').value);
+        $('rt-const').innerHTML = p ? p.constants.map(c => `<option value="${c}">${stakingEscapeHtml(c)}</option>`).join('') : '<option>—</option>';
+    }
+    fillConsts();
+    $('rt-pallet').addEventListener('change', fillConsts);
+    $('rt-const-run').addEventListener('click', async () => {
+        const pallet = $('rt-pallet').value, item = $('rt-const').value;
+        if (!pallet || !item) return;
+        $('rt-const-status').textContent = 'Reading…';
+        try {
+            const r = await fetch(`/api/consts/${pallet}/${item}`);
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+            $('rt-const-status').textContent = '';
+            show($('rt-const-result'), d);
+        } catch (e) { $('rt-const-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`; }
+    });
+
+    // ---- RPC console ----
+    // The method list comes straight from the server's allowlist, so the UI can
+    // never offer a method the backend would refuse.
+    let allowed = [];
+    try {
+        const r = await fetch('/api/rpc/call');
+        if (r.ok) {
+            const body = await r.json();
+            allowed = Array.isArray(body.allowed) ? body.allowed : [];
+        }
+    } catch (e) { /* leave empty; the picker shows "(unavailable)" */ }
+    $('rpc-method').innerHTML = allowed.length
+        ? allowed.map(m => `<option value="${m}">${stakingEscapeHtml(m)}</option>`).join('')
+        : '<option value="">(unavailable)</option>';
+
+    $('rpc-run').addEventListener('click', async () => {
+        const method = $('rpc-method').value;
+        if (!method) return;
+        let params;
+        try {
+            params = JSON.parse($('rpc-params').value || '[]');
+            if (!Array.isArray(params)) throw new Error('Params must be a JSON array, e.g. [12250870]');
+        } catch (e) {
+            $('rpc-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`;
+            return;
+        }
+        $('rpc-status').textContent = 'Calling…';
+        try {
+            const r = await fetch('/api/rpc/call', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ method, params })
+            });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+            $('rpc-status').textContent = '';
+            show($('rpc-result'), d);
+        } catch (e) { $('rpc-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`; }
+    });
+}
+
+// ─── /utilities ──────────────────────────────────────────────────────────────
+// Offline developer helpers — SS58 conversion, hashing, signature
+// verification. Everything here runs in the browser; no chain calls, so these
+// keep working when the RPC is down.
+function renderUtilitiesPage() {
+    const root = document.getElementById('utilities-page-content');
+    if (!root) return;
+
+    root.innerHTML = `
+        <div class="cs-hero">
+            <h1>Utilities</h1>
+            <p class="cs-tagline">Address conversion, hashing and signature verification. Runs entirely in your browser — nothing is sent to the server.</p>
+        </div>
+
+        <div class="cs-panel glass">
+            <h2 class="rt-h2">SS58 address converter</h2>
+            <div class="cs-controls">
+                <label class="cs-field"><span>Address or 0x public key</span>
+                    <input id="ut-addr" type="text" placeholder="esoEt6… or 5Grwva… or 0x…" autocomplete="off"></label>
+                <label class="cs-field"><span>Target prefix</span>
+                    <select id="ut-prefix">
+                        <option value="88">88 — Polkadex</option>
+                        <option value="0">0 — Polkadot</option>
+                        <option value="2">2 — Kusama</option>
+                        <option value="42">42 — generic Substrate</option>
+                    </select></label>
+            </div>
+            <div class="cs-actions"><button id="ut-addr-run" class="wallet-action-btn primary" type="button">Convert</button>
+                <span id="ut-addr-status" class="cs-status"></span></div>
+            <div id="ut-addr-result" class="cs-result"></div>
+        </div>
+
+        <div class="cs-panel glass" style="margin-top:18px;">
+            <h2 class="rt-h2">Hashing</h2>
+            <div class="cs-controls">
+                <label class="cs-field cs-field-at"><span>Input <em>text, or 0x… for raw bytes</em></span>
+                    <input id="ut-hash-in" type="text" placeholder="hello  or  0xdeadbeef" autocomplete="off"></label>
+            </div>
+            <div class="cs-actions"><button id="ut-hash-run" class="wallet-action-btn primary" type="button">Hash</button>
+                <span id="ut-hash-status" class="cs-status"></span></div>
+            <div id="ut-hash-result" class="cs-result"></div>
+        </div>
+
+        <div class="cs-panel glass" style="margin-top:18px;">
+            <h2 class="rt-h2">Verify signature</h2>
+            <div class="cs-controls">
+                <label class="cs-field"><span>Signer address</span><input id="ut-vf-addr" type="text" autocomplete="off"></label>
+                <label class="cs-field"><span>Message <em>text or 0x…</em></span><input id="ut-vf-msg" type="text" autocomplete="off"></label>
+                <label class="cs-field"><span>Signature <em>0x…</em></span><input id="ut-vf-sig" type="text" autocomplete="off"></label>
+            </div>
+            <div class="cs-actions"><button id="ut-vf-run" class="wallet-action-btn primary" type="button">Verify</button>
+                <span id="ut-vf-status" class="cs-status"></span></div>
+            <div id="ut-vf-result" class="cs-result"></div>
+        </div>
+    `;
+
+    const $ = id => document.getElementById(id);
+    // Accept either a text string or 0x-prefixed raw bytes, matching what
+    // wallets and runtime code actually hand you.
+    const toBytes = v => (isHex(v) ? hexToU8a(v) : stringToU8a(v));
+
+    $('ut-addr-run').addEventListener('click', () => {
+        const v = $('ut-addr').value.trim();
+        const prefix = parseInt($('ut-prefix').value, 10);
+        try {
+            const pub = decodeAddress(v);
+            const out = {
+                input: v,
+                publicKey: u8aToHex(pub),
+                converted: encodeAddress(pub, prefix),
+                prefix,
+                // Show the common formats at once — the same account in two
+                // prefixes looks like two different accounts otherwise.
+                polkadex_88: encodeAddress(pub, 88),
+                substrate_42: encodeAddress(pub, 42),
+                polkadot_0: encodeAddress(pub, 0)
+            };
+            $('ut-addr-status').textContent = '';
+            $('ut-addr-result').innerHTML = `<pre>${stakingEscapeHtml(JSON.stringify(out, null, 2))}</pre>`;
+        } catch (e) {
+            $('ut-addr-status').innerHTML = `<span class="cs-err">Not a valid address or public key.</span>`;
+            $('ut-addr-result').innerHTML = '';
+        }
+    });
+
+    $('ut-hash-run').addEventListener('click', () => {
+        const v = $('ut-hash-in').value;
+        try {
+            const bytes = toBytes(v);
+            const out = {
+                input: v,
+                interpretedAs: isHex(v) ? 'raw bytes (hex)' : 'utf-8 text',
+                blake2_256: blake2AsHex(bytes, 256),
+                blake2_128: blake2AsHex(bytes, 128),
+                keccak_256: keccakAsHex(bytes),
+                xxhash_128: xxhashAsHex(bytes, 128),
+                xxhash_64: xxhashAsHex(bytes, 64)
+            };
+            $('ut-hash-status').textContent = '';
+            $('ut-hash-result').innerHTML = `<pre>${stakingEscapeHtml(JSON.stringify(out, null, 2))}</pre>`;
+        } catch (e) {
+            $('ut-hash-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`;
+        }
+    });
+
+    $('ut-vf-run').addEventListener('click', () => {
+        const addr = $('ut-vf-addr').value.trim();
+        const msg = $('ut-vf-msg').value;
+        const sig = $('ut-vf-sig').value.trim();
+        try {
+            const res = signatureVerify(toBytes(msg), sig, addr);
+            $('ut-vf-status').textContent = '';
+            $('ut-vf-result').innerHTML =
+                `<div class="cs-result-head">${res.isValid
+                    ? '<span class="cs-count">Signature is VALID</span>'
+                    : '<span class="cs-err">Signature is NOT valid</span>'}</div>
+                 <pre>${stakingEscapeHtml(JSON.stringify({ isValid: res.isValid, crypto: res.crypto }, null, 2))}</pre>`;
+        } catch (e) {
+            $('ut-vf-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`;
+            $('ut-vf-result').innerHTML = '';
+        }
+    });
+}
+
 // ─── /developers ─────────────────────────────────────────────────────────────
 // Developer-facing API reference. Designed to mirror the README's "API
 // reference" section so we have a single source of truth in the codebase
@@ -5325,7 +5772,7 @@ function renderDevelopersPage() {
                 <table class="developers-table">
                     <thead><tr><th>Behavior</th><th>What to do</th></tr></thead>
                     <tbody>
-                        <tr><td><strong>HTML pages sit behind Cloudflare</strong>, which may challenge or block clients that look like abusive bots. A naive server-side fetch of an HTML page can come back empty or challenged.</td><td>Request the <code>/api/*</code> JSON endpoints instead — they are the supported, un-gated path for automated clients. Send a descriptive <code>User-Agent</code> and respect the <code>Cache-Control</code> headers.</td></tr>
+                        <tr><td><strong>The site sits behind Cloudflare.</strong> Requests from cloud/datacenter IP ranges are sometimes challenged, so a call from a CI runner or hosted backend can come back empty where the same call from a laptop succeeds.</td><td>It's an edge policy, not an API restriction — a plain <code>curl</code> gets HTTP 200. Send a descriptive <code>User-Agent</code>, respect the <code>Cache-Control</code> headers, and ask the operator to allowlist your range if you're calling from a data centre.</td></tr>
                         <tr><td><strong>The API itself is open to non-browser clients.</strong> CORS is a browser-only mechanism, so a caller that sends no <code>Origin</code> header (native app, server, script, AI agent) is always allowed.</td><td>Call the API directly from servers and native apps with no configuration. Only browser callers from other web origins need to be added to <code>ALLOWED_ORIGINS</code>.</td></tr>
                     </tbody>
                 </table>

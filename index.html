@@ -198,6 +198,9 @@
                 <div class="nav-section-title">Build</div>
                 <a href="/developers" class="nav-item" data-target="developers"><i class='bx bx-code-alt'></i> Developers</a>
                 <a href="/chain-state" class="nav-item" data-target="chain-state"><i class='bx bx-data'></i> Chain State</a>
+                <a href="/decode" class="nav-item" data-target="decode"><i class='bx bx-file-find'></i> Extrinsic Decoder</a>
+                <a href="/runtime" class="nav-item" data-target="runtime"><i class='bx bx-chip'></i> Runtime &amp; RPC</a>
+                <a href="/utilities" class="nav-item" data-target="utilities"><i class='bx bx-wrench'></i> Utilities</a>
             </nav>
             <div class="sidebar-footer">
                 <!-- Sidebar price ticker. Polled by pollPriceTicker() in script.js
@@ -1109,6 +1112,26 @@
                  block, which is what makes on-chain forensics reproducible. -->
             <div class="chain-state-page page-section" data-page="chain-state" style="display: none;">
                 <div id="chain-state-page-content"></div>
+            </div>
+
+            <!-- /decode — per-argument extrinsic decoder for any block
+                 (polkadot.js "Extrinsics" inspection, read-only). Backed by
+                 /api/decode/:block. Shows each argument's name, declared type,
+                 decoded value AND raw hex. -->
+            <div class="decode-page page-section" data-page="decode" style="display: none;">
+                <div id="decode-page-content"></div>
+            </div>
+
+            <!-- /runtime — runtime version, constants browser and the
+                 allowlisted read-only RPC console. -->
+            <div class="runtime-page page-section" data-page="runtime" style="display: none;">
+                <div id="runtime-page-content"></div>
+            </div>
+
+            <!-- /utilities — offline developer helpers (SS58 conversion,
+                 hashing, signature verification). No chain calls. -->
+            <div class="utilities-page page-section" data-page="utilities" style="display: none;">
+                <div id="utilities-page-content"></div>
             </div>
 
             <!-- Help Center -->
