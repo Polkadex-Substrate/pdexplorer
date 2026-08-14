@@ -4963,6 +4963,12 @@ async function renderChainStatePage() {
                 <button id="cs-run" class="wallet-action-btn primary" type="button">Query</button>
                 <button id="cs-entries" class="wallet-action-btn" type="button" title="List the first entries of a map">List entries</button>
                 <button id="cs-copy" class="wallet-action-btn" type="button">Copy link</button>
+                <span class="cs-export" id="cs-export" hidden>
+                    <span class="cs-export-label">Export</span>
+                    <button id="cs-dl-json" class="staking-download-btn" type="button" title="Full result with provenance">JSON</button>
+                    <button id="cs-dl-csv"  class="staking-download-btn" type="button" title="Flattened rows">CSV</button>
+                    <button id="cs-copy-val" class="staking-download-btn" type="button" title="Copy the decoded value to the clipboard">Copy value</button>
+                </span>
                 <span id="cs-status" class="cs-status"></span>
             </div>
             <div id="cs-docs" class="cs-docs"></div>
@@ -5084,6 +5090,34 @@ async function renderChainStatePage() {
         setTimeout(() => { $('cs-status').textContent = ''; }, 1500);
     });
 
+    const flash = msg => {
+        $('cs-status').textContent = msg;
+        setTimeout(() => { $('cs-status').textContent = ''; }, 1800);
+    };
+    $('cs-dl-json').addEventListener('click', () => {
+        if (!chainStateLastResult) return;
+        downloadStakingBlob(
+            chainStateFilename(chainStateLastResult, 'json'),
+            JSON.stringify(chainStateExportPayload(chainStateLastResult), null, 2),
+            'application/json');
+        flash('JSON exported.');
+    });
+    $('cs-dl-csv').addEventListener('click', () => {
+        if (!chainStateLastResult) return;
+        downloadStakingBlob(
+            chainStateFilename(chainStateLastResult, 'csv'),
+            chainStateCsv(chainStateLastResult),
+            'text/csv;charset=utf-8');
+        flash('CSV exported.');
+    });
+    $('cs-copy-val').addEventListener('click', () => {
+        if (!chainStateLastResult) return;
+        const d = chainStateLastResult;
+        const value = d.entries ? d.entries : (d.json !== undefined ? d.json : d.human);
+        navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+        flash('Value copied.');
+    });
+
     // ---- restore from query string (deep link) ----
     const params = new URLSearchParams(window.location.search || '');
     const qp = params.get('pallet'), qi = params.get('item');
@@ -5099,11 +5133,102 @@ async function renderChainStatePage() {
     }
 }
 
+// Last result, retained so the export buttons can act on it.
+let chainStateLastResult = null;
+
+// Wrap a result with everything needed to re-run and cite it.
+//
+// An exported file usually ends up pasted into a report, an issue, or an email,
+// separated from the UI that produced it. Without provenance the reader cannot
+// tell WHICH block it was read at, which runtime decoded it, or whether the key
+// was mangled on the way in — so the export records the query, the resolved
+// block number AND hash, the source URL, and the retrieval time. Anyone can
+// then re-run it and get the same bytes.
+function chainStateExportPayload(d) {
+    return {
+        _provenance: {
+            source: 'Polkadex Mainnet Explorer — chain state',
+            site: window.location.origin,
+            // Re-runnable: same pallet, item, keys and block.
+            query: `${d.pallet}.${d.item}${d.args && d.args.length ? '(' + d.args.join(', ') + ')' : ''}`,
+            apiUrl: `${window.location.origin}/api/state/${d.pallet}/${d.item}` +
+                    `?${new URLSearchParams({
+                        ...(d.args && d.args.length ? { args: d.args.join(',') } : {}),
+                        ...(d.at ? { at: String(d.at.block) } : {})
+                    })}`,
+            pageUrl: window.location.href,
+            // Keys exactly as submitted — the record that no numeric coercion
+            // happened to a large u64 key.
+            keysAsSubmitted: d.args || [],
+            atBlock: d.at ? d.at.block : null,
+            atBlockHash: d.at ? d.at.hash : null,
+            atChainHead: !d.at,
+            retrievedAt: new Date().toISOString()
+        },
+        storage: d.storage || null,
+        result: d.entries
+            ? { entriesTotal: d.entriesTotal, truncated: d.truncated, limit: d.limit, entries: d.entries }
+            : { isEmpty: d.isEmpty, count: d.count, human: d.human, json: d.json, hex: d.hex }
+    };
+}
+
+function chainStateFilename(d, ext) {
+    const keys = (d.args || []).join('-').replace(/[^\w.-]/g, '').slice(0, 40);
+    const at = d.at ? `at${d.at.block}` : 'latest';
+    return `chainstate-${d.pallet}.${d.item}${keys ? '-' + keys : ''}-${at}.${ext}`;
+}
+
+// CSV escaping: quote always, double embedded quotes. Values here include
+// addresses and hex blobs, and a stray comma silently shifting columns in a
+// spreadsheet is exactly the kind of quiet corruption this page exists to avoid.
+function csvCell(v) {
+    if (v === null || v === undefined) return '""';
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return `"${s.replace(/"/g, '""')}"`;
+}
+
+function chainStateCsv(d) {
+    const head = ['pallet', 'item', 'keys', 'at_block', 'at_block_hash', 'retrieved_at'];
+    const base = [d.pallet, d.item, (d.args || []).join(' | '),
+                  d.at ? d.at.block : 'latest', d.at ? d.at.hash : '',
+                  new Date().toISOString()];
+    const lines = [];
+
+    if (d.entries) {
+        // Map listing: one row per entry.
+        lines.push([...head, 'entry_key', 'entry_key_hex', 'value_json'].map(csvCell).join(','));
+        for (const e of d.entries) {
+            lines.push([...base, e.key, e.keyHex, e.value ? e.value.json : null].map(csvCell).join(','));
+        }
+    } else if (Array.isArray(d.json)) {
+        // Vec value (e.g. a validator set): one row per element, indexed.
+        lines.push([...head, 'index', 'value'].map(csvCell).join(','));
+        d.json.forEach((v, i) => lines.push([...base, i, v].map(csvCell).join(',')));
+    } else if (d.json && typeof d.json === 'object') {
+        // Struct: one row per field, so it opens usefully in a spreadsheet.
+        lines.push([...head, 'field', 'value'].map(csvCell).join(','));
+        for (const [k, v] of Object.entries(d.json)) {
+            lines.push([...base, k, v].map(csvCell).join(','));
+        }
+    } else {
+        lines.push([...head, 'value', 'hex'].map(csvCell).join(','));
+        lines.push([...base, d.json, d.hex].map(csvCell).join(','));
+    }
+    // CRLF matches the staking-rewards exports and keeps Excel happy.
+    return lines.join('\r\n');
+}
+
 // Render a /api/state result. Always shows Human, JSON and Hex — never just
 // the friendly rendering.
 function renderChainStateResult(d) {
     const box = document.getElementById('cs-result');
     if (!box) return;
+
+    // Retain for the export buttons, and reveal them now there's something
+    // to export.
+    chainStateLastResult = d;
+    const exportBar = document.getElementById('cs-export');
+    if (exportBar) exportBar.hidden = false;
 
     const atLabel = d.at
         ? `block <a href="/block/${d.at.block}" class="item-link">${d.at.block}</a> <code>${escapeHtml(String(d.at.hash).slice(0, 18))}…</code>`
