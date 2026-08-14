@@ -10918,11 +10918,46 @@ function councilMotionVote(hash, index, approve) {
     const stored = getStoredWallet();
     if (!(councilData.members || []).some(m => isSameAddress(m.address, stored)))
         return alert('Only council members can vote on motions. Your connected wallet does not hold a council seat.');
-    const idx = Number(index);
+    // Validate the index BEFORE building the call.
+    //
+    // `index` arrives as a DOM attribute string, and the backend leaves it null
+    // whenever council.voting() returns None (a closed motion, or a stale
+    // snapshot). Rendered into the attribute that becomes the literal "null" or
+    // "undefined". Passing those through to polkadot-js is dangerous in two
+    // different ways, both verified:
+    //   Number("null") -> NaN        -> Compact<u32> THROWS (loud, harmless)
+    //   null/undefined -> encodes as 0 -> a vote silently cast on motion #0
+    // The second is the dangerous one: a governance vote landing on the wrong
+    // motion with no error at all. Refuse anything that isn't a real index.
+    // Note the empty-string case: Number("") === 0, which is a VALID index, so
+    // a blank attribute would sail through a numeric check and cast a real vote
+    // on motion #0. Require the raw value to look like digits before converting.
+    const rawIndex = String(index == null ? '' : index).trim();
+    const idx = /^\d+$/.test(rawIndex) ? Number(rawIndex) : NaN;
+    if (!Number.isInteger(idx) || idx < 0) {
+        return alert(`This motion has no on-chain vote index available, so a vote can't be cast safely.\n\n` +
+                     `That usually means the motion just closed, or the page data is stale — reload and try again.\n\n` +
+                     `(Refusing rather than guessing: an unset index would encode as 0 and cast your vote on motion #0.)`);
+    }
     if (!confirm(`Cast a ${approve ? 'AYE' : 'NAY'} vote on council motion #${idx}?`)) return;
     const pallet = councilData.collectivePallet;
     submitSignedTx({
-        buildTx: (api) => api.tx[pallet].vote(hash, idx, approve),
+        buildTx: (api) => {
+            const tx = api.tx[pallet].vote(hash, idx, approve);
+            // Log what we actually encode. When a submission fails at the node
+            // (e.g. a validate_transaction panic) this is the only way to tell
+            // "the explorer built a bad call" apart from "this node rejected a
+            // good call" — paste it beside the same vote from polkadot.js and
+            // the bytes either match or they don't.
+            try {
+                console.info('[council.vote] pallet=%s hash=%s index=%s approve=%s\n  call=%s\n  endpoint=%s\n  runtime=%s/%s',
+                    pallet, hash, idx, approve,
+                    tx.method.toHex(),
+                    (api._options && api._options.provider && api._options.provider.endpoint) || 'unknown',
+                    api.runtimeVersion.specName.toString(), api.runtimeVersion.specVersion.toString());
+            } catch (e) { /* diagnostics must never block a vote */ }
+            return tx;
+        },
         label: `Motion #${idx} ${approve ? 'aye' : 'nay'} vote`,
         onSuccess: () => setTimeout(fetchCouncilData, 2500)
     });

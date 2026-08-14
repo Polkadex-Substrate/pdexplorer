@@ -2316,7 +2316,7 @@ footer a{margin-right:16px}
 <li><code>POST /api/rpc/call</code> — allowlisted read-only RPC methods</li>
 </ul>
 <p><strong>Read-only by construction</strong> — only <code>api.query</code>, <code>api.consts</code> and allowlisted read RPCs are reachable; nothing here can submit an extrinsic.</p>
-<p><strong>Send storage keys as strings.</strong> A u64 key like <code>9223372036854775808</code> (2&#8311;&#179;) exceeds JavaScript's <code>MAX_SAFE_INTEGER</code>; a client that parses it as a number queries <code>9223372036854776000</code> instead — a different key whose empty result reads like confirmation. Responses echo <code>args</code> back so you can check.</p>
+<p><strong>Send storage keys as strings.</strong> A u64 key like <code>9223372036854775808</code> (2&#8310;&#179;) exceeds JavaScript's <code>MAX_SAFE_INTEGER</code>; a client that parses it as a number queries <code>9223372036854776000</code> instead — a different key whose empty result reads like confirmation. Responses echo <code>args</code> back so you can check.</p>
 <p><strong>Verify against <code>hex</code>, not <code>human</code>.</strong> <code>toHuman()</code> abbreviates hashes (an all-zero H256 shows as <code>0x0000…0000</code>) and group-separates integers, so every response carries human, JSON and hex together, plus a <code>count</code> for Vec results.</p>
 <p>There is an interactive UI for this at <a href="${SITE_URL}/chain-state">/chain-state</a>, with shareable deep links (<code>?pallet=&amp;item=&amp;args=&amp;at=</code>).</p>
 <pre><code>curl '${SITE_URL}/api/decode/12250870?method=submit_snapshot'
