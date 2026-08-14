@@ -4276,7 +4276,25 @@ function bootSeoRouter() {
 }
 
 // Routing Logic
+// Council-page live polling. Started on route entry, stopped on any route
+// change (routeTo runs for every navigation, so the stop below is the single
+// choke point — no per-page cleanup to forget). 30s halves the worst-case
+// staleness of the backend's 12s event-driven snapshot + short cache tier
+// without adding meaningful load: it's one KV-backed GET per open tab.
+let councilPollTimer = null;
+function startCouncilPolling() {
+    if (councilPollTimer) return;
+    councilPollTimer = setInterval(() => {
+        // Skip hidden tabs — no point polling a page nobody is looking at.
+        if (document.visibilityState === 'visible') fetchCouncilData();
+    }, 30000);
+}
+function stopCouncilPolling() {
+    if (councilPollTimer) { clearInterval(councilPollTimer); councilPollTimer = null; }
+}
+
 function routeTo(target) {
+    stopCouncilPolling();
     if (!target) target = 'home';
 
     // Strip query string and hash fragment before doing the route lookup. The
@@ -4379,6 +4397,13 @@ function routeTo(target) {
                 renderWatchlistPage();
             } else if (mainTarget === 'council') {
                 fetchCouncilData();
+                // Poll while the page is open. Motions are the one governance
+                // surface where minutes matter — a 3-seat threshold can resolve
+                // in a couple of blocks, and council members watching a live
+                // vote previously saw a snapshot frozen at page entry. Paired
+                // with the backend's event-driven snapshot refresh, a new vote
+                // is visible here within ~15-40s of landing on-chain.
+                startCouncilPolling();
             } else if (mainTarget === 'democracy') {
                 initDemocracyPage();
             } else if (mainTarget === 'treasury') {

@@ -3231,7 +3231,12 @@ app.get('/api/council', (req, res) => {
         const data = db.getKv('council') || { members: [], runnersUp: [], candidates: [], motions: [], blocksRemaining: 0, termDuration: 0, desiredMembers: 0, desiredRunnersUp: 0, collectivePallet: null };
         data.motionHistory = db.getCouncilMotions();
         data.history = governanceHistoryMeta();
-        cacheLong(res);
+        // Short tier, not long. This payload carries LIVE vote tallies on open
+        // motions; cacheLong meant a fresh vote could hide behind up to 5 min
+        // of browser cache + 10 min of CDN cache — council members watched
+        // their own just-cast vote fail to appear. The KV read this serves is
+        // trivially cheap, so the short tier costs the origin nothing.
+        cacheShort(res);
         res.json(data);
     } catch (err) {
         console.error('API Error /api/council:', err);
@@ -5639,6 +5644,17 @@ async function syncChainIndex() {
             const forward = await scanChainRange(latestScannedBlock + 1, head, BLOCKS_FORWARD_MAX);
             if (forward.blocks.length) db.insertBlocks(forward.blocks);
             if (forward.events.length) db.insertEvents(forward.events);
+            // Event-driven governance refresh. The council snapshot otherwise
+            // renews on a slow timer (COUNCIL_REFRESH_MS), which meant a new
+            // motion or a fresh vote took minutes to appear — painful for a
+            // 3-seat-threshold council watching a live vote. The forward pass
+            // runs every ~12s on new blocks only, so piggy-backing here makes
+            // motions appear within one block-tick of landing on-chain at
+            // near-zero extra cost (the events are already in hand).
+            if (forward.events.some(e => /^(council|councilCollective|generalCouncil)$/i.test(e.section || ''))) {
+                console.log('[chain-index] council event in fresh block — refreshing council snapshot now');
+                syncCouncil().catch(() => { /* the interval pass remains the safety net */ });
+            }
             if (forward.failedNumbers && forward.failedNumbers.length) tickHadFailures = true;
             // Advance the watermark to head even if individual blocks failed —
             // the gap-fill pass will pick those up by name on subsequent ticks.
