@@ -490,7 +490,28 @@ async function init() {
         // (so.polkadex.ee, polkadex-rpc.faradaynodes.com, ...) so this single
         // URL is resilient without the frontend needing to know the topology.
         const wsProvider = new WsProvider('wss://rpc.polkadex.ee');
-        globalApi = await ApiPromise.create({ provider: wsProvider });
+        globalApi = await ApiPromise.create({
+            provider: wsProvider,
+            // The runtime declares the CheckMetadataHash signed extension, but
+            // @polkadot/api 10.13.1 predates support for it and logs
+            //   "Unknown signed extensions CheckMetadataHash ... no-effect"
+            // then encodes NOTHING for it. The runtime still expects a Mode
+            // byte in the signed extra and an Option<[u8;32]> in the signing
+            // payload, so every signed extrinsic we submitted decoded
+            // misaligned on-chain and panicked inside
+            // TaggedTransactionQueue_validate_transaction — surfacing to the
+            // user as "wasm `unreachable` instruction executed". Declaring the
+            // shape here makes 10.13.1 encode Mode::Disabled (0) + None, which
+            // is exactly what a current api sends when metadata-hash checking
+            // is not in use. Remove this block only when @polkadot/api is
+            // upgraded to a version that knows the extension natively.
+            signedExtensions: {
+                CheckMetadataHash: {
+                    extrinsic: { mode: 'u8' },
+                    payload: { metadataHash: 'Option<[u8;32]>' }
+                }
+            }
+        });
 
         networkStatusText.innerText = "Polkadex Connected";
         statusIndicator.classList.add('live');
@@ -10974,12 +10995,20 @@ function councilMotionVote(hash, index, approve) {
             // "the explorer built a bad call" apart from "this node rejected a
             // good call" — paste it beside the same vote from polkadot.js and
             // the bytes either match or they don't.
+            //
+            // signedExtensions is logged too, and matters as much as the call:
+            // a correct call inside a malformed envelope still panics the
+            // runtime, and that is exactly how the CheckMetadataHash bug hid
+            // for weeks — the call hex was perfect every time. If the runtime
+            // declares an extension that is missing from this list, the
+            // envelope is wrong, not the call.
             try {
-                console.info('[council.vote] pallet=%s hash=%s index=%s approve=%s\n  call=%s\n  endpoint=%s\n  runtime=%s/%s',
+                console.info('[council.vote] pallet=%s hash=%s index=%s approve=%s\n  call=%s\n  endpoint=%s\n  runtime=%s/%s\n  signedExtensions=%s',
                     pallet, hash, idx, approve,
                     tx.method.toHex(),
                     (api._options && api._options.provider && api._options.provider.endpoint) || 'unknown',
-                    api.runtimeVersion.specName.toString(), api.runtimeVersion.specVersion.toString());
+                    api.runtimeVersion.specName.toString(), api.runtimeVersion.specVersion.toString(),
+                    (api.registry.signedExtensions || []).join(','));
             } catch (e) { /* diagnostics must never block a vote */ }
             return tx;
         },

@@ -6388,7 +6388,23 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
 
     let newApi;
     try {
-        newApi = await ApiPromise.create({ provider: wsProvider });
+        // signedExtensions: same declaration as the frontend, for a different
+        // reason. The backend never signs anything, but it DECODES signed
+        // extrinsics (/api/decode, block indexing). @polkadot/api 10.13.1
+        // doesn't know the runtime's CheckMetadataHash extension, so it skips
+        // the Mode byte when reading an extrinsic's signed extra — every field
+        // after it (era, nonce, tip) is then read from the wrong offset.
+        // Declaring the shape keeps decoded output faithful to the chain,
+        // which is the whole point of the forensic endpoints.
+        newApi = await ApiPromise.create({
+            provider: wsProvider,
+            signedExtensions: {
+                CheckMetadataHash: {
+                    extrinsic: { mode: 'u8' },
+                    payload: { metadataHash: 'Option<[u8;32]>' }
+                }
+            }
+        });
     } catch (err) {
         // ApiPromise.create only rejects on hard errors (bad metadata, etc.);
         // transient connect failures are handled by WsProvider's retry loop.

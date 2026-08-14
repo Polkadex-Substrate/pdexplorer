@@ -11,7 +11,7 @@
     "server": "node --experimental-sqlite server.js"
   },
   "dependencies": {
-    "@polkadot/api": "latest",
+    "@polkadot/api": "10.13.1",
     "cors": "^2.8.6",
     "express": "^5.2.1"
   },
