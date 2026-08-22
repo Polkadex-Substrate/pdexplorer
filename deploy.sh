@@ -87,7 +87,10 @@ fi
 #
 # DEPLOY_DIR is absolute and overridable; the script always operates there
 # regardless of where it is invoked from.
-REPO_URL="${REPO_URL:-https://github.com/polkadexaj/pdexscan.git}"
+# Audit F-030: default to the CANONICAL remote. The old default pointed at
+# the personal pdexscan fork — a fresh VPS would clone (and `reset --hard` to)
+# whatever that repo contains, a supply-chain hijack waiting to happen.
+REPO_URL="${REPO_URL:-https://github.com/Polkadex-Substrate/pdexplorer.git}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
 
 if [ -d "$DEPLOY_DIR/.git" ]; then
@@ -165,9 +168,36 @@ CERT_GLOB="${CERTBOT_PATH:-./certbot}/conf/live/*/fullchain.pem"
 if [ "${RUN_LETSENCRYPT:-0}" != "1" ] && compgen -G "$CERT_GLOB" >/dev/null 2>&1; then
     echo "--> Existing certificate found — skipping init-letsencrypt.sh."
     echo "    (Cloudflare Origin cert setup. Use RUN_LETSENCRYPT=1 to force Let's Encrypt bootstrap.)"
-else
-    echo "--> No certificate found; bootstrapping..."
+    # Audit F-024: "a cert exists" is not "a cert Cloudflare will accept".
+    # init-letsencrypt.sh writes a SELF-SIGNED placeholder, and this skip used
+    # to treat that placeholder as done — under Full (Strict) that is a 526.
+    # Warn loudly (don't abort: Flexible-mode setups do run on placeholders).
+    for pem in ${CERTBOT_PATH:-./certbot}/conf/live/*/fullchain.pem; do
+        issuer="$(openssl x509 -in "$pem" -noout -issuer 2>/dev/null || true)"
+        case "$issuer" in
+            *"Let's Encrypt"*|*"CloudFlare Origin"*|*"Cloudflare Origin"*) ;;
+            *) echo "    WARNING: $pem issuer is not Let's Encrypt / Cloudflare Origin CA:"
+               echo "             ${issuer:-unreadable} — Cloudflare Full (Strict) will 526 on this."
+               echo "             Run provision-ubuntu.sh cf-origin-cert (or a real certonly) to replace it." ;;
+        esac
+    done
+fi
+if [ "${RUN_LETSENCRYPT:-0}" = "1" ] || ! compgen -G "$CERT_GLOB" >/dev/null 2>&1; then
+    echo "--> No certificate found (or bootstrap forced); bootstrapping..."
     bash ./init-letsencrypt.sh
+fi
+
+# ---- Cert readability for unprivileged nginx (audit F-040) ------------------
+# The frontend container now runs nginx as uid/gid 101 (nginx-unprivileged).
+# Cert files written by certbot/openssl as root default to 600/700, which the
+# rootless worker cannot read — nginx would exit at boot and Cloudflare would
+# 521. Grant group 101 read-only traversal+read, idempotently. Private key
+# stays unreadable to "other".
+CERT_CONF_DIR="${CERTBOT_PATH:-./certbot}/conf"
+if [ -d "$CERT_CONF_DIR" ]; then
+    echo "--> Ensuring cert tree is readable by the unprivileged nginx uid (101)..."
+    chgrp -R 101 "$CERT_CONF_DIR" 2>/dev/null || sudo chgrp -R 101 "$CERT_CONF_DIR"
+    chmod -R g+rX,o-rwx "$CERT_CONF_DIR" 2>/dev/null || sudo chmod -R g+rX,o-rwx "$CERT_CONF_DIR"
 fi
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi

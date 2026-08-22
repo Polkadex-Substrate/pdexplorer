@@ -8,8 +8,14 @@ WORKDIR /app
 # ships with the image (uid 1000). Running as a non-root user inside the
 # container means a future RCE doesn't immediately have root inside the
 # container — and a container escape lands as uid 1000 on the host, not root.
-COPY package.json ./
-RUN npm install --omit=dev && chown -R node:node /app
+# Audit F-031/F-102: copy the LOCKFILE and use `npm ci`, not `npm install`.
+# npm install against package.json alone re-resolves every range at build
+# time, so two image builds months apart can ship different dependency trees
+# with zero git diff — exactly how the wrong @polkadot/api got in. npm ci
+# installs the lockfile verbatim and fails loudly if it disagrees with
+# package.json.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && chown -R node:node /app
 
 COPY --chown=node:node server.js db.js email.js backfill-transactions-from-events.mjs migrate-add-indexes.mjs ./
 

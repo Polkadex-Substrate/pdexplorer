@@ -44,8 +44,11 @@ services:
     container_name: pdexplorer-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      # Container listens on 8080/8443 because nginx runs as the unprivileged
+      # uid 101 (audit F-040) and non-root can't bind <1024. The HOST still
+      # serves plain 80/443 — externally nothing changes.
+      - "80:8080"
+      - "443:8443"
     volumes:
       # RELATIVE paths here resolve against the directory Compose runs in, so
       # deploying from a different checkout silently hands nginx an EMPTY cert
@@ -53,13 +56,22 @@ services:
       # returns 521 (nothing listening). Set CERTBOT_PATH to an absolute path
       # in .env so the certs are pinned to one location, exactly like DATA_PATH
       # pins the SQLite index.
-      - ${CERTBOT_PATH:-./certbot}/conf:/etc/letsencrypt
-      - ${CERTBOT_PATH:-./certbot}/www:/var/www/certbot
+      #
+      # :ro (audit F-040): nginx only READS certs. If the frontend container
+      # is compromised it must not be able to overwrite TLS material; only
+      # the certbot service holds a writable mount.
+      - ${CERTBOT_PATH:-./certbot}/conf:/etc/letsencrypt:ro
+      - ${CERTBOT_PATH:-./certbot}/www:/var/www/certbot:ro
     depends_on:
       - backend
 
   certbot:
-    image: certbot/certbot
+    # Audit F-032: pinned — implicit :latest let `docker compose pull` swap
+    # the binary that holds the TLS private-key volume with no git diff.
+    # When bumping, add the digest for full supply-chain pinning:
+    #   docker pull certbot/certbot:<ver> && docker inspect --format='{{index .RepoDigests 0}}' certbot/certbot:<ver>
+    # then write image: certbot/certbot:<ver>@sha256:…
+    image: certbot/certbot:v2.11.0
     container_name: certbot
     volumes:
       # RELATIVE paths here resolve against the directory Compose runs in, so

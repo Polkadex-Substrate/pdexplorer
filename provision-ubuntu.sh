@@ -60,7 +60,9 @@ set -euo pipefail
 # ---- Configuration ---------------------------------------------------------
 DOMAIN="${DOMAIN:-explorer.polkadex.ee}"
 LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-business@polkadex.ee}"
-REPO_URL="${REPO_URL:-https://github.com/polkadexaj/pdexscan.git}"
+# Audit F-030: canonical remote, not the personal fork — a fresh VPS clones
+# and later hard-resets to whatever this URL serves.
+REPO_URL="${REPO_URL:-https://github.com/Polkadex-Substrate/pdexplorer.git}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
 SSH_PORT="${SSH_PORT:-22}"
 ALLOW_PASSWORD_SSH="${ALLOW_PASSWORD_SSH:-no}"
@@ -121,6 +123,20 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 EOF
     systemctl enable --now unattended-upgrades.service >/dev/null
     ok "unattended-upgrades enabled (security only, no auto-reboot)"
+
+    # Audit F-098: refuse to lock out password auth when NO key can get back
+    # in. The old order disabled password SSH and restarted sshd first, then
+    # never checked authorized_keys — a one-liner run without a key lost SSH
+    # to the box permanently (console recovery only).
+    if [ "$ALLOW_PASSWORD_SSH" = "no" ]; then
+        _has_key=0
+        for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+            [ -s "$f" ] && _has_key=1 && break
+        done
+        if [ "$_has_key" -eq 0 ]; then
+            die "No non-empty authorized_keys found and ALLOW_PASSWORD_SSH=no — hardening would lock you out. Add an SSH key first, or run with ALLOW_PASSWORD_SSH=yes."
+        fi
+    fi
 
     log "Configuring SSH (keys only, no root password login)"
     install -d -m 0755 /etc/ssh/sshd_config.d
@@ -370,6 +386,16 @@ LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL
 
 # ---- Data path (host bind-mount → /app/data inside the backend container)
 DATA_PATH=$DEPLOY_DIR/data
+
+# ---- Cert path (audit F-023). ABSOLUTE, like DATA_PATH: compose's fallback
+# is the RELATIVE ./certbot, which resolves against whatever directory compose
+# is invoked from — run a deploy from a second checkout and nginx mounts an
+# empty cert dir, fails on fullchain.pem, and Cloudflare returns 521.
+CERTBOT_PATH=$DEPLOY_DIR/certbot
+
+# ---- Diagnostics (audit F-038). Bearer token for /api/diag/*; leave empty
+# to restrict diagnostics to loopback (operator on the box) only.
+DIAG_TOKEN=
 
 # ---- Chain RPC (comma-separated WS endpoints; first = primary)
 # rpc.polkadex.ee is the Cloudflare Load Balancer endpoint that fronts the
@@ -1085,7 +1111,21 @@ main() {
         backup)         setup_backups ;;
         cloudflare)     setup_cloudflare_only ;;
         cf-origin-cert) setup_cf_origin_cert ;;
-        all)            harden_system; install_docker; deploy_app; setup_backups ;;
+        # Audit F-098 + F-024: `all` now includes the Cloudflare firewall phase
+        # (80/443 restricted to CF ranges instead of Anywhere) and — when the
+        # operator has staged secrets/cloudflare-origin.pem — the Origin CA
+        # cert install, so the default path no longer ends on a self-signed
+        # placeholder that Full (Strict) rejects with 526. Skipping the origin
+        # cert when secrets are absent is deliberate: the phase would die()
+        # mid-provision otherwise; the summary tells the operator what remains.
+        all)            harden_system; install_docker; deploy_app; setup_backups
+                        if [ -r "$DEPLOY_DIR/secrets/cloudflare-origin.pem" ]; then
+                            setup_cf_origin_cert
+                        else
+                            warn "No $DEPLOY_DIR/secrets/cloudflare-origin.pem — origin cert is still the self-signed placeholder."
+                            warn "Cloudflare Full (Strict) will 526 until you run: sudo bash $0 cf-origin-cert"
+                        fi
+                        setup_cloudflare_only ;;
         all+cf)         harden_system; install_docker; deploy_app; setup_backups; setup_cloudflare_only ;;
         *)              die "Usage: $0 [harden|docker|app|backup|cloudflare|cf-origin-cert|all|all+cf]" ;;
     esac

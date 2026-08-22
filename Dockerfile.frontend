@@ -3,8 +3,12 @@
 FROM node:22.11-alpine AS build
 
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install
+# Audit F-149: the lockfile was copied but then IGNORED — `npm install`
+# re-resolves ranges, so the lock gave no reproducibility. `npm ci` installs
+# it verbatim (and fails the build if lock and package.json disagree, which
+# is the correct failure mode for a wallet's supply chain).
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 COPY . .
 
@@ -19,11 +23,20 @@ ARG BUILD_TIME=unknown
 RUN npm run build \
  && printf '{"component":"frontend","gitSha":"%s","builtAt":"%s"}\n' "$GIT_SHA" "$BUILD_TIME" > /app/dist/version.json
 
-# Pin nginx to a specific minor too; the floating `nginx:alpine` tag breaks
-# reproducible builds whenever upstream cuts a release.
-FROM nginx:1.27-alpine
+# Audit F-040 (SECURITY_AUDIT.md H-1, frontend half): run nginx as a NON-ROOT
+# user. The stock nginx image runs the master process as uid 0, so a container
+# break-in had root inside the container and could read privkey.pem outright.
+# nginxinc/nginx-unprivileged is the official rootless variant (uid 101): pid
+# and cache paths are pre-arranged for an unprivileged user, and because
+# non-root can't bind <1024 it listens on 8080/8443 — nginx.conf and
+# docker-compose port mappings match that.
+#
+# OPERATOR NOTE (first deploy after this change): the bind-mounted cert tree
+# must be readable by uid/gid 101 — deploy.sh handles the chgrp/chmod
+# idempotently. Pinned to the same 1.27 minor as before.
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 80
+EXPOSE 8080 8443
 CMD ["nginx", "-g", "daemon off;"]

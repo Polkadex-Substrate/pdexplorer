@@ -2,6 +2,12 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses,
          blake2AsHex, xxhashAsHex, keccakAsHex, signatureVerify } from '@polkadot/util-crypto';
 import { u8aToHex, hexToU8a, stringToU8a, isHex } from '@polkadot/util';
+// Signing-critical helpers live in lib/ so they can be unit-tested without a
+// browser — see lib/wallet-safety.js and test/wallet-safety.test.js. Do not
+// re-inline these; the audit findings they encode (F-011, F-012, F-054) are
+// exactly the kind that reappear when the logic is buried in this bundle.
+import { pdexToPlanck, isPositiveNumberInput, isValidPolkadexAddress,
+         buildTransferTx } from './lib/wallet-safety.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -1916,7 +1922,10 @@ async function fetchBlocks(force = false) {
         // Safety guard: Ensure data.blocks actually exists before checking length
         if (data.error || !data.blocks) throw new Error(data.error || "Blocks cache empty");
 
-        if (data.status === 'Initializing' || (data.status === 'Syncing' && data.blocks.length === 0)) {
+        // Audit F-020: spin ONLY while there are no rows. Status alone must
+        // not hide data — the backend now reports the real chain_index state,
+        // and an index that has rows is renderable regardless of its phase.
+        if (data.blocks.length === 0 && (data.status === 'Initializing' || data.status === 'Syncing')) {
             fullBlocksListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: orange;">Indexer is crawling historical blocks, please wait…</div>';
             setTimeout(() => { blocksFetched = false; fetchBlocks(); }, 5000);
             return;
@@ -2065,7 +2074,8 @@ async function fetchEvents(force = false) {
         const response = await fetch('/api/events');
         const data = await response.json();
 
-        if (data.status === 'Initializing' || (data.status === 'Syncing' && data.events.length === 0)) {
+        // Audit F-020: spin only while there are no rows (see fetchBlocks).
+        if (data.events.length === 0 && (data.status === 'Initializing' || data.status === 'Syncing')) {
             fullEventsListEl.innerHTML = '<div style="text-align:center; padding: 20px; color: orange;">Indexer is crawling historical events, please wait...</div>';
             setTimeout(() => { eventsFetched = false; fetchEvents(); }, 5000);
             return;
@@ -6072,11 +6082,16 @@ function tryOpenFromQueryString(page) {
     }
 }
 
+// Audit F-015: every string and key MUST be HTML-escaped. This tree renders
+// decoded extrinsics/events on /block and /tx, and those contain arbitrary
+// user-controlled bytes from the chain (system.remark, identity fields inside
+// calls). Unescaped, anyone who lands a remark on-chain gets stored XSS with
+// a shareable public URL. The decode page already escapes — this must too.
 function renderJSONTree(obj, indent = 0) {
     if (obj === null) return '<span class="json-null">null</span>';
     if (typeof obj === 'boolean') return `<span class="json-boolean">${obj}</span>`;
     if (typeof obj === 'number') return `<span class="json-number">${obj}</span>`;
-    if (typeof obj === 'string') return `<span class="json-string">"${obj}"</span>`;
+    if (typeof obj === 'string') return `<span class="json-string">"${stakingEscapeHtml(obj)}"</span>`;
 
     if (Array.isArray(obj)) {
         if (obj.length === 0) return '[]';
@@ -6097,7 +6112,7 @@ function renderJSONTree(obj, indent = 0) {
         const innerIndent = indent + 1;
         const spaces = '  '.repeat(innerIndent);
         keys.forEach((k, i) => {
-            html += `<div class="json-indent">${spaces}<span class="json-key">"${k}"</span>: ${renderJSONTree(obj[k], innerIndent)}${i < keys.length - 1 ? ',' : ''}</div>`;
+            html += `<div class="json-indent">${spaces}<span class="json-key">"${stakingEscapeHtml(k)}"</span>: ${renderJSONTree(obj[k], innerIndent)}${i < keys.length - 1 ? ',' : ''}</div>`;
         });
         html += '  '.repeat(indent) + '}';
         return html;
@@ -6153,13 +6168,16 @@ async function fetchAccountDetails(address) {
                 <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
                     <tr style="background: rgba(255,255,255,0.05);">
                         <td style="padding: 12px 20px; font-weight: 600; width: 250px;">account</td>
-                        <td style="padding: 12px 20px;" class="address-cell address-with-label" data-address="${stakingEscapeHtml(data.account)}">${data.account} <span onclick="copyToClipboard(this, '${data.account}')" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span> ${watchlistStarButton('address', data.account, (data.display && data.display !== 'Unknown') ? data.display : data.account)}
+                        <td style="padding: 12px 20px;" class="address-cell address-with-label" data-address="${stakingEscapeHtml(data.account)}">${stakingEscapeHtml(data.account)} <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span> ${watchlistStarButton('address', data.account, (data.display && data.display !== 'Unknown') ? data.display : data.account)}
                             <div id="account-label-editor"></div>
                         </td>
                     </tr>
                     <tr>
                         <td style="padding: 12px 20px; font-weight: 600;">display</td>
-                        <td style="padding: 12px 20px; color: var(--brand-secondary);">${data.display}</td>
+                        <!-- Audit F-013: data.display is pallet_identity text — anyone
+                             can set it on-chain, so it MUST be escaped or an identity
+                             string becomes stored XSS on /account/<addr>. -->
+                        <td style="padding: 12px 20px; color: var(--brand-secondary);">${stakingEscapeHtml(data.display)}</td>
                     </tr>
                     <tr style="background: rgba(255,255,255,0.02);">
                         <td style="padding: 12px 20px; font-weight: 600;">balance total</td>
@@ -6175,7 +6193,7 @@ async function fetchAccountDetails(address) {
                     </tr>
                     <tr>
                         <td style="padding: 12px 20px; font-weight: 600;">roles</td>
-                        <td style="padding: 12px 20px;">${data.roles}</td>
+                        <td style="padding: 12px 20px;">${stakingEscapeHtml(data.roles)}</td>
                     </tr>
                     <tr style="background: rgba(255,255,255,0.02);">
                         <td style="padding: 12px 20px; font-weight: 600;">Rating(top)</td>
@@ -6200,6 +6218,18 @@ async function fetchAccountDetails(address) {
             </div>
         `;
         accountDetailsContainer.innerHTML = html;
+
+        // Audit F-122: bind copy with addEventListener and read the address
+        // from the already-escaped data-address attribute. An inline
+        // onclick="copyToClipboard(this, '${address}')" puts a raw string
+        // inside a JavaScript-in-HTML context — a second injection sink even
+        // after the visible text is escaped.
+        accountDetailsContainer.querySelectorAll('.js-copy-address').forEach(el => {
+            el.addEventListener('click', function () {
+                const holder = this.closest('[data-address]');
+                if (holder) copyToClipboard(this, holder.getAttribute('data-address'));
+            });
+        });
 
         // Now that the container divs exist, mount the two makeTable
         // instances. Re-running fetchAccountDetails creates new instances
@@ -6406,11 +6436,13 @@ async function fetchTxDetails(block, hash) {
             <div style="padding: 20px;">
                 <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; text-align: left;">
                     <tr><td style="padding: 10px; font-weight: bold; width: 150px;">Time</td><td style="padding: 10px;">${stakingEscapeHtml(formatLocalDateTime(data.time))}</td></tr>
-                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">event</td><td style="padding: 10px;">${data.event}</td></tr>
-                    <tr><td style="padding: 10px; font-weight: bold;">from</td><td style="padding: 10px;"><a href="/account/${data.from}" class="item-link address-cell">${data.from}</a></td></tr>
-                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">to</td><td style="padding: 10px;"><a href="/account/${data.to}" class="item-link address-cell">${data.to}</a></td></tr>
-                    <tr><td style="padding: 10px; font-weight: bold;">status</td><td style="padding: 10px;"><span class="badge" style="background: ${data.status === 'success' ? 'var(--success)' : 'var(--error)'}; font-size: 11px;">${data.status}</span></td></tr>
-                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">block</td><td style="padding: 10px;"><a href="/block/${data.block}" class="item-link">${data.block}</a></td></tr>
+                    <!-- Audit F-122: every chain-derived field escaped; from/to
+                         also URL-encoded in the href attribute context. -->
+                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">event</td><td style="padding: 10px;">${stakingEscapeHtml(data.event)}</td></tr>
+                    <tr><td style="padding: 10px; font-weight: bold;">from</td><td style="padding: 10px;"><a href="/account/${encodeURIComponent(data.from)}" class="item-link address-cell">${stakingEscapeHtml(data.from)}</a></td></tr>
+                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">to</td><td style="padding: 10px;"><a href="/account/${encodeURIComponent(data.to)}" class="item-link address-cell">${stakingEscapeHtml(data.to)}</a></td></tr>
+                    <tr><td style="padding: 10px; font-weight: bold;">status</td><td style="padding: 10px;"><span class="badge" style="background: ${data.status === 'success' ? 'var(--success)' : 'var(--error)'}; font-size: 11px;">${stakingEscapeHtml(data.status)}</span></td></tr>
+                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">block</td><td style="padding: 10px;"><a href="/block/${encodeURIComponent(data.block)}" class="item-link">${stakingEscapeHtml(String(data.block))}</a></td></tr>
                 </table>
                 <div class="json-container">
                     ${renderJSONTree({ hash: data.hash, signer: data.from, method: data.event, extrinsic: data.extrinsic, events: data.events })}
@@ -6653,7 +6685,15 @@ async function fetchValidatorDetails(address) {
             canonicalPath: `/validator/${address}`
         });
 
-        const identityStr = data.identity !== "Unknown" ? data.identity : `<span class="address-cell">${address.substring(0, 8)}...</span>`;
+        // Audit F-014: escape ONLY the identity text — it's on-chain
+        // pallet_identity data anyone can set, i.e. stored XSS if inserted
+        // raw. The Unknown fallback is our own static markup and must NOT be
+        // escaped, or unknown validators would render a literal "<span…" on
+        // screen. (The address inside it is chain-format SS58, escaped anyway
+        // for uniformity.)
+        const identityStr = data.identity !== "Unknown"
+            ? stakingEscapeHtml(data.identity)
+            : `<span class="address-cell">${stakingEscapeHtml(address.substring(0, 8))}...</span>`;
 
         let commissionWarning = '';
         if (data.history.length > 0) {
@@ -6735,13 +6775,13 @@ async function fetchValidatorDetails(address) {
                 
                 ${commissionWarning}
                 
-                <div style="margin-bottom: 15px;">
+                <div style="margin-bottom: 15px;" data-address="${stakingEscapeHtml(data.address)}">
                     <strong style="display: block; margin-bottom: 5px;">Address:</strong>
-                    <span class="address-cell">${data.address}</span> <span onclick="copyToClipboard(this, '${data.address}')" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span>
+                    <span class="address-cell">${stakingEscapeHtml(data.address)}</span> <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span>
                 </div>
-                <div style="margin-bottom: 25px;">
+                <div style="margin-bottom: 25px;" data-address="${stakingEscapeHtml(data.controller)}">
                     <strong style="display: block; margin-bottom: 5px;">Controller account:</strong>
-                    <span class="address-cell">${data.controller}</span> <span onclick="copyToClipboard(this, '${data.controller}')" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span>
+                    <span class="address-cell">${stakingEscapeHtml(data.controller)}</span> <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span>
                 </div>
 
                 ${renderValidatorScorecard(data.scorecard)}
@@ -6771,6 +6811,15 @@ async function fetchValidatorDetails(address) {
                 </div>
             </div>
         `;
+
+        // Audit F-122: copy bound via listener + escaped data-address, not an
+        // inline onclick holding a raw string in a JS-in-HTML context.
+        container.querySelectorAll('.js-copy-address').forEach(el => {
+            el.addEventListener('click', function () {
+                const holder = this.closest('[data-address]');
+                if (holder) copyToClipboard(this, holder.getAttribute('data-address'));
+            });
+        });
 
         const triggerToggle = document.getElementById('toggle-trigger-events');
         const triggerLog = document.getElementById('trigger-events-log');
@@ -6919,10 +6968,9 @@ function stakingFormatPDEX(value) {
 function stakingFormatNumber(value) {
     return Number(value || 0).toLocaleString('en-US');
 }
-function isValidPolkadexAddress(addr) {
-    try { decodeAddress(addr); return true; }
-    catch (e) { return false; }
-}
+// isValidPolkadexAddress is imported from ./lib/wallet-safety.js (audit
+// F-012 — rejects 0x hashes and out-of-range lengths). Kept out of this file
+// so it is unit-testable; see test/wallet-safety.test.js.
 // Compare two SS58 addresses by their underlying public key bytes. Wallet
 // extensions often hand back addresses in the generic Substrate format
 // (prefix 42) while the backend normalizes them to Polkadex's prefix 88,
@@ -8781,24 +8829,9 @@ async function loadValidatorsForPicker() {
     return validatorsCache;
 }
 
-// PDEX has 12 decimals. Parse a decimal string into Planck units as a string
-// so we never lose precision through Number.
-function pdexToPlanck(value) {
-    const s = String(value || '0').trim();
-    if (!s) return '0';
-    const neg = s.startsWith('-');
-    const abs = neg ? s.slice(1) : s;
-    const [intPart, decPart = ''] = abs.split('.');
-    const decPadded = (decPart + '000000000000').slice(0, 12);
-    const result = BigInt(intPart || '0') * 1000000000000n + BigInt(decPadded || '0');
-    return (neg ? -result : result).toString();
-}
-
-function isPositiveNumberInput(str) {
-    if (str == null || String(str).trim() === '') return false;
-    const n = parseFloat(str);
-    return Number.isFinite(n) && n > 0;
-}
+// pdexToPlanck and isPositiveNumberInput are imported from
+// ./lib/wallet-safety.js — decimal-string BigInt conversion (audit F-011),
+// unit-tested in test/wallet-safety.test.js.
 
 // Some Substrate runtimes use batch / batchAll / forceBatch under utility.
 function batchTx(api, calls) {
@@ -9530,19 +9563,8 @@ function clearSendError() {
     if (el) { el.textContent = ''; el.style.display = 'none'; }
 }
 
-// Build the transfer extrinsic, picking the best variant available on the
-// connected runtime. Newer Substrate splits the call into KeepAlive vs
-// AllowDeath; older versions only have balances.transfer.
-function buildTransferTx(api, dest, planckStr, keepAlive) {
-    const t = api.tx.balances;
-    if (!t) throw new Error('balances pallet is not available on this runtime.');
-    if (keepAlive && t.transferKeepAlive) return t.transferKeepAlive(dest, planckStr);
-    if (!keepAlive && t.transferAllowDeath) return t.transferAllowDeath(dest, planckStr);
-    if (t.transferAllowDeath) return t.transferAllowDeath(dest, planckStr);
-    if (t.transferKeepAlive) return t.transferKeepAlive(dest, planckStr);
-    if (t.transfer) return t.transfer(dest, planckStr);
-    throw new Error('No supported balances.transfer* call on this runtime.');
-}
+// buildTransferTx is imported from ./lib/wallet-safety.js — keep-alive intent
+// binds the method (audit F-054), unit-tested in test/wallet-safety.test.js.
 
 // Existential deposit (in PDEX) read from chain constants.
 function getExistentialDepositPDEX() {
@@ -10674,13 +10696,21 @@ async function fetchCouncilData() {
                 <tr style="background: rgba(255,255,255,0.02);">
                     <td>
                         <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">${stakingEscapeHtml(item.name || 'Unknown')}</div>
-                        <div class="address-cell" style="font-size: 13px;">${addr} <span onclick="copyToClipboard(this, '${addr}')" style="cursor: pointer; color: var(--brand-secondary); margin-left: 8px;">copy</span></div>
+                        <div class="address-cell" data-address="${addr}" style="font-size: 13px;">${addr} <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); margin-left: 8px;">copy</span></div>
                     </td>
                     <td style="text-align: right; font-weight: 600;">
                         ${Number(item.stake || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} PDEX
                     </td>
                 </tr>`;
             }).join('');
+            // Audit F-122 (same class, site not listed in the report): copy
+            // via listener + escaped data-address, no inline onclick.
+            el.querySelectorAll('.js-copy-address').forEach(span => {
+                span.addEventListener('click', function () {
+                    const holder = this.closest('[data-address]');
+                    if (holder) copyToClipboard(this, holder.getAttribute('data-address'));
+                });
+            });
         };
 
         renderList(members, 'council-members-list');
@@ -11507,10 +11537,13 @@ async function submitCouncilVote() {
 
     const stakeInput = document.getElementById('vote-stake-input').value;
     if (!stakeInput) return alert('Enter a backing stake.');
-    const stakeAmount = parseFloat(stakeInput);
-    if (isNaN(stakeAmount) || stakeAmount <= 0) return alert('Invalid stake amount.');
-    const stakePlanck = BigInt(Math.floor(stakeAmount * (10 ** 12)));
-    
+    if (!isPositiveNumberInput(stakeInput)) return alert('Invalid stake amount.');
+    // Audit F-011: convert via decimal-string BigInt math, never Number*1e12.
+    // parseFloat(x)*1e12 loses precision on decimals ("1.1" → one planck
+    // short) and silently corrupts anything ≥ ~9007 PDEX — the user would
+    // sign a stake that differs from what they typed.
+    const stakePlanck = pdexToPlanck(stakeInput);
+
     try {
         const injected = await getInjectedAccounts();
         if (!injected || injected.length === 0) return alert('No wallet extension found.');
@@ -11888,14 +11921,16 @@ async function submitTreasuryProposal() {
 
     const amtInput = document.getElementById('treasury-amount-input');
     const benInput = document.getElementById('treasury-beneficiary-input');
-    const amt = parseFloat(amtInput ? amtInput.value : '');
+    const amtStr = (amtInput ? amtInput.value : '').trim();
     const beneficiary = (benInput ? benInput.value : '').trim();
 
-    if (isNaN(amt) || amt <= 0) return showErr('Enter a valid PDEX amount greater than zero.');
+    if (!isPositiveNumberInput(amtStr)) return showErr('Enter a valid PDEX amount greater than zero.');
     if (!beneficiary) return showErr('Enter a beneficiary address.');
     if (!isValidPolkadexAddress(beneficiary)) return showErr('That beneficiary address is not a valid Polkadex address.');
 
-    const valuePlanck = BigInt(Math.floor(amt * 1e12)).toString();
+    // Audit F-011: decimal-string conversion — Number*1e12 signs a planck
+    // value that can differ from what the proposer typed.
+    const valuePlanck = pdexToPlanck(amtStr);
     await submitSignedTx({
         buildTx: (api) => api.tx.treasury.proposeSpend(valuePlanck, beneficiary),
         label: 'Treasury proposal',
@@ -12212,13 +12247,15 @@ async function submitReferendumVote() {
 
     const amtInput = document.getElementById('referendum-vote-amount');
     const convInput = document.getElementById('referendum-vote-conviction');
-    const amt = parseFloat(amtInput ? amtInput.value : '');
+    const amtStr = (amtInput ? amtInput.value : '').trim();
     const conviction = convInput ? convInput.value : 'Locked1x';
 
-    if (isNaN(amt) || amt <= 0) return showErr('Enter a positive PDEX amount to lock behind your vote.');
-    if (amt > 1e15) return showErr('That amount exceeds plausible balances — double-check the value.');
+    if (!isPositiveNumberInput(amtStr)) return showErr('Enter a positive PDEX amount to lock behind your vote.');
+    if (parseFloat(amtStr) > 1e15) return showErr('That amount exceeds plausible balances — double-check the value.');
 
-    const balancePlanck = BigInt(Math.floor(amt * 1e12)).toString();
+    // Audit F-011: decimal-string conversion — Number*1e12 signs a planck
+    // value that can differ from what the voter typed.
+    const balancePlanck = pdexToPlanck(amtStr);
     const aye = pendingReferendumVote.side === 'aye';
     const refIndex = pendingReferendumVote.refIndex;
 
@@ -12572,9 +12609,16 @@ function renderMultisigCalculator() {
             result.innerHTML = `
                 <div style="padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);border-radius:var(--radius-sm);">
                     <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">Multisig address (${threshold}-of-${lines.length})</div>
-                    <div class="address-cell" style="word-break:break-all;color:var(--brand-secondary);font-weight:600;">${stakingEscapeHtml(multisigAddr)} <span onclick="copyToClipboard(this, '${multisigAddr}')" style="cursor:pointer;color:var(--text-muted);font-size:0.78rem;margin-left:8px;">copy</span></div>
+                    <div class="address-cell" data-address="${stakingEscapeHtml(multisigAddr)}" style="word-break:break-all;color:var(--brand-secondary);font-weight:600;">${stakingEscapeHtml(multisigAddr)} <span class="js-copy-address" style="cursor:pointer;color:var(--text-muted);font-size:0.78rem;margin-left:8px;">copy</span></div>
                     <div style="margin-top:6px;"><a href="/account/${encodeURIComponent(multisigAddr)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">View on-chain</a></div>
                 </div>`;
+            // Audit F-122: listener + escaped data-address, no inline onclick.
+            result.querySelectorAll('.js-copy-address').forEach(el => {
+                el.addEventListener('click', function () {
+                    const holder = this.closest('[data-address]');
+                    if (holder) copyToClipboard(this, holder.getAttribute('data-address'));
+                });
+            });
         } catch (e) {
             result.innerHTML = `<span style="color:var(--error);">Derivation failed: ${stakingEscapeHtml(e.message || String(e))}</span>`;
         }

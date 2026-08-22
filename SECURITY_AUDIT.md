@@ -276,13 +276,13 @@ Posts are stored verbatim (only length-validated to 4000 chars). This is fine �
 
 ### INFO I-5 — `CMC_API_KEY` was hardcoded in the source
 
-`server.js:64`:
+`server.js:64` used to read:
 
 ```js
-const CMC_API_KEY = process.env.CMC_API_KEY || 'ee98717bf0924ab88d749ca613cd7f86';
+const CMC_API_KEY = process.env.CMC_API_KEY || '<REDACTED — key literal removed from this doc; it remains in git history until a history rewrite>';
 ```
 
-That fallback key is committed to git. **Rotate this CMC key immediately** — it's been exposed in source control for an unknown period and should be considered compromised. Replace the literal with an empty string:
+That fallback key is committed to git history. **Rotate this CMC key immediately** — it's been exposed in source control for an unknown period and should be considered compromised. (The literal was also quoted verbatim in this document until 2026-08-21; quoting a secret in the audit that reported it keeps it greppable at HEAD — audit F-033.) Replace the literal with an empty string:
 
 ```js
 const CMC_API_KEY = process.env.CMC_API_KEY || '';

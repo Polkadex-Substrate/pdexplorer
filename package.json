@@ -8,14 +8,15 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node --experimental-sqlite server.js",
-    "server": "node --experimental-sqlite server.js"
+    "server": "node --experimental-sqlite server.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "@polkadot/api": "10.13.1",
-    "cors": "^2.8.6",
-    "express": "^5.2.1"
+    "cors": "2.8.6",
+    "express": "5.2.1"
   },
   "devDependencies": {
-    "vite": "^6.4.2"
+    "vite": "6.4.2"
   }
 }

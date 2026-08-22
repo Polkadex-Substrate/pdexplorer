@@ -203,10 +203,21 @@ sudo docker compose exec frontend nginx -s reload
 echo | openssl s_client -connect 127.0.0.1:443 -servername explorer.polkadex.ee 2>/dev/null | openssl x509 -noout -issuer
 ```
 
-The ACME challenge is plain HTTP on :80, so it works through the Cloudflare
-proxy. Alternatively install a **Cloudflare Origin Certificate** (15-year, no
-renewal) into those two files. The compose `certbot` service auto-renews LE
-certs every 12h thereafter.
+**Important — Let's Encrypt HTTP-01 does NOT work through an orange-cloud
+(proxied) Cloudflare record by default** (audit F-027; README explains why —
+"Always Use HTTPS" redirects the challenge before it reaches the origin). The
+`certonly` above only succeeds if one of these is true:
+
+1. The DNS record is **grey-cloud** (DNS-only) during issuance, or
+2. You use **DNS-01** validation instead of the webroot method, or
+3. You skip Let's Encrypt entirely and install a **Cloudflare Origin
+   Certificate** (15-year, no renewal): put the cert + key in
+   `secrets/cloudflare-origin.pem` / `.key` and run
+   `sudo bash provision-ubuntu.sh cf-origin-cert`. This is the recommended
+   path for a permanently proxied zone.
+
+The compose `certbot` service auto-renews LE certs every 12h thereafter
+(option 1/2 only — Origin CA certs need no renewal).
 
 ### After cutover
 

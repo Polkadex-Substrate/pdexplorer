@@ -5,6 +5,7 @@ import { cpus } from 'node:os';
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat } from '@polkadot/util';
+import { isOpenGovStatus } from './lib/gov-status.js';
 import path from 'path';
 import * as db from './db.js';
 import { sendEmail, emailProviderStatus } from './email.js';
@@ -1474,6 +1475,38 @@ function devApiGate(req, res) {
     return requireRpc(res);
 }
 
+// Audit F-038: the /api/diag/* endpoints print operational internals — the
+// live POLKADEX_WS URL (a private archive node is exactly the thing an
+// attacker wants a map of post-Perfctl), worker pids, the SubQuery endpoint,
+// and the email provider's from-address + readiness (phishing prep). They
+// were reachable by anyone. Gate them behind a shared secret:
+//   - DIAG_TOKEN set   → require Authorization: Bearer <token> (or ?token=).
+//   - DIAG_TOKEN unset → loopback callers only (operator on the box via
+//     `curl 127.0.0.1:3001/...`; nginx-proxied traffic arrives with a
+//     non-loopback X-Forwarded-For and is refused).
+// Monitors that used to keyword-match these URLs should point at the public
+// /api/health below, which returns only { healthy } with no URLs, pids, or
+// email fields.
+const DIAG_TOKEN = (process.env.DIAG_TOKEN || '').trim();
+function diagGate(req, res) {
+    res.set('Cache-Control', 'no-store');
+    if (DIAG_TOKEN) {
+        const auth = String(req.headers['authorization'] || '');
+        const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+        const supplied = bearer || String(req.query.token || '');
+        if (supplied === DIAG_TOKEN) return true;
+        res.status(401).json({ error: 'diagnostics require a valid token' });
+        return false;
+    }
+    // No token configured: only trust a socket-level loopback connection that
+    // was NOT proxied (nginx always adds X-Forwarded-For).
+    const sock = (req.socket && req.socket.remoteAddress) || '';
+    const isLoopback = sock === '127.0.0.1' || sock === '::1' || sock === '::ffff:127.0.0.1';
+    if (isLoopback && !req.headers['x-forwarded-for']) return true;
+    res.status(403).json({ error: 'diagnostics are operator-only (set DIAG_TOKEN to enable remote access)' });
+    return false;
+}
+
 const DEV_API_TIMEOUT_MS = readPositiveInteger(process.env.DEV_API_TIMEOUT_MS, 20000);
 
 // Chain queries can hang when the node is unhealthy; never let one pin a
@@ -2402,8 +2435,16 @@ app.get('/developers', (req, res) => {
 // LRU is doing what we think during a load test or post-deploy. Each
 // cluster worker has its own caches, so hitting this endpoint multiple
 // times in a row will round-robin across workers and show different numbers.
-app.get('/api/diag/rpc-cache', (req, res) => {
+// Public liveness probe for uptime monitors: boolean only, by design.
+// Everything richer (endpoint URLs, pids, provider names) lives behind
+// diagGate on /api/diag/* — see audit F-038.
+app.get('/api/health', (req, res) => {
     res.set('Cache-Control', 'no-store');
+    res.json({ healthy: !!(rpcConnected && globalApi) });
+});
+
+app.get('/api/diag/rpc-cache', (req, res) => {
+    if (!diagGate(req, res)) return;
     res.json({
         pid: process.pid,
         block:     blockCache.stats(),
@@ -2452,7 +2493,7 @@ async function fetchSubqueryMetadata() {
 }
 
 app.get('/api/diag/subquery-lag', async (req, res) => {
-    res.set('Cache-Control', 'no-store');
+    if (!diagGate(req, res)) return;
     const startMs = Date.now();
     try {
         const meta = await fetchSubqueryMetadata();
@@ -2503,7 +2544,7 @@ app.get('/api/diag/subquery-lag', async (req, res) => {
 // per-worker views. The drift is bounded by the indexer worker's tick rate
 // (~12s) — not significant for an external monitor.
 app.get('/api/diag/rpc-health', async (req, res) => {
-    res.set('Cache-Control', 'no-store');
+    if (!diagGate(req, res)) return;
     const startMs = Date.now();
 
     const checks = {
@@ -2687,16 +2728,24 @@ app.get('/api/transactions/older', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// Audit F-020: these two endpoints used to read getSyncState('blocks') and
+// getSyncState('events') — keys that only the RETIRED standalone syncBlocks /
+// syncEvents crawlers ever wrote. The live writer is the combined chain
+// indexer under 'chain_index'. Consequences of the dead keys: a fresh install
+// reported 'Initializing' forever (SPA refused to render the tables even with
+// a healthy index), while long-lived deployments served a fossilised 'Synced'
+// + months-old lastSync that no longer described anything. Both endpoints now
+// report the health of the indexer that actually populates their tables.
 app.get('/api/blocks', (req, res) => {
     try {
-        const state = db.getSyncState('blocks');
+        const state = db.getSyncState('chain_index');
         cacheShort(res);
         res.json({ blocks: db.getRecentBlocks(200), lastSync: state.lastSync || 0, status: state.status || 'Initializing' });
     } catch (err) { res.status(500).json({ blocks: [], status: 'Error', error: err.message }); }
 });
 app.get('/api/events', (req, res) => {
     try {
-        const state = db.getSyncState('events');
+        const state = db.getSyncState('chain_index');
         cacheShort(res);
         res.json({ events: db.getRecentEvents(500), lastSync: state.lastSync || 0, status: state.status || 'Initializing' });
     } catch (err) { res.status(500).json({ events: [], status: 'Error', error: err.message }); }
@@ -3291,6 +3340,11 @@ app.get('/api/democracy', (req, res) => {
     }
 });
 
+// isOpenGovStatus is imported from ./lib/gov-status.js (audit F-003 — one
+// case-insensitive predicate shared by banner, calendar, and email so the
+// indexer's casing can't drift from the consumers' comparison again).
+// Unit-tested in test/gov-status.test.js.
+
 // --- Governance: latest events (for notification polling) ---------------------
 // Small, hot endpoint that frontend polls every ~30s to detect new referenda
 // or proposals. Returns just the indices + tabled timestamps the frontend
@@ -3305,11 +3359,8 @@ app.get('/api/governance/latest', (req, res) => {
 
         // Only surface OPEN referenda in the notification stream. Closed ones
         // (passed/cancelled/notpassed) shouldn't pop a banner — the user
-        // can't do anything actionable about them. We treat "ongoing" and
-        // "started" as open; everything else is closed.
-        const isReferendumOpen = (r) =>
-            r && (r.status === 'ongoing' || r.status === 'started');
-        const openReferenda = referenda.filter(isReferendumOpen);
+        // can't do anything actionable about them.
+        const openReferenda = referenda.filter(r => r && isOpenGovStatus(r.status));
         // Of those, surface the highest-indexed one (most recently tabled).
         let topOpenRef = null;
         for (const r of openReferenda) {
@@ -3392,7 +3443,7 @@ app.get('/api/governance/calendar', async (req, res) => {
         // happened yet; resolved entries (passed/cancelled/notpassed) have an
         // end_block in the past.
         for (const r of referenda) {
-            const isActive = r.status === 'ongoing' || r.status === 'started';
+            const isActive = isOpenGovStatus(r.status);
             events.push({
                 id: 'ref-' + r.refIndex,
                 kind: 'referendum',
@@ -3500,7 +3551,23 @@ function getAuthAddress(req) {
     return session ? session.address : null;
 }
 
+// Audit F-070 (SECURITY_AUDIT.md M-2): both auth endpoints were uncapped.
+// Unlimited /challenge lets one IP spray INSERT OR REPLACE rows and — because
+// the challenge PK is the address — repeatedly overwrite a victim's in-flight
+// nonce so their honest login keeps failing. Unlimited /verify burns worker
+// CPU on signatureVerify. Reuse the developer-API per-IP budget (default
+// 60/min, DEV_API_RATE_LIMIT_PER_MIN): the same shared map means an abuser
+// throttles themselves across surfaces, and a NAT full of real users stays
+// comfortably under it (login is a once-per-session action).
+function authRateGate(req, res) {
+    if (devApiRateOk(clientIp(req))) return true;
+    res.set('Cache-Control', 'no-store');
+    res.status(429).json({ error: 'Too many auth requests from this address — wait a minute and retry.' });
+    return false;
+}
+
 app.post('/api/auth/challenge', (req, res) => {
+    if (!authRateGate(req, res)) return;
     const raw = (req.body && req.body.address || '').trim();
     if (!isValidAddress(raw)) return res.status(400).json({ error: 'Invalid wallet address.' });
     let address;
@@ -3511,6 +3578,7 @@ app.post('/api/auth/challenge', (req, res) => {
 });
 
 app.post('/api/auth/verify', (req, res) => {
+    if (!authRateGate(req, res)) return;
     const raw = (req.body && req.body.address || '').trim();
     const signature = (req.body && req.body.signature || '').trim();
     if (!isValidAddress(raw) || !signature) return res.status(400).json({ error: 'Invalid request.' });
@@ -3826,7 +3894,7 @@ app.get('/api/email/preferences', (req, res) => {
 
 // Diag: how many confirmed subscribers + provider status.
 app.get('/api/diag/email', (req, res) => {
-    res.set('Cache-Control', 'no-store');
+    if (!diagGate(req, res)) return;
     res.json({
         provider: emailProviderStatus(),
         confirmedSubscribers: db.countEmailSubscribers()
@@ -5320,7 +5388,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
     // 1. New OPEN referenda — one email per ongoing referendum, idempotent
     //    by (event_kind='gov.new-ref', event_id=refIndex).
     for (const r of (referenda || [])) {
-        if (r.status !== 'ongoing' && r.status !== 'started') continue;
+        if (!isOpenGovStatus(r.status)) continue;
         await dispatchToSubscribers({
             eventKind: 'gov.new-ref',
             eventId: r.refIndex,
@@ -5373,7 +5441,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
         } catch (_) { /* skip closing-reminder this tick */ }
         const BLOCK_TIME_MS = 12_000;
         for (const r of (referenda || [])) {
-            if (r.status !== 'ongoing' && r.status !== 'started') continue;
+            if (!isOpenGovStatus(r.status)) continue;
             if (!r.endBlock || !currentBlock) continue;
             const blocksLeft = Number(r.endBlock) - currentBlock;
             if (blocksLeft <= 0) continue;
@@ -6601,16 +6669,22 @@ async function rpcWatchdog() {
 // process-local; the indexer worker is additionally the sole writer to SQLite
 // (single-writer invariant under WAL).
 function runWorker({ indexer }) {
-    // DB init can throw (corrupt SQLite / unwritable bind mount after an
-    // unclean reboot). Catch it so the process doesn't exit-loop under
-    // `restart: unless-stopped`; the operator can then exec in and inspect.
+    // Audit F-022: a failed initDb must be FATAL. The old code logged and
+    // carried on — the worker still called app.listen, nginx saw a healthy
+    // backend, every SQLite route threw, and chain writes silently stopped
+    // while the site "looked up". Serving HTTP without a database is worse
+    // than being down: compose (`restart: unless-stopped`) can only restart
+    // a process that exits. Exit non-zero; if the DB path is truly wedged
+    // (corrupt file, unwritable bind mount) the crash loop is visible in
+    // `docker ps` instead of hidden behind a listening socket.
     try {
         // Only the indexer worker seeds the O(1) row counters — it's the sole
         // writer, and seeding does a one-time COUNT(*) we don't want N workers
         // each repeating on a 20 GB+ database at startup.
         db.initDb(DATA_DIR, !!indexer);
     } catch (err) {
-        console.error('FATAL: database init failed at ' + DATA_DIR + ' — serving may be degraded:', err && err.message ? err.message : err);
+        console.error('FATAL: database init failed at ' + DATA_DIR + ' — exiting so the supervisor restarts us:', err && err.message ? err.message : err);
+        process.exit(1);
     }
 
     // Every worker opens its own chain WebSocket because the detail endpoints
