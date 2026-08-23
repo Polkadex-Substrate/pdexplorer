@@ -18,6 +18,19 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && chown -R node:node /app
 
 COPY --chown=node:node server.js db.js email.js backfill-transactions-from-events.mjs migrate-add-indexes.mjs ./
+# lib/ is REQUIRED at runtime — server.js imports ./lib/gov-status.js. This
+# COPY list is explicit (not `COPY . .`), so any new relative import must be
+# added here or the container dies at startup with ERR_MODULE_NOT_FOUND and
+# every /api/* route goes dark while the SPA still loads from nginx — the
+# failure looks like "the API is broken", not "a file is missing". That cost
+# two deploys on 2026-08-22; test/dockerfile-copy.test.js now asserts this
+# list covers every relative import in server.js.
+#
+# Nothing else is added here on purpose: a COPY of a path that isn't in the
+# repo FAILS THE BUILD, so each extra line is another way to break a deploy.
+# Operator scripts under tools/ are deliberately NOT copied — run them with
+#     docker compose exec -T backend node --experimental-sqlite - < tools/<script>
+COPY --chown=node:node lib ./lib
 
 # Build provenance, surfaced by GET /api/version. Declared AFTER npm install so
 # a new SHA doesn't invalidate the dependency layer on every deploy.
