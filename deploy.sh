@@ -240,12 +240,34 @@ fi
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "--> Building $GIT_SHA at $BUILD_TIME"
 
-echo "--> Building and starting full Docker stack..."
+# ---- BUILD FIRST, then swap -------------------------------------------------
+# Ordering matters more than it looks. This used to be `down` followed by
+# `up --build`, which means ANY build failure — a missing file, a bad image
+# tag, a registry hiccup — left the site fully offline instead of leaving the
+# running stack alone. That happened twice on 2026-08-22 (a COPY of a path
+# that wasn't in the image, then a transient registry timeout), and each time
+# a compile-time mistake became a user-visible outage.
+#
+# Building before tearing anything down means a failed build is a non-event:
+# the old containers are still serving, and this script exits before touching
+# them. Downtime is now only the container swap (a second or two), not the
+# build.
+#
 # Pass -p and the build args explicitly rather than exporting them: `sudo`
 # strips the environment by default, so exported variables would not reach the
 # compose process and the stamp would silently read "unknown".
+echo "--> Building images (old stack still serving)..."
+if ! sudo GIT_SHA="$GIT_SHA" BUILD_TIME="$BUILD_TIME" $DC -p "$COMPOSE_PROJECT" build; then
+    echo ""
+    echo "    ! BUILD FAILED — nothing was torn down; the previous stack is still running."
+    echo "      Fix the error above and re-run. Current containers:"
+    sudo $DC -p "$COMPOSE_PROJECT" ps || true
+    exit 1
+fi
+
+echo "--> Swapping in the new stack..."
 sudo $DC -p "$COMPOSE_PROJECT" down || true
-sudo GIT_SHA="$GIT_SHA" BUILD_TIME="$BUILD_TIME" $DC -p "$COMPOSE_PROJECT" up -d --build
+sudo GIT_SHA="$GIT_SHA" BUILD_TIME="$BUILD_TIME" $DC -p "$COMPOSE_PROJECT" up -d
 
 # ---- Verify what actually came up ------------------------------------------
 # A deploy that "succeeded" while leaving the old code running is the failure
