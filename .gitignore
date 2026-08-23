@@ -1,6 +1,13 @@
 node_modules/
 outputs/
 dist/
+
+# Third-party browser scripts copied out of node_modules by
+# tools/vendor-assets.mjs so they ship from our own origin (audit F-029).
+# Build artifacts, not source: the versions are pinned in package-lock.json
+# and `npm run build` regenerates them via the `prebuild` hook. Never edit by
+# hand — the next build overwrites it.
+public/vendor/
 *_cache.json
 cache.json
 data/

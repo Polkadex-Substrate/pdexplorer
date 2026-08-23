@@ -68,8 +68,10 @@
          critical origins. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
-    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+    <!-- jsDelivr and cdnjs prefetches removed with the scripts they served
+         (F-029). unpkg still serves the Boxicons stylesheet; Google Fonts
+         still serves Inter. Both are non-executable, but they must also be
+         vendored before a `default-src 'self'` CSP can land (F-039). -->
     <link rel="dns-prefetch" href="https://unpkg.com">
     <link rel="preload" as="image" href="logo.png" fetchpriority="high">
 
@@ -81,11 +83,16 @@
     <link rel="stylesheet" href="styles.css">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
 
-    <!-- Defer third-party scripts so they don't block first paint; the SPA
-         only needs them after first interaction (chart on dashboard,
-         QR code on the donate page). -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+    <!-- Audit F-029: these were `https://cdn.jsdelivr.net/npm/chart.js` (NO
+         version — jsDelivr's `latest`) and a cdnjs copy of qrcodejs with no
+         SRI. Both execute in the same origin as /wallet, where the page calls
+         signAndSend, so a surprise publish upstream was a wallet compromise.
+         They are now served from our own origin, copied out of node_modules at
+         build time by tools/vendor-assets.mjs and version-pinned by
+         package-lock.json. Still deferred: the SPA needs them only after first
+         interaction (chart on dashboard, QR code on the donate page). -->
+    <script src="/vendor/chart.umd.js" defer></script>
+    <script src="/vendor/qrcode.min.js" defer></script>
 
     <!-- Structured data: WebSite + Organization + SiteNavigationElement. The
          SearchAction hooks into Google's sitelink search box. -->

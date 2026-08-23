@@ -4,6 +4,7 @@
 // INSERT/UPSERT and every read is an indexed query, so caches can hold full
 // historical data without the cost of rewriting/parsing a growing file.
 import { DatabaseSync } from 'node:sqlite';
+import { rpcUnavailableLikePatterns } from './lib/rpc-errors.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -669,6 +670,28 @@ export function getBlockGaps(limit = 50, sinceBlock = null) {
     return bounded ? stmt.all(sinceBlock, limit) : stmt.all(limit);
 }
 
+// Audit F-005: getBlockGaps() uses LEAD, so it can only see a hole BETWEEN two
+// stored rows. If the newest or oldest blocks of the claimed range are missing
+// entirely there is no "next row" to compare against and the hole is invisible
+// — the exact blind spot that lets a post-outage suffix hole go unnoticed.
+//
+// This reports the two edge cases explicitly, given the watermarks the indexer
+// claims to have covered. Both queries are MIN/MAX on the primary key, so this
+// is cheap enough to call on a normal tick (unlike the LEAD window scan).
+export function getEdgeGaps(oldestClaimed, latestClaimed) {
+    const row = db.prepare('SELECT MIN(number) AS lo, MAX(number) AS hi FROM blocks').get();
+    const out = [];
+    if (!row || row.lo == null) return out;      // empty table: nothing to compare
+    const lo = Number(row.lo), hi = Number(row.hi);
+    if (oldestClaimed != null && Number(oldestClaimed) > 0 && lo > Number(oldestClaimed)) {
+        out.push({ kind: 'prefix', gapStart: Number(oldestClaimed), gapEnd: lo - 1, gapSize: lo - Number(oldestClaimed) });
+    }
+    if (latestClaimed != null && hi < Number(latestClaimed)) {
+        out.push({ kind: 'suffix', gapStart: hi + 1, gapEnd: Number(latestClaimed), gapSize: Number(latestClaimed) - hi });
+    }
+    return out;
+}
+
 // --- events ---
 function mapEventRow(r) {
     let data = null;
@@ -1209,6 +1232,34 @@ export function recordScanFailure(indexer, block, errMessage) {
 // Clear a single (indexer, block) entry — called after a retry succeeds.
 export function clearScanFailure(indexer, block) {
     db.prepare('DELETE FROM scan_failures WHERE indexer = ? AND block = ?').run(indexer, block);
+}
+
+// NOTE: countScanFailures() already exists further down this file (it returns
+// { retrying, permanent, total }); don't add a second one. Audit F-050 is
+// about USING those counts — see deriveIndexStatus in lib/index-status.js.
+
+// Reset the attempt counter on abandoned blocks so the retry queue picks them
+// up again. Used after fixing the bug that caused the failures (e.g. the
+// missing RPC guard that permanently dropped 3 governance blocks in June).
+export function requeueScanFailures(indexer, maxAttempts = 10) {
+    const info = db.prepare(
+        'UPDATE scan_failures SET attempts = 0 WHERE indexer = ? AND attempts >= ?'
+    ).run(indexer, maxAttempts);
+    return Number(info && info.changes) || 0;
+}
+
+// Rescue blocks that were abandoned because the NODE was unavailable, not
+// because the block was bad. Those attempts should never have counted (see
+// lib/rpc-errors.js); this repairs the rows that predate that fix. Idempotent:
+// once requeued the rows either succeed and disappear, or fail for a real
+// reason and no longer match these patterns.
+export function requeueTransientScanFailures(maxAttempts = 10) {
+    const likes = rpcUnavailableLikePatterns();
+    const clause = likes.map(() => 'LOWER(last_error) LIKE ?').join(' OR ');
+    const info = db.prepare(
+        `UPDATE scan_failures SET attempts = 0 WHERE attempts >= ? AND (${clause})`
+    ).run(maxAttempts, ...likes);
+    return Number(info && info.changes) || 0;
 }
 
 // Return up to `limit` failures for the given indexer, oldest first,

@@ -4,7 +4,9 @@
   "description": "Polkadex Explorer",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run vendor && vite",
+    "vendor": "node tools/vendor-assets.mjs",
+    "prebuild": "npm run vendor",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node --experimental-sqlite server.js",
@@ -17,6 +19,8 @@
     "express": "5.2.1"
   },
   "devDependencies": {
+    "chart.js": "4.5.1",
+    "qrcodejs": "1.0.0",
     "vite": "6.4.2"
   }
 }

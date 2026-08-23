@@ -6,6 +6,10 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat } from '@polkadot/util';
 import { isOpenGovStatus } from './lib/gov-status.js';
+import { deriveIndexStatus, describeIndexStatus } from './lib/index-status.js';
+import { isRpcUnavailableError } from './lib/rpc-errors.js';
+import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/reward-dedup.js';
+import { attributeBatchRewards, isBatchDelimiter, isAttributableBatch } from './lib/reward-attribution.js';
 import path from 'path';
 import * as db from './db.js';
 import { sendEmail, emailProviderStatus } from './email.js';
@@ -1224,6 +1228,12 @@ async function scanBlockForTransactions(blockNumber) {
         return { blockNumber, transactions: blockTransactions, ok: true };
     } catch (err) {
         const short = shortErrorMessage(err);
+        // Transport failure ≠ bad block: don't spend one of this block's
+        // retry attempts on the node being down (see lib/rpc-errors.js).
+        if (isRpcUnavailableError(err)) {
+            console.warn(`Financial transaction scan deferred block ${blockNumber} (node unavailable, attempt not counted): ${short}`);
+            return { blockNumber, transactions: [], ok: false, transient: true };
+        }
         console.warn(`Financial transaction scan skipped block ${blockNumber}: ${short}`);
         db.recordScanFailure('transactions', blockNumber, short);
         return { blockNumber, transactions: [], ok: false };
@@ -2736,18 +2746,29 @@ app.get('/api/transactions/older', async (req, res) => {
 // a healthy index), while long-lived deployments served a fossilised 'Synced'
 // + months-old lastSync that no longer described anything. Both endpoints now
 // report the health of the indexer that actually populates their tables.
+// coverage: the indexer's own account of what it is missing (audit F-004 /
+// F-050). Sent on both feeds so a client can distinguish "up to date" from
+// "serving data with a known hole in it" without a manual measurement.
+function coverageOf(state) {
+    return {
+        knownGapBlocks: Number(state.knownGapBlocks) || 0,
+        retryableFailures: Number(state.retryableFailures) || 0,
+        permanentFailures: Number(state.permanentFailures) || 0,
+        detail: state.detail || null
+    };
+}
 app.get('/api/blocks', (req, res) => {
     try {
         const state = db.getSyncState('chain_index');
         cacheShort(res);
-        res.json({ blocks: db.getRecentBlocks(200), lastSync: state.lastSync || 0, status: state.status || 'Initializing' });
+        res.json({ blocks: db.getRecentBlocks(200), lastSync: state.lastSync || 0, status: state.status || 'Initializing', coverage: coverageOf(state) });
     } catch (err) { res.status(500).json({ blocks: [], status: 'Error', error: err.message }); }
 });
 app.get('/api/events', (req, res) => {
     try {
         const state = db.getSyncState('chain_index');
         cacheShort(res);
-        res.json({ events: db.getRecentEvents(500), lastSync: state.lastSync || 0, status: state.status || 'Initializing' });
+        res.json({ events: db.getRecentEvents(500), lastSync: state.lastSync || 0, status: state.status || 'Initializing', coverage: coverageOf(state) });
     } catch (err) { res.status(500).json({ events: [], status: 'Error', error: err.message }); }
 });
 
@@ -3102,10 +3123,17 @@ app.get('/api/staking-rewards/:address', async (req, res) => {
             era: r.era, amount: r.amount, validator: r.validator, block: r.block,
             blockHash: r.blockHash, eventIndex: r.eventIndex, timestamp: r.timestamp, status: 'claimed'
         }));
-        const unclaimed = db.getUnclaimed(address).map(r => ({
+        const unclaimedRaw = db.getUnclaimed(address).map(r => ({
             era: r.era, amount: r.amount, validator: r.validator || null, block: null,
             blockHash: null, eventIndex: null, timestamp: null, status: 'unclaimed'
         }));
+
+        // F-002: reconcile at READ time, not just when the cache is recomputed.
+        // The cached unclaimed set has a TTL, so right after a claim the era is
+        // in `claimed` (the indexer is seconds behind the chain) and still in
+        // the cache — and the old code added both into totalAmount.
+        const reconciled = summarizeRewards(claimed, unclaimedRaw);
+        const unclaimed = reconciled.unclaimed;
 
         // Unpaid rewards are computed on demand; refresh in the background when stale.
         const unclaimedAt = db.getUnclaimedComputedAt(address);
@@ -3146,9 +3174,6 @@ app.get('/api/staking-rewards/:address', async (req, res) => {
             }
         } catch (_e) { /* keep bondedAmount null */ }
 
-        const claimedTotal = claimed.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
-        const unclaimedTotal = unclaimed.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
-        const eraSet = new Set([...claimed, ...unclaimed].filter(r => r.era != null).map(r => r.era));
         const newest = claimed.length ? claimed[0] : null;
         const oldest = claimed.length ? claimed[claimed.length - 1] : null;
         const syncState = db.getSyncState('staking_rewards');
@@ -3175,12 +3200,10 @@ app.get('/api/staking-rewards/:address', async (req, res) => {
             unclaimed,
             apr,
             summary: {
-                claimedTotal,
-                claimedCount: claimed.length,
-                unclaimedTotal,
-                unclaimedCount: unclaimed.length,
-                totalAmount: claimedTotal + unclaimedTotal,
-                eraCount: eraSet.size,
+                // claimedTotal / unclaimedTotal / totalAmount / eraCount all
+                // come from the reconciled figures (F-002) — see
+                // lib/reward-dedup.js.
+                ...reconciled.summary,
                 firstBlock: oldest ? oldest.block : null,
                 lastBlock: newest ? newest.block : null,
                 firstTimestamp: oldest ? oldest.timestamp : null,
@@ -4519,9 +4542,16 @@ app.get('/api/wallet/:address', async (req, res) => {
 
         // Rewards from the local index; trigger an unpaid-reward refresh if stale.
         const claimed = db.getStakingRewards(address);
-        const claimedTotal = claimed.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-        const unclaimed = db.getUnclaimed(address);
-        const unpaidTotal = unclaimed.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+        // F-002 applies here too, and with sharper consequences than on the
+        // rewards page: `unpaidEntries` below is what the frontend turns into
+        // staking.payoutStakers(validator, era) calls. An entry the indexer has
+        // already seen claimed doesn't just inflate a total — it puts a button
+        // in front of the user whose only possible outcome is an AlreadyClaimed
+        // dispatch error. Reconcile against the claimed rows first.
+        const reconciled = summarizeRewards(claimed, db.getUnclaimed(address));
+        const unclaimed = reconciled.unclaimed;
+        const claimedTotal = reconciled.summary.claimedTotal;
+        const unpaidTotal = reconciled.summary.unclaimedTotal;
         const unclaimedAt = db.getUnclaimedComputedAt(address);
         const unclaimedFresh = unclaimedAt > Date.now() - UNCLAIMED_TTL;
         if (!unclaimedFresh && !computingUnclaimed.has(address)) recomputeUnclaimed(address);
@@ -5007,6 +5037,14 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
         return { treasury, motions, ok: true };
     } catch (err) {
         const short = shortErrorMessage(err);
+        // A node disconnect says nothing about this block, so it must not
+        // consume one of the block's SCAN_MAX_ATTEMPTS lives. Counting them is
+        // what permanently retired blocks 472,223 / 473,207 / 473,599 in June
+        // 2026 — see lib/rpc-errors.js.
+        if (isRpcUnavailableError(err)) {
+            console.warn(`Governance scan deferred block ${blockNumber} (node unavailable, attempt not counted): ${short}`);
+            return { treasury: [], motions: [], ok: false, transient: true };
+        }
         console.warn(`Governance scan skipped block ${blockNumber}: ${short}`);
         db.recordScanFailure('governance', blockNumber, short);
         return { treasury: [], motions: [], ok: false };
@@ -5069,9 +5107,11 @@ async function syncGovernance() {
         let backfillCursor = Number(state.backfillCursor) || 0;
         let backfillComplete = !!state.backfillComplete;
 
+        // Anchor just below head so the forward pass scans head itself
+        // (audit F-048/F-113 — see the note in syncChainIndex).
         if (!initialized) {
             initialized = true;
-            latestScannedBlock = head;
+            latestScannedBlock = head - 1;
             oldestScannedBlock = head;
             backfillCursor = head - 1;
             backfillComplete = (head - 1) < GOV_MIN_BLOCK;
@@ -5086,6 +5126,18 @@ async function syncGovernance() {
                 collectiveName
             });
             await applyGovernanceRecords(fwd.treasury, fwd.motions);
+            // Audit F-009: after downtime longer than GOV_FORWARD_MAX blocks,
+            // the cap means the oldest part of the gap is never fetched, yet
+            // the watermark below still jumps to head — so those blocks were
+            // silently skipped forever. Record them instead; the gap-fill pass
+            // reads scan_failures and will work through them.
+            const govLowestAttempted = Math.max(latestScannedBlock + 1, head - GOV_FORWARD_MAX + 1);
+            if (govLowestAttempted > latestScannedBlock + 1) {
+                const skipFrom = latestScannedBlock + 1;
+                const skipTo = govLowestAttempted - 1;
+                console.warn(`[governance] forward cap skipped ${skipFrom}-${skipTo} (${skipTo - skipFrom + 1} blocks) — recording for repair`);
+                recordSkippedRange('governance', skipFrom, skipTo, 'forward cap: not attempted this tick');
+            }
             latestScannedBlock = head;
             db.setSyncState('governance', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Backfilling' });
         }
@@ -5602,7 +5654,22 @@ async function scanSingleBlock(blockNumber) {
     // pruned historical metadata, api.at() fails and getEventsAtBlock returns
     // null; we then index the block with zero events (best-effort) instead of
     // throwing. Full historical event backfill requires an archive RPC.
-    const allEvents = (await getEventsAtBlock(hash)) || [];
+    // Audit F-006: distinguish "this block genuinely has no events" from "we
+    // could not decode its events". getEventsAtBlock returns null for the
+    // latter, and coercing that to [] stored the block as a COMPLETE success
+    // with zero events — permanent, silent event loss that no retry would ever
+    // revisit, while the status said Synced.
+    //
+    // The block row is still written (the blocks table stays complete and the
+    // backfill keeps moving), but the height is flagged so the caller can queue
+    // it for retry. On an archive node a null here is a real, transient failure
+    // and retrying fixes it. Operators on a PRUNED node — where historical
+    // metadata is genuinely gone and no retry can ever succeed — can set
+    // EVENTS_STRICT=0 to accept zero-event blocks as final instead of
+    // accumulating permanent failures.
+    const decodedEvents = await getEventsAtBlock(hash);
+    const allEvents = decodedEvents || [];
+    const eventsIncomplete = EVENTS_STRICT && decodedEvents === null;
     if (!allEvents.length && extrinsics.length > 1) warnNoHistoricalEvents(blockNumber);
 
     // Author is best-effort — derived from the consensus digest via
@@ -5637,11 +5704,13 @@ async function scanSingleBlock(blockNumber) {
             data: record.event.data.toHuman(), signerAddress, signerName, timestamp, status
         });
     }
-    return { block, events };
+    return { block, events, eventsIncomplete };
 }
 
 // Scan an inclusive numeric range, processing blocks in parallel batches.
-// Returns { blocks, events, attempts, succeeded, failedNumbers }.
+// Returns { blocks, events, attempts, succeeded, failedNumbers, incompleteNumbers }.
+// `incompleteNumbers` are heights whose BLOCK was stored but whose EVENTS could
+// not be decoded (audit F-006) — the caller queues them for retry.
 async function scanChainRange(startBlock, endBlock, maxAttempts) {
     const top = Math.max(startBlock, endBlock);
     const bottom = Math.min(startBlock, endBlock);
@@ -5653,13 +5722,29 @@ async function scanChainRange(startBlock, endBlock, maxAttempts) {
     const blocks = [];
     const events = [];
     const failedNumbers = [];
+    const incompleteNumbers = [];
+    // Heights the node simply couldn't serve right now. Kept separate from
+    // failedNumbers so the caller doesn't record a scan failure for them.
+    const transientNumbers = [];
+    const failureReasons = new Map();
     let succeeded = 0;
 
     for (let i = 0; i < numbers.length; i += BLOCKS_FETCH_CONCURRENCY) {
         const chunk = numbers.slice(i, i + BLOCKS_FETCH_CONCURRENCY);
         const results = await Promise.all(chunk.map(n => scanSingleBlock(n).catch(err => {
-            console.warn(`[chain-index] block ${n} fetch failed: ${err && err.message ? err.message : err}`);
-            return { __error: true, n };
+            const message = shortErrorMessage(err);
+            // Keep the MESSAGE, don't just log it. The caller has to know
+            // whether this was the node being unreachable or the block being
+            // undecodable, because a transport failure must not consume one of
+            // the block's ten retry attempts (lib/rpc-errors.js). The previous
+            // version logged the message and returned a bare `{__error}`, so a
+            // single disconnect mid-tick could burn an attempt on up to
+            // BLOCKS_FORWARD_MAX + BLOCKS_BACKFILL_CHUNK heights at once —
+            // reintroducing, on the busiest indexer, exactly the defect that
+            // permanently retired three governance blocks in June.
+            const transient = isRpcUnavailableError(err);
+            if (!transient) console.warn(`[chain-index] block ${n} fetch failed: ${message}`);
+            return { __error: true, n, message, transient };
         })));
         for (let j = 0; j < results.length; j++) {
             const r = results[j];
@@ -5667,12 +5752,79 @@ async function scanChainRange(startBlock, endBlock, maxAttempts) {
                 blocks.push(r.block);
                 for (const e of r.events) events.push(e);
                 succeeded++;
+                if (r.eventsIncomplete) incompleteNumbers.push(chunk[j]);
+            } else if (r && r.transient) {
+                transientNumbers.push(chunk[j]);
             } else {
                 failedNumbers.push(chunk[j]);
+                failureReasons.set(chunk[j], (r && r.message) || 'fetch failed');
             }
         }
     }
-    return { blocks, events, attempts: numbers.length, succeeded, failedNumbers };
+    if (transientNumbers.length) {
+        console.warn(`[chain-index] deferred ${transientNumbers.length} block(s) (node unavailable, attempts not counted)`);
+    }
+    return {
+        blocks, events, attempts: numbers.length, succeeded,
+        failedNumbers, incompleteNumbers, transientNumbers, failureReasons
+    };
+}
+
+// Audit F-004 support. Write a skipped height range into scan_failures so the
+// hole is an explicit, queryable fact instead of something a later window scan
+// has to rediscover.
+//
+// Bounded on purpose: a long outage can skip tens of thousands of heights, and
+// one row per block would bloat the table and the retry queue. Record the
+// OLDEST portion — those are the blocks at risk of drifting out of the cheap
+// recent-gap window (CHAIN_GAP_SCAN_WINDOW) into the 12×-slower hourly full
+// scan. The remainder stays discoverable by the window scan, which is exactly
+// the pre-existing behaviour, so this is strictly an improvement.
+const SKIP_RECORD_MAX = readPositiveInteger(process.env.SKIP_RECORD_MAX, 2000);
+
+// How many interior gaps to total up per scan. Bounded because the LEAD window
+// query already ran — this only affects how many rows come back — but not 1,
+// which is what it was, and which made a hundred holes report as one.
+const CHAIN_GAP_COUNT_LIMIT = readPositiveInteger(process.env.CHAIN_GAP_COUNT_LIMIT, 500);
+
+// Record what a scanChainRange pass could not complete.
+//
+// Two rules, both learned the hard way:
+//   * transientNumbers are NOT recorded at all. A node that was unreachable
+//     tells us nothing about a block, so those attempts must be free
+//     (lib/rpc-errors.js — ten unlucky disconnects permanently retired three
+//     governance blocks in June).
+//   * the reason string is the ACTUAL error. requeueTransientScanFailures
+//     matches on last_error, so a constant like 'forward pass fetch failed'
+//     would leave a genuine transport casualty unrescuable forever.
+function recordChainScanFailures(result, passName) {
+    if (!result) return;
+    const reasons = result.failureReasons instanceof Map ? result.failureReasons : new Map();
+    for (const n of (result.failedNumbers || [])) {
+        db.recordScanFailure('chain_index', n, `${passName}: ${reasons.get(n) || 'fetch failed'}`);
+    }
+    for (const n of (result.incompleteNumbers || [])) {
+        db.recordScanFailure('chain_index', n, `${passName}: events could not be decoded (F-006) — block stored, events pending`);
+    }
+}
+
+// Audit F-006. When true (default), a block whose events could not be decoded
+// is queued for retry rather than stored as a zero-event success. Set
+// EVENTS_STRICT=0 on a PRUNED (non-archive) node, where historical event
+// metadata is genuinely unavailable and retrying can never succeed — otherwise
+// every old block accumulates a permanent failure and the index reports
+// Degraded forever. explorer.polkadex.ee runs an archive node, so strict.
+const EVENTS_STRICT = String(process.env.EVENTS_STRICT ?? '1') !== '0';
+function recordSkippedRange(indexer, from, to, reason) {
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const total = hi - lo + 1;
+    const cap = Math.min(total, SKIP_RECORD_MAX);
+    for (let n = lo; n < lo + cap; n++) db.recordScanFailure(indexer, n, reason);
+    if (total > cap) {
+        console.warn(`[${indexer}] skipped range ${lo}-${hi} is ${total} blocks; recorded the oldest ${cap} (SKIP_RECORD_MAX) — the rest remain discoverable by the gap scan`);
+    }
+    return cap;
 }
 
 async function syncChainIndex() {
@@ -5690,11 +5842,17 @@ async function syncChainIndex() {
         let backfillCursor = Number(state.backfillCursor) || 0;
         let backfillComplete = !!state.backfillComplete;
 
-        // First run: anchor watermarks to the current head; backfill will then
-        // walk everything below it toward genesis on subsequent ticks.
+        // First run: anchor watermarks just BELOW the current head; backfill
+        // then walks everything under it toward genesis on later ticks.
+        //
+        // Audit F-113: this used to set latestScannedBlock = head, which claims
+        // the head block is indexed without ever fetching it — block `head` was
+        // permanently absent on every fresh database (and only recoverable by a
+        // later gap scan). Anchoring at head-1 means the forward pass below
+        // scans `head` on this very tick, because head > latestScannedBlock.
         if (!initialized) {
             initialized = true;
-            latestScannedBlock = head;
+            latestScannedBlock = head - 1;
             oldestScannedBlock = head;
             backfillCursor = head - 1;
             backfillComplete = (head - 1) < BLOCKS_MIN_BLOCK;
@@ -5724,8 +5882,35 @@ async function syncChainIndex() {
                 syncCouncil().catch(() => { /* the interval pass remains the safety net */ });
             }
             if (forward.failedNumbers && forward.failedNumbers.length) tickHadFailures = true;
-            // Advance the watermark to head even if individual blocks failed —
-            // the gap-fill pass will pick those up by name on subsequent ticks.
+
+            // Audit F-004. scanChainRange() walks DOWNWARD from `head` and stops
+            // after BLOCKS_FORWARD_MAX attempts, so when the explorer has been
+            // offline the oldest part of [latestScannedBlock+1, head] is never
+            // attempted this tick. The watermark used to jump to `head` anyway,
+            // which recorded those heights as scanned and left the only trace of
+            // them in a window scan that has to rediscover the hole later. That
+            // is how a 4-hour outage on 2026-08-22 produced a silent
+            // 1,213-block gap while the API reported "Synced".
+            //
+            // Now: remember exactly what was skipped, and remember the blocks
+            // that were attempted and failed, so the hole is a recorded fact
+            // rather than something to be inferred. The watermark still advances
+            // to head — moving it backwards would re-fetch blocks we already
+            // hold every tick — but the skipped range is written to
+            // scan_failures, which the gap-fill pass and the status reporter
+            // both read.
+            const lowestAttempted = Math.max(latestScannedBlock + 1, head - BLOCKS_FORWARD_MAX + 1);
+            if (lowestAttempted > latestScannedBlock + 1) {
+                const skipFrom = latestScannedBlock + 1;
+                const skipTo = lowestAttempted - 1;
+                console.warn(`[chain-index] forward cap skipped ${skipFrom}-${skipTo} (${skipTo - skipFrom + 1} blocks) — recording for repair`);
+                recordSkippedRange('chain_index', skipFrom, skipTo, 'forward cap: not attempted this tick');
+            }
+            // Real reason strings, not a constant. requeueTransientScanFailures
+            // matches on last_error, so a hardcoded 'forward pass fetch failed'
+            // would make a transport casualty permanently unrescuable.
+            recordChainScanFailures(forward, 'forward pass');
+
             latestScannedBlock = head;
             if (oldestScannedBlock === 0) oldestScannedBlock = head;
             db.setSyncState('chain_index', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Syncing' });
@@ -5738,6 +5923,9 @@ async function syncChainIndex() {
             if (back.blocks.length) db.insertBlocks(back.blocks);
             if (back.events.length) db.insertEvents(back.events);
             if (back.failedNumbers && back.failedNumbers.length) tickHadFailures = true;
+            // Same F-006 bookkeeping as the forward pass: a stored block whose
+            // events failed to decode must not count as finished.
+            recordChainScanFailures(back, 'backfill');
             oldestScannedBlock = Math.min(oldestScannedBlock || backfillCursor, stop);
             backfillCursor = stop - 1;
             if (backfillCursor < BLOCKS_MIN_BLOCK) backfillComplete = true;
@@ -5765,7 +5953,11 @@ async function syncChainIndex() {
         let gaps = [];
         if (doScan) {
             const sinceBlock = fullScan ? null : Math.max(BLOCKS_MIN_BLOCK, head - CHAIN_GAP_SCAN_WINDOW);
-            gaps = db.getBlockGaps(1, sinceBlock);
+            // Limit is for the COUNT, not the repair: this used to be 1, so
+            // `knownGapBlocks` reported a single hole however many there were.
+            // Repair still takes only gaps[0] per tick (the newest), which is
+            // the intended pacing.
+            gaps = db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT, sinceBlock);
             lastRecentGapScanAt = nowTs;
             if (fullScan) lastFullGapScanAt = nowTs;
             if (gaps.length) {
@@ -5775,13 +5967,123 @@ async function syncChainIndex() {
                 const fill = await scanChainRange(chunkStart, chunkEnd, BLOCKS_GAP_FILL_CHUNK);
                 if (fill.blocks.length) db.insertBlocks(fill.blocks);
                 if (fill.events.length) db.insertEvents(fill.events);
+                // Retire the scan_failures rows we just repaired, and bump the
+                // ones that failed again. Without this the recorded-skip rows
+                // from the forward pass would linger forever and keep the
+                // status pinned at "Repairing" over an index that is actually
+                // whole.
+                const stillFailed = new Set(fill.failedNumbers || []);
+                const stillIncomplete = new Set(fill.incompleteNumbers || []);
+                for (const blk of fill.blocks) {
+                    // Only retire a height if its events came through too —
+                    // otherwise the F-006 case would clear its own retry row.
+                    if (blk && blk.number != null && !stillIncomplete.has(blk.number)) {
+                        db.clearScanFailure('chain_index', blk.number);
+                    }
+                }
+                recordChainScanFailures(fill, 'gap-fill');
                 console.log(`[chain-index] gap-fill ${chunkStart}-${chunkEnd} (gap of ${g.gapSize}): ${fill.succeeded}/${fill.attempts} repaired`);
             }
         }
 
-        db.setSyncState('chain_index', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Synced' });
-        if (gaps.length || !backfillComplete) {
-            console.log(`[chain-index] head=${head} indexed=${oldestScannedBlock}-${latestScannedBlock} (${db.countBlocks()} blocks), backfill=${backfillComplete ? 'complete' : 'in progress'}, known gaps=${gaps.length}`);
+        // 3b) FAILURE-QUEUE PASS — retry the heights recorded in scan_failures.
+        //
+        // The gap scan above cannot do this job. It finds holes with a LEAD
+        // window over STORED rows, so it is blind to exactly the case F-006
+        // introduced: a block whose row was written but whose events could not
+        // be decoded. That height is present in `blocks`, absent from `events`,
+        // and invisible to getBlockGaps forever. Without this pass its
+        // scan_failures row is write-only — nothing ever clears it, so
+        // retryableFailures stays above zero and the status is pinned at
+        // "Repairing" permanently while claiming a queue that no code reads.
+        //
+        // The other two indexers (governance, staking_rewards) have had this
+        // pass all along; chain_index simply never grew one, because until
+        // F-004/F-006 it never wrote failure rows.
+        const queued = db.getScanFailures('chain_index', SCAN_GAP_FILL_BATCH, SCAN_MAX_ATTEMPTS);
+        if (queued.length) {
+            let repaired = 0;
+            for (const row of queued) {
+                const n = Number(row.block);
+                if (!Number.isFinite(n)) continue;
+                const one = await scanChainRange(n, n, 1);
+                if (one.blocks.length) db.insertBlocks(one.blocks);
+                if (one.events.length) db.insertEvents(one.events);
+                // Clear only on a fully clean re-scan: the block came back AND
+                // its events decoded. Otherwise recordChainScanFailures leaves
+                // the row with its attempts counter bumped — or, for a
+                // transport failure, untouched and free to retry.
+                const clean = one.blocks.length > 0
+                    && (one.incompleteNumbers || []).length === 0
+                    && (one.failedNumbers || []).length === 0;
+                if (clean) { db.clearScanFailure('chain_index', n); repaired++; }
+                else recordChainScanFailures(one, 'failure-queue retry');
+            }
+            console.log(`[chain-index] failure-queue: ${repaired}/${queued.length} height(s) repaired`);
+        }
+
+        // ── Honest status (audit F-004 / F-050) ─────────────────────────────
+        // This used to hardcode status:'Synced' — on the very tick that could
+        // log "known gaps=1". Derive it from what we actually know instead.
+        //
+        // Cheap by construction: edge gaps are MIN/MAX on the PK, the failure
+        // counts are an indexed aggregate, and `gaps` is already in hand from
+        // the throttled scan above. No extra window scan.
+        const edgeGaps = db.getEdgeGaps(oldestScannedBlock, latestScannedBlock);
+        for (const eg of edgeGaps) {
+            console.warn(`[chain-index] ${eg.kind} hole ${eg.gapStart}-${eg.gapEnd} (${eg.gapSize} blocks) — invisible to the LEAD gap scan (F-005)`);
+        }
+        const failCounts = db.countScanFailures('chain_index', SCAN_MAX_ATTEMPTS);
+
+        // Interior-gap total. Two traps here, both of which made the status
+        // dishonest again in the exact scenario this code exists for:
+        //
+        //  1. The window scan is THROTTLED (5 min) while the tick runs every
+        //     12 s, so on ~24 of every 25 ticks `gaps` is [] — not because the
+        //     index is whole but because we didn't look. Recomputing from it
+        //     unconditionally flapped the status back to 'Synced' between
+        //     scans, over the very 1,213-block hole this was written to
+        //     surface. So when we didn't scan, carry the last measurement
+        //     forward instead of asserting zero.
+        //  2. getBlockGaps takes a LIMIT, and it was being called with 1, so
+        //     the total counted one hole no matter how many existed. Count over
+        //     a batch; still repair only the newest one per tick.
+        // Carried forward from `interiorGapBlocks`, NOT from the persisted
+        // `knownGapBlocks` — that one already includes the edge component,
+        // which is re-measured every tick and would be double-counted.
+        const interiorGapBlocks = doScan
+            ? gaps.reduce((sum, g) => sum + (Number(g.gapSize) || 0), 0)
+            : (Number(state.interiorGapBlocks) || 0);
+        const knownGapBlocks =
+            interiorGapBlocks +
+            edgeGaps.reduce((sum, g) => sum + (Number(g.gapSize) || 0), 0);
+        const chainStatus = deriveIndexStatus({
+            initialized,
+            backfillComplete,
+            knownGapBlocks,
+            retryableFailures: failCounts.retrying,
+            permanentFailures: failCounts.permanent
+        });
+        db.setSyncState('chain_index', {
+            initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete,
+            lastSync: Date.now(),
+            status: chainStatus,
+            // Surfaced by /api/blocks and /api/events so a hole is visible in
+            // the product, not only to whoever runs tools/index-health.mjs.
+            knownGapBlocks,
+            // Persisted so a tick that skipped the throttled window scan can
+            // carry the last real measurement forward instead of reporting 0.
+            interiorGapBlocks,
+            retryableFailures: failCounts.retrying,
+            permanentFailures: failCounts.permanent,
+            detail: describeIndexStatus({
+                knownGapBlocks,
+                retryableFailures: failCounts.retrying,
+                permanentFailures: failCounts.permanent
+            }) || undefined
+        });
+        if (gaps.length || edgeGaps.length || !backfillComplete || failCounts.retrying || failCounts.permanent) {
+            console.log(`[chain-index] head=${head} indexed=${oldestScannedBlock}-${latestScannedBlock} (${db.countBlocks()} blocks), backfill=${backfillComplete ? 'complete' : 'in progress'}, status=${chainStatus}, missing=${knownGapBlocks}, retryable=${failCounts.retrying}, permanent=${failCounts.permanent}`);
         }
     } catch (err) {
         logSyncError('Chain index sync', err);
@@ -6008,13 +6310,25 @@ function findPayoutInfo(call, depth = 0) {
     if (section === 'utility' && ['batch', 'batchAll', 'forceBatch'].includes(method)) {
         const inner = call.args && call.args[0];
         if (inner && inner.length) {
-            for (const sub of inner) {
-                const result = findPayoutInfo(sub, depth + 1);
-                // A batch can pay several validators in one era; only trust the
-                // validator field when the batch holds a single call.
-                if (result.era != null) {
-                    return { era: result.era, validator: inner.length === 1 ? result.validator : null };
-                }
+            // Descriptor per TOP-LEVEL item, positions preserved, so
+            // attributeBatchRewards can map utility.ItemCompleted delimiters
+            // back to the item that produced each Rewarded event (F-002).
+            const items = Array.from(inner).map(sub => findPayoutInfo(sub, depth + 1));
+            const firstPayout = items.find(i => i.era != null);
+            if (firstPayout) {
+                return {
+                    // Fallbacks for the single-item case and for callers that
+                    // don't do per-item attribution.
+                    era: firstPayout.era,
+                    validator: items.length === 1 ? firstPayout.validator : null,
+                    // `items` is offered ONLY when every top-level item is a
+                    // direct payoutStakers call. A nested batch or a proxy
+                    // wrapper emits its own ItemCompleted events, so counting
+                    // delimiters would file a reward under the wrong validator
+                    // — see lib/reward-attribution.js. Withholding `items`
+                    // makes the caller fall back to the conservative null.
+                    items: isAttributableBatch(inner) ? items : undefined
+                };
             }
         }
         return { era: null, validator: null };
@@ -6070,14 +6384,57 @@ async function scanBlockForRewards(blockNumber) {
         ]);
         const blockHashHex = blockHash.toHex();
 
+        // Per-extrinsic caches. A block with a 30-call batch produces dozens of
+        // Rewarded events from ONE extrinsic; decode and walk it once.
+        const payoutInfoByExtrinsic = new Map();
+        const attributionByExtrinsic = new Map();
+
+        const payoutInfoFor = (exIndex) => {
+            if (!payoutInfoByExtrinsic.has(exIndex)) {
+                payoutInfoByExtrinsic.set(exIndex, extractPayoutInfo(signedBlock.block.extrinsics[exIndex]));
+            }
+            return payoutInfoByExtrinsic.get(exIndex);
+        };
+
+        // F-002: map each Rewarded event of a MULTI-item batch back to the
+        // batch item that emitted it, using utility's ItemCompleted /
+        // ItemFailed delimiters. Returns null when there is nothing to
+        // disambiguate (single payout, or not a batch at all).
+        const attributionFor = (exIndex) => {
+            if (attributionByExtrinsic.has(exIndex)) return attributionByExtrinsic.get(exIndex);
+            const info = payoutInfoFor(exIndex);
+            let map = null;
+            if (info && Array.isArray(info.items) && info.items.length > 1) {
+                const sequence = [];
+                events.forEach((rec, idx) => {
+                    if (!rec.phase.isApplyExtrinsic) return;
+                    if (rec.phase.asApplyExtrinsic.toNumber() !== exIndex) return;
+                    if (isBatchDelimiter(rec.event.section, rec.event.method)) {
+                        sequence.push({ kind: 'delimiter' });
+                    } else if (parseRewardedEvent(rec)) {
+                        sequence.push({ kind: 'reward', ref: idx });
+                    }
+                });
+                map = attributeBatchRewards(info.items, sequence);
+            }
+            attributionByExtrinsic.set(exIndex, map);
+            return map;
+        };
+
         const rewards = hits.map(({ record, parsed, eventIndex }) => {
             let era = null;
             let validator = null;
             if (record.phase.isApplyExtrinsic) {
                 const exIndex = record.phase.asApplyExtrinsic.toNumber();
-                const info = extractPayoutInfo(signedBlock.block.extrinsics[exIndex]);
+                const info = payoutInfoFor(exIndex);
                 era = info.era;
                 validator = info.validator;
+                const attributed = attributionFor(exIndex);
+                const perItem = attributed && attributed.get(eventIndex);
+                if (perItem) {
+                    if (perItem.era != null) era = perItem.era;
+                    if (perItem.validator) validator = perItem.validator;
+                }
             }
             return {
                 stash: parsed.stash,
@@ -6093,6 +6450,11 @@ async function scanBlockForRewards(blockNumber) {
         return { rewards, ok: true };
     } catch (err) {
         const short = shortErrorMessage(err);
+        // Transport failure ≠ bad block (see lib/rpc-errors.js).
+        if (isRpcUnavailableError(err)) {
+            console.warn(`Staking rewards scan deferred block ${blockNumber} (node unavailable, attempt not counted): ${short}`);
+            return { rewards: [], ok: false, transient: true };
+        }
         console.warn(`Staking rewards scan skipped block ${blockNumber}: ${short}`);
         db.recordScanFailure('staking_rewards', blockNumber, short);
         return { rewards: [], ok: false };
@@ -6157,7 +6519,9 @@ async function recomputeUnclaimed(stash) {
             return;
         }
         const pending = await globalApi.derive.staking.stakerRewards(stash, false);
-        const claimedKeys = new Set(db.getClaimedRewardKeys(stash).map(k => `${k.era}|${k.validator || ''}`));
+        // Same reconciliation rules the endpoint applies at read time
+        // (lib/reward-dedup.js) so the cache and the response can't disagree.
+        const claimedIndex = buildClaimedIndex(db.getClaimedRewardKeys(stash));
         const rows = [];
         for (const entry of pending) {
             const era = entry.era && entry.era.toNumber ? entry.era.toNumber() : Number(entry.era);
@@ -6168,8 +6532,9 @@ async function recomputeUnclaimed(stash) {
                 if (!(amount > 0)) continue;
                 let validator = validatorId;
                 try { validator = normalizeAddress(validatorId); } catch (e) { }
-                // Skip anything already recorded as a claimed payout (defensive).
-                if (claimedKeys.has(`${era}|${validator}`)) continue;
+                // Skip anything already recorded as a claimed payout.
+                if (claimedIndex.unattributedEras.has(era)) continue;
+                if (claimedIndex.exact.has(claimedRewardKey(era, validator))) continue;
                 rows.push({ era, validator, amount });
             }
         }
@@ -6309,11 +6674,13 @@ async function syncStakingRewards() {
         let backfillCursor = Number(state.backfillCursor) || 0;
         let backfillComplete = !!state.backfillComplete;
 
-        // First run: anchor watermarks to the current head; the resumable
-        // backfill pass then walks everything below it.
+        // First run: anchor watermarks just BELOW the current head so the
+        // forward pass actually scans it (audit F-048 — anchoring AT head
+        // marked the head block scanned without ever fetching it, losing any
+        // reward events in it permanently).
         if (!initialized) {
             initialized = true;
-            latestScannedBlock = head;
+            latestScannedBlock = head - 1;
             oldestScannedBlock = head;
             backfillCursor = head - 1;
             backfillComplete = (head - 1) < STAKING_REWARDS_MIN_BLOCK;
@@ -6330,6 +6697,16 @@ async function syncStakingRewards() {
                 maxBlocks: STAKING_REWARDS_FORWARD_MAX
             });
             db.insertStakingRewards(forward.rewards.map(toRewardRow));
+            // Audit F-010: the warning above told the log that blocks were
+            // being dropped and then dropped them anyway. Record the unattempted
+            // range so gap-fill can reclaim it — missing reward events here
+            // understate what a nominator earned.
+            const rewardLowestAttempted = Math.max(latestScannedBlock + 1, head - STAKING_REWARDS_FORWARD_MAX + 1);
+            if (rewardLowestAttempted > latestScannedBlock + 1) {
+                const skipFrom = latestScannedBlock + 1;
+                const skipTo = rewardLowestAttempted - 1;
+                recordSkippedRange('staking_rewards', skipFrom, skipTo, 'forward cap: not attempted this tick');
+            }
             latestScannedBlock = head;
             db.setSyncState('staking_rewards', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Syncing' });
         }
@@ -6755,6 +7132,18 @@ function runWorker({ indexer }) {
 // kicks below all gate on isRpcReady() and become no-ops until the
 // handshake completes; connectRpc's own post-connect kicks then catch up.
 function startIndexerLoops() {
+    // One-time repair of blocks that were abandoned because the NODE was
+    // unavailable rather than because the block was undecodable. Those attempts
+    // should never have counted (lib/rpc-errors.js), so give them their retry
+    // lives back now that the scanners no longer make that mistake. Idempotent
+    // and cheap: an indexed UPDATE that matches nothing on a healthy database.
+    try {
+        const rescued = db.requeueTransientScanFailures(SCAN_MAX_ATTEMPTS);
+        if (rescued) console.log(`[indexer] requeued ${rescued} block(s) abandoned during RPC outages — they will be retried`);
+    } catch (err) {
+        console.warn('[indexer] transient-failure requeue skipped:', err && err.message ? err.message : err);
+    }
+
     // Stagger initial kicks so the RPC node isn't slammed by every sync in the
     // same second of startup — that pile-up alone can spike load. The first
     // call still happens immediately so the home page has data quickly; the
