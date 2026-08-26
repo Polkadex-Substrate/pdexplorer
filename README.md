@@ -19,7 +19,8 @@ Live: **https://explorer.polkadex.ee/**
 
 **Indexer**
 
-- Combined blocks + events indexer with three passes per tick: forward (new head), backfill (genesis-ward), gap-fill (re-attempt missing block numbers detected via SQL window query)
+- Combined blocks + events indexer with four passes per tick: forward (new head), backfill (genesis-ward), gap-fill (re-attempt missing block numbers detected via SQL window query), and a reorg sweep that re-verifies stored hashes against finality and repairs discarded forks (F-007)
+- Transaction and reward rows are hash-keyed (F-021) so a fork row and its canonical replacement can never collide; the transactions table backfills to genesis automatically by deriving transfers from already-indexed events (F-008)
 - Parallel block fetching (configurable concurrency, default 8) for fast catch-up after outages
 - Per-sync backoff when the upstream RPC errors, so a flaky chain doesn't amplify load
 - Staking-rewards crawler with resumable per-address history
@@ -244,7 +245,7 @@ The indexer's gap-fill code automatically backfills any blocks missed between th
 
 ## Configuration
 
-All knobs are env vars. None are required to start — every value has a sensible default — but a production deploy will want at least `DOMAIN`, `LETSENCRYPT_EMAIL`, and `CMC_API_KEY` set.
+All knobs are env vars. None are required to start — every value has a sensible default — but a production deploy will want at least `DOMAIN` and `LETSENCRYPT_EMAIL` set. (`CMC_API_KEY` is *not* needed: the default price provider is keyless CoinGecko.)
 
 ### General
 
@@ -302,13 +303,16 @@ Schema: subscribers live in `email_subscribers`, dispatch idempotency in `email_
 | `STAKING_REWARDS_FORWARD_MAX`    | `20000` | Max blocks per forward staking-rewards crawl                       |
 | `STAKING_REWARDS_BACKFILL_CHUNK` | `500`   | Blocks per staking-rewards backfill chunk                          |
 | `GOV_FORWARD_MAX`                | `50000` | Max blocks per governance crawl                                    |
-| `TX_INITIAL_SCAN_BLOCKS`         | `20000` | Initial transaction crawl depth                                    |
+| `TX_INITIAL_SCAN_BLOCKS`         | `20000` | Initial (RPC) transaction crawl depth; history older than this is derived from the local events table by the automatic backfill (F-008) |
+| `TX_BACKFILL_CHUNK`              | `5000`  | Blocks of local events per tick the transactions backfill derives — zero RPC |
+| `REORG_SWEEP_MAX`                | `200`   | Newly-finalized heights re-verified per tick against their canonical hash (F-007) |
+| `REORG_TAIL_MAX`                 | `64`    | Cap on the unfinalized tail re-checked every tick (F-007) |
 
 ### Price feed
 
 | Env var          | Default | Notes                                                                   |
 | ---------------- | ------- | ----------------------------------------------------------------------- |
-| `CMC_API_KEY`    | *(none)*| CoinMarketCap API key. Without it the price chart shows no data.        |
+| `CMC_API_KEY`    | *(none)*| CoinMarketCap API key. **Optional** — only needed if you add `cmc` to `PRICE_PROVIDERS`. The default CoinGecko feed is keyless, so the chart works without this. |
 | `CMC_SYMBOL`     | `PDEX`  | CMC symbol to query                                                     |
 
 ### Sitemap
@@ -409,10 +413,14 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 ### Price feed (multi-provider)
 
-- `GET /api/price-latest` — current price, last-sync, plus a **`bySource`** map with one entry per active provider (`ascendex`, `cmc`, plus `ascendex-backfill` and `defillama-backfill` after the one-shot history import). Each entry: `{ label, configured, lastSync, status, error, latest, count }`.
+- `GET /api/price-latest` — current price, last-sync, plus a **`bySource`** map with one entry per active provider (`coingecko` by default, `cmc` if enabled; historical tags `ascendex`, `ascendex-backfill` and `defillama-backfill` also appear where those rows exist). Each entry: `{ label, configured, lastSync, status, error, latest, count }`.
 - `GET /api/price-history?days=N` — daily series for the last N days (capped at 4000). Each row carries a `source` tag identifying which provider supplied it. Response also includes the same `bySource` rollup.
 
-Providers are pluggable via `PRICE_PROVIDERS` env (csv; default `ascendex,cmc`). CMC requires `CMC_API_KEY`; AscendEX is keyless. The one-shot historical backfill lives in `backfill-price-history.mjs` and pulls daily klines from AscendEX going back to PDEX's first trading day (March 2022).
+Providers are pluggable via `PRICE_PROVIDERS` env (csv; **default `coingecko`**). CoinGecko is keyless — set `COINGECKO_API_KEY` to a free demo key only if you want higher rate limits — and aggregates PDEX across its real markets rather than a single venue. Add `cmc` (with `CMC_API_KEY`) to poll CoinMarketCap alongside it.
+
+**AscendEX was removed after the exchange shut down in July 2026.** Setting `PRICE_PROVIDERS=ascendex` polls nothing; historical rows tagged `ascendex` / `ascendex-backfill` remain in `price_history` and still render on the chart.
+
+There is no price-history backfill script in the repo (audit F-025 — the README and INSTALL previously pointed at a `backfill-price-history.mjs` that does not exist). Existing historical rows were imported ad-hoc; a fresh install builds its chart from the first live poll onward.
 
 ### Governance
 
@@ -425,10 +433,16 @@ Providers are pluggable via `PRICE_PROVIDERS` env (csv; default `ascendex,cmc`).
 ### Email alerts (governance + network events)
 
 - `POST /api/email/subscribe` — double opt-in signup (rate-limited per IP)
-- `GET /api/email/confirm?token=<t>` — confirm subscription via emailed link
-- `GET /api/email/unsubscribe?token=<t>` — one-click unsubscribe
+- `GET /api/email/confirm?token=<t>` — renders a confirmation page with a button. **Read-only.**
+- `POST /api/email/confirm` (`token` form field) — performs the confirmation
+- `GET /api/email/unsubscribe?token=<t>` — renders an unsubscribe page with a button. **Read-only.**
+- `POST /api/email/unsubscribe` (`token` form field) — performs the unsubscribe; also the RFC 8058 `List-Unsubscribe-Post` target
+
+  The writes moved off GET in audit F-001/F-036: mail scanners, link checkers and browser prefetch fetch emailed URLs without a human, which was silently confirming and unsubscribing people.
 - `GET /api/email/preferences?token=<t>` — fetch current event preferences
 - `POST /api/email/preferences` — update preferences (token in body)
+
+  Both back the **`/email/preferences?token=<t>`** page, linked from the footer of every alert email. The token is the credential (there is no login), so that route is `noindex` and `Disallow`ed in `robots.txt`.
 
 ### Discussions
 
@@ -581,30 +595,44 @@ The provision script installs a nightly SQLite backup pipeline as the `backup` p
 **What's installed:**
 
 - `/opt/pdexplorer/backup.sh` — the actual backup script (uses SQLite's online backup API, WAL-safe)
-- `/etc/cron.d/pdexplorer-backup` — runs nightly at 03:00 UTC as root
+- `/etc/cron.d/pdexplorer-backup` — invokes it nightly at 03:00 UTC as root
 - `/etc/logrotate.d/pdexplorer-backup` — weekly rotation of the backup log, 8 weeks retained
-- `/opt/pdexplorer/backups/` — destination dir, mode 0750
+- `/var/backup/` — destination dir, mode 0750
 
-**Schedule and retention:**
+Backups deliberately live **outside** `/opt/pdexplorer`, so they are not in the
+Docker build context, not in the repo, and not removed by a stray
+`git clean -fdx` or `docker compose down -v`. Older revisions of this project
+used `/opt/pdexplorer/backups/`; the provision script migrates anything found
+there and that path no longer receives new snapshots.
 
-- 03:00 UTC every night
-- Output: `/opt/pdexplorer/backups/explorer-YYYYMMDDTHHMMSSZ.db.gz`
-- Old backups are removed after 14 days (override with `KEEP_DAYS=30 ./backup.sh`)
-- Compressed with gzip -9 by default (`COMPRESS=zstd` for faster, parallel compression)
+**Schedule and retention** (defaults; each is an env override on `backup.sh`):
+
+- Cron fires at 03:00 UTC nightly, but `MIN_INTERVAL_HOURS=48` throttles it to
+  one snapshot every other day. **A run skipped by the throttle is normal** —
+  check the log rather than concluding backups are broken.
+- Output: `/var/backup/explorer-YYYYMMDDTHHMMSSZ.db.gz`
+- Retention is **count-based, not age-based**: `MAX_BACKUPS=7` keeps the newest
+  7 generations. (There is no `KEEP_DAYS`.) The DB is a derived index of chain
+  state, so backups exist to restore fast, not to hold deep history.
+- Compressed with `COMPRESS=gzip` at `COMPRESS_LEVEL=6` — `pigz` is used when
+  present, so this is parallel. `COMPRESS=zstd` (also `-T0`) or `none` work too.
 - A flock-based lockfile (`/var/lock/pdexplorer-backup.lock`) prevents overlapping runs
 - Every snapshot is integrity-checked before rotation; failures are kept with a `.CORRUPT` suffix and old backups are NOT pruned
+- Off-box shipping is built in: set `REMOTE_ENABLED=1` with `REMOTE_HOST` /
+  `REMOTE_USER` / `SSH_KEY`, and `REMOTE_MAX_BACKUPS` (default 14) applies there
 
 **Manual run:**
 
 ```bash
 sudo /opt/pdexplorer/backup.sh                        # one-shot, uses defaults
-sudo DEST=/mnt/external KEEP_DAYS=60 /opt/pdexplorer/backup.sh
+sudo FORCE=1 /opt/pdexplorer/backup.sh                # ignore the 48h throttle
+sudo DEST=/mnt/external MAX_BACKUPS=30 /opt/pdexplorer/backup.sh
 ```
 
 **Inspect what's there:**
 
 ```bash
-ls -lh /opt/pdexplorer/backups/
+ls -lh /var/backup/
 tail -n 50 /var/log/pdexplorer-backup.log
 ```
 
@@ -612,7 +640,7 @@ tail -n 50 /var/log/pdexplorer-backup.log
 
 ```bash
 docker compose -f /opt/pdexplorer/docker-compose.yml down
-gunzip -c /opt/pdexplorer/backups/explorer-YYYYMMDDTHHMMSSZ.db.gz \
+gunzip -c /var/backup/explorer-YYYYMMDDTHHMMSSZ.db.gz \
     > /opt/pdexplorer/data/explorer.db
 # Wipe any leftover WAL/SHM from the previous run — the gunzipped DB is a
 # fully checkpointed snapshot, so these are stale and could corrupt the
@@ -623,15 +651,15 @@ docker compose -f /opt/pdexplorer/docker-compose.yml up -d backend
 docker compose logs -f backend         # confirm the indexer picks up from the snapshot
 ```
 
-**Off-host shipping (recommended).** The cron job only protects against accidental corruption / bad migrations, not against losing the host itself. Pair it with one of:
+**Off-host shipping (recommended).** The cron job only protects against accidental corruption / bad migrations, not against losing the host itself. `backup.sh` can push snapshots itself — set `REMOTE_ENABLED=1`, `REMOTE_HOST`, `REMOTE_USER`, `REMOTE_PATH`, and `SSH_KEY` (default `/root/.ssh/pdex_backup_ed25519`, no passphrase). Or use an external tool against `/var/backup`:
 
 ```bash
 # rclone to S3 / B2 / GDrive / etc — daily sync after the backup runs:
-30 3 * * * root rclone copy /opt/pdexplorer/backups remote:pdexplorer-backups --max-age 24h
+30 3 * * * root rclone copy /var/backup remote:pdexplorer-backups --max-age 24h
 
 # restic to any backend with deduplication + encryption:
 30 3 * * * root RESTIC_PASSWORD_FILE=/root/.restic-pw \
-  restic -r s3:s3.amazonaws.com/my-bucket/pdexplorer backup /opt/pdexplorer/backups
+  restic -r s3:s3.amazonaws.com/my-bucket/pdexplorer backup /var/backup
 ```
 
 **Disaster-recovery story.** Because the explorer is reconstructable from chain state, a "lost everything including the off-host backup" failure is not a data-loss event — it's a downtime event. Bring up a fresh provisioned host with no `explorer.db`; the indexer starts re-indexing from genesis. Full backfill takes around 8–12 hours on a typical VPS with the current settings; serve traffic from a status page in the meantime, or restore a stale backup and let the gap-filler catch up.

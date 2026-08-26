@@ -63,25 +63,21 @@
     <link rel="mask-icon" href="logo.png" color="#7c3aed">
     <link rel="manifest" href="/manifest.webmanifest">
 
-    <!-- DNS prefetch / preconnect for third-party origins. preconnect opens the
-         TCP+TLS handshake early; dns-prefetch is a cheaper fallback for less
-         critical origins. -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- jsDelivr and cdnjs prefetches removed with the scripts they served
-         (F-029). unpkg still serves the Boxicons stylesheet; Google Fonts
-         still serves Inter. Both are non-executable, but they must also be
-         vendored before a `default-src 'self'` CSP can land (F-039). -->
-    <link rel="dns-prefetch" href="https://unpkg.com">
+    <!-- No third-party origins remain: F-029 vendored the CDN scripts, and
+         F-039 vendored the Boxicons stylesheet (was unpkg) and Inter (was
+         Google Fonts). Everything the page loads is same-origin — which is
+         what lets nginx enforce a strict Content-Security-Policy, and means
+         visiting the explorer no longer pings Google on every pageview. The
+         preconnect/dns-prefetch hints left with the origins they warmed. -->
     <link rel="preload" as="image" href="logo.png" fetchpriority="high">
 
     <!-- Sitemap discovery for crawlers that read <link rel="sitemap">. -->
     <link rel="sitemap" type="application/xml" href="/sitemap.xml">
     <link rel="alternate" type="application/rss+xml" title="Polkadex Explorer" href="https://explorer.polkadex.ee/">
 
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/vendor/inter.css" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
-    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
+    <link href="/vendor/boxicons/css/boxicons.min.css" rel="stylesheet">
 
     <!-- Audit F-029: these were `https://cdn.jsdelivr.net/npm/chart.js` (NO
          version — jsDelivr's `latest`) and a cdnjs copy of qrcodejs with no
@@ -176,7 +172,9 @@
                     <img src="logo.png" alt="Polkadex Logo" class="logo-img" style="width: 32px; height: 32px; border-radius: 50%;">
                     <span class="logo-text" style="font-size: 1.1rem;">Polkadex Mainnet Explorer</span>
                 </a>
-                <button class="mobile-toggle sidebar-close" onclick="document.getElementById('sidebar').classList.remove('open')"><i class='bx bx-x'></i></button>
+                <!-- Bound in script.js (wireStaticShellControls) — inline handlers are
+                     blocked by the CSP's script-src 'self' (F-039). -->
+                <button class="mobile-toggle sidebar-close js-sidebar-close" type="button" aria-label="Close menu"><i class='bx bx-x'></i></button>
             </div>
             <nav class="sidebar-nav">
                 <a href="/" class="nav-item active" data-target="home"><i class='bx bx-grid-alt'></i> Home</a>
@@ -228,7 +226,7 @@
             <!-- Header -->
             <header class="topbar">
                 <div class="mobile-top-bar" style="display: none; align-items: center; gap: 16px;">
-                    <button class="mobile-toggle" onclick="document.getElementById('sidebar').classList.add('open')">
+                    <button class="mobile-toggle js-sidebar-open" type="button" aria-label="Open menu">
                         <i class='bx bx-menu'></i>
                     </button>
                     <a href="https://polkadex.ee" target="_blank" class="logo" style="text-decoration: none; display: flex; align-items: center; gap: 8px; font-weight: bold; color: white;">
@@ -1099,6 +1097,17 @@
                 <div id="price-page-content"></div>
             </div>
 
+            <!-- /email/preferences?token=<unsubscribeToken> — manage which
+                 alert emails you receive. Audit F-066: this route previously
+                 had no section at all, so routeTo() matched nothing and the
+                 link rendered a blank pane. Reached ONLY from a link in an
+                 alert email; the token in the query string is the credential,
+                 so the route is noindex and Disallowed in robots.txt.
+                 Rendered by renderEmailPreferencesPage() in script.js. -->
+            <div class="email-prefs-page page-section" data-page="email-preferences" style="display: none;">
+                <div id="email-prefs-content"></div>
+            </div>
+
             <!-- /developers — served SERVER-SIDE by the backend: see
                  app.get('/developers') in server.js + the nginx `location =
                  /developers` proxy. A direct hit / crawler / curl / AI client
@@ -1196,7 +1205,7 @@
                         <p style="margin-left: 14px;">— <strong style="color: var(--text-primary);">Browser wallet extensions</strong> (Polkadot.js, Talisman, SubWallet, Nova Wallet) when you click Connect Wallet. The explorer doesn't share any data with them; they expose your account list to us with your explicit permission.</p>
                         <p style="margin-left: 14px;">— <strong style="color: var(--text-primary);">A PDEX price feed</strong> (CoinGecko/Coinpaprika public API) that runs server-side. Your browser does not contact these endpoints directly.</p>
                         <p style="margin-left: 14px;">— <strong style="color: var(--text-primary);">A transactional email provider</strong> (Postmark by default; SendGrid as an alternative) that delivers your governance email alerts <em>if and only if you opt in</em> via the "Get email alerts" button. They see your email address and the alert content to send the message; they don't get your IP, your wallet, or anything else from us. We don't share your address with them for any purpose besides delivery.</p>
-                        <p>We do not load Google Analytics, Mixpanel, Segment, advertising pixels, or any other analytics/tracking script. The explorer's JavaScript bundle is self-hosted; there are no third-party scripts loaded from external CDNs that could fingerprint you.</p>
+                        <p>We do not load Google Analytics, Mixpanel, Segment, advertising pixels, or any other analytics/tracking script. Every script, stylesheet, and font is self-hosted from explorer.polkadex.ee — including the icon font and the Inter typeface, which we serve ourselves rather than from Google Fonts, so viewing this site sends no request to Google or to any CDN other than Cloudflare in front of us. A Content-Security-Policy header enforces this: the browser itself refuses to load scripts from anywhere else.</p>
 
                         <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">5. Email alerts (optional)</h2>
                         <p>If you opt in to email alerts via the "Get email alerts" button, we store your email address, a randomly-generated confirmation token, an independent randomly-generated unsubscribe token, your selected event preferences, and timestamps. We use the email solely to deliver the alerts you subscribed to. There is no marketing.</p>

@@ -8,6 +8,9 @@ import { u8aToHex, hexToU8a, stringToU8a, isHex } from '@polkadot/util';
 // exactly the kind that reappear when the logic is buried in this bundle.
 import { pdexToPlanck, isPositiveNumberInput, isValidPolkadexAddress,
          buildTransferTx } from './lib/wallet-safety.js';
+// Audit F-017 — folding REST snapshots into the live arrays instead of
+// replacing them. See lib/merge-rows.js for the rules.
+import { mergeRows, blockRank, txRank } from './lib/merge-rows.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -468,6 +471,18 @@ const txDetailsContainer = document.getElementById('tx-details-container');
 const navItems = document.querySelectorAll('.nav-item');
 const pageSections = document.querySelectorAll('.page-section');
 
+// Static-shell controls that used to be inline onclick= attributes in
+// index.html. The CSP (F-039) sets script-src 'self', which blocks inline
+// handlers — and these two were the only ones left in the static markup.
+function wireStaticShellControls() {
+    const sidebar = document.getElementById('sidebar');
+    document.querySelectorAll('.js-sidebar-open').forEach(el =>
+        el.addEventListener('click', () => sidebar && sidebar.classList.add('open')));
+    document.querySelectorAll('.js-sidebar-close').forEach(el =>
+        el.addEventListener('click', () => sidebar && sidebar.classList.remove('open')));
+}
+wireStaticShellControls();
+
 // State
 let blocks = [];
 let fullBlocks = [];
@@ -485,6 +500,20 @@ let eventDisplayLimit = 50;
 let validatorsFetched = false;
 let globalApi = null;
 const RECENT_REFRESH_MS = 12000;
+
+// Upper bound on the shared `transactions` array (audit F-017).
+//
+// ONE constant on purpose. This started as three different numbers — the
+// WebSocket handler popped at 500, the /transactions merge capped at 2000, and
+// the home-page merge capped at 500 — all writing the same module-level array.
+// A user who paged in 1,200 rows on /transactions and then visited home got
+// truncated to 500 on the next 12s tick, while `olderTxBeforeBlock` kept its
+// old watermark: clicking "Load Older 100" again resumed below the truncation
+// and left a HOLE in the middle of the list. Divergent caps on shared state is
+// how that happens, so there is only one.
+//
+// 2000 is ~20 pages of "Load Older 100" and a few MB at most.
+const TX_ROW_CAP = 2000;
 
 async function init() {
     try {
@@ -1266,7 +1295,7 @@ function subscribeNewBlocks(api) {
                 };
                 if (!transactions.find(existing => existing.hash === tx.hash)) transactions.unshift(tx);
                 if (currentTxSort.field === null) sortTransactions(); // Keeps it sorted if needed
-                if (transactions.length > 500) transactions.pop();
+                if (transactions.length > TX_ROW_CAP) transactions.pop();
             });
             renderTransactions();
             if (document.querySelector('.transactions-page').style.display === 'flex') {
@@ -1709,11 +1738,21 @@ async function fetchTransactions(force = false) {
             return;
         }
 
-        transactions = financialTransactionRows(data.transactions);
+        // F-017: merge, don't replace. refreshRecentViews calls this with
+        // force=true every 12s, so a plain assignment discarded both the WS
+        // heads and every row paged in by "Load Older 100".
+        transactions = mergeRows({
+            local: transactions,
+            snapshot: financialTransactionRows(data.transactions),
+            keyOf: tx => tx.hash,
+            rankOf: txRank,
+            cap: TX_ROW_CAP
+        });
         transactionCacheMeta = {
             latestScannedBlock: data.latestScannedBlock,
             oldestScannedBlock: data.oldestScannedBlock,
-            scannedBlocks: data.scannedBlocks
+            scannedBlocks: data.scannedBlocks,
+            backfillComplete: !!data.backfillComplete
         };
         txFetched = true;
         sortTransactions();
@@ -1812,7 +1851,18 @@ function renderFullTransactions() {
         transactionsTableApi.setData(rows);
     }
 
-    if (txCountEl) txCountEl.innerText = `${rows.length} Records`;
+    if (txCountEl) {
+        // F-008's UI half: while the genesis-ward backfill is still walking,
+        // say so instead of letting a bare record count imply all-time
+        // coverage. innerText — this is plain text, never markup.
+        const meta = transactionCacheMeta || {};
+        const coverage = meta.backfillComplete
+            ? ''
+            : (meta.oldestScannedBlock
+                ? ` · history before block ${Number(meta.oldestScannedBlock).toLocaleString('en-US')} still indexing`
+                : '');
+        txCountEl.innerText = `${rows.length} Records${coverage}`;
+    }
     updateOlderFinancialTxButton(rows.length === 0);
     // makeTable's filter bar replaces the need for client-side "Show More" —
     // all loaded rows are shown unless the user filters them out. Hide the
@@ -1873,6 +1923,10 @@ async function loadOlderFinancialTransactions() {
         olderTxBeforeBlock = data.nextBeforeBlock || olderTxBeforeBlock;
         const existingHashes = new Set(transactions.map(tx => tx.hash));
         const olderRows = financialTransactionRows(data.transactions).filter(tx => !existingHashes.has(tx.hash));
+        // Append is right here (these rows are strictly older than what we
+        // hold), but the next 12s poll used to undo it — see the merge in
+        // fetchTransactions, which now keeps anything below the snapshot's
+        // oldest block.
         transactions = financialTransactionRows([...transactions, ...olderRows]);
         sortTransactions();
         renderFullTransactions();
@@ -1931,7 +1985,14 @@ async function fetchBlocks(force = false) {
             return;
         }
 
-        fullBlocks = data.blocks;
+        // F-017: merge so live WS heads survive the 12s poll.
+        fullBlocks = mergeRows({
+            local: fullBlocks,
+            snapshot: data.blocks,
+            keyOf: b => b.number,
+            rankOf: blockRank,
+            cap: 200
+        });
         blocksFetched = true;
         renderFullBlocks();
 
@@ -2029,7 +2090,16 @@ async function refreshDashboardLists() {
         if (txRes) {
             const txData = await txRes.json();
             if (Array.isArray(txData.transactions)) {
-                transactions = financialTransactionRows(txData.transactions);
+                // F-017: was a straight assignment, which erased any transfer
+                // the WebSocket had already shown but the indexer had not yet
+                // caught up to — the row vanished ~12s after appearing.
+                transactions = mergeRows({
+                    local: transactions,
+                    snapshot: financialTransactionRows(txData.transactions),
+                    keyOf: tx => tx.hash,
+                    rankOf: txRank,
+                    cap: TX_ROW_CAP
+                });
                 transactionCacheMeta = {
                     latestScannedBlock: txData.latestScannedBlock,
                     oldestScannedBlock: txData.oldestScannedBlock,
@@ -2041,7 +2111,13 @@ async function refreshDashboardLists() {
         if (bRes) {
             const bData = await bRes.json();
             if (Array.isArray(bData.blocks)) {
-                blocks = bData.blocks.slice(0, 10);
+                blocks = mergeRows({
+                    local: blocks,
+                    snapshot: bData.blocks,
+                    keyOf: b => b.number,
+                    rankOf: blockRank,
+                    cap: 10
+                });
                 renderBlocks();
             }
         }
@@ -2844,6 +2920,11 @@ const ROUTE_SEO = {
     // initWalletPage() flips it to noindex when an address is bound (personal).
     'wallet':             { title: 'Connect Wallet — Send PDEX, Stake & Manage Your Account · Polkadex Explorer',
                             description: 'Connect a Polkadot.js, Talisman, or SubWallet extension on desktop, or use Nova Wallet / SubWallet on mobile to send PDEX, stake, and manage your Polkadex account.' },
+    // Token-bearing page reached only from an alert email. Never index it:
+    // the URL IS the credential, so a crawled copy is a leaked one.
+    'email-preferences':  { title: 'Email alert preferences — Polkadex Mainnet Explorer',
+                            description: 'Choose which Polkadex Mainnet Explorer alert emails you receive.',
+                            noindex: true },
     'donate':             { title: 'Support the Explorer — Polkadex Mainnet Explorer',
                             description: 'Help fund infrastructure for the Polkadex Mainnet Explorer. Donate with PDEX, BTC, ETH, USDT, USDC, or any major crypto asset. Every contribution keeps the explorer ad-free and tracker-free.' },
     'search':             { title: 'Search Results — Polkadex Mainnet Explorer',
@@ -3570,7 +3651,7 @@ const HELP_TOPICS = [
             <ul>
                 <li><b>Primary colour</b> is Polkadex pink <code>#E6007A</code> — reserved for the most important call to action on each screen.</li>
                 <li><b>Secondary colour</b> is accent green <code>#00E676</code> — for successful actions and positive metrics.</li>
-                <li><b>Typeface</b> is Inter (300/400/500/600/700) loaded from Google Fonts. Monospace stack is <code>Courier New, monospace</code> for addresses, hashes, and URLs.</li>
+                <li><b>Typeface</b> is Inter (300/400/500/600/700), self-hosted from this origin (no Google Fonts request). Monospace stack is <code>Courier New, monospace</code> for addresses, hashes, and URLs.</li>
                 <li><b>Icons</b> come from Boxicons 2.1.4, used via the <code>bx-*</code> class system.</li>
             </ul>
             <div class="help-callout">
@@ -3634,7 +3715,9 @@ const HELP_TOPICS = [
             <p><strong>Governance:</strong> new referendum opens for voting · new public proposal tabled · 24-hour reminder before a referendum closes · referendum result (passed/failed) · treasury proposal activity · council motion activity.</p>
             <p><strong>Network milestones:</strong> runtime upgrade · era boundary summary · chain stalled alert. These are off by default — most people only want the governance events.</p>
             <h3>Unsubscribe and preferences</h3>
-            <p>Every email includes a one-click <strong>Unsubscribe</strong> link at the bottom. Clicking it stops all future alerts immediately — no login or wallet needed. You can resubscribe any time from the explorer.</p>
+            <p>Every alert email has two links in its footer. <strong>Manage preferences</strong> opens a page where you can tick and untick any of the nine alert types above and save — no login or wallet needed, because the link itself identifies you. <strong>Unsubscribe</strong> stops everything.</p>
+            <p>Both links are personal to you, so treat them like a password: anyone who has the URL can change your alert settings. Neither is indexed by search engines. If you lose them, the footer of any later alert email has a fresh copy.</p>
+            <p>Confirming a subscription and unsubscribing both ask you to click a button on the page rather than acting on the link itself — that is deliberate, so a corporate mail scanner following links in your inbox can't opt you in or out without you.</p>
             <h3>Privacy and data handling</h3>
             <p>Your email address is stored only to deliver the alerts you've selected. We don't sell it, hand it to other services, or use it for marketing. The <a href="/privacy" class="item-link">privacy policy</a> has the full details. We use a transactional email provider (Postmark) for delivery — they see the email content but only to send it.</p>
         `
@@ -3918,7 +4001,7 @@ function renderBrandPage() {
                 page always reflects what the site is actually rendering.</p>
             </div>
             <div class="brand-header-logo">
-                <img src="/logo.png" alt="Polkadex logo" onerror="this.style.display='none'">
+                <img src="/logo.png" alt="Polkadex logo" class="js-brand-img" data-fallback="hide">
             </div>
         </header>
 
@@ -3983,7 +4066,7 @@ function renderBrandPage() {
                     <span style="font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--brand-secondary);">e8ab9d4fJp…  block #12338677  /api/extrinsic</span>
                 </div>
             </div>
-            <p class="brand-note">Primary face is <strong>Inter</strong> (Google Fonts, weights 300/400/500/600/700).
+            <p class="brand-note">Primary face is <strong>Inter</strong> (self-hosted, weights 300/400/500/600/700).
             Monospace stack is system-default <code>Courier New, monospace</code> — used for addresses, hashes, URLs, and storage keys.</p>
         </section>
 
@@ -3991,15 +4074,15 @@ function renderBrandPage() {
             <h2>Logo</h2>
             <div class="brand-logo-grid">
                 <div class="brand-logo-card" style="background: var(--bg-dark);">
-                    <img src="/logo.png" alt="Polkadex logo on dark" onerror="this.parentElement.innerHTML='<div class=brand-logo-fallback>logo.png</div>'">
+                    <img src="/logo.png" alt="Polkadex logo on dark" class="js-brand-img" data-fallback="plain">
                     <span>On dark</span>
                 </div>
                 <div class="brand-logo-card" style="background: #f5f3fa;">
-                    <img src="/logo.png" alt="Polkadex logo on light" onerror="this.parentElement.innerHTML='<div class=brand-logo-fallback style=color:#14101c>logo.png</div>'">
+                    <img src="/logo.png" alt="Polkadex logo on light" class="js-brand-img" data-fallback="light">
                     <span style="color: #14101c;">On light</span>
                 </div>
                 <div class="brand-logo-card" style="background: var(--brand-primary);">
-                    <img src="/logo.png" alt="Polkadex logo on brand" onerror="this.parentElement.innerHTML='<div class=brand-logo-fallback>logo.png</div>'">
+                    <img src="/logo.png" alt="Polkadex logo on brand" class="js-brand-img" data-fallback="plain">
                     <span>On brand</span>
                 </div>
             </div>
@@ -4080,6 +4163,21 @@ function renderBrandPage() {
     // Click-to-copy on the swatch buttons. Use the Clipboard API where available
     // and fall back to a hidden textarea + execCommand for older browsers /
     // restricted-permissions environments. Show transient feedback inline.
+    // Image fallbacks — formerly inline onerror= attributes, which (a) are
+    // blocked under script-src 'self' and (b) assigned innerHTML from an
+    // attribute string (audit F-165's exact complaint).
+    container.querySelectorAll('.js-brand-img').forEach(img => {
+        img.addEventListener('error', () => {
+            const mode = img.getAttribute('data-fallback');
+            if (mode === 'hide') { img.style.display = 'none'; return; }
+            const fb = document.createElement('div');
+            fb.className = 'brand-logo-fallback';
+            if (mode === 'light') fb.style.color = '#14101c';
+            fb.textContent = 'logo.png';
+            img.replaceWith(fb);
+        });
+    });
+
     container.querySelectorAll('.brand-swatch').forEach(btn => {
         btn.addEventListener('click', async () => {
             const value = btn.dataset.copy;
@@ -4294,6 +4392,28 @@ function bootSeoRouter() {
         if (href.startsWith('#')) {
             const t = href.substring(1).trim();
             if (!t) return;
+            // Audit F-016: an in-page anchor is NOT a route. This handler used
+            // to treat every `href="#x"` as one, which broke the /developers
+            // table of contents in two different ways: "#price" and
+            // "#discussions" are also real route names, so those links left the
+            // page entirely, and the other twelve (#overview, #cors, …) matched
+            // no route and opened a blank pane.
+            //
+            // Decided by the DOM, not by a hardcoded list of exceptions: if an
+            // element with that id exists on the page, the author meant "scroll
+            // to it". Anything else keeps the old routing behaviour, so legacy
+            // fragment links still work.
+            const anchored = document.getElementById(t);
+            if (anchored) {
+                e.preventDefault();
+                anchored.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                // Keep the fragment in the URL so the link is copyable and Back
+                // works, but do NOT push a route — the path must stay put.
+                if (window.location.hash !== `#${t}`) {
+                    history.replaceState(history.state, '', `${window.location.pathname}${window.location.search}#${t}`);
+                }
+                return;
+            }
             target = t;
         } else if (href.startsWith('/')) {
             // Only intercept if the host is the same; absolute paths are SPA routes.
@@ -4366,6 +4486,11 @@ function routeTo(target) {
     } else if (target.startsWith('discussions/')) {
         mainTarget = 'discussions';
         detailId = target.substring('discussions/'.length);
+    } else if (target === 'email/preferences' || target === 'email/preferences/') {
+        // The first route where the slash is part of the page identity rather
+        // than a detail id, so it collapses to a single-token data-page the
+        // same way account/<addr> becomes account-details.
+        mainTarget = 'email-preferences';
     } else if (target.startsWith('help/')) {
         // /help/<slug> — preserves the slug as the detail id so the dispatcher
         // can render the right article. /help by itself routes to the landing.
@@ -4504,6 +4629,10 @@ function routeTo(target) {
                 // then queries on demand; supports ?pallet=&item=&args=&at=
                 // deep links so a finding can be shared and re-verified.
                 renderChainStatePage();
+            } else if (mainTarget === 'email-preferences') {
+                // /email/preferences?token=<t> — audit F-066. Reads its token
+                // from window.location.search, not from the route token.
+                renderEmailPreferencesPage();
             }
         } else {
             page.style.display = 'none';
@@ -5241,9 +5370,22 @@ function chainStateExportPayload(d) {
         },
         storage: d.storage || null,
         result: d.entries
-            ? { entriesTotal: d.entriesTotal, truncated: d.truncated, limit: d.limit, entries: d.entries }
+            ? { entriesReturned: d.entriesReturned, entriesTotal: d.entriesTotal, totalUnknownReason: d.totalUnknownReason, truncated: d.truncated, limit: d.limit, entries: d.entries }
             : { isEmpty: d.isEmpty, count: d.count, human: d.human, json: d.json, hex: d.hex }
     };
+}
+
+// How many entries to claim in the /chain-state result header.
+//
+// Audit F-018: the backend no longer walks the whole storage map, so it cannot
+// report a true total — `entriesTotal` is null by design. This used to
+// interpolate that field directly, which would now render "null entries".
+// Say what we actually know: the number returned, and whether more exist.
+function chainStateEntryCount(d) {
+    const shown = Array.isArray(d.entries) ? d.entries.length : 0;
+    const noun = `entr${shown === 1 ? 'y' : 'ies'}`;
+    if (d.entriesTotal != null) return `${d.entriesTotal} ${noun}`;
+    return d.truncated ? `${shown}+ ${noun}` : `${shown} ${noun}`;
 }
 
 function chainStateFilename(d, ext) {
@@ -5311,8 +5453,8 @@ function renderChainStateResult(d) {
     if (d.entries) {
         box.innerHTML = `
             <div class="cs-result-head">
-                <strong>${escapeHtml(d.pallet)}.${escapeHtml(d.item)}</strong> — ${d.entriesTotal} entr${d.entriesTotal === 1 ? 'y' : 'ies'} at ${atLabel}
-                ${d.truncated ? `<span class="cs-warn">showing first ${d.limit}</span>` : ''}
+                <strong>${escapeHtml(d.pallet)}.${escapeHtml(d.item)}</strong> — ${chainStateEntryCount(d)} at ${atLabel}
+                ${d.truncated ? `<span class="cs-warn">showing the first ${d.limit}; more exist</span>` : ''}
             </div>
             <div class="cs-entries">${d.entries.map(e => `
                 <div class="cs-entry">
@@ -5966,10 +6108,10 @@ curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&amp;at=1
             <h2>Email alerts</h2>
             <ul class="developers-endpoints">
                 <li><code>POST /api/email/subscribe</code> — double opt-in signup (rate-limited per IP)</li>
-                <li><code>GET /api/email/confirm?token=&lt;t&gt;</code> — confirm subscription via emailed link</li>
-                <li><code>GET /api/email/unsubscribe?token=&lt;t&gt;</code> — one-click unsubscribe</li>
+                <li><code>GET /api/email/confirm?token=&lt;t&gt;</code> — renders a confirmation page with a button (read-only); <code>POST /api/email/confirm</code> with a <code>token</code> form field performs it</li>
+                <li><code>GET /api/email/unsubscribe?token=&lt;t&gt;</code> — renders an unsubscribe page with a button (read-only); <code>POST /api/email/unsubscribe</code> performs it, and is the RFC 8058 <code>List-Unsubscribe-Post</code> target</li>
                 <li><code>GET /api/email/preferences?token=&lt;t&gt;</code> — fetch current event preferences</li>
-                <li><code>POST /api/email/preferences</code> — update preferences (token in body)</li>
+                <li><code>POST /api/email/preferences</code> — update preferences (token in body). Both back the <code>/email/preferences?token=&lt;t&gt;</code> page linked from every alert email; that route is <code>noindex</code> because the token is the credential.</li>
             </ul>
         </section>
 
@@ -6204,8 +6346,8 @@ async function fetchAccountDetails(address) {
             
             <div style="margin-bottom: 20px;">
                 <div class="account-tabs" style="padding: 0 20px; margin-bottom: 15px;">
-                    <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions" onclick="switchAccountTab('transactions')">Transactions</button>
-                    <button type="button" class="account-tab account-tab-btn" data-account-tab="events" onclick="switchAccountTab('events')">Events</button>
+                    <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transactions</button>
+                    <button type="button" class="account-tab account-tab-btn" data-account-tab="events">Events</button>
                 </div>
                 
                 <div id="account-tab-transactions">
@@ -6224,6 +6366,12 @@ async function fetchAccountDetails(address) {
         // onclick="copyToClipboard(this, '${address}')" puts a raw string
         // inside a JavaScript-in-HTML context — a second injection sink even
         // after the visible text is escaped.
+        // Tab switching — the buttons already carried data-account-tab; the
+        // inline onclick= beside it is gone for the same CSP reason as above.
+        accountDetailsContainer.querySelectorAll('.account-tab-btn').forEach(el => {
+            el.addEventListener('click', () => window.switchAccountTab(el.getAttribute('data-account-tab')));
+        });
+
         accountDetailsContainer.querySelectorAll('.js-copy-address').forEach(el => {
             el.addEventListener('click', function () {
                 const holder = this.closest('[data-address]');
@@ -6914,6 +7062,195 @@ let stakingRewardFilter = 'all';
 let stakingUnclaimedPolls = 0;
 let walletPriceChart = null;
 const WALLET_STORAGE_KEY = 'pdex_wallet_address';
+
+// ─── /email/preferences ─────────────────────────────────────────────────────
+//
+// Audit F-066. This route had no page: index.html carried no matching
+// `data-page`, so routeTo() matched nothing and every section stayed hidden —
+// a blank pane, which reads as "the site is broken" rather than as a 404. The
+// API routes existed the whole time; only the surface was missing.
+//
+// Three things about this page are load-bearing:
+//
+//  1. THE TOKEN IS THE CREDENTIAL. `?token=` is the same unsubscribe token the
+//     alert emails carry. There is no login. So the page is noindex (see
+//     ROUTE_SEO), robots-Disallowed, and never renders the token back into the
+//     DOM or into a shareable link.
+//
+//  2. THE POST MUST SEND THE WHOLE OBJECT. normalizePrefs() on the server
+//     merges the submitted prefs into DEFAULT_EMAIL_PREFS — not into the
+//     subscriber's stored prefs. Anything omitted is therefore RESET, not left
+//     alone. The subscribe modal only ever sends {governance, network}, which
+//     is survivable there because it runs at signup when nothing else is set.
+//     Here it would silently wipe `account.*` and `cadence`. So we keep the
+//     full object the GET returned and only overwrite the checkbox fields.
+//
+//  3. THE LABELS MUST MATCH THE MODAL. Two vocabularies for the same nine
+//     toggles is how a user ends up unable to find the alert they want to turn
+//     off. EMAIL_PREF_GROUPS below is the single source; the modal should be
+//     migrated onto it too.
+
+const EMAIL_PREF_GROUPS = [
+    {
+        legend: 'Governance',
+        items: [
+            { path: 'governance.newReferendum',    label: 'New referendum opens for voting' },
+            { path: 'governance.newProposal',      label: 'New public proposal tabled' },
+            { path: 'governance.closingReminder',  label: '24-hour reminder before a referendum closes' },
+            { path: 'governance.referendumResult', label: 'Referendum result (passed / failed)' },
+            { path: 'governance.treasuryProposal', label: 'Treasury proposal activity' },
+            { path: 'governance.councilMotion',    label: 'Council motion activity' }
+        ]
+    },
+    {
+        legend: 'Network milestones',
+        items: [
+            { path: 'network.runtimeUpgrade', label: 'Runtime upgrade' },
+            { path: 'network.eraBoundary',    label: 'Era boundary summary' },
+            { path: 'network.chainStalled',   label: 'Chain stalled alert (ops)' }
+        ]
+    }
+];
+
+// The prefs object last loaded from the server. Kept whole so the POST can
+// send back everything it does not manage — see note 2 above.
+let emailPrefsLoaded = null;
+
+function emailPrefsCard(inner) {
+    return `<div class="cs-hero"><h1>Email alert preferences</h1></div>
+            <div class="cs-panel glass" style="max-width:640px;">${inner}</div>`;
+}
+
+async function renderEmailPreferencesPage() {
+    const box = document.getElementById('email-prefs-content');
+    if (!box) return;
+
+    // Read the token from the URL, never from the route token — navigateTo()
+    // drops the query string, and routeTo() strips it before matching.
+    let token = '';
+    try { token = (new URLSearchParams(window.location.search || '')).get('token') || ''; }
+    catch (_) { token = ''; }
+
+    if (!token) {
+        box.innerHTML = emailPrefsCard(
+            `<p style="color:var(--text-secondary);line-height:1.6;margin:0;">This page needs the personal link from one of your alert emails. Open the most recent one and click <strong>Manage preferences</strong>.</p>`
+        );
+        return;
+    }
+
+    box.innerHTML = emailPrefsCard(`<p style="color:var(--text-secondary);margin:0;">Loading your preferences…</p>`);
+
+    let data;
+    try {
+        const res = await fetch(`/api/email/preferences?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
+        if (res.status === 404) {
+            box.innerHTML = emailPrefsCard(
+                `<p style="color:var(--text-secondary);line-height:1.6;margin:0;">This preferences link is not recognised. It may have been superseded, or the URL was cut short in transit — email clients sometimes wrap long links. Try opening it from a newer alert email.</p>`
+            );
+            return;
+        }
+        data = await parseJsonResponse(res);
+        if (data.error) throw new Error(data.error);
+    } catch (e) {
+        box.innerHTML = emailPrefsCard(
+            `<p class="staking-error" style="margin:0;display:block;">Could not load your preferences: ${stakingEscapeHtml(e.message)}</p>`
+        );
+        return;
+    }
+
+    emailPrefsLoaded = (data && typeof data.prefs === 'object' && data.prefs) ? data.prefs : {};
+
+    // `eventPrefs` is raw stored JSON — rows written before a preference
+    // existed simply lack the key. Read through a default so an absent key
+    // renders unchecked rather than as undefined.
+    const isOn = (path) => {
+        const [section, key] = path.split('.');
+        const group = emailPrefsLoaded[section];
+        return !!(group && group[key]);
+    };
+
+    const fields = EMAIL_PREF_GROUPS.map(group => `
+        <fieldset style="border:0;padding:0;margin:0 0 18px;">
+            <legend style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);padding:0;margin-bottom:8px;">${stakingEscapeHtml(group.legend)}</legend>
+            ${group.items.map(item => `
+                <label class="email-pref">
+                    <input type="checkbox" data-pref-path="${stakingEscapeHtml(item.path)}"${isOn(item.path) ? ' checked' : ''}>
+                    ${stakingEscapeHtml(item.label)}
+                </label>`).join('')}
+        </fieldset>`).join('');
+
+    const unsubscribed = !!data.unsubscribed;
+
+    box.innerHTML = emailPrefsCard(`
+        <p style="color:var(--text-secondary);line-height:1.6;margin:0 0 4px;">Alerts for <strong style="color:var(--text-primary);">${stakingEscapeHtml(data.email || '')}</strong></p>
+        ${unsubscribed
+            ? `<p class="cs-warn" style="margin:0 0 16px;">You are currently unsubscribed, so none of these will be sent. Saving your choices here does not resubscribe you.</p>`
+            : `<p style="color:var(--text-secondary);font-size:0.85rem;margin:0 0 18px;">Untick anything you would rather not receive. Changes save immediately.</p>`}
+        <form id="email-prefs-form">
+            ${fields}
+            <div class="cs-actions" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                <button type="submit" id="email-prefs-save" class="wallet-action-btn primary">Save preferences</button>
+                <span id="email-prefs-status" class="cs-status"></span>
+            </div>
+            <div id="email-prefs-error" class="staking-error" style="display:none;"></div>
+        </form>
+        <hr style="border:none;border-top:1px solid var(--border-color);margin:22px 0 16px;">
+        <p style="color:var(--text-secondary);font-size:0.82rem;line-height:1.6;margin:0;">
+            Want to stop everything instead? Use the <strong>Unsubscribe</strong> link at the bottom of any alert email.
+        </p>
+    `);
+
+    wireEmailPreferencesForm(token);
+}
+
+function wireEmailPreferencesForm(token) {
+    const form = document.getElementById('email-prefs-form');
+    if (!form) return;
+    const btn = document.getElementById('email-prefs-save');
+    const statusEl = document.getElementById('email-prefs-status');
+    const errEl = document.getElementById('email-prefs-error');
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+        if (statusEl) statusEl.textContent = 'Saving…';
+        if (btn) btn.disabled = true;
+
+        // Start from everything the server gave us, so keys this page does not
+        // render (account.*, cadence) survive the round trip. See note 2 in
+        // renderEmailPreferencesPage.
+        const prefs = JSON.parse(JSON.stringify(emailPrefsLoaded || {}));
+        form.querySelectorAll('input[type="checkbox"][data-pref-path]').forEach(cb => {
+            const [section, key] = (cb.getAttribute('data-pref-path') || '').split('.');
+            if (!section || !key) return;
+            if (!prefs[section] || typeof prefs[section] !== 'object') prefs[section] = {};
+            prefs[section][key] = !!cb.checked;
+        });
+
+        try {
+            const res = await fetch('/api/email/preferences', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, prefs })
+            });
+            const data = await parseJsonResponse(res);
+            if (!res.ok || data.error) throw new Error(data.error || `Save failed (${res.status})`);
+            // Adopt the server's normalized copy — it is the authority on what
+            // was actually stored, and re-reading it keeps a second save from
+            // being built on our optimistic guess.
+            if (data.prefs && typeof data.prefs === 'object') emailPrefsLoaded = data.prefs;
+            if (statusEl) {
+                statusEl.innerHTML = '<span class="cs-count">Saved</span>';
+                setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+            }
+        } catch (err) {
+            if (statusEl) statusEl.textContent = '';
+            if (errEl) { errEl.textContent = err.message; errEl.style.display = 'block'; }
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    });
+}
 
 function stakingEscapeHtml(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
@@ -13115,6 +13452,18 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
         .reverse()
         .map(p => ({ day: formatLocalDate(p.timestamp), value: Number(p.price) || 0 }));
     const latestPrice = priceSeries.length ? priceSeries[priceSeries.length - 1].value : null;
+    // Audit F-035: the card below hardcoded "CoinMarketCap" and told users to
+    // set CMC_API_KEY. The default provider has been keyless CoinGecko since
+    // AscendEX shut down (Jul 2026), so that advice sent operators chasing an
+    // API key they do not need. Every price_history row carries its own
+    // `source` tag — read it instead of naming a provider in the UI.
+    const latestPriceSource = (() => {
+        const newest = (priceData && priceData.history && priceData.history[0]) || null;
+        const tag = newest && newest.source;
+        if (!tag) return '';
+        const labels = (priceData && priceData.bySource) || {};
+        return (labels[tag] && labels[tag].label) || tag;
+    })();
 
     // Same normalization for treasury awards — the v1 dashboard plumbed
     // this through `getDailyAnalytics()` but never rendered it. The series
@@ -13188,8 +13537,8 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
                         'PDEX / USD',
                         'analytics-chart-price',
                         priceSeries.length
-                            ? `latest ${latestPrice != null ? '$' + Number(latestPrice).toLocaleString('en-US', { maximumFractionDigits: 6 }) : '—'} · CoinMarketCap`
-                            : 'price feed not configured (set CMC_API_KEY)'
+                            ? `latest ${latestPrice != null ? '$' + Number(latestPrice).toLocaleString('en-US', { maximumFractionDigits: 6 }) : '—'}${latestPriceSource ? ' · ' + escapeHtml(latestPriceSource) : ''}`
+                            : 'no price data yet — the feed fills in as it polls'
                     )}
                     ${analyticsChartCard(
                         'Treasury awards (cumulative)',
@@ -13212,8 +13561,9 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
     drawAnalyticsLineChart('analytics-chart-tx-volume',  series.txVolume,        'PDEX volume',    '#00d4ff');
     drawAnalyticsLineChart('analytics-chart-addrs',      series.activeAddresses, 'Active addresses','#2ecc71');
     drawAnalyticsBarChart('analytics-chart-blocks',     series.blocks,          'Blocks',         '#9b59b6');
-    // Price line — only when CMC is configured AND has returned data. The
-    // helper no-ops if the canvas is missing or the series is empty.
+    // Price line — drawn once the configured provider (CoinGecko by default)
+    // has returned data. The helper no-ops if the canvas is missing or the
+    // series is empty.
     drawAnalyticsLineChart('analytics-chart-price',     priceSeries,            'USD',            '#f5a623');
     // Treasury cumulative line — climbs with every awarded proposal.
     // Shown even when the day list is empty so the empty-state subtitle

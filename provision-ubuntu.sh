@@ -1071,7 +1071,7 @@ summary() {
   Journal storage : $(grep -oP 'Storage=\K\S+' /etc/systemd/journald.conf.d/persistent.conf 2>/dev/null || echo volatile)
   Docker          : $(docker --version 2>/dev/null || echo not-installed)
   Backup cron     : $([ -f /etc/cron.d/pdexplorer-backup ] && echo "active (nightly 03:00 UTC)" || echo "not installed")
-  Backups dir     : $DEPLOY_DIR/backups$([ -d "$DEPLOY_DIR/backups" ] && echo " ($(find "$DEPLOY_DIR/backups" -maxdepth 1 -name 'explorer-*.db*' 2>/dev/null | wc -l) file(s))" || echo " (not created yet)")
+  Backups dir     : /var/backup$([ -d /var/backup ] && echo " ($(find /var/backup -maxdepth 1 -name 'explorer-*.db*' 2>/dev/null | wc -l) file(s))" || echo " (not created yet)")
   Domain          : $DOMAIN
   Deploy dir      : $DEPLOY_DIR
 ============================================================================
@@ -1091,11 +1091,14 @@ Next steps:
        docker compose -f $DEPLOY_DIR/docker-compose.yml logs -f backend
   5. Confirm certificate is valid:
        curl -sI https://$DOMAIN | head -5
-  6. Verify the nightly backup ran:
+  6. Verify the backup ran:
        tail -n 50 /var/log/pdexplorer-backup.log
-       ls -lh $DEPLOY_DIR/backups/
-     Ship $DEPLOY_DIR/backups/ off-host (rclone / restic / aws s3 sync)
-     so a host failure doesn't take your only copy with it.
+       ls -lh /var/backup/
+     Note: cron fires nightly but backup.sh throttles to one run per
+     MIN_INTERVAL_HOURS (default 48), so an empty result the morning
+     after provisioning is expected — check the log, not the directory.
+     Ship /var/backup/ off-host (set REMOTE_ENABLED=1 in backup.sh, or
+     use rclone / restic) so a host failure doesn't take your only copy.
 
 EOF
 }

@@ -5,6 +5,7 @@
 // historical data without the cost of rewriting/parsing a growing file.
 import { DatabaseSync } from 'node:sqlite';
 import { rpcUnavailableLikePatterns } from './lib/rpc-errors.js';
+import { migrateHashKeyedIds, deleteForkRows as deleteForkRowsImpl } from './lib/id-migration.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -420,6 +421,38 @@ export function initDb(dataDir, seedCounts = false) {
     try { migrateFromJson(dataDir); }
     catch (e) { console.warn('JSON -> SQLite migration skipped:', e.message); }
 
+    // ---- F-021: hash-keyed transaction / reward ids ----
+    // Destructive-by-design (it deletes fork duplicates and fork-inconsistent
+    // rows), so unlike the ensureColumn calls above it lives in
+    // lib/id-migration.js with its own tests against a real database.
+    // Idempotent by construction; the kv flag skips the full-table scans on
+    // later boots.
+    //
+    // INDEXER WORKER ONLY (`seedCounts` is true exactly for that worker).
+    // Review of this batch caught the alternative failing in a refork loop:
+    // all N cluster workers call initDb at once, the rewrite holds the write
+    // lock for the duration of a full-table pass, and every other worker's
+    // 5s busy_timeout expires → SQLITE_BUSY → the throw below → exit(1) →
+    // refork churn until the winner commits. HTTP workers never write these
+    // tables, and reads of legacy ids during the window are harmless.
+    if (seedCounts) {
+        try {
+            const done = getKv('migration:hash-keyed-ids');
+            if (!done || !done.completedAt) {
+                const r = migrateHashKeyedIds(db);
+                setKv('migration:hash-keyed-ids', { ...r, completedAt: Date.now() });
+                console.log(`[migration] hash-keyed ids: ${r.txRewritten} tx rewritten, ${r.txDuplicatesDeleted} tx duplicates removed, ` +
+                    `${r.rewardRewritten} rewards rewritten, ${r.rewardDuplicatesDeleted} reward duplicates removed; ` +
+                    `fork-inconsistent rows deleted: ${r.forkEventsDeleted} events, ${r.forkTxDeleted} tx, ${r.forkRewardsDeleted} rewards`);
+            }
+        } catch (e) {
+            // Do NOT swallow into a warning: new-format writers against an
+            // unmigrated table create the duplicate state F-021 describes.
+            // Fail the boot; F-022 established that dying loudly beats limping.
+            throw new Error(`hash-keyed id migration failed: ${e.message}`);
+        }
+    }
+
     // Seed the O(1) row counters once (writer/indexer worker only, to avoid N
     // workers each running the same expensive COUNT(*) at startup). This is the
     // only place a full COUNT(*) on events/transactions runs; thereafter the
@@ -678,6 +711,32 @@ export function getBlockGaps(limit = 50, sinceBlock = null) {
 // This reports the two edge cases explicitly, given the watermarks the indexer
 // claims to have covered. Both queries are MIN/MAX on the primary key, so this
 // is cheap enough to call on a normal tick (unlike the LEAD window scan).
+// F-007: the stored (number, hash) pairs for a height range, so the reorg
+// sweep can compare them against the chain's canonical hashes. Range reads on
+// the PK — cheap at any table size.
+export function getBlockHashesRange(fromNumber, toNumber) {
+    return db.prepare('SELECT number, hash FROM blocks WHERE number >= ? AND number <= ?')
+        .all(fromNumber, toNumber);
+}
+
+// F-007 repair: delete every row at this height that does not carry the
+// canonical hash. Implementation + tests in lib/id-migration.js.
+export function deleteForkRows(blockNumber, canonicalHash) {
+    return deleteForkRowsImpl(db, blockNumber, canonicalHash);
+}
+
+// F-008: transfer events for a block range, feeding the transactions
+// backfill. Same row shape the operator backfill script reads, so
+// lib/tx-from-event.js's buildTxRowFromEventRow consumes both.
+export function getTransferEventRowsRange(fromBlock, toBlock) {
+    return db.prepare(`
+        SELECT block, event_index AS eventIndex, data, timestamp, block_hash AS blockHash, status
+          FROM events
+         WHERE section = 'balances' AND method = 'Transfer'
+           AND block >= ? AND block <= ?
+    `).all(fromBlock, toBlock);
+}
+
 export function getEdgeGaps(oldestClaimed, latestClaimed) {
     const row = db.prepare('SELECT MIN(number) AS lo, MAX(number) AS hi FROM blocks').get();
     const out = [];

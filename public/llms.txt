@@ -132,10 +132,13 @@ is CoinGecko (keyless public API).
 ## Public JSON API — email alerts
 
 - POST /api/email/subscribe — double opt-in signup (rate-limited per IP)
-- GET /api/email/confirm?token=<t> — confirm subscription
-- GET /api/email/unsubscribe?token=<t> — one-click unsubscribe
+- GET /api/email/confirm?token=<t> — renders a confirm page with a button (read-only)
+- POST /api/email/confirm (token form field) — performs the confirmation
+- GET /api/email/unsubscribe?token=<t> — renders an unsubscribe page with a button (read-only)
+- POST /api/email/unsubscribe (token form field) — performs the unsubscribe; RFC 8058 List-Unsubscribe-Post target
 - GET /api/email/preferences?token=<t> — read event preferences
 - POST /api/email/preferences — update preferences (token in body)
+  Both back the /email/preferences?token=<t> page (noindex; linked from alert emails).
 
 ## Authenticated (wallet sign-in, for posting to discussions)
 

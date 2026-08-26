@@ -140,6 +140,43 @@ describe('vendored browser scripts (F-029)', () => {
             `Add it to tools/vendor-assets.mjs and reference /vendor/... instead.`);
     });
 
+    test('index.html loads no stylesheet or font from a third-party origin (F-039)', () => {
+        // The CSP says default-src 'self'; a re-introduced external
+        // stylesheet would not be an aesthetic regression, it would be a
+        // BLANK PAGE — the browser refuses to load it.
+        const links = [...html.matchAll(/<link[^>]*\shref=["']([^"']+)["']/g)].map(m => m[1]);
+        const remote = links.filter(h => /^(https?:)?\/\//.test(h) && !h.startsWith('https://explorer.polkadex.ee'));
+        assert.deepEqual(remote, [],
+            `index.html links to another origin: ${remote.join(', ')} — the CSP will block it.`);
+    });
+
+    test('the nginx CSP exists in BOTH server blocks and allows the chain RPC (F-039, F-041)', () => {
+        const conf = read('nginx.conf');
+        const csps = [...conf.matchAll(/add_header Content-Security-Policy "([^"]+)"/g)].map(m => m[1]);
+        assert.equal(csps.length, 2,
+            `expected the CSP on both server blocks (:8080 serves content on the Cloudflare Flexible path — F-041), found ${csps.length}`);
+        for (const policy of csps) {
+            assert.match(policy, /script-src 'self'/, 'script-src must stay self-only — that is the wallet protection');
+            assert.ok(!/script-src[^;]*'unsafe-inline'/.test(policy), "script-src gained 'unsafe-inline', which defeats the policy");
+            // 'unsafe-eval' reopens JS eval; only the wasm-scoped keyword is
+            // acceptable, and it is REQUIRED — @polkadot/wasm-crypto compiles
+            // WASM for signing, and without it the CSP breaks the wallet.
+            assert.ok(!/script-src[^;]*'unsafe-eval'/.test(policy), "script-src gained 'unsafe-eval' — use 'wasm-unsafe-eval' only");
+            assert.match(policy, /script-src[^;]*'wasm-unsafe-eval'/, "script-src lost 'wasm-unsafe-eval' — @polkadot signing WASM will be blocked");
+            // The SPA dials the chain directly; dropping this blanks the wallet.
+            assert.match(policy, /connect-src[^;]*wss:\/\/rpc\.polkadex\.ee/, 'connect-src must allow wss://rpc.polkadex.ee or the wallet goes dark');
+            // qrcodejs renders the donate QR into a data: image.
+            assert.match(policy, /img-src[^;]*data:/, 'img-src needs data: for the donate-page QR code');
+        }
+        assert.equal(csps[0], csps[1], 'the two server blocks have drifted apart — F-041 is how that starts');
+    });
+
+    test('no inline event handlers remain in index.html (CSP script-src blocks them)', () => {
+        const handlers = [...html.matchAll(/\son[a-z]+\s*=\s*["']/g)];
+        assert.deepEqual(handlers.map(h => h[0]), [],
+            'an inline on*= handler is back in index.html — script-src self silently disables it');
+    });
+
     test('every /vendor/ script tag is produced by tools/vendor-assets.mjs', () => {
         const vendored = scriptSrcs.filter(s => s.startsWith('/vendor/'));
         assert.ok(vendored.length > 0, 'expected at least one /vendor/ script tag');

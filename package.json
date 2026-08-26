@@ -19,6 +19,8 @@
     "express": "5.2.1"
   },
   "devDependencies": {
+    "@fontsource/inter": "5.2.8",
+    "boxicons": "2.1.4",
     "chart.js": "4.5.1",
     "qrcodejs": "1.0.0",
     "vite": "6.4.2"

@@ -124,8 +124,17 @@ Optional one-off data migrations (also idempotent, `INSERT OR IGNORE`):
 
 ```bash
 docker compose exec backend node --experimental-sqlite backfill-transactions-from-events.mjs
-docker compose exec backend node --experimental-sqlite backfill-price-history.mjs
 ```
+
+> **Price history on a fresh install.** This list used to include a
+> `backfill-price-history.mjs`; that script is not in the repo (audit F-025)
+> and the command failed with `Cannot find module`. The historical rows on the
+> production database were imported ad-hoc and carry the `defillama-backfill`
+> and `ascendex-backfill` source tags. A brand-new deployment therefore starts
+> its price chart from the first live poll and fills in at
+> `PRICE_SYNC_INTERVAL_MS` (default 10 min) — long ranges such as
+> `/api/price-history?days=365` stay sparse until enough time has passed.
+> Nothing else depends on those rows.
 
 ## 6. Verify
 

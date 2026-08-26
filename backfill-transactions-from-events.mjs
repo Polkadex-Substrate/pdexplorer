@@ -26,8 +26,9 @@
 //   forceTransfer) because they all emit the same Transfer event.
 //
 // HASH / IDEMPOTENCY
-//   Each row's primary key is `event-<block>-<eventIndex>`, byte-for-byte the
-//   same id the live indexer assigns to event-derived transactions. Inserts
+//   Each row's primary key is `event-<blockHash>-<eventIndex>` (audit F-021 —
+//   hash-keyed so fork rows can't collide with canonical ones), byte-for-byte
+//   the same id the live indexer assigns via lib/tx-from-event.js. Inserts
 //   use INSERT OR IGNORE, so (a) re-running this script is safe, and (b) rows
 //   the forward indexer already wrote are left untouched — no duplicates.
 //
@@ -51,6 +52,12 @@
 //   syncTransactions indexer is untouched and keeps appending new transfers.
 
 import { DatabaseSync } from 'node:sqlite';
+// Parsing + id scheme shared with the live indexer (lib/tx-from-event.js).
+// This script used to carry its own copies; after F-008 made the indexer do
+// the same derivation, two implementations of "what is this transfer worth"
+// was a disagreement waiting to happen — and after F-021 the id scheme is a
+// correctness surface, not a convention.
+import { parseTransfer, formatAmountDisplay, eventTxId } from './lib/tx-from-event.js';
 import fs from 'node:fs';
 import process from 'node:process';
 
@@ -93,74 +100,7 @@ console.log(`[tx-backfill] Mode:       ${DRY_RUN ? 'DRY RUN (no writes)' : 'WRIT
 // toHuman variants emit a named object {from,to,amount}. We handle all three
 // so numeric_amount (which drives the analytics volume series) stays correct.
 
-// SI prefixes used by @polkadot/util formatBalance, mapped to their PDEX
-// multiplier (power-of-ten in steps of 3, base unit = 1 PDEX).
-const SI = {
-    y: 1e-24, z: 1e-21, a: 1e-18, f: 1e-15, p: 1e-12, n: 1e-9,
-    µ: 1e-6, u: 1e-6, m: 1e-3, '': 1, k: 1e3, M: 1e6, G: 1e9,
-    T: 1e12, P: 1e15, E: 1e18, Z: 1e21, Y: 1e24,
-};
-
-// Returns { from, to, amountPdex } or null if the row isn't a usable transfer.
-function parseTransfer(dataJson) {
-    let data;
-    try { data = JSON.parse(dataJson); } catch { return null; }
-
-    let from, to, rawAmount;
-    if (Array.isArray(data)) {
-        if (data.length < 3) return null;
-        [from, to, rawAmount] = data;
-    } else if (data && typeof data === 'object') {
-        from = data.from ?? data.who ?? data.source;
-        to = data.to ?? data.dest ?? data.destination;
-        rawAmount = data.amount ?? data.value;
-    } else {
-        return null;
-    }
-    if (from == null || to == null || rawAmount == null) return null;
-
-    const amountPdex = parseAmountToPdex(rawAmount);
-    if (amountPdex == null) return null;
-    return { from: String(from), to: String(to), amountPdex };
-}
-
-// Convert a toHuman()-style balance scalar into a PDEX float.
-// Returns null only if completely unparseable.
-function parseAmountToPdex(raw) {
-    const s = String(raw).trim();
-
-    // Case A: pure planck integer, optionally comma-grouped — the common case.
-    if (/^[\d,]+$/.test(s)) {
-        const planck = BigInt(s.replace(/,/g, ''));
-        // Keep full precision through the division: whole tokens via BigInt,
-        // fractional remainder as a float, then recombine.
-        const whole = planck / PLANCK_PER_PDEX;
-        const frac = Number(planck % PLANCK_PER_PDEX) / Number(PLANCK_PER_PDEX);
-        return Number(whole) + frac;
-    }
-
-    // Case B: SI-formatted with a PDEX unit, e.g. "12.3456 PDEX", "1.5 kPDEX".
-    const m = s.match(/^([\d.,]+)\s*([a-zA-Zµ]*)PDEX$/);
-    if (m) {
-        const num = Number(m[1].replace(/,/g, ''));
-        const prefix = m[2] || '';
-        const mult = SI[prefix];
-        if (Number.isFinite(num) && mult != null) return num * mult;
-    }
-
-    // Case C: a bare decimal number with no unit — treat as already-in-PDEX.
-    if (/^[\d.,]+$/.test(s.replace(/\s/g, ''))) {
-        const num = Number(s.replace(/,/g, ''));
-        if (Number.isFinite(num)) return num;
-    }
-
-    return null;
-}
-
-// Mirror server.js buildFinancialTransactionFromEvent's display string.
-function formatAmountDisplay(amountPdex) {
-    return `${amountPdex.toLocaleString('en-US', { maximumFractionDigits: 4 })} PDEX`;
-}
+// (Transfer parsing lives in lib/tx-from-event.js — see import above.)
 
 // ---- DB ----
 function openDb(dbPath) {
@@ -241,7 +181,9 @@ function run() {
             if (!t) { unparseable++; continue; }
             parsed++;
             batch.push({
-                hash: `event-${ev.block}-${ev.eventIndex}`,
+                // F-021: hash-keyed (falls back to the legacy number key
+                // only when the event row genuinely has no hash).
+                hash: eventTxId(ev.blockHash, ev.block, ev.eventIndex),
                 from: t.from,
                 to: t.to,
                 block: ev.block,

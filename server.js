@@ -10,6 +10,12 @@ import { deriveIndexStatus, describeIndexStatus } from './lib/index-status.js';
 import { isRpcUnavailableError } from './lib/rpc-errors.js';
 import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/reward-dedup.js';
 import { attributeBatchRewards, isBatchDelimiter, isAttributableBatch } from './lib/reward-attribution.js';
+import { resolveClientIp } from './lib/client-ip.js';
+import { planReorgSweep, hashesDiffer, heightsToVerify } from './lib/reorg.js';
+import { buildTxRowFromEventRow, eventTxId, rewardId } from './lib/tx-from-event.js';
+import {
+    selectDispatchable, selectNewlyResolved, isTerminalRefStatus, describeRefOutcome
+} from './lib/email-events.js';
 import path from 'path';
 import * as db from './db.js';
 import { sendEmail, emailProviderStatus } from './email.js';
@@ -152,6 +158,20 @@ app.use(cors({
     credentials: false
 }));
 app.use(express.json({ limit: '64kb' }));
+
+// Form-encoded bodies, scoped to the two routes that need them (the email
+// confirm/unsubscribe pages, F-001/F-036 — plain <form method="POST">
+// submissions from a mail client, no JavaScript to serialise JSON).
+//
+// Deliberately NOT app.use(). application/x-www-form-urlencoded is a
+// CORS-"simple" content type: it triggers no preflight, so the request is
+// delivered even when the origin check below would have rejected it — only the
+// response is hidden. Registering it globally would have made every POST in the
+// app reachable by a cross-site auto-submitting form; on /api/email/subscribe
+// that means any page on the web could make the explorer mail a confirmation to
+// an address of its choosing and burn a visitor's signup quota. Those routes
+// still require JSON, which forces a preflight.
+const formBody = express.urlencoded({ extended: false, limit: '4kb' });
 
 // Use dedicated data directory for Docker volumes
 const PORT = process.env.PORT || 3001;
@@ -304,8 +324,18 @@ const TOTAL_UNLOCKING_TTL_MS = readPositiveInteger(process.env.TOTAL_UNLOCKING_T
 const TX_CACHE_LIMIT = readPositiveInteger(process.env.TX_CACHE_LIMIT, 500);
 const TX_INITIAL_SCAN_BLOCKS = readPositiveInteger(process.env.TX_INITIAL_SCAN_BLOCKS, 20000);
 const TX_OLDER_SCAN_BLOCKS = readPositiveInteger(process.env.TX_OLDER_SCAN_BLOCKS, TX_INITIAL_SCAN_BLOCKS);
+// F-008: how many blocks of the LOCAL events table the transactions backfill
+// derives per tick. Zero RPC — this is a range read over events plus INSERT OR
+// IGNORE — so it can be generous; 5000/tick walks the full 12.8M-block history
+// in well under a day without the chain node noticing anything happened.
+const TX_BACKFILL_CHUNK = readPositiveInteger(process.env.TX_BACKFILL_CHUNK, 5000);
+// Below this height there is nothing to derive (block 1 onward by default).
+const TX_MIN_BLOCK = readPositiveInteger(process.env.TX_MIN_BLOCK, 1);
 const TX_SCAN_BATCH_SIZE = readPositiveInteger(process.env.TX_SCAN_BATCH_SIZE, 25);
-const FINANCIAL_TX_SCANNER_VERSION = 2;
+// v3: hash-keyed transaction ids (F-021). Bumped only because initDb's
+// migrateHashKeyedIds rewrites the EXISTING rows first — the audit is explicit
+// that changing the writer without a migration just creates duplicates.
+const FINANCIAL_TX_SCANNER_VERSION = 3;
 const VALIDATOR_HISTORY_ERAS = readPositiveInteger(process.env.VALIDATOR_HISTORY_ERAS, 30);
 // Staking rewards indexer tuning. The crawler scans blocks for staking.Rewarded
 // events (claimed payouts) and appends them to a local per-address index.
@@ -581,6 +611,9 @@ class LRU {
         this.cache.set(key, val);
     }
     clear() { this.cache.clear(); this.hits = 0; this.misses = 0; }
+    // Targeted eviction — the reorg repair (F-007) must drop a single
+    // number->hash entry without nuking every cache in the process.
+    evict(key) { this.cache.delete(key); }
     stats() {
         const total = this.hits + this.misses;
         return {
@@ -1132,7 +1165,9 @@ function buildFinancialTransactionFromEvent(record, eventIndex, blockNumber, blo
     const to = event.data[1].toString();
     const numericAmount = formatPDEX(event.data[2]);
     return {
-        hash: `event-${blockNumber}-${eventIndex}`,
+        // F-021: hash-keyed, so a fork row and its canonical replacement can
+        // never collide under INSERT OR IGNORE. See lib/tx-from-event.js.
+        hash: eventTxId(blockHash && blockHash.toString ? blockHash.toString() : blockHash, blockNumber, eventIndex),
         from,
         to,
         block: blockNumber,
@@ -1471,8 +1506,12 @@ setInterval(() => {
     }
 }, 5 * 60 * 1000).unref();
 
+// Audit F-019 — see lib/client-ip.js for why the leftmost X-Forwarded-For was
+// the wrong value and what replaced it. ONE definition, used by every limiter:
+// the old code had this expression written out twice (here and in the email
+// signup handler), which is how a trust decision drifts.
 function clientIp(req) {
-    return (req.headers['x-forwarded-for'] || req.ip || 'unknown').toString().split(',')[0].trim();
+    return resolveClientIp(req.headers, req.socket && req.socket.remoteAddress) || req.ip || 'unknown';
 }
 
 // Gate shared by every developer endpoint: rate limit + live RPC.
@@ -1512,7 +1551,9 @@ function diagGate(req, res) {
     // was NOT proxied (nginx always adds X-Forwarded-For).
     const sock = (req.socket && req.socket.remoteAddress) || '';
     const isLoopback = sock === '127.0.0.1' || sock === '::1' || sock === '::ffff:127.0.0.1';
-    if (isLoopback && !req.headers['x-forwarded-for']) return true;
+    // Both proxy headers must be absent: nginx sets X-Forwarded-For AND
+    // X-Real-IP, so requiring neither keeps this to a genuine on-box curl.
+    if (isLoopback && !req.headers['x-forwarded-for'] && !req.headers['x-real-ip']) return true;
     res.status(403).json({ error: 'diagnostics are operator-only (set DIAG_TOKEN to enable remote access)' });
     return false;
 }
@@ -1736,9 +1777,33 @@ app.get('/api/state/:pallet/:item', async (req, res) => {
                     hint: `Pass ?args=<key>, or ?entries=1 to list the first ${DEV_API_MAX_ENTRIES} entries.`
                 });
             }
-            const all = await withTimeout(entry.entries(), DEV_API_TIMEOUT_MS, 'entries');
-            const truncated = all.length > DEV_API_MAX_ENTRIES;
-            const rows = all.slice(0, DEV_API_MAX_ENTRIES).map(([k, v]) => ({
+            // Audit F-018: this called `entry.entries()` — UNBOUNDED — and only
+            // then sliced to DEV_API_MAX_ENTRIES. The HTTP body was capped; the
+            // RPC work never was. The chain node materialised the entire
+            // storage map, shipped every (key, value) pair over the wire, and
+            // this worker decoded all of them before throwing away all but 100.
+            // On a big map that is a one-request denial of service against
+            // rpc.polkadex.ee — which is the same endpoint the wallet dials to
+            // sign — reachable by any anonymous caller.
+            //
+            // entriesPaged fetches exactly one page. We ask for one extra row
+            // beyond the cap purely to learn whether more exist.
+            const pageSize = DEV_API_MAX_ENTRIES + 1;
+            let page;
+            try {
+                page = await withTimeout(entry.entriesPaged({ args: [], pageSize }), DEV_API_TIMEOUT_MS, 'entriesPaged');
+            } catch (pagedErr) {
+                // Some runtimes/older metadata don't expose entriesPaged for a
+                // given entry. Refuse rather than silently falling back to the
+                // unbounded walk this finding is about.
+                return res.status(501).json({
+                    error: `${pallet}.${item} cannot be listed in pages on this runtime, and an unpaged scan is not permitted.`,
+                    hint: 'Query a specific key with ?args=<key>.',
+                    detail: pagedErr && pagedErr.message ? pagedErr.message : String(pagedErr)
+                });
+            }
+            const truncated = page.length > DEV_API_MAX_ENTRIES;
+            const rows = page.slice(0, DEV_API_MAX_ENTRIES).map(([k, v]) => ({
                 key: k.toHuman(),
                 keyHex: k.toHex(),
                 value: serialiseCodec(v)
@@ -1746,7 +1811,15 @@ app.get('/api/state/:pallet/:item', async (req, res) => {
             cacheShort(res);
             return res.json({
                 pallet, item, at, storage: desc,
-                entriesTotal: all.length, truncated,
+                // entriesTotal is deliberately NOT a map size any more. Knowing
+                // the true total requires the full walk this endpoint refuses
+                // to do, and returning the page length under a name that used
+                // to mean "total" would be a quietly wrong number. `truncated`
+                // still answers the only question a caller can act on.
+                entriesReturned: rows.length,
+                truncated,
+                entriesTotal: null,
+                totalUnknownReason: 'counting every entry requires an unbounded storage walk (F-018)',
                 limit: DEV_API_MAX_ENTRIES, entries: rows
             });
         }
@@ -2228,11 +2301,14 @@ app.get('/robots.txt', (req, res) => {
         //   /wallet/<addr>    — personal dashboard (NOT indexable).
         //   /watchlist        — personal local-storage page.
         //   /search           — query-result page, no canonical content.
+        //   /email/           — the preferences page; its ?token= IS the
+        //                       credential, so a crawled URL is a leaked one.
         //   /api/             — JSON endpoints, not human-readable.
         'Allow: /wallet',
         'Disallow: /wallet/',
         'Disallow: /watchlist',
         'Disallow: /search',
+        'Disallow: /email/',
         'Disallow: /api/',
         // Reference + content surfaces — explicitly allowed so the wildcard
         // root Allow can't be mis-parsed by older or stricter crawlers.
@@ -2376,7 +2452,7 @@ curl '${SITE_URL}/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></
 <li><code>GET /api/governance/latest</code> — most-recent OPEN referendum / proposal</li>
 <li><code>GET /api/governance/calendar</code> — unified governance timeline</li>
 <li><code>GET /api/discussions</code>, <code>GET /api/discussions/:id</code> — governance discussion threads</li>
-<li><code>POST /api/email/subscribe</code>, <code>GET /api/email/confirm</code>, <code>GET /api/email/unsubscribe</code>, <code>GET|POST /api/email/preferences</code> — email alerts</li>
+<li><code>POST /api/email/subscribe</code>, <code>GET|POST /api/email/confirm</code>, <code>GET|POST /api/email/unsubscribe</code> (GET renders a button, POST performs the change — F-001/F-036), <code>GET|POST /api/email/preferences</code> (backing the <code>/email/preferences?token=&lt;t&gt;</code> page) — email alerts</li>
 </ul>
 <p>Price providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>coingecko</code>, a keyless public API).</p>
 
@@ -2710,7 +2786,11 @@ app.get('/api/transactions', (req, res) => {
             lastSync: state.lastSync || 0,
             status: state.status || 'Initializing',
             latestScannedBlock: state.latestScannedBlock || 0,
-            oldestScannedBlock: state.oldestScannedBlock || 0
+            oldestScannedBlock: state.oldestScannedBlock || 0,
+            // F-008: whether the genesis-ward derivation has finished, so the
+            // UI can label partial coverage instead of implying completeness.
+            backfillComplete: !!state.txBackfillComplete,
+            detail: state.detail || null
         });
     } catch (err) { res.status(500).json({ transactions: [], status: 'Error', error: err.message }); }
 });
@@ -3763,7 +3843,8 @@ function htmlEscape(s) {
 //   5. Email the confirmation link.
 //   6. Respond JSON { status: 'pending'|'already-confirmed', email }.
 app.post('/api/email/subscribe', async (req, res) => {
-    const ip = (req.headers['x-forwarded-for'] || req.ip || 'unknown').toString().split(',')[0].trim();
+    // F-019: was a second, spoofable copy of the leftmost-XFF expression.
+    const ip = clientIp(req);
     if (!emailSignupRateOk(ip)) {
         return res.status(429).json({ error: 'Too many signup attempts. Please wait an hour.' });
     }
@@ -3851,12 +3932,70 @@ Unsubscribe at any time: ${unsubscribeUrl}
     res.json({ status: 'pending', email: effective.email });
 });
 
-// GET /api/email/confirm?token=...
-// Renders a friendly HTML page (so the link works directly from email clients).
+// Audit F-001 / F-036: opting in and opting out are STATE CHANGES, and they
+// used to happen on GET.
+//
+// A GET is supposed to be safe — the whole internet assumes it. Corporate mail
+// scanners (Microsoft Safe Links, Proofpoint, Gmail's image proxy), antivirus
+// link checkers, chat-app unfurlers and browser prefetch all fetch URLs they
+// find in email without a human ever clicking. So:
+//   * F-001 — subscribe a victim's address, and the first scanner to touch the
+//     mailed link completes the opt-in on their behalf. The double-opt-in
+//     stopped proving consent, which is the one job it has.
+//   * F-036 — the unsubscribe link fires the same way, silently opting real
+//     subscribers out.
+//
+// Both are now: GET renders a page with a button, the button POSTs, the POST
+// does the write. Scanners follow links, not form submissions.
+//
+// This is also why the confirm page no longer prints the unsubscribe token —
+// it used to embed it twice in a body that ends up in mail-scanner logs, proxy
+// caches, and browser history.
+
+// GET /api/email/confirm?token=... — renders a confirm BUTTON. No write.
 app.get('/api/email/confirm', (req, res) => {
     const token = String(req.query.token || '').trim();
+    const subscriber = db.getEmailSubscriberByConfirmationToken(token);
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    if (!subscriber) {
+        return res.status(404).type('html').send(confirmResultPage({
+            title: 'Confirmation link not recognised',
+            body: '<p>This confirmation link is invalid or has already been used. If you meant to subscribe, please request a new link from the explorer.</p>',
+            isError: true
+        }));
+    }
+    // Only short-circuit when the subscription is confirmed AND live, so a
+    // confirmed-then-unsubscribed row at least reaches the POST.
+    //
+    // Note this does NOT fix F-042, and an earlier version of this comment
+    // wrongly claimed it did. Resubscribing is broken at two other points:
+    // /api/email/subscribe short-circuits on confirmedAt alone without checking
+    // unsubscribedAt, so no new confirmation mail is ever sent; and
+    // db.confirmEmailSubscriber guards its write with `if (!row.confirmedAt)`,
+    // so even reaching the POST leaves unsubscribed_at set while the page says
+    // "You're subscribed!". Fixing that properly is F-042's own change.
+    if (subscriber.confirmedAt && !subscriber.unsubscribedAt) {
+        return res.type('html').send(confirmResultPage({
+            title: 'Already confirmed',
+            body: `<p>Your subscription for <strong>${htmlEscape(subscriber.email)}</strong> is already active. Nothing more to do.</p>`,
+            isError: false
+        }));
+    }
+    res.type('html').send(confirmResultPage({
+        title: 'Confirm your subscription',
+        body: `<p>Click the button below to start receiving explorer alerts at <strong>${htmlEscape(subscriber.email)}</strong>.</p>
+               ${confirmActionForm('/api/email/confirm', token, 'Confirm subscription')}`,
+        isError: false
+    }));
+});
+
+// POST /api/email/confirm — the actual write.
+app.post('/api/email/confirm', formBody, (req, res) => {
+    const token = String((req.body && req.body.token) || req.query.token || '').trim();
     const subscriber = db.confirmEmailSubscriber(token);
     res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
     if (!subscriber) {
         return res.status(404).type('html').send(confirmResultPage({
             title: 'Confirmation link not recognised',
@@ -3867,16 +4006,50 @@ app.get('/api/email/confirm', (req, res) => {
     res.type('html').send(confirmResultPage({
         title: 'You\'re subscribed!',
         body: `<p>Your subscription is confirmed for <strong>${htmlEscape(subscriber.email)}</strong>. You'll start receiving alerts at the next matching on-chain event.</p>
-               <p>You can <a href="/email/preferences?token=${encodeURIComponent(subscriber.unsubscribeToken)}">manage your preferences</a> or <a href="/api/email/unsubscribe?token=${encodeURIComponent(subscriber.unsubscribeToken)}">unsubscribe</a> at any time.</p>`,
+               <p>Every alert email carries your unsubscribe link. (It is deliberately not repeated on this page — mail scanners fetch these URLs, and the link is a bearer token.)</p>`,
         isError: false
     }));
 });
 
-// GET /api/email/unsubscribe?token=...
+// GET /api/email/unsubscribe?token=... — renders an unsubscribe BUTTON.
+//
+// Note on RFC 8058 (List-Unsubscribe-Post): mail clients that offer a native
+// "unsubscribe" button POST to the List-Unsubscribe URL, so pointing that
+// header at the POST route below keeps one-click unsubscribe working without
+// reopening the prefetch hole.
 app.get('/api/email/unsubscribe', (req, res) => {
     const token = String(req.query.token || '').trim();
+    const subscriber = db.getEmailSubscriberByUnsubscribeToken(token);
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    if (!subscriber) {
+        return res.status(404).type('html').send(confirmResultPage({
+            title: 'Unsubscribe link not recognised',
+            body: '<p>This unsubscribe link is invalid. You may have already unsubscribed, or the link was corrupted in transit. If you continue to receive emails, please contact the explorer team.</p>',
+            isError: true
+        }));
+    }
+    if (subscriber.unsubscribedAt) {
+        return res.type('html').send(confirmResultPage({
+            title: 'Already unsubscribed',
+            body: `<p>We are not sending alerts to <strong>${htmlEscape(subscriber.email)}</strong>.</p>`,
+            isError: false
+        }));
+    }
+    res.type('html').send(confirmResultPage({
+        title: 'Unsubscribe from explorer alerts?',
+        body: `<p>This will stop all alert emails to <strong>${htmlEscape(subscriber.email)}</strong>.</p>
+               ${confirmActionForm('/api/email/unsubscribe', token, 'Unsubscribe')}`,
+        isError: false
+    }));
+});
+
+// POST /api/email/unsubscribe — the actual write.
+app.post('/api/email/unsubscribe', formBody, (req, res) => {
+    const token = String((req.body && req.body.token) || req.query.token || '').trim();
     const subscriber = db.unsubscribeEmailSubscriber(token);
     res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
     if (!subscriber) {
         return res.status(404).type('html').send(confirmResultPage({
             title: 'Unsubscribe link not recognised',
@@ -3895,6 +4068,7 @@ app.get('/api/email/unsubscribe', (req, res) => {
 // Token-authenticated preferences update. Uses the unsubscribeToken — the
 // user only needs that one URL to manage everything.
 app.post('/api/email/preferences', (req, res) => {
+    res.set('Cache-Control', 'no-store');
     const token = String((req.body && req.body.token) || '').trim();
     const prefs = normalizePrefs(req.body && req.body.prefs);
     const subscriber = db.setEmailSubscriberPrefs(token, prefs);
@@ -3904,6 +4078,12 @@ app.post('/api/email/preferences', (req, res) => {
 
 // GET /api/email/preferences?token=... — read current prefs for the modal.
 app.get('/api/email/preferences', (req, res) => {
+    // Never cacheable, and never indexable. The token is in the URL and the
+    // subscriber's email address is in the body, so a cached copy anywhere
+    // between here and the browser is a personal-data leak. The confirm and
+    // unsubscribe HTML routes have always set these; this one did not.
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
     const token = String(req.query.token || '').trim();
     const subscriber = db.getEmailSubscriberByUnsubscribeToken(token);
     if (!subscriber) return res.status(404).json({ error: 'Subscription not found.' });
@@ -3948,6 +4128,16 @@ function confirmResultPage({ title, body, isError }) {
   <a class="home-link" href="/">Back to the explorer</a>
 </div>
 </body></html>`;
+}
+
+// The button that turns a prefetchable GET into a deliberate POST (F-001,
+// F-036). A plain HTML form, no JavaScript: these pages are opened straight
+// from a mail client and must work with scripting disabled.
+function confirmActionForm(action, token, label) {
+    return `<form method="POST" action="${htmlEscape(action)}" style="margin:18px 0 4px;">
+  <input type="hidden" name="token" value="${htmlEscape(token)}">
+  <button type="submit" style="cursor:pointer;border:0;font:inherit;font-weight:600;color:#fff;padding:11px 20px;background:#E6007A;border-radius:8px;">${htmlEscape(label)}</button>
+</form>`;
 }
 
 // --- DISCUSSION BOARD: threads + posts ---
@@ -5369,7 +5559,15 @@ async function dispatchToSubscribers({ eventKind, eventId, prefMatches, makeEmai
                 text: tmpl.text,
                 html: tmpl.html,
                 tag: eventKind,
-                headers: { 'List-Unsubscribe': `<${tmpl.unsubscribeUrl}>` }
+                // RFC 8058 one-click. `List-Unsubscribe-Post` tells the mail
+                // client to POST rather than follow the link, which is exactly
+                // what the F-036 fix requires: the GET now only renders a
+                // button, so a client that merely fetched the URL would report
+                // success while nothing had been unsubscribed.
+                headers: {
+                    'List-Unsubscribe': `<${tmpl.unsubscribeUrl}>`,
+                    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+                }
             });
             db.recordEmailDispatchResult({
                 eventKind, eventId: String(eventId), subscriberId: s.id,
@@ -5400,6 +5598,20 @@ function emailSiteOrigin() {
 // Common email layout — keeps brand consistent across event types.
 function emailLayout({ title, intro, ctaText, ctaHref, details, unsubscribeUrl }) {
     const origin = emailSiteOrigin();
+    // The preferences page takes the same bearer token as the unsubscribe URL,
+    // so it is derived rather than threaded through every caller.
+    //
+    // This link was withheld for exactly one commit: an earlier pass added it
+    // while `/email/preferences` was still a blank pane (F-066 — no matching
+    // `data-page`, so routeTo matched nothing), which would have shipped a
+    // dead link to every subscriber. The page is real now, hence the link.
+    //
+    // Only the ALERT emails carry it, not the confirmation email — at confirm
+    // time the subscriber has nothing to manage yet, and that page is fetched
+    // by mail scanners.
+    const preferencesUrl = unsubscribeUrl
+        ? String(unsubscribeUrl).replace('/api/email/unsubscribe?token=', '/email/preferences?token=')
+        : `${origin}/email/preferences`;
     const text =
 `${title}
 
@@ -5410,6 +5622,7 @@ ${details ? details + '\n\n' : ''}${ctaText}: ${ctaHref}
 — Polkadex Mainnet Explorer
 ${origin}
 
+Manage preferences: ${preferencesUrl}
 Unsubscribe: ${unsubscribeUrl}
 `;
     const html =
@@ -5424,6 +5637,7 @@ Unsubscribe: ${unsubscribeUrl}
   <hr style="border:none;border-top:1px solid #2a3045;margin:28px 0;">
   <p style="font-size:0.75rem;color:#6a7387;line-height:1.5;">
     Polkadex Mainnet Explorer · <a href="${htmlEscape(origin)}" style="color:#8a92a6;">${htmlEscape(origin.replace(/^https?:\/\//, ''))}</a><br>
+    <a href="${htmlEscape(preferencesUrl)}" style="color:#6a7387;">Manage preferences</a> ·
     <a href="${htmlEscape(unsubscribeUrl)}" style="color:#6a7387;">Unsubscribe</a>
   </p>
 </div>
@@ -5434,6 +5648,310 @@ Unsubscribe: ${unsubscribeUrl}
 // Convenience: build the per-subscriber unsubscribe URL for any email.
 function unsubscribeUrlFor(subscriber) {
     return `${emailSiteOrigin()}/api/email/unsubscribe?token=${encodeURIComponent(subscriber.unsubscribeToken)}`;
+}
+
+// ─── Guarded dispatchers for the six previously-dead preferences ────────────
+//
+// Until now the subscribe modal offered nine checkboxes and the dispatcher
+// honoured three. Someone who ticked "Runtime upgrade" in June has been
+// waiting for an email that no code could ever send. These close that gap.
+//
+// Every one of them reads a table of FULL CHAIN HISTORY, so every one of them
+// goes through lib/email-events.js. Read that file's header before changing
+// anything here: without the first-run watermark, the first tick after deploy
+// mails every confirmed subscriber once per historical row, and the
+// idempotency table then makes it permanent.
+
+// How old an event may be and still be worth an email. Deliberately short —
+// this is the blast radius if a watermark is ever lost.
+const EMAIL_EVENT_MAX_AGE_MS = readPositiveInteger(process.env.EMAIL_EVENT_MAX_AGE_MS, 3 * 24 * 3600_000);
+// Hard cap on emails per event kind per tick.
+const EMAIL_EVENT_BATCH_MAX = readPositiveInteger(process.env.EMAIL_EVENT_BATCH_MAX, 10);
+// How often to check for a runtime upgrade / new era.
+const NETWORK_EMAIL_CHECK_MS = readPositiveInteger(process.env.NETWORK_EMAIL_CHECK_MS, 2 * 60 * 1000);
+
+// kv-backed watermark helpers. One row per event kind, so a bug in one
+// dispatcher cannot re-arm another.
+function emailWatermark(kind) {
+    const row = db.getKv(`email:watermark:${kind}`);
+    return row && row.value !== undefined ? row.value : null;
+}
+function setEmailWatermark(kind, value) {
+    db.setKv(`email:watermark:${kind}`, { value, updatedAt: Date.now() });
+}
+
+// Run a watermark-guarded dispatch. Centralised so the first-run behaviour and
+// the "always persist the new watermark" rule can't be forgotten by one call
+// site — forgetting to persist means replaying the same events every tick.
+async function dispatchWatermarked({ kind, items, rankOf, timeOf, prefMatches, makeEmail, eventIdOf }) {
+    const { dispatch, nextBaseline, firstRun, suppressed } = selectDispatchable({
+        items,
+        rankOf,
+        timeOf,
+        baseline: emailWatermark(kind),
+        nowMs: Date.now(),
+        maxAgeMs: EMAIL_EVENT_MAX_AGE_MS,
+        limit: EMAIL_EVENT_BATCH_MAX
+    });
+
+    if (firstRun) {
+        console.log(`[email] ${kind}: first run — adopting watermark ${nextBaseline}, sending nothing for ${suppressed} historical row(s)`);
+    } else if (suppressed > 0) {
+        console.log(`[email] ${kind}: ${suppressed} row(s) above the watermark suppressed (too old, or over the per-tick cap)`);
+    }
+
+    // Per-item try/catch, and the watermark persisted in `finally`.
+    //
+    // dispatchToSubscribers only wraps the sendEmail call itself — the
+    // surrounding getConfirmedEmailSubscribers, prefMatches,
+    // reserveEmailDispatch and makeEmail calls are all outside its try, so any
+    // of them can throw straight through. Without this, one malformed row
+    // (a null motionIndex reaching toLocaleString, say) would abort the loop
+    // BEFORE the watermark write and the dispatcher would re-evaluate the same
+    // failing item on every tick forever, silently blocking every event behind
+    // it. The idempotency table means a retry is harmless, but a permanent
+    // wedge is not.
+    //
+    // A failing item still advances the watermark: skipping one event is a far
+    // better outcome than freezing the queue.
+    try {
+        for (const item of dispatch) {
+            try {
+                await dispatchToSubscribers({
+                    eventKind: kind, eventId: eventIdOf(item), prefMatches,
+                    makeEmail: ({ subscriber }) => makeEmail(item, subscriber)
+                });
+            } catch (err) {
+                console.warn(`[email] ${kind}: skipping one event after an error:`, err && err.message ? err.message : err);
+            }
+        }
+    } finally {
+        if (nextBaseline !== null && nextBaseline !== undefined) setEmailWatermark(kind, nextBaseline);
+    }
+}
+
+async function dispatchResolvedReferenda(referenda) {
+    const kind = 'gov.ref-result';
+    const stored = db.getKv(`email:seen:${kind}`);
+    const { dispatch, nextSeen, firstRun } = selectNewlyResolved({
+        items: referenda || [],
+        idOf: r => r.refIndex,
+        isResolved: r => isTerminalRefStatus(r.status),
+        seen: stored && Array.isArray(stored.ids) ? stored.ids : null,
+        limit: EMAIL_EVENT_BATCH_MAX
+    });
+
+    if (firstRun) {
+        console.log(`[email] ${kind}: first run — adopting ${nextSeen.length} already-decided referendum id(s), sending nothing`);
+    }
+
+    // Same throw-safety as dispatchWatermarked: the seen-set must be persisted
+    // even if one referendum's send blows up, or the dispatcher re-evaluates
+    // the same failing row on every tick and never announces anything again.
+    try {
+    for (const r of dispatch) {
+        const outcome = describeRefOutcome(r.status);
+        try {
+        await dispatchToSubscribers({
+            eventKind: kind,
+            eventId: r.refIndex,
+            prefMatches: (p) => p.governance && p.governance.referendumResult,
+            makeEmail: ({ subscriber }) => {
+                const unsub = unsubscribeUrlFor(subscriber);
+                const href = `${emailSiteOrigin()}/democracy?ref=${r.refIndex}`;
+                const tally = (r.ayes != null && r.nays != null && r.tallyKnown)
+                    ? `Final tally: ${Number(r.ayes).toLocaleString('en-US')} aye / ${Number(r.nays).toLocaleString('en-US')} nay.`
+                    : null;
+                const tmpl = emailLayout({
+                    title:   `Referendum #${r.refIndex} ${outcome}`,
+                    intro:   `Voting on referendum #${r.refIndex} has closed. It ${outcome}.`,
+                    details: tally,
+                    ctaText: 'See the result',
+                    ctaHref: href,
+                    unsubscribeUrl: unsub
+                });
+                return { subject: `[Polkadex] Referendum #${r.refIndex} ${outcome}`, ...tmpl, unsubscribeUrl: unsub };
+            }
+        });
+        } catch (err) {
+            console.warn(`[email] ${kind}: skipping referendum #${r.refIndex} after an error:`, err && err.message ? err.message : err);
+        }
+    }
+    } finally {
+        db.setKv(`email:seen:${kind}`, { ids: nextSeen, updatedAt: Date.now() });
+    }
+}
+
+async function dispatchNewTreasuryProposals() {
+    await dispatchWatermarked({
+        kind: 'gov.treasury-prop',
+        items: db.getTreasuryProposals(),
+        rankOf: p => p.id,
+        timeOf: p => p.proposedAt,
+        eventIdOf: p => p.id,
+        prefMatches: (pp) => pp.governance && pp.governance.treasuryProposal,
+        makeEmail: (p, subscriber) => {
+            const unsub = unsubscribeUrlFor(subscriber);
+            const href = `${emailSiteOrigin()}/treasury?proposal=${p.id}`;
+            const amount = p.value != null ? `${Number(p.value).toLocaleString('en-US', { maximumFractionDigits: 4 })} PDEX` : 'an unspecified amount';
+            const who = p.beneficiaryName && p.beneficiaryName !== 'Unknown' ? p.beneficiaryName : p.beneficiary;
+            const tmpl = emailLayout({
+                title:   `New treasury proposal — #${p.id}`,
+                intro:   `Treasury proposal #${p.id} requests ${amount}.`,
+                details: who ? `Beneficiary: ${who}` : null,
+                ctaText: 'View proposal',
+                ctaHref: href,
+                unsubscribeUrl: unsub
+            });
+            return { subject: `[Polkadex] New treasury proposal #${p.id} — ${amount}`, ...tmpl, unsubscribeUrl: unsub };
+        }
+    });
+}
+
+async function dispatchNewCouncilMotions() {
+    await dispatchWatermarked({
+        kind: 'gov.council-motion',
+        items: db.getCouncilMotions(),
+        rankOf: m => m.motionIndex,
+        timeOf: m => m.proposedAt,
+        // Keyed by hash, not index: a motion index can be reused across
+        // council terms, and the hash is the row's actual primary key.
+        eventIdOf: m => m.hash,
+        prefMatches: (p) => p.governance && p.governance.councilMotion,
+        makeEmail: (m, subscriber) => {
+            const unsub = unsubscribeUrlFor(subscriber);
+            const href = `${emailSiteOrigin()}/council?motion=${m.motionIndex}`;
+            const call = m.section && m.method ? `${m.section}.${m.method}` : 'a runtime call';
+            const tmpl = emailLayout({
+                title:   `New council motion — #${m.motionIndex}`,
+                intro:   `The council has proposed motion #${m.motionIndex}: ${call}.`,
+                details: m.threshold != null ? `It needs ${m.threshold} approval(s) to pass.` : null,
+                ctaText: 'View motion',
+                ctaHref: href,
+                unsubscribeUrl: unsub
+            });
+            return { subject: `[Polkadex] New council motion #${m.motionIndex} — ${call}`, ...tmpl, unsubscribeUrl: unsub };
+        }
+    });
+}
+
+// ─── Network-milestone dispatchers ──────────────────────────────────────────
+//
+// The three `network.*` preferences. Unlike the governance ones these read
+// LIVE chain state rather than a history table, so there is nothing to
+// backfill — but each still needs a "have we already announced this one?"
+// marker, because the tick that observes them runs every couple of minutes and
+// the condition persists across many ticks.
+
+let isDispatchingNetworkEmails = false;
+
+async function dispatchNetworkEmails() {
+    if (isDispatchingNetworkEmails || !isRpcReady()) return;
+    isDispatchingNetworkEmails = true;
+    try {
+        // ── Runtime upgrade ──────────────────────────────────────────────
+        // specVersion is monotonic, so the watermark IS the version number.
+        let specVersion = null;
+        try { specVersion = globalApi.runtimeVersion.specVersion.toNumber(); } catch (_) {}
+        if (Number.isFinite(specVersion)) {
+            const seen = emailWatermark('net.runtime-upgrade');
+            if (seen === null || seen === undefined) {
+                // First run: adopt the current version silently. Announcing it
+                // would tell every subscriber the chain had "just upgraded" to
+                // whatever it happened to be running when we deployed.
+                setEmailWatermark('net.runtime-upgrade', specVersion);
+                console.log(`[email] net.runtime-upgrade: first run — adopting specVersion ${specVersion}, sending nothing`);
+            } else if (specVersion > Number(seen)) {
+                await dispatchToSubscribers({
+                    eventKind: 'net.runtime-upgrade',
+                    eventId: specVersion,
+                    prefMatches: (p) => p.network && p.network.runtimeUpgrade,
+                    makeEmail: ({ subscriber }) => {
+                        const unsub = unsubscribeUrlFor(subscriber);
+                        const tmpl = emailLayout({
+                            title:   `Polkadex runtime upgraded to v${specVersion}`,
+                            intro:   `The Polkadex runtime has been upgraded from spec version ${seen} to ${specVersion}.`,
+                            details: 'Wallet extensions and tooling sometimes need a refresh after an upgrade — if signing starts failing, reload the explorer first.',
+                            ctaText: 'View runtime details',
+                            ctaHref: `${emailSiteOrigin()}/runtime`,
+                            unsubscribeUrl: unsub
+                        });
+                        return { subject: `[Polkadex] Runtime upgraded to spec v${specVersion}`, ...tmpl, unsubscribeUrl: unsub };
+                    }
+                });
+                setEmailWatermark('net.runtime-upgrade', specVersion);
+            }
+        }
+
+        // ── Era boundary ─────────────────────────────────────────────────
+        let activeEra = null;
+        try {
+            const opt = await globalApi.query.staking.activeEra();
+            if (opt && opt.isSome) activeEra = opt.unwrap().index.toNumber();
+        } catch (_) {}
+        if (Number.isFinite(activeEra)) {
+            const seen = emailWatermark('net.era');
+            if (seen === null || seen === undefined) {
+                setEmailWatermark('net.era', activeEra);
+                console.log(`[email] net.era: first run — adopting era ${activeEra}, sending nothing`);
+            } else if (activeEra > Number(seen)) {
+                // Only announce the era we just entered, never the gap. If the
+                // indexer was down for a week, `activeEra - seen` could be 30+
+                // and a loop would send 30 emails about eras that are already
+                // over.
+                await dispatchToSubscribers({
+                    eventKind: 'net.era',
+                    eventId: activeEra,
+                    prefMatches: (p) => p.network && p.network.eraBoundary,
+                    makeEmail: ({ subscriber }) => {
+                        const unsub = unsubscribeUrlFor(subscriber);
+                        const skipped = Number(activeEra) - Number(seen) - 1;
+                        const tmpl = emailLayout({
+                            title:   `Era ${activeEra} has begun`,
+                            intro:   `Polkadex has entered staking era ${activeEra}. Rewards for the previous era are now claimable.`,
+                            details: skipped > 0 ? `(${skipped} earlier era boundary email${skipped === 1 ? '' : 's'} were skipped — the explorer was not watching.)` : null,
+                            ctaText: 'Check your rewards',
+                            ctaHref: `${emailSiteOrigin()}/staking-rewards`,
+                            unsubscribeUrl: unsub
+                        });
+                        return { subject: `[Polkadex] Era ${activeEra} has begun`, ...tmpl, unsubscribeUrl: unsub };
+                    }
+                });
+                setEmailWatermark('net.era', activeEra);
+            }
+        }
+    } catch (err) {
+        console.warn('[email] network dispatch failed:', err && err.message ? err.message : err);
+    } finally {
+        isDispatchingNetworkEmails = false;
+    }
+}
+
+// Chain-stalled alert. Called from chainHeadWatchdog the moment an episode
+// starts, so `eventId` is the episode's start timestamp — one email per stall,
+// not one per watchdog tick while the stall persists.
+async function dispatchChainStalledEmail({ staleSince, lastBlock, minutesStale }) {
+    try {
+        await dispatchToSubscribers({
+            eventKind: 'net.chain-stalled',
+            eventId: staleSince,
+            prefMatches: (p) => p.network && p.network.chainStalled,
+            makeEmail: ({ subscriber }) => {
+                const unsub = unsubscribeUrlFor(subscriber);
+                const tmpl = emailLayout({
+                    title:   'Polkadex chain head has stopped advancing',
+                    intro:   `The explorer has not seen a new block for ${minutesStale} minutes. The last block it observed was #${Number(lastBlock).toLocaleString('en-US')}.`,
+                    details: 'This can mean the chain itself has stalled, or that the explorer\'s upstream RPC node has lost its peers. It is an operational alert, not a governance one.',
+                    ctaText: 'Check explorer status',
+                    ctaHref: `${emailSiteOrigin()}/`,
+                    unsubscribeUrl: unsub
+                });
+                return { subject: `[Polkadex] Chain head stalled for ${minutesStale} minutes`, ...tmpl, unsubscribeUrl: unsub };
+            }
+        });
+    } catch (err) {
+        console.warn('[email] chain-stalled dispatch failed:', err && err.message ? err.message : err);
+    }
 }
 
 async function dispatchGovernanceEmails({ referenda, publicProposals }) {
@@ -5482,6 +6000,17 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
             }
         });
     }
+
+    // 4. Referendum RESULTS — announce a referendum the tick it stops being
+    //    open. Not a watermark: a referendum's index says nothing about when
+    //    it resolves (#7 can be cancelled while #5 is still open), and the
+    //    rows carry no timestamp. See selectNewlyResolved.
+    await dispatchResolvedReferenda(referenda);
+
+    // 5. Treasury proposals and 6. council motions — both read tables that
+    //    hold FULL chain history, so both go through the first-run watermark.
+    await dispatchNewTreasuryProposals();
+    await dispatchNewCouncilMotions();
 
     // 3. Closing-in-24h reminder — for each ongoing referendum whose endBlock
     //    is within the window, dispatch once (idempotent).
@@ -5827,6 +6356,191 @@ function recordSkippedRange(indexer, from, to, reason) {
     return cap;
 }
 
+// ─── Reorg detection and repair (audit F-007) ───────────────────────────────
+//
+// `blocks.number` is the primary key and no pass ever revisits a written
+// height, so until now the first hash the indexer saw at a height was the hash
+// it kept — forever. The forward pass follows the BEST head, which is exactly
+// the part of the chain that can still be discarded, so after any short reorg
+// the explorer kept presenting the orphan block, its events, its transactions
+// and its reward rows as canonical. The tx-detail endpoint even ships a ±2
+// "in case of reorgs" neighbour search on top of tables that keep the fork.
+//
+// Anchor: a GRANDPA-FINALIZED hash can never change. Two passes per tick, both
+// planned by lib/reorg.js (where the range arithmetic is unit-tested):
+//
+//   FINALITY SWEEP — kv watermark `reorg:verified` = highest height whose
+//   stored hash was compared against its FINALIZED hash. Sweep
+//   (verified, finalizedHead], repair mismatches, advance. Every height gets
+//   exactly one guaranteed check against its immutable hash — including the
+//   race where a block is written, reorged AND finalized between two ticks.
+//   Steady state: 1–2 heights per tick.
+//
+//   TAIL CHECK — (finalizedHead, bestHead] re-checked every tick, watermark
+//   untouched (nothing there is final). This bounds how long a visitor can be
+//   looking at an orphan to roughly one tick instead of one finalization lag.
+//
+// First run adopts verified = finalizedHead: verifying 12.8M historical rows
+// would be one RPC call each, and an orphan that old is a cosmetic artefact
+// rather than a live hazard. Repairs are exact, not blind: delete rows whose
+// stored hash differs from canonical (lib/id-migration.js — which is also why
+// tx/reward ids are hash-keyed now, F-021), then rescan the height.
+
+const REORG_SWEEP_MAX = readPositiveInteger(process.env.REORG_SWEEP_MAX, 200);
+const REORG_TAIL_MAX = readPositiveInteger(process.env.REORG_TAIL_MAX, 64);
+
+// Derive event-derived transaction rows for a local block range and insert
+// them. Zero RPC — reads the events table. Shared by the F-008 backfill pass,
+// the reorg repair, and the chain_index gap-fill/failure-queue (which insert
+// events for repaired heights that the backfill cursor has long passed, so
+// someone has to re-derive or those transfers never reach the tx table).
+function deriveTransactionsFromLocalEvents(lo, hi) {
+    const rows = db.getTransferEventRowsRange(lo, hi)
+        .map(buildTxRowFromEventRow)
+        .filter(Boolean);
+    if (rows.length) db.insertTransactions(rows);
+    return rows.length;
+}
+
+// Repair one height whose canonical hash is known and differs from storage.
+async function repairReorgedBlock(n, canonicalHash, storedHash) {
+    console.warn(`[reorg] block ${n}: stored ${storedHash} is not canonical ${canonicalHash} — repairing`);
+
+    // Delete the fork's rows FIRST. Rescan inserts use OR IGNORE / OR REPLACE,
+    // so inserting before deleting would leave orphan events beside canonical
+    // ones — the audit's "second event set" failure.
+    const del = db.deleteForkRows(n, canonicalHash);
+
+    // The number→hash cache is the one cache keyed by NUMBER, so it is the one
+    // place the pre-reorg view survives a repair. Evict before rescanning or
+    // scanSingleBlock would faithfully re-fetch the orphan.
+    blockHashCache.evict(String(n));
+
+    // Rescan the canonical block: blocks row (INSERT OR REPLACE overwrites the
+    // orphan header), events, event-derived transactions, reward rows.
+    // Self-healing note: if scanSingleBlock THROWS here, the fork rows are
+    // deleted but nothing is reinserted — and that is recoverable BECAUSE the
+    // blocks row still holds the old hash (INSERT OR REPLACE never ran), so
+    // the next sweep sees the same mismatch and redoes the whole repair. The
+    // dangerous cases are the ones where the rescan half-succeeds, below.
+    const rescan = await scanSingleBlock(n);
+    if (rescan && rescan.block) db.insertBlocks([rescan.block]);
+    if (rescan && rescan.events && rescan.events.length) db.insertEvents(rescan.events);
+    if (rescan && rescan.eventsIncomplete) {
+        db.recordScanFailure('chain_index', n, 'reorg repair: events could not be decoded (F-006) — block stored, events pending');
+        // Half-success trap the batch review caught: the blocks row is now
+        // canonical, so this sweep will NEVER revisit the height — and the
+        // chain_index failure queue only reinstates blocks and events, while
+        // the F-008 cursor is monotonic and long past. Without this row the
+        // transfers we just deleted would be gone permanently.
+        db.recordScanFailure('transactions', n, 'reorg repair: events pending — transfers must be re-derived');
+    }
+
+    deriveTransactionsFromLocalEvents(n, n);
+
+    // Same trap for rewards: they were deleted above, so a rescan that does
+    // not complete MUST leave a queue entry or the rows are lost. A
+    // non-transient failure records its own scan_failures row inside
+    // scanBlockForRewards; the transient/thrown paths deliberately do not
+    // (lib/rpc-errors.js) — correct for ordinary scanning, wrong after a
+    // delete — so those two cases are recorded here.
+    const rw = await scanBlockForRewards(n).catch(() => null);
+    if (rw && rw.ok) {
+        if (rw.rewards.length) db.insertStakingRewards(rw.rewards.map(toRewardRow));
+    } else if (!rw || rw.transient) {
+        db.recordScanFailure('staking_rewards', n, 'reorg repair: reward rows deleted, rescan deferred — retry');
+    }
+
+    console.log(`[reorg] block ${n} repaired: removed ${del.events} event(s), ${del.transactions} tx row(s), ${del.rewards} reward row(s) from the discarded fork; canonical data reinserted`);
+}
+
+async function reorgSweep(head) {
+    if (!isRpcReady()) return;
+
+    const finalizedHash = await globalApi.rpc.chain.getFinalizedHead();
+    const finalizedNumber = (await globalApi.rpc.chain.getHeader(finalizedHash)).number.toNumber();
+
+    const stored = db.getKv('reorg:verified');
+    const plan = planReorgSweep({
+        verified: stored && stored.value !== undefined ? stored.value : null,
+        finalizedNumber,
+        head,
+        sweepMax: REORG_SWEEP_MAX,
+        tailMax: REORG_TAIL_MAX
+    });
+
+    if (plan.firstRun) {
+        db.setKv('reorg:verified', { value: plan.adopt, updatedAt: Date.now() });
+        console.log(`[reorg] first run — verified watermark adopted at finalized head ${plan.adopt}; heights below it are assumed canonical, everything above is checked from now on`);
+    }
+
+    // What do we hold for the planned ranges? Heights we never stored cannot
+    // hold an orphan block and cost nothing.
+    //
+    // Read each NON-EMPTY range separately. The obvious-looking
+    // `min(sweepFrom, tailFrom)..max(sweepTo, tailTo)` is a trap the batch
+    // review caught before it shipped: an empty sweep is encoded as
+    // (from=1, to=0), so on the FIRST TICK AFTER DEPLOY min() resolved to 1
+    // and max() to the chain head — a synchronous read of all 12.8M block
+    // rows into a JS Map, minutes of blocked event loop or an OOM-kill,
+    // exactly once, on the deploy where it would be least explicable.
+    const storedHashes = new Map();
+    for (const [a, b] of [[plan.sweepFrom, plan.sweepTo], [plan.tailFrom, plan.tailTo]]) {
+        if (b < a) continue;
+        for (const r of db.getBlockHashesRange(a, b)) storedHashes.set(Number(r.number), r.hash);
+    }
+    if (storedHashes.size === 0 && plan.sweepTo < plan.sweepFrom) return;
+    const heights = heightsToVerify(plan, new Set(storedHashes.keys()));
+
+    // Verify ascending. `verifiedUpTo` only advances past heights whose check
+    // COMPLETED — an RPC failure mid-sweep stops the watermark exactly there,
+    // so the unchecked remainder is next tick's work rather than silently
+    // marked verified.
+    let verifiedUpTo = null;
+    let repaired = 0;
+    try {
+        for (const n of heights) {
+            // Direct RPC, NOT getBlockHashCached: the cache is precisely where
+            // the pre-reorg view lives.
+            const canonical = (await globalApi.rpc.chain.getBlockHash(n)).toHex();
+            if (hashesDiffer(storedHashes.get(n), canonical)) {
+                await repairReorgedBlock(n, canonical, storedHashes.get(n));
+                repaired++;
+            } else if (canonical && canonical.startsWith('0x') && !/^0x0+$/.test(canonical)) {
+                // The blocks row agrees with the chain — but the CHILD tables
+                // can still disagree. syncTransactions and syncChainIndex run
+                // un-awaited in the same interval and fetch their hashes
+                // independently, so around an in-flight reorg one pass can
+                // store fork-A tx rows while the other stores the canonical-B
+                // block. blocks.hash then matches canonical, no repair fires,
+                // and nothing else ever compares transactions.block_hash to
+                // blocks.hash — the fork tx row would be permanent. So every
+                // verified height also gets the (normally no-op, indexed)
+                // child-table consistency delete, and anything it removes is
+                // queued for rescan through the machinery that owns it.
+                const del = db.deleteForkRows(n, canonical);
+                if (!del.skipped && (del.events || del.transactions || del.rewards)) {
+                    console.warn(`[reorg] block ${n}: blocks row canonical but child tables held fork rows — removed ${del.events} event(s), ${del.transactions} tx, ${del.rewards} reward(s); queueing rescans`);
+                    if (del.events) db.recordScanFailure('chain_index', n, 'reorg consistency: fork events removed — rescan');
+                    if (del.transactions) db.recordScanFailure('transactions', n, 'reorg consistency: fork tx rows removed — rescan');
+                    if (del.rewards) db.recordScanFailure('staking_rewards', n, 'reorg consistency: fork reward rows removed — rescan');
+                }
+            }
+            if (n >= plan.sweepFrom && n <= plan.sweepTo) verifiedUpTo = n;
+        }
+        // A clean pass verifies the whole sweep range even where nothing was
+        // stored (nothing stored = nothing to be wrong about).
+        if (plan.sweepTo >= plan.sweepFrom) verifiedUpTo = plan.sweepTo;
+    } finally {
+        if (!plan.firstRun && verifiedUpTo !== null && verifiedUpTo >= plan.sweepFrom) {
+            db.setKv('reorg:verified', { value: verifiedUpTo, updatedAt: Date.now() });
+        }
+        if (repaired > 0) {
+            console.warn(`[reorg] repaired ${repaired} reorged height(s) this tick`);
+        }
+    }
+}
+
 async function syncChainIndex() {
     if (isSyncingChain || !isRpcReady() || inBackoff('chain_index')) return;
     isSyncingChain = true;
@@ -5982,6 +6696,10 @@ async function syncChainIndex() {
                     }
                 }
                 recordChainScanFailures(fill, 'gap-fill');
+                // Late events (F-008): the tx backfill cursor is monotonic and
+                // has usually passed these heights, so derive their transfers
+                // here or they never reach the transactions table.
+                if (fill.events.length) deriveTransactionsFromLocalEvents(chunkStart, chunkEnd);
                 console.log(`[chain-index] gap-fill ${chunkStart}-${chunkEnd} (gap of ${g.gapSize}): ${fill.succeeded}/${fill.attempts} repaired`);
             }
         }
@@ -6018,8 +6736,21 @@ async function syncChainIndex() {
                     && (one.failedNumbers || []).length === 0;
                 if (clean) { db.clearScanFailure('chain_index', n); repaired++; }
                 else recordChainScanFailures(one, 'failure-queue retry');
+                if (one.events.length) deriveTransactionsFromLocalEvents(n, n);
             }
             console.log(`[chain-index] failure-queue: ${repaired}/${queued.length} height(s) repaired`);
+        }
+
+        // 3c) REORG SWEEP (audit F-007) — does the chain still agree with what
+        // we stored? Transport errors are the node's problem, not this
+        // height's; anything else is logged and retried next tick because the
+        // verified-watermark only advances past heights actually checked.
+        try {
+            await reorgSweep(head);
+        } catch (err) {
+            if (!isRpcUnavailableError(err)) {
+                console.warn('[reorg] sweep failed this tick:', err && err.message ? err.message : err);
+            }
         }
 
         // ── Honest status (audit F-004 / F-050) ─────────────────────────────
@@ -6181,13 +6912,99 @@ async function syncTransactions() {
             console.log(`[transactions] gap-fill: ${recovered} recovered, ${stillFailing} still failing (${stats.retrying} retrying / ${stats.permanent} permanent in queue)`);
         }
 
+        // ── F-008: BACKFILL PASS — walk the rest of history, genesis-ward ──
+        //
+        // The finding: this indexer crawled a ~20k-block window once, then
+        // stored `status: 'Synced'` forever after, while account histories,
+        // the volume KPI and the analytics series silently omitted everything
+        // older (~94 days of coverage on the live database against 4+ years
+        // of chain). "Synced" was the same word F-004 was misusing.
+        //
+        // The pass derives transfers from the LOCAL events table — zero RPC —
+        // because the chain indexer already backfilled events to genesis.
+        // Exactly what the operator script (backfill-transactions-from-
+        // events.mjs) does, sharing lib/tx-from-event.js, but resumable and
+        // automatic instead of a command someone has to know to run. Where
+        // events are missing (F-006 undecodable rows) nothing is derivable —
+        // the chain_index failure queue owns repairing those, and this cursor
+        // must not stall waiting for them.
+        let txBackfillCursor = Number.isFinite(Number(state.txBackfillCursor))
+            ? Number(state.txBackfillCursor)
+            : null;
+        let txBackfillComplete = !!state.txBackfillComplete;
+        // The version bump forces an initial re-crawl; taking min() keeps the
+        // previously earned coverage record instead of resetting it to
+        // head-20k (which would have re-broken F-008's bookkeeping).
+        let oldestScannedBlock = needsInitialCrawl
+            ? Math.min(scan.oldestScannedBlock || Infinity, Number(state.oldestScannedBlock) || Infinity)
+            : (Number(state.oldestScannedBlock) || latestScannedBlock);
+        if (!Number.isFinite(oldestScannedBlock)) oldestScannedBlock = latestBlock;
+
+        if (txBackfillCursor === null && !txBackfillComplete) {
+            // First run of the backfill: start just below the live coverage.
+            txBackfillCursor = Math.max(TX_MIN_BLOCK - 1, oldestScannedBlock - 1);
+            txBackfillComplete = txBackfillCursor < TX_MIN_BLOCK;
+        }
+
+        // The cursor must never outrun the EVENTS table's own coverage. On the
+        // production database events reach genesis, so this floor is 1 and the
+        // gate is invisible — but on a fresh install this local derivation
+        // (5000 blocks/tick, zero RPC) laps the RPC-bound events backfill by
+        // orders of magnitude. Ungated, it would stride through empty ranges,
+        // find nothing, declare itself complete, and report Synced over a
+        // near-empty transfer history — the exact lie F-008 is about, rebuilt
+        // by its own fix. The batch review caught this. Chain_index's
+        // backfillCursor is the next height IT will scan going down, so
+        // everything ABOVE it holds events.
+        const chainIdxState = db.getSyncState('chain_index');
+        const eventsFloor = chainIdxState.backfillComplete
+            ? TX_MIN_BLOCK
+            : (Number.isFinite(Number(chainIdxState.backfillCursor))
+                ? Number(chainIdxState.backfillCursor) + 1
+                : Infinity);
+
+        if (!txBackfillComplete && txBackfillCursor >= TX_MIN_BLOCK && txBackfillCursor >= eventsFloor) {
+            const lo = Math.max(TX_MIN_BLOCK, eventsFloor, txBackfillCursor - TX_BACKFILL_CHUNK + 1);
+            deriveTransactionsFromLocalEvents(lo, txBackfillCursor);
+            oldestScannedBlock = Math.min(oldestScannedBlock, lo);
+            txBackfillCursor = lo - 1;
+            // Completion is only reachable when eventsFloor itself is
+            // TX_MIN_BLOCK (events reach genesis) — otherwise `lo` bottoms out
+            // at the floor and the cursor waits there for events to catch up.
+            if (txBackfillCursor < TX_MIN_BLOCK) {
+                txBackfillComplete = true;
+                console.log('[transactions] backfill complete — event-derived transfer history now reaches genesis');
+            }
+        }
+
+        // ── Honest status (the F-008 close test) ──
+        // 'Synced' now means what it says: the live window is current AND the
+        // genesis-ward walk has finished. Until then this reports Backfilling
+        // (or Repairing/Degraded when the failure queue says so), the same
+        // vocabulary the chain indexer adopted for F-004/F-050.
+        const txFailCounts = db.countScanFailures('transactions', SCAN_MAX_ATTEMPTS);
+        const txStatus = deriveIndexStatus({
+            initialized: true,
+            backfillComplete: txBackfillComplete,
+            knownGapBlocks: 0,
+            retryableFailures: txFailCounts.retrying,
+            permanentFailures: txFailCounts.permanent
+        });
+
         db.setSyncState('transactions', {
             lastSync: Date.now(),
-            status: 'Synced',
+            status: txStatus,
             latestScannedBlock: latestBlock,
-            oldestScannedBlock: needsInitialCrawl ? scan.oldestScannedBlock : (Number(state.oldestScannedBlock) || latestScannedBlock),
+            oldestScannedBlock,
+            txBackfillCursor,
+            txBackfillComplete,
             scannedBlocks: previousScannedBlocks + scan.scannedBlocks,
-            scannerVersion: FINANCIAL_TX_SCANNER_VERSION
+            scannerVersion: FINANCIAL_TX_SCANNER_VERSION,
+            detail: describeIndexStatus({
+                knownGapBlocks: 0,
+                retryableFailures: txFailCounts.retrying,
+                permanentFailures: txFailCounts.permanent
+            }) || (txBackfillComplete ? undefined : `deriving historical transfers, next chunk ends at block ${txBackfillCursor}`)
         });
     } catch (err) {
         console.error("Transaction sync error:", err);
@@ -6496,7 +7313,8 @@ function toRewardRow(reward) {
     try { stash = normalizeAddress(reward.stash); } catch (e) { }
     if (validator) { try { validator = normalizeAddress(validator); } catch (e) { } }
     return {
-        id: `${reward.block}-${reward.eventIndex}`,
+        // F-021 — same identity rule as transactions.
+        id: rewardId(reward.blockHash, reward.block, reward.eventIndex),
         stash,
         amount: reward.amount,
         era: reward.era,
@@ -6652,11 +7470,17 @@ async function syncPrice() {
     }
 }
 
-// Historical backfill lives in the standalone script
-// `backfill-price-history.mjs` at the repo root — run it once against the
-// SQLite DB to populate price_history with daily DefiLlama data going back
-// to PDEX's first trading day (Dec 21, 2022). The indexer process itself
-// only handles forward-going polling.
+// Historical price rows: the indexer only polls FORWARD. Rows older than the
+// first poll on a given database were imported ad-hoc and carry the
+// 'defillama-backfill' / 'ascendex-backfill' source tags.
+//
+// Audit F-025: this comment (and README + INSTALL) used to point at a
+// standalone `backfill-price-history.mjs` "at the repo root". No such file
+// exists — an operator following INSTALL got `Cannot find module`. A fresh
+// deployment builds its chart from the first poll onward, so long ranges like
+// /api/price-history?days=365 stay sparse for a while. Nothing else depends on
+// those rows; if the sparse chart is worth fixing, the script has to be written
+// first, and it needs adding to Dockerfile.backend's explicit COPY list.
 
 // One crawl pass: index new blocks (forward) and walk a resumable chunk of
 // older history (backfill). Runs once per interval and appends every time.
@@ -6964,7 +7788,15 @@ async function chainHeadWatchdog() {
     // Head is stale.
     if (!chainStaleSince) {
         chainStaleSince = Date.now();
-        console.warn(`[CHAIN-WATCHDOG] chain head #${lastHeadValue} hasn't advanced in ${Math.round(sinceAdvance / 60000)} min — upstream node may have stalled`);
+        const minutesStale = Math.round(sinceAdvance / 60000);
+        console.warn(`[CHAIN-WATCHDOG] chain head #${lastHeadValue} hasn't advanced in ${minutesStale} min — upstream node may have stalled`);
+        // Email the `network.chainStalled` subscribers ONCE per episode. The
+        // eventId is this episode's start timestamp, so the idempotency table
+        // keeps it to one message however long the stall lasts. Fire-and-forget
+        // — a mail failure must not stop the watchdog from rebuilding the api
+        // below, which is the part that actually fixes anything.
+        dispatchChainStalledEmail({ staleSince: chainStaleSince, lastBlock: lastHeadValue, minutesStale })
+            .catch(err => console.warn('[email] chain-stalled dispatch failed:', err && err.message ? err.message : err));
     }
 
     // One-shot api rebuild attempt per stale episode. Delegate to
@@ -7167,6 +7999,13 @@ function startIndexerLoops() {
         syncChainIndex();
         syncTransactions();
     }, CHAIN_INDEX_INTERVAL_MS);
+    // Network-milestone email checks (runtime upgrade, era boundary). Two
+    // cheap reads — one in-memory, one storage — so a short cadence is fine,
+    // and a short cadence is what makes "era 4218 has begun" arrive while it
+    // is still news. The chain-stalled alert is not here: it fires from
+    // chainHeadWatchdog at the moment an episode starts.
+    setTimeout(dispatchNetworkEmails, 12_000);
+    setInterval(dispatchNetworkEmails, NETWORK_EMAIL_CHECK_MS);
     setInterval(syncHolders, THIRTY_MINUTES);
     setInterval(syncCouncil,   COUNCIL_REFRESH_MS);
     setInterval(syncTreasury,  TREASURY_REFRESH_MS);
