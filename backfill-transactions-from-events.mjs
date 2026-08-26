@@ -150,7 +150,7 @@ function run() {
 
     const flush = () => {
         if (!batch.length || DRY_RUN) { batch = []; return; }
-        db.exec('BEGIN');
+        db.exec('BEGIN IMMEDIATE')  /* F-137: take the write lock up front */;
         try {
             for (const r of batch) {
                 const res = insert.run(

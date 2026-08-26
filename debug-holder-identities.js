@@ -1,8 +1,19 @@
+// Audit F-164: this file re-implemented server.js's getOnChainIdentity
+// (superOf → identityOf → display, with the sub-identity hop). Two copies
+// of that lookup drift, and a probe that disagrees with production is worse
+// than no probe — it produces confident wrong answers during an incident.
+// These scripts are diagnostic only and nothing in the app imports them;
+// if you need the production behaviour, query /api/account/:address or
+// export getOnChainIdentity from server.js rather than copying it again.
+// Audit F-100: this probe used to hardcode the PUBLIC production RPC, so
+// running it — including by accident, from a dev box — put load on the
+// endpoint real wallets sign against. Defaults to a local node now; set
+// POLKADEX_WS to aim it somewhere else deliberately.
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import fs from 'fs/promises';
 
 async function run() {
-    const wsProvider = new WsProvider('wss://rpc.polkadex.ee');
+    const wsProvider = new WsProvider((process.env.POLKADEX_WS || 'ws://127.0.0.1:9944'));
     const api = await ApiPromise.create({ provider: wsProvider });
     
     const entries = await api.query.system.account.entries();

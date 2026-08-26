@@ -132,7 +132,10 @@ Spacing follows a 4 px grid. Common gap values: `4`, `8`, `12`, `16`, `20`, `24`
 
 - **Logo:** `logo.png` (at the repo root).
 - **Favicon:** `favicon.png`.
-- **PWA icon set:** see `manifest.webmanifest`.
+- **PWA icon set:** see `public/manifest.webmanifest` (the only manifest in the
+  repo — Vite copies `public/` verbatim into `dist/`, so this is the file served
+  at `/manifest.webmanifest`. A second, disagreeing copy used to sit at the repo
+  root; audit F-061 deleted it because nothing shipped it).
 - **Live token source:** the `:root` block in `styles.css`.
 - **Interactive cheatsheet:** [`explorer.polkadex.ee/brand`](https://explorer.polkadex.ee/brand).
 - **User-facing brand article in the explorer's help center:** [`/help/brand-kit`](https://explorer.polkadex.ee/help/brand-kit).

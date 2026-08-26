@@ -67,6 +67,16 @@ DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
 SSH_PORT="${SSH_PORT:-22}"
 ALLOW_PASSWORD_SSH="${ALLOW_PASSWORD_SSH:-no}"
 
+# Audit F-097: pin the Compose project name to the SAME default deploy.sh uses.
+# Compose otherwise derives it from the basename of the directory it is invoked
+# from, so provisioning from /opt/pdexplorer and later deploying from
+# /root/pdexplorer produced TWO independent stacks — duplicate containers
+# fighting over ports 80/443, which is how the 521 outage happened. Exported so
+# every `docker compose` call below (and anything this script shells out to)
+# agrees without needing a `-p` flag on each one.
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pdexplorer}"
+export COMPOSE_PROJECT_NAME
+
 # ---- Helpers ---------------------------------------------------------------
 log()  { printf '\n\033[1;34m[provision]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
@@ -334,6 +344,37 @@ EOF
 }
 
 # ---- Phase 3: App deploy ---------------------------------------------------
+#
+# Audit F-097 — deploy_app() and deploy.sh are NOT interchangeable. They overlap
+# heavily and used to disagree silently; the differences that remain are
+# deliberate, and this is the record of which script to reach for:
+#
+#   deploy_app()  = FIRST deploy on a bare box. It may create things.
+#   deploy.sh     = EVERY deploy after that. It refuses to guess.
+#
+# | Concern        | deploy_app() (here)                  | deploy.sh                       |
+# |----------------|--------------------------------------|---------------------------------|
+# | git            | `fetch --all` + `reset --hard`       | `git pull origin main`          |
+# |                | (DESTROYS local edits — that is the  | (fails loudly on a conflict, so |
+# |                |  point on a fresh box)               |  a hand-patched box is safe)    |
+# | .env           | WRITES one from the template if      | REFUSES to start without a real |
+# |                | absent; preserves an existing file   | .env, and refuses one that is   |
+# |                |                                      | byte-identical to .env.example  |
+# | TLS            | bootstraps a cert (init-letsencrypt, | SKIPS cert bootstrap when one   |
+# |                | else a self-signed placeholder) so   | already exists — re-running it  |
+# |                | nginx can start at all               | over a Cloudflare Origin cert   |
+# |                |                                      | is what caused the 521/526      |
+# | Compose project| pinned via COMPOSE_PROJECT_NAME      | pinned via `-p "$COMPOSE_..."`  |
+# |                | export at the top of this file       | — same default, `pdexplorer`    |
+# | GIT_SHA        | stamped (see the build step below)   | stamped, incl. `-dirty` suffix  |
+#
+# Not yet unified: this function still runs its own `docker compose up -d
+# --build` instead of delegating the build/verify half to deploy.sh. Doing that
+# properly means reconciling deploy.sh's `git pull` with the hard reset above
+# and its .env refusal with the .env this function just wrote, so it is a tested
+# change rather than a comment. Until then: after the first provision, deploy
+# with deploy.sh — do NOT re-run `provision-ubuntu.sh app` on a box whose
+# working tree you have edited, because the hard reset will discard it.
 deploy_app() {
     log "Phase 3/3: Explorer deploy"
 
@@ -461,6 +502,19 @@ EOF
     fi
 
     log "Building + starting the explorer stack"
+    # Audit F-097: stamp build provenance, exactly like deploy.sh does. Without
+    # these the images bake GIT_SHA=unknown, so `curl /api/version` and
+    # `curl /version.json` answer "unknown" on any box that was brought up by
+    # provision rather than by deploy.sh — and the single most useful question
+    # during an incident ("is my fix actually deployed?") becomes unanswerable.
+    GIT_SHA="$(git -C "$DEPLOY_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+    if [ -n "$(git -C "$DEPLOY_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+        GIT_SHA="${GIT_SHA}-dirty"
+        warn "Tracked files differ from HEAD; tagging build as $GIT_SHA"
+    fi
+    BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    export GIT_SHA BUILD_TIME
+    log "Building $GIT_SHA at $BUILD_TIME (compose project: $COMPOSE_PROJECT_NAME)"
     docker compose down --remove-orphans || true
     docker compose pull --ignore-pull-failures || true
     docker compose up -d --build

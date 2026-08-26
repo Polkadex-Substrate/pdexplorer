@@ -7,9 +7,20 @@
 # 15+ GB — every rebuild waits minutes just to transfer junk that's about to
 # be ignored.
 #
-# Keep this list in sync with Dockerfile.backend (which COPYs server.js + db.js
-# only) and Dockerfile.frontend (which COPYs the whole tree, hence relies on
-# this exclusion list to filter out the heavy stuff).
+# Keep this list in sync with Dockerfile.backend and Dockerfile.frontend.
+#
+# Dockerfile.backend COPYs an EXPLICIT set (audit F-176 — this comment used to
+# claim "server.js + db.js only", which has been wrong for a while):
+#     package.json  package-lock.json
+#     server.js  db.js  email.js
+#     backfill-transactions-from-events.mjs  migrate-add-indexes.mjs
+#     lib/
+# Anything the backend needs at runtime must be added BOTH to that COPY list
+# and left un-ignored here.
+#
+# Dockerfile.frontend COPYs the whole tree (`COPY . .`) so Vite can build, and
+# therefore relies entirely on this exclusion list to keep heavy files and
+# secrets out of the build context.
 
 # ─── Runtime data — never belongs in a built image ──────────────────────────
 # The SQLite chain index lives here when DATA_PATH defaults to ./data. Bind-
@@ -61,10 +72,26 @@ Thumbs.db
 
 # ─── Environment & secrets ──────────────────────────────────────────────────
 # The container reads .env via env_file in docker-compose; baking it into the
-# image is a leak vector.
+# image is a leak vector. Audit F-148: `.env` alone was not enough — the
+# frontend does `COPY . .`, so ANY env/key file in the tree ended up in a build
+# layer (and layers survive later deletion). Exclude the whole family plus PEM
+# and key material, not just the exact name `.env`.
 .env
+.env.*
 .env.local
 .env.*.local
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ─── Local-only debug probes (audit F-100 / F-148) ──────────────────────────
+# One-off RPC probes that hardcode a WSS endpoint. Nothing in server.js or the
+# SPA imports them, and Dockerfile.backend does not COPY them — but the
+# frontend's `COPY . .` was shipping them into the build context for no reason.
+debug-*.js
+test_council.cjs
 
 # ─── Local-only docs that don't need to ship in the image ───────────────────
 # These exist for repo readers but the running container doesn't use them.

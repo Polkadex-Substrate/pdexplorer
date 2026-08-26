@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS idx_tx_block ON transactions(block DESC);
 CREATE INDEX IF NOT EXISTS idx_tx_from ON transactions(from_addr);
 CREATE INDEX IF NOT EXISTS idx_tx_to ON transactions(to_addr);
+-- Audit F-088 note: idx_tx_timestamp is NOT created here, deliberately.
+-- Putting it in SCHEMA looked like the obvious fix — and a review caught that
+-- db.js's own comment below (see "do NOT build indexes here") forbids it: a
+-- synchronous CREATE INDEX on the live multi-million-row transactions table
+-- holds the write lock for minutes, jamming every worker's db.exec(SCHEMA) so
+-- none reaches app.listen. That is a site-wide outage at boot, traded for a
+-- slow query. It is created lazily instead — see ensureAnalyticsIndexes().
 CREATE TABLE IF NOT EXISTS blocks (
   number INTEGER PRIMARY KEY,
   hash TEXT,
@@ -351,7 +358,30 @@ function ensureColumn(table, column, definition) {
             db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
         }
     } catch (e) {
-        console.warn(`ensureColumn(${table}.${column}) failed: ${e.message}`);
+        // Audit F-138: this was warn-and-continue. A failed ALTER means the
+        // process then runs queries against a column that does not exist —
+        // every one of them throwing at request time, which surfaces as
+        // random 500s rather than as "the migration failed". Same reasoning as
+        // F-022's initDb fail-fast: die at boot, where it's diagnosable.
+        //
+        // EXCEPT for the benign race a review caught: with WORKERS=N, all N
+        // workers call initDb at once, and two can both read PRAGMA
+        // table_info before either ALTERs. The loser gets "duplicate column
+        // name" — which means the column EXISTS, i.e. the outcome we wanted.
+        // Throwing there would fail the boot on the very upgrade path this
+        // guard is meant to protect. Re-check and continue only if the column
+        // is genuinely present now.
+        const benign = /duplicate column name/i.test(e.message || '');
+        if (benign) {
+            try {
+                const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+                if (cols.some(c => c.name === column)) {
+                    console.log(`[db] ensureColumn(${table}.${column}): another worker added it first — continuing`);
+                    return;
+                }
+            } catch (_) { /* fall through to the throw */ }
+        }
+        throw new Error(`schema migration failed: ensureColumn(${table}.${column}): ${e.message}`);
     }
 }
 
@@ -468,6 +498,36 @@ export function initDb(dataDir, seedCounts = false) {
         // `migrate-add-indexes.mjs` script (safe to run against a live DB).
         // The count seed below is read-only (a COUNT scan holds no write lock),
         // so it can't block the other workers.
+        // Audit F-088, done safely: create the analytics timestamp indexes ONLY
+        // when the table is small enough that CREATE INDEX is instant. That is
+        // exactly the case the finding describes — a FRESH install, which
+        // otherwise full-scans millions of rows for every timestamp range query
+        // until an operator remembers migrate-add-indexes.mjs. On a large
+        // existing DB this is skipped and the out-of-band script remains the
+        // only safe route (see the warning above).
+        try {
+            const FRESH_INDEX_MAX_ROWS = 200000;
+            for (const [table, idx, col] of [
+                ['transactions', 'idx_tx_timestamp', 'timestamp'],
+                ['blocks', 'idx_blocks_timestamp', 'timestamp']
+            ]) {
+                const exists = db.prepare(
+                    "SELECT 1 FROM sqlite_master WHERE type='index' AND name = ?").get(idx);
+                if (exists) continue;
+                const n = db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c;
+                if (n <= FRESH_INDEX_MAX_ROWS) {
+                    db.exec(`CREATE INDEX IF NOT EXISTS ${idx} ON ${table}(${col})`);
+                    console.log(`[db] created ${idx} (${n} rows — fresh install, instant)`);
+                } else {
+                    console.warn(`[db] ${idx} is MISSING and ${table} has ${n} rows — too large to build at boot. ` +
+                        'Run `node --experimental-sqlite migrate-add-indexes.mjs` out-of-band; ' +
+                        'timestamp range queries are full scans until you do.');
+                }
+            }
+        } catch (e) {
+            console.warn('[db] analytics index check skipped:', e.message);
+        }
+
         for (const t of ['events', 'transactions']) {
             try {
                 const has = db.prepare('SELECT 1 FROM table_counts WHERE name = ?').get(t);
@@ -491,7 +551,7 @@ export function initDb(dataDir, seedCounts = false) {
 
 // Run a function inside a transaction so bulk writes commit in one fsync.
 function runTx(fn) {
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE');
     try { const result = fn(); db.exec('COMMIT'); return result; }
     catch (e) { try { db.exec('ROLLBACK'); } catch (_) { } throw e; }
 }
@@ -539,8 +599,11 @@ export function getHolders() {
     return { holders, totalCount: s.totalCount ?? holders.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing' };
 }
 export function getHolderRank(address) {
+    // Audit F-053: the holders table is a top-500 snapshot, and this returned
+    // 0 for everyone outside it — which the account page then printed as
+    // "rank 0", i.e. better than rank 1. Unknown is null, not zero.
     const row = db.prepare('SELECT rank FROM holders WHERE address = ?').get(address);
-    return row ? row.rank : 0;
+    return row ? row.rank : null;
 }
 
 // --- transactions ---
@@ -563,7 +626,17 @@ export function insertTransactions(list) {
 export function getRecentTransactions(limit) {
     return db.prepare(`SELECT ${TX_COLS} FROM transactions ORDER BY block DESC, timestamp DESC LIMIT ?`).all(limit);
 }
-export function getTransactionsByAddress(address, limit) {
+export function getTransactionsByAddress(address, limit, altAddress = null) {
+    // Audit F-080: rows written before the writer normalised (and any imported
+    // by the old backfill) may carry a different SS58 prefix for the same
+    // AccountId. Callers pass the normalised form plus the raw one they were
+    // given, so an account's history is complete during and after the
+    // transition. Both are indexed columns, so the OR stays cheap.
+    if (altAddress && altAddress !== address) {
+        return db.prepare(`SELECT ${TX_COLS} FROM transactions
+             WHERE from_addr IN (?, ?) OR to_addr IN (?, ?)
+             ORDER BY block DESC LIMIT ?`).all(address, altAddress, address, altAddress, limit);
+    }
     return db.prepare(`SELECT ${TX_COLS} FROM transactions WHERE from_addr = ? OR to_addr = ? ORDER BY block DESC LIMIT ?`).all(address, address, limit);
 }
 export function countTransactions() {
@@ -869,8 +942,34 @@ export function insertPrice(point) {
             point.source ?? null
         );
 }
+// Audit F-153: with more than one provider enabled, each writes its own row
+// per poll (deliberately offset by a few ms so the timestamp PK doesn't
+// collide — see PRICE_PROVIDER_TS_OFFSET). Plotting every row makes the chart
+// SAWTOOTH between providers' slightly different quotes, which reads as
+// volatility that never happened. Collapse to one point per poll window,
+// preferring the row whose source ranks highest, so the series is a single
+// coherent line. Historical backfill rows (one source, far apart) are
+// unaffected.
+//
+// The ranking is explicit rather than "newest wins": newest-wins would flip
+// between providers tick to tick, which is the same sawtooth by another route.
+const PRICE_SOURCE_RANK = { coingecko: 4, cmc: 3, ascendex: 2, 'ascendex-backfill': 1, 'defillama-backfill': 1 };
+const PRICE_MERGE_WINDOW_MS = 60 * 1000;
+
 export function getPriceHistory(sinceTs) {
-    return db.prepare('SELECT timestamp, price, market_cap AS marketCap, volume_24h AS volume24h, pct_change_24h AS pctChange24h, source FROM price_history WHERE timestamp >= ? ORDER BY timestamp ASC').all(sinceTs ?? 0);
+    const rows = db.prepare('SELECT timestamp, price, market_cap AS marketCap, volume_24h AS volume24h, pct_change_24h AS pctChange24h, source FROM price_history WHERE timestamp >= ? ORDER BY timestamp ASC').all(sinceTs ?? 0);
+    const out = [];
+    for (const row of rows) {
+        const prev = out[out.length - 1];
+        if (prev && Math.abs(Number(row.timestamp) - Number(prev.timestamp)) <= PRICE_MERGE_WINDOW_MS) {
+            const rankPrev = PRICE_SOURCE_RANK[prev.source] || 0;
+            const rankRow = PRICE_SOURCE_RANK[row.source] || 0;
+            if (rankRow > rankPrev) out[out.length - 1] = row;
+            continue;   // same poll window — one point, not two
+        }
+        out.push(row);
+    }
+    return out;
 }
 export function getLatestPrice() {
     return db.prepare('SELECT timestamp, price, market_cap AS marketCap, volume_24h AS volume24h, pct_change_24h AS pctChange24h, source FROM price_history ORDER BY timestamp DESC LIMIT 1').get() || null;
@@ -1080,7 +1179,7 @@ export function upsertAddressLabel({ address, signer, label }) {
 
 export function deleteAddressLabel(address, signer) {
     // Cascade the votes + reports too so we don't accumulate orphans.
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE');
     try {
         db.prepare('DELETE FROM address_label_votes WHERE label_address = ? AND label_signer = ?').run(address, signer);
         db.prepare('DELETE FROM address_label_reports WHERE label_address = ? AND label_signer = ?').run(address, signer);
@@ -1474,6 +1573,28 @@ export function getEmailSubscriberByEmail(email) {
     if (!lc) return null;
     return mapSubscriber(db.prepare('SELECT * FROM email_subscribers WHERE email_lc = ?').get(lc));
 }
+// Audit F-110: confirmation tokens had no expiry column and were never
+// rotated, while the subscribe modal told users the link was "valid for 24
+// hours". A months-old link in a mailbox stayed a live opt-in credential.
+// TOKEN_TTL is enforced in the lookup so an expired token simply does not
+// resolve, and resendConfirmationToken() rotates on every resend.
+export const CONFIRM_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function rotateConfirmationToken(id, newToken) {
+    db.prepare('UPDATE email_subscribers SET confirmation_token = ?, updated_at = ? WHERE id = ?')
+        .run(newToken, Date.now(), id);
+    return getEmailSubscriberById(id);
+}
+
+// Is this confirmation token still within its TTL? Measured from the row's
+// updated_at, which rotation bumps.
+export function isConfirmationTokenFresh(row) {
+    if (!row) return false;
+    const stamp = Number(row.updatedAt || row.createdAt || 0);
+    if (!Number.isFinite(stamp) || stamp <= 0) return false;
+    return (Date.now() - stamp) <= CONFIRM_TOKEN_TTL_MS;
+}
+
 export function getEmailSubscriberByConfirmationToken(token) {
     if (!token) return null;
     return mapSubscriber(db.prepare('SELECT * FROM email_subscribers WHERE confirmation_token = ?').get(token));
@@ -1515,9 +1636,16 @@ export function createEmailSubscriberIfMissing({ email, confirmationToken, unsub
 export function confirmEmailSubscriber(token) {
     const row = getEmailSubscriberByConfirmationToken(token);
     if (!row) return null;
-    if (!row.confirmedAt) {
+    // Audit F-042, the half that was still missing: this guarded on
+    // `!row.confirmedAt`, so a subscriber who had confirmed, unsubscribed and
+    // then signed up again clicked their confirmation link and NOTHING
+    // happened — unsubscribed_at stayed set, getConfirmedEmailSubscribers kept
+    // excluding them, and the page said "You're subscribed!". Reactivating an
+    // unsubscribed row is the entire point of the resubscribe flow, so the
+    // write must also run when confirmed_at is set but unsubscribed_at is too.
+    if (!row.confirmedAt || row.unsubscribedAt) {
         db.prepare('UPDATE email_subscribers SET confirmed_at = ?, unsubscribed_at = NULL, updated_at = ? WHERE id = ?')
-            .run(Date.now(), Date.now(), row.id);
+            .run(row.confirmedAt || Date.now(), Date.now(), row.id);
     }
     return getEmailSubscriberById(row.id);
 }

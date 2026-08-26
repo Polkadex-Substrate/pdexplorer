@@ -142,7 +142,18 @@ docker compose exec backend node --experimental-sqlite backfill-transactions-fro
 docker compose ps                                   # all containers Up
 docker compose logs --tail=50 backend | grep listening   # "Backend listening on port 3001"
 curl -fsS http://127.0.0.1/api/network-info | head  # backend reachable via nginx
-iostat -x 2 3                                        # %util low, r_await single-digit ms on SSD
+curl -fsS http://127.0.0.1/api/version              # gitSha matches the tree you deployed
+df -h /var/lib/docker .                             # disk headroom for images + the SQLite index
+```
+
+Optional disk-latency check. `iostat` comes from the `sysstat` package, which
+`provision-ubuntu.sh` does **not** install (audit F-146 — this step used to call
+`iostat` unconditionally and failed with `command not found` on every freshly
+provisioned box). Install it first if you want the numbers:
+
+```bash
+sudo apt-get install -y sysstat
+iostat -x 2 3                                       # %util low, r_await single-digit ms on SSD
 ```
 
 ## Migrating from an existing server

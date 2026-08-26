@@ -2,6 +2,13 @@ node_modules/
 outputs/
 dist/
 
+# F-131: the shipped og-image lives in public/ (Vite copies public/ into
+# dist). A second, different-bytes copy sat at the repo root doing nothing but
+# inviting someone to edit the wrong one. It's untracked now; the sandbox that
+# made this change couldn't delete the local file, so it's ignored instead —
+# feel free to `rm og-image.png` at the repo root.
+/og-image.png
+
 # Third-party browser scripts copied out of node_modules by
 # tools/vendor-assets.mjs so they ship from our own origin (audit F-029).
 # Build artifacts, not source: the versions are pinned in package-lock.json

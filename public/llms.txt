@@ -38,26 +38,53 @@ Access notes:
   allowlisted — it is an edge policy, not an API restriction.
 - Be a well-behaved client: send a descriptive `User-Agent`, respect the
   `Cache-Control` headers (don't poll faster than `max-age`), and back off on
-  HTTP 503 (`{"error":"rpc not connected"}`) rather than hammering.
+  HTTP 503 with `"code":"RPC_NOT_READY"` rather than hammering. See "Error
+  handling" below for the exact body — do NOT match on the `error` prose.
 
 ## Public JSON API — chain data (read-only)
 
 - GET /api/blocks — most recent blocks
 - GET /api/block/:number — single block with extrinsics + events
 - GET /api/events — most recent on-chain events
-- GET /api/transactions — most recent transactions (balance transfers)
-- GET /api/transactions/older?before=<n> — pagination further back
+- GET /api/transactions — most recent transactions. BALANCE TRANSFERS ONLY —
+  see the caveat below
+- GET /api/transactions/older?before=<n> — pagination further back.
+  Response carries nextBeforeBlock plus resumeInBlock/resumeRequired: a single
+  block can hold more transfers than one page, so when resumeRequired is true
+  echo resumeInBlock back as ?resumeBlock=&resumeCount= or you will re-read
+  that height forever (audit F-078).
 - GET /api/extrinsic/:block/:txHash — single-extrinsic detail
+- GET /api/extrinsic-by-hash/:txHash — find which block holds a tx hash by
+  scanning backwards from the head. ?recent=<blocks> (default 200 ≈ 40 min,
+  max 2000 ≈ 6 h). Returns { found, block, txHash, scanned } — feed `block` to
+  /api/extrinsic/:block/:txHash. found:false means "not in the scanned window",
+  NOT "does not exist"
 - GET /api/validators — full validator set with stake + commission
 - GET /api/validator/:address — per-validator era history
 - GET /api/holders — top-balance accounts
 - GET /api/account/:address — account-level summary
 - GET /api/network-info — network metrics (schema below)
-- GET /api/search/:query — block / extrinsic / account lookup
+- GET /api/search/:query — LIVE-RPC block-number / block-hash / account lookup.
+  Does NOT search the SQLite index and does NOT resolve extrinsic hashes — see
+  the caveat below
 - GET /api/staking-rewards/:address — per-address reward history
 - GET /api/staking-rewards-status — reward-backfill progress
 - GET /api/wallet/:address — wallet dashboard payload (balances, staking
   incl. `activeStakedPlanck` u128 string, unpaid rewards, recent activity)
+
+Two caveats that change what these answers mean:
+
+- /api/transactions is `balances.Transfer` AND NOTHING ELSE. Every row is
+  stamped method: "balances.Transfer". balances.Deposit, Withdraw, Minted,
+  Burned, DustLost, treasury payouts, vesting releases and OCEX settlement
+  movements are all real balance changes that never appear here, so summing
+  this feed does not reconcile an account. Use /api/events (full decoded event
+  stream) or /api/decode/:block for every movement.
+- /api/search/:query never touches the index. It tries, in order: an all-digit
+  query as a block NUMBER, a 66-char 0x… as a block HASH, then the query as an
+  ACCOUNT via system.account. An extrinsic hash therefore 404s — use
+  /api/extrinsic-by-hash/:txHash or /api/extrinsic/:block/:txHash. Being
+  RPC-backed, it also 503s while the node is unreachable.
 
 ## Public JSON API — chain inspection (polkadot.js-style, read-only)
 
@@ -108,6 +135,51 @@ Example — verifying a call and the state around it at a historical block:
     curl 'https://explorer.polkadex.ee/api/decode/12250870?method=submit_snapshot'
     curl 'https://explorer.polkadex.ee/api/state/ocex/validatorSetId?at=12250870'
     curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&at=12250870'
+
+## Public JSON API — account inspection (read-only, RPC-backed)
+
+- GET /api/identity/:address — on-chain identity, following identity.superOf →
+  identityOf so sub-accounts resolve as "Parent / Sub"
+- GET /api/proxies/:address — proxy delegations declared by the address
+- GET /api/proxy-types — the runtime's ProxyType enum variants, read out of the
+  chain metadata (authoritative for this runtime, not hardcoded)
+- GET /api/multisigs/:address — pending multisig calls for the address
+
+Each returns HTTP 501 if the runtime does not have the corresponding pallet.
+
+## Public JSON API — community labels
+
+Crowd-sourced address labels. The GET is public; every write needs a
+wallet-signed session (see "Authenticated" below) and answers 401 without one.
+
+- GET    /api/labels/:address — labels with score, up/down votes, reportCount,
+  vetoed, createdAt, plus `topLabel`. With a session the payload also contains
+  the CALLER'S OWN `viewerVote`, so only the anonymous response is cacheable
+- POST   /api/labels/:address — add or replace your own label for that address
+- DELETE /api/labels/:address — remove your own label
+- POST   /api/labels/:address/:signer/vote — up/down-vote someone else's label
+- POST   /api/labels/:address/:signer/report — report a label (self-reports 400)
+- POST   /api/labels/:address/:signer/veto — veto a label on YOUR OWN address
+  (the caller must be :address)
+
+## Public JSON API — analytics
+
+- GET /api/analytics/timeseries?days=N — daily series, N clamped to 1–365. The
+  7/30/90/365 windows are pre-warmed by the indexer; others aggregate live
+- GET /api/analytics/snapshot — current KPI rollup (issuance, bonded,
+  validator/nominator counts, indexed row counts)
+
+## Build provenance + liveness
+
+- GET /api/version — { component: "backend", gitSha, builtAt, dirty, startedAt,
+  specVersion, rpcConnected }. `dirty: true` means the image was built from a
+  tree with uncommitted changes, so gitSha alone does not identify the running
+  code. Node version, pid and raw uptime are deliberately not published
+- GET /version.json — the frontend's equivalent, a static file
+- GET /api/health — { healthy: <bool> }, true only when the chain RPC is up
+
+Operator-only diagnostics live under /api/diag/* behind a bearer token or a
+loopback source address. They are not part of the public contract.
 
 ## Public JSON API — price feed
 
@@ -189,30 +261,75 @@ where 23.09% is the chain's nominal maximum APY at its target staking ratio.
 
 ## Error handling
 
-Failures return a 4xx/5xx status with `{ "error": "<message>" }`. Endpoints that
-depend on the chain RPC return HTTP 503 with `{ "error": "rpc not connected" }`
-during RPC outages — treat 503 as "retry with backoff", not a permanent error.
+Failures return a 4xx/5xx status with `{ "error": "<message>" }`. The `error`
+string is a human-readable sentence meant for display and is reworded between
+releases — do not pattern-match on it.
+
+Endpoints that depend on the chain RPC return HTTP 503 during an RPC outage.
+That response carries a stable machine-readable discriminator, plus
+`Retry-After: 5` and `Cache-Control: no-store`:
+
+    {
+      "error": "Live blockchain data is not available right now — the explorer
+                is still connecting to the Polkadex node. Please refresh in a
+                few seconds.",
+      "code": "RPC_NOT_READY"
+    }
+
+Branch on `code === "RPC_NOT_READY"` (or just on the 503) and retry with
+backoff — it is not a permanent error. `RPC_NOT_READY` is currently the only
+`code` the API emits; every other failure has `error` alone.
 
 ## Caching tiers (respect the Cache-Control headers)
 
-- Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events):
+- Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events,
+  /api/council, /api/governance/latest):
   public, max-age=5, s-maxage=10, stale-while-revalidate=30
-- Medium — wallet, validators, network-info, /api/price-latest:
-  public, max-age=30, s-maxage=60, stale-while-revalidate=300
-- Long — historical (/api/price-history, /api/staking-rewards/:addr, holders,
-  sitemap): public, max-age=300, s-maxage=600, stale-while-revalidate=3600
+- Medium — /api/validators, /api/network-info, /api/holders, /api/price-latest,
+  /api/discussions, /api/staking-rewards-status, /api/analytics/*, and
+  /api/consts/* + /api/runtime when queried at the current head:
+  public, max-age=30, s-maxage=60, stale-while-revalidate=120
+- Long — /api/price-history, /api/treasury, /api/democracy,
+  /api/governance/calendar, /api/rpc/metadata, /api/decode/:block,
+  /api/proxy-types, GET /api/rpc/call, and any inspection route pinned to a
+  past block with ?at= :
+  public, max-age=300, s-maxage=600, stale-while-revalidate=3600
+
+/sitemap.xml sends its own public, max-age=300, s-maxage=300.
+
+Everything else sends NO Cache-Control header — treat that as "do not reuse
+this response". Notably /api/wallet/:address, /api/account/:address,
+/api/staking-rewards/:address, /api/search/:query, /api/block/:id,
+/api/extrinsic/*, /api/validator/:address, /api/transactions/older,
+/api/labels/* (a signed-in response contains the caller's own vote),
+/api/version, /api/health, and everything under /api/auth/*, /api/email/* and
+/api/diag/*.
 
 ## Addresses
 
 Paths that take an `:address` expect Polkadex SS58 (prefix 88, `e…`). The server
 normalizes via `toPolkadexAddress()`, so prefix-42/0 forms usually resolve too.
 
-## Key site routes (all client-rendered — use the API for data)
+## Key site routes (client-rendered — use the API for data)
 
-/ (home) · /blocks · /transactions · /events · /validators · /staking ·
-/accounts (holders) · /wallet/<address> · /treasury · /council · /democracy ·
-/calendar · /developers (API reference) · /help (help center) · /brand ·
-/privacy · /cookies
+Chain data: / (home) · /blocks · /block/<n> · /transactions · /events ·
+/validators · /validator/<address> · /holders · /account/<address> · /search
+
+Wallet + staking: /wallet · /wallet/<address> · /staking-rewards · /watchlist
+
+Governance: /democracy · /council · /treasury · /calendar · /discussions
+
+Price + analytics: /price · /analytics
+
+Developer surfaces: /developers (API reference) · /chain-state · /decode ·
+/runtime · /utilities
+
+Reference: /help and /help/<article> · /brand · /privacy · /cookies · /donate
+
+Audit F-157: this list previously said `/staking` and `/accounts (holders)`.
+Neither route exists — they are `/staking-rewards` and `/holders`. The
+authoritative set is SITEMAP_STATIC_ROUTES in server.js, which is what
+/sitemap.xml is generated from; prefer the sitemap over this list.
 
 ## More
 

@@ -410,7 +410,6 @@
                         <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching validators from indexer…</div>
                     </div>
                     <div style="text-align: center; padding: 20px;">
-                        <button id="show-more-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--border-color); background: rgba(255,255,255,0.05); border-radius: var(--radius-sm); cursor: pointer; display: none; transition: var(--transition-fast);">Show More</button>
                     </div>
                 </div>
             </div>
@@ -875,7 +874,13 @@
                              amount still bonded, the chain rejects it. Display it so users see the
                              constraint before they type a value that lands in the dead zone. -->
                         <div><span>Network minimum bond</span><strong id="unstake-min-bond">--</strong></div>
+                        <!-- F-057: matured unbond chunks need an explicit
+                             staking.withdrawUnbonded to become transferable.
+                             This row (and its button) appear only when the
+                             chain says something is actually withdrawable. -->
+                        <div id="unstake-withdrawable-row" style="display:none;"><span>Withdrawable now</span><strong id="unstake-withdrawable">--</strong></div>
                     </div>
+                    <button type="button" id="submit-withdraw-tx-btn" class="wallet-action-btn" style="display:none;margin-bottom:14px;">Withdraw unbonded funds</button>
 
                     <label class="stake-label">Amount to unbond (PDEX)</label>
                     <div class="stake-amount-wrap">
@@ -1018,7 +1023,6 @@
                         <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching holders from indexer…</div>
                     </div>
                     <div style="text-align: center; padding: 20px;">
-                        <button id="show-more-holders-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--border-color); background: rgba(255,255,255,0.05); border-radius: var(--radius-sm); cursor: pointer; display: none; transition: var(--transition-fast);">Show More</button>
                     </div>
                 </div>
             </div>
@@ -1035,7 +1039,6 @@
                     </div>
                     <div style="text-align: center; padding: 20px;">
                         <button id="load-older-financial-tx-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--brand-primary); background: rgba(229,0,122,0.1); border-radius: var(--radius-sm); cursor: pointer; display: none; transition: var(--transition-fast); margin-right: 10px;">Load Older 100 Financial Tx</button>
-                        <button id="show-more-tx-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--border-color); background: rgba(255,255,255,0.05); border-radius: var(--radius-sm); cursor: pointer; display: none; transition: var(--transition-fast);">Show More</button>
                     </div>
                 </div>
             </div>
@@ -1051,7 +1054,6 @@
                         <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching blocks…</div>
                     </div>
                     <div style="text-align: center; padding: 20px;">
-                        <button id="show-more-blocks-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--border-color); background: rgba(255,255,255,0.05); border-radius: var(--radius-sm); cursor: pointer; display: none; transition: var(--transition-fast);">Show More</button>
                     </div>
                 </div>
             </div>
@@ -1068,7 +1070,6 @@
                         <div style="text-align:center; padding: 20px;">Fetching events...</div>
                     </div>
                     <div style="text-align: center; padding: 20px; border-top: 1px solid var(--border-color);">
-                        <button id="show-more-events-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--border-color); background: rgba(255,255,255,0.05); border-radius: var(--radius-sm); cursor: pointer; display: none; transition: var(--transition-fast);">Show More</button>
                     </div>
                 </div>
             </div>
@@ -1106,6 +1107,19 @@
                  Rendered by renderEmailPreferencesPage() in script.js. -->
             <div class="email-prefs-page page-section" data-page="email-preferences" style="display: none;">
                 <div id="email-prefs-content"></div>
+            </div>
+
+            <!-- 404 pane (audit F-124). An unknown path used to hide every
+                 section — a silent blank page wearing the HOMEPAGE's title,
+                 description and index,follow. routeTo() falls back to this
+                 section when no data-page matches, and ROUTE_SEO marks it
+                 noindex so typo URLs don't get indexed as duplicate homes. -->
+            <div class="not-found-page page-section" data-page="not-found" style="display: none;">
+                <div class="list-container glass" style="padding: 48px; text-align: center;">
+                    <h1 style="font-size: 2.4rem; margin-bottom: 8px;">404</h1>
+                    <p style="color: var(--text-secondary); margin-bottom: 20px;">There's no page at this address. If you followed a link here, it may be pointing at a route that no longer exists.</p>
+                    <a href="/" class="item-link" style="font-weight: 600;">Back to the explorer</a>
+                </div>
             </div>
 
             <!-- /developers — served SERVER-SIDE by the backend: see
@@ -1257,13 +1271,13 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet</code></td><td style="padding: 10px 12px;">Connected wallet address and source extension name.</td><td style="padding: 10px 12px;">So the My Account page works without re-connecting on every reload.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_last_used_address</code></td><td style="padding: 10px 12px;">The most recently active address when your wallet has multiple accounts.</td><td style="padding: 10px 12px;">So we can default to the right account instead of always picking the first one.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_address</code></td><td style="padding: 10px 12px;">Connected wallet address and source extension name.</td><td style="padding: 10px 12px;">So the My Account page works without re-connecting on every reload.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_last_used_wallet_address</code></td><td style="padding: 10px 12px;">The most recently active address when your wallet has multiple accounts.</td><td style="padding: 10px 12px;">So we can default to the right account instead of always picking the first one.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_watchlist_v1</code></td><td style="padding: 10px 12px;">Addresses, validators, and governance items you've starred.</td><td style="padding: 10px 12px;">So your watchlist follows you across sessions.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_labels_session</code></td><td style="padding: 10px 12px;">Short-lived signed bearer token (about 24 hours) for posting/voting on community labels.</td><td style="padding: 10px 12px;">So you don't have to re-sign every time you vote on a label.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_discuss_session</code></td><td style="padding: 10px 12px;">Signed bearer token (valid 7 days, matching the server-side session TTL) for posting on the discussion board. <strong>This is a credential</strong> — anyone with it can post as your address until it expires.</td><td style="padding: 10px 12px;">So you don't have to re-sign for every post.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_tour_seen_v1</code></td><td style="padding: 10px 12px;">A boolean flag once you've completed the onboarding tour.</td><td style="padding: 10px 12px;">So we don't pop the tour up again every visit.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_banner_dismissed</code></td><td style="padding: 10px 12px;">A flag set when you dismiss the storage notice banner.</td><td style="padding: 10px 12px;">So we don't show it again.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_apr_period</code></td><td style="padding: 10px 12px;">The APR-history window you last picked (7d / 30d / 90d / 6m / 1y / all-time).</td><td style="padding: 10px 12px;">So your selection persists on the My Account page.</td></tr>
+                                    
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_price_period</code></td><td style="padding: 10px 12px;">The time window you last picked on the full-screen <a href="/price" class="item-link">/price</a> chart (7 / 30 / 90 / 365 / 4000 days).</td><td style="padding: 10px 12px;">So your selection persists between visits.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_home_snapshot</code></td><td style="padding: 10px 12px;">A small JSON cache of the home-page stat values (price, market cap, total issuance, in-stake, AVG APY, era, validators, nominators, max active stake) plus a save timestamp.</td><td style="padding: 10px 12px;">So returning visitors see populated home-page cells instantly while live data loads in the background. Expires after 7 days.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_dashboard:&lt;address&gt;</code></td><td style="padding: 10px 12px;">One JSON snapshot of the My Account dashboard payload (balance, staking positions, recent activity, price history, reward history) per address you've viewed, plus a save timestamp.</td><td style="padding: 10px 12px;">So returning to the dashboard renders instantly while the live data refreshes in the background. Expires after 30 minutes.</td></tr>

@@ -1,7 +1,11 @@
+// Audit F-100: this probe used to hardcode the PUBLIC production RPC, so
+// running it — including by accident, from a dev box — put load on the
+// endpoint real wallets sign against. Defaults to a local node now; set
+// POLKADEX_WS to aim it somewhere else deliberately.
 import { ApiPromise, WsProvider } from '@polkadot/api';
 
 async function run() {
-    const wsProvider = new WsProvider('wss://rpc.polkadex.ee');
+    const wsProvider = new WsProvider((process.env.POLKADEX_WS || 'ws://127.0.0.1:9944'));
     const api = await ApiPromise.create({ provider: wsProvider });
     
     console.log("Fetching all accounts...");

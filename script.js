@@ -27,10 +27,24 @@ function toPolkadexAddress(addr) {
 
 // Utility to generate human readable relative time
 function timeAgo(timestamp) {
-    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    // F-114 made getBlockTimestamp return null for a block whose timestamp
+    // couldn't be read — correct, but a review caught the interaction: with
+    // the new day/month/year buckets, Date.now() - null landed in the years
+    // branch and rendered a confident "56.6 years ago". An unknown time must
+    // look unknown.
+    const ts = Number(timestamp);
+    if (!Number.isFinite(ts) || ts <= 0) return '—';
+    const seconds = Math.floor((Date.now() - ts) / 1000);
+    if (seconds < 0) return 'just now';   // clock skew between browser and chain
     if (seconds < 60) return `${seconds} secs ago`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)} mins ago`;
-    return `${Math.floor(seconds / 3600)} hrs ago`;
+    // Audit F-127: this stopped at hours, so with the transactions table now
+    // reaching back to 2021 (F-008) a four-year-old transfer read
+    // "35,000 hrs ago". Say days/months/years like a person would.
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} hrs ago`;
+    if (seconds < 30 * 86400) return `${Math.floor(seconds / 86400)} days ago`;
+    if (seconds < 365 * 86400) return `${Math.floor(seconds / (30 * 86400))} months ago`;
+    return `${(seconds / (365.25 * 86400)).toFixed(1)} years ago`;
 }
 
 // Format PDEX balances (12 decimals)
@@ -492,6 +506,10 @@ let transactions = [];
 let txFetched = false;
 let txDisplayLimit = 50;
 let olderTxBeforeBlock = null;
+// F-078 / F-079 paging state: where to resume inside a partially-returned
+// height, and whether the server has told us there is nothing older.
+let olderTxResume = null;
+let olderTxReachedGenesis = false;
 let transactionCacheMeta = {};
 let isLoadingOlderTx = false;
 let fullEvents = [];
@@ -1341,8 +1359,19 @@ function subscribeNewBlocks(api) {
     });
 }
 
+// Audit F-067: was Number(balance)/1e12 — a codec u128 above 2^53 planck
+// (~9007 PDEX) truncates BEFORE the division, so a live whale transfer painted
+// a subtly wrong amount. BigInt keeps whole tokens exact; only the sub-planck
+// fraction rides a float.
 function formatLivePDEX(balance) {
-    return Number(balance) / 10 ** 12;
+    try {
+        const planck = BigInt(balance.toString().replace(/,/g, ''));
+        const whole = planck / 1000000000000n;
+        const frac = Number(planck % 1000000000000n) / 1e12;
+        return Number(whole) + frac;
+    } catch (e) {
+        return Number(balance) / 10 ** 12;
+    }
 }
 
 function getLiveExtrinsicAmountSummary(ex) {
@@ -1524,7 +1553,11 @@ function renderValidators() {
                     }
                 },
                 {
-                    key: 'avg30DayApy', label: 'Real APY (30d)',
+                    // Audit F-044: this column was labelled "Real APY (30d)"
+                    // while the number is the nominal max APY adjusted for the
+                    // validator's CURRENT commission — a projection, not a
+                    // realized 30-day average. Label what it is.
+                    key: 'avg30DayApy', label: 'Est. APY (current commission)',
                     sort: (a, b) => (a.avg30DayApy || 0) - (b.avg30DayApy || 0),
                     format: row => `<span style="color: var(--success); font-weight: 500;">${Number(row.avg30DayApy).toFixed(2)}%</span>`
                 },
@@ -1874,6 +1907,16 @@ function renderFullTransactions() {
 function updateOlderFinancialTxButton(show) {
     const loadOlderBtn = document.getElementById('load-older-financial-tx-btn');
     if (!loadOlderBtn) return;
+    // F-079: once the server reports end-of-chain there is nothing older —
+    // keep the button visible but inert and say why, rather than leaving a
+    // button that silently does nothing (which is what a reset cursor felt
+    // like from the outside).
+    if (olderTxReachedGenesis) {
+        loadOlderBtn.style.display = 'inline-block';
+        loadOlderBtn.disabled = true;
+        loadOlderBtn.innerText = 'Reached the start of the chain';
+        return;
+    }
     loadOlderBtn.style.display = show ? 'inline-block' : 'none';
     loadOlderBtn.disabled = isLoadingOlderTx;
     loadOlderBtn.innerText = isLoadingOlderTx ? 'Loading older financial tx...' : 'Load Older 100 Financial Tx';
@@ -1912,15 +1955,30 @@ async function loadOlderFinancialTransactions() {
     try {
         const currentFinancialTx = financialTransactionRows(transactions);
         const oldestLoadedBlock = currentFinancialTx.length > 0 ? Math.min(...currentFinancialTx.map(tx => tx.block)) : null;
-        const beforeBlock = olderTxBeforeBlock || oldestLoadedBlock || transactionCacheMeta.oldestScannedBlock;
+        // F-079 client half: `||` treats a legitimate 0 as absent. Genesis is
+        // block 0, so the old chain reset the cursor to the head there.
+        const firstDefined = (...vals) => vals.find(v => v !== null && v !== undefined && Number.isFinite(Number(v)));
+        const beforeBlock = firstDefined(olderTxBeforeBlock, oldestLoadedBlock, transactionCacheMeta.oldestScannedBlock);
         const query = new URLSearchParams({ limit: '100' });
-        if (beforeBlock) query.set('beforeBlock', beforeBlock);
+        if (beforeBlock !== undefined) query.set('beforeBlock', String(beforeBlock));
+        // F-078: resume inside a height the previous page only partly returned.
+        if (olderTxResume && Number.isFinite(Number(olderTxResume.block))) {
+            query.set('resumeBlock', String(olderTxResume.block));
+            query.set('resumeCount', String(olderTxResume.count));
+        }
 
         const response = await fetch(`/api/transactions/older?${query.toString()}`);
-        const data = await response.json();
+        const data = await parseJsonResponse(response);
         if (data.error) throw new Error(data.error);
 
-        olderTxBeforeBlock = data.nextBeforeBlock || olderTxBeforeBlock;
+        // End of chain: stop, and say so, instead of wrapping to the head.
+        if (data.endOfChain) {
+            olderTxReachedGenesis = true;
+        }
+        if (data.nextBeforeBlock !== null && data.nextBeforeBlock !== undefined) {
+            olderTxBeforeBlock = data.nextBeforeBlock;
+        }
+        olderTxResume = data.resumeInBlock || null;
         const existingHashes = new Set(transactions.map(tx => tx.hash));
         const olderRows = financialTransactionRows(data.transactions).filter(tx => !existingHashes.has(tx.hash));
         // Append is right here (these rows are strictly older than what we
@@ -2133,7 +2191,7 @@ function activePageName() {
 
 function refreshRecentViews() {
     const activePage = activePageName();
-    if (activePage === 'home' || activePage === 'dashboard') refreshDashboardLists();
+    if (activePage === 'home') refreshDashboardLists(); // F-132: the phantom 'dashboard' alias is gone — no such data-page ever existed
     if (activePage === 'transactions') fetchTransactions(true);
     if (activePage === 'blocks') fetchBlocks(true);
     if (activePage === 'events') fetchEvents(true);
@@ -2614,7 +2672,7 @@ async function performSearch(query) {
             columns: [
                 { key: 'hash', label: 'Tx hash', searchable: true,
                   format: r => r.block
-                      ? `<a href="/extrinsic/${r.block}/${r.hash}" class="item-link mono">${stakingEscapeHtml(String(r.hash).slice(0, 18))}…</a>`
+                      ? `<a href="/tx/${r.block}/${r.hash}" class="item-link mono">${stakingEscapeHtml(String(r.hash).slice(0, 18))}…</a>`
                       : `<span class="mono">${stakingEscapeHtml(String(r.hash).slice(0, 18))}…</span>` },
                 { key: 'from', label: 'From', searchable: true,
                   format: r => shortAddressLink(r.from) },
@@ -2741,9 +2799,15 @@ async function parseJsonResponse(response) {
 //      click.
 // Pass `fallbackPath` without a leading slash (e.g. 'validators', not
 // '/validators') because the SPA's navigateTo strips the leading slash itself.
+// Audit F-129: this used to trust `document.referrer` being same-origin as
+// proof there was somewhere to go back TO. Cmd-click a detail row into a new
+// tab and the referrer is same-origin while the tab's history is just this
+// page — history.back() is a silent no-op and the X button does nothing. The
+// only reliable signal is one we write ourselves: spaNavDepth counts pushes
+// THIS tab's SPA session has made.
 function closeDetailView(fallbackPath) {
-    const sameOriginReferrer = document.referrer && document.referrer.startsWith(location.origin);
-    if (history.length > 1 || sameOriginReferrer) {
+    if (spaNavDepth > 0) {
+        spaNavDepth = Math.max(0, spaNavDepth - 1);
         history.back();
     } else {
         navigateTo(fallbackPath || 'home');
@@ -2924,6 +2988,9 @@ const ROUTE_SEO = {
     // the URL IS the credential, so a crawled copy is a leaked one.
     'email-preferences':  { title: 'Email alert preferences — Polkadex Mainnet Explorer',
                             description: 'Choose which Polkadex Mainnet Explorer alert emails you receive.',
+                            noindex: true },
+    'not-found':          { title: 'Page not found — Polkadex Mainnet Explorer',
+                            description: 'There is no page at this address.',
                             noindex: true },
     'donate':             { title: 'Support the Explorer — Polkadex Mainnet Explorer',
                             description: 'Help fund infrastructure for the Polkadex Mainnet Explorer. Donate with PDEX, BTC, ETH, USDT, USDC, or any major crypto asset. Every contribution keeps the explorer ad-free and tracker-free.' },
@@ -3240,7 +3307,7 @@ const HELP_TOPICS = [
             <h3>What to look for</h3>
             <ul>
                 <li><b>HIGH RISK badge</b> — commission &gt; 50%. The validator keeps a majority of rewards. Avoid.</li>
-                <li><b>Real APY (30d)</b> — actual realized yield over the last 30 days, after commission. This is what nominators got, not the theoretical target.</li>
+                <li><b>Est. APY (current commission)</b> — the chain's nominal maximum APY adjusted for the validator's current commission. A projection of what nominating this validator would yield if conditions hold — not a measured historical average.</li>
                 <li><b>Total stake</b> — too low risks dropping out of the active set; very high may dilute your share.</li>
             </ul>
             <p>Click a row to open the <b>Validator Detail</b> page, which adds a scorecard with estimated APY, commission band, active-era rate, slash count, and current stake. Star the validator (top-right) to add to your <b>Watchlist</b>.</p>
@@ -3363,9 +3430,15 @@ const HELP_TOPICS = [
                 <li><b>Governance proxy</b> — delegate voting to someone you trust.</li>
             </ul>
             <p>The Proxies card lists each delegate with type and delay. <b>Remove</b> revokes a proxy; <b>Add proxy</b> authorises a new one. The proxy type dropdown is sourced from the live runtime metadata.</p>
+            <div class="help-callout">
+                <b>What this explorer can and cannot sign.</b> It signs <code>proxy.addProxy</code> and <code>proxy.removeProxy</code> for <em>your own</em> account — managing who may act for you. It does <b>not</b> support acting <em>as</em> someone's proxy (<code>proxy.proxy</code>): if an account has delegated to you, submit that call from <a href="https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.polkadex.ee#/extrinsics" target="_blank" rel="noopener" class="item-link">polkadot.js Apps</a>.
+            </div>
             <h3>Multisig</h3>
             <p>A multisig is an address derived from a list of signers and a threshold (e.g. 2-of-3). Transactions need <b>at least threshold-of-N</b> approvals to execute. The address is deterministic — anyone with the same signer list and threshold can recompute it.</p>
             <p>The calculator turns a textarea of signer addresses + threshold into the corresponding multisig address. The <b>Pending approvals</b> table shows multisig transactions still waiting for further signatures.</p>
+            <div class="help-callout">
+                <b>Multisig here is read-only.</b> The calculator and the pending-approvals table are views — the explorer cannot approve, execute or cancel a multisig call (<code>multisig.asMulti</code>, <code>approveAsMulti</code>, <code>cancelAsMulti</code>). Sign those from <a href="https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.polkadex.ee#/extrinsics" target="_blank" rel="noopener" class="item-link">polkadot.js Apps</a>. Use this page to compute the address and to watch what is pending.
+            </div>
             <div class="help-callout">
                 <b>When to consider multisig.</b> Treasury accounts, DAOs, and high-value vaults benefit: no single key compromise loses funds. The trade-off is operational — every transaction needs several humans to coordinate signing.
             </div>
@@ -3433,7 +3506,7 @@ const HELP_TOPICS = [
         keywords: 'unstake unbond withdraw cool down 28 days unlock chill min nominator bond max',
         body: `
             <p>Click <b>Unstake</b> on the dashboard. Enter the PDEX amount you want to unbond. The modal shows the current unbonding period — typically 28 days — and your existing unlocking balance (if any).</p>
-            <p>After signing, the PDEX moves into the <b>unbonding</b> state. When the 28 days elapse, one more call (<code>withdrawUnbonded</code>) returns it to your free balance. The explorer prompts you when withdrawal becomes available.</p>
+            <p>After signing, the PDEX moves into the <b>unbonding</b> state. When the unbonding period elapses, one more call (<code>withdrawUnbonded</code>) returns it to your free balance. Open the <b>Unstake</b> modal on My Account — when matured funds are waiting, it shows a “Withdrawable now” row with a <b>Withdraw unbonded funds</b> button.</p>
             <p>You can have multiple in-flight unbonding chunks at once, each with its own clock.</p>
             <h3>Partial vs. full unbond</h3>
             <p>The network enforces a <b>minimum bond</b> — usually 100 PDEX. A partial unbond that would leave you below that threshold is rejected by the runtime. The modal shows the current minimum so you can size your unbond accordingly.</p>
@@ -3538,7 +3611,7 @@ const HELP_TOPICS = [
             <h3>Reading</h3>
             <p>No sign-in needed. Browse the thread list; click any thread for the per-thread view.</p>
             <h3>Posting</h3>
-            <p>Click <b>Sign in with wallet</b>. The explorer asks your wallet to sign a short challenge — no transaction, just a signature. The resulting bearer token is stored locally for ~24 hours, then you'll be asked to sign again. Each post shows your address and a local-time timestamp.</p>
+            <p>Click <b>Sign in with wallet</b>. The explorer asks your wallet to sign a short challenge — no transaction, just a signature. The resulting bearer token is stored locally and lasts <b>7 days</b>, then you'll be asked to sign again. Each post shows your address and a local-time timestamp.</p>
         `
     },
     {
@@ -3585,7 +3658,7 @@ const HELP_TOPICS = [
             <ol class="help-steps">
                 <li>Connect a wallet.</li>
                 <li>Go to the Account Details page of the address.</li>
-                <li>In the Labels panel, click <b>Sign in with wallet</b>. Your wallet signs a short challenge — no transaction, just a signature. The token persists ~24 hours.</li>
+                <li>In the Labels panel, click <b>Sign in with wallet</b>. Your wallet signs a short challenge — no transaction, just a signature. The token persists for 7 days.</li>
                 <li>Type your label (max 64 chars) and click <b>Suggest</b> (or <b>Set label</b> if you own the address).</li>
             </ol>
             <h3>Voting, reporting, veto</h3>
@@ -4344,6 +4417,10 @@ function readRouteFromLocation() {
 // Push a new history entry and route to it. All call sites that used to do
 // `window.location.hash = X` now go through here so the URL bar shows a
 // clean path and crawlers can index it.
+// How many history entries THIS SPA session has pushed (F-129). Session-
+// scoped on purpose: a fresh tab starts at 0 regardless of referrer.
+let spaNavDepth = 0;
+
 function navigateTo(target, { replace = false } = {}) {
     if (!target || target === 'home') target = '';
     // Don't push duplicate history entries for the same URL.
@@ -4351,7 +4428,10 @@ function navigateTo(target, { replace = false } = {}) {
     const currentPath = window.location.pathname + window.location.hash;
     if (newPath !== currentPath || window.location.hash) {
         const fn = replace ? 'replaceState' : 'pushState';
-        try { history[fn](null, '', newPath || '/'); }
+        try {
+            history[fn](null, '', newPath || '/');
+            if (!replace) spaNavDepth++;   // F-129
+        }
         catch (e) { /* same-origin / sandboxed iframes can throw; fall back below */ }
     }
     routeTo(target || 'home');
@@ -4369,6 +4449,12 @@ function bootSeoRouter() {
     }
 
     window.addEventListener('popstate', () => {
+        // F-129: a Back consumes one of the entries this SPA pushed, so the
+        // depth counter has to come down with it. A review caught the first
+        // version only ever incrementing — the count could exceed the real
+        // back-stack, and closeDetailView would call history.back() into
+        // nothing again, which is the very no-op it was written to avoid.
+        spaNavDepth = Math.max(0, spaNavDepth - 1);
         routeTo(readRouteFromLocation());
     });
 
@@ -4416,7 +4502,16 @@ function bootSeoRouter() {
             }
             target = t;
         } else if (href.startsWith('/')) {
-            // Only intercept if the host is the same; absolute paths are SPA routes.
+            // Audit F-059: an absolute same-origin path is USUALLY an SPA
+            // route — but not always. /llms.txt, /sitemap.xml, /vendor/*.js
+            // and friends are real files that nginx serves; intercepting them
+            // routed users to a blank pane named "llms.txt". Anything with a
+            // file extension, and the handful of extensionless real endpoints,
+            // must fall through to a normal navigation.
+            const path = href.split(/[?#]/)[0];
+            const isRealFile = /\.[a-z0-9]{2,12}$/i.test(path)
+                || path === '/robots.txt' || path.startsWith('/api/') || path.startsWith('/vendor/');
+            if (isRealFile) return;
             target = href.replace(/^\/+/, '');
         } else {
             return;
@@ -4473,7 +4568,10 @@ function routeTo(target) {
     } else if (target.startsWith('block/')) {
         mainTarget = 'block-details';
         detailId = target.split('/')[1];
-    } else if (target.startsWith('tx/')) {
+    } else if (target.startsWith('tx/') || target.startsWith('extrinsic/')) {
+        // 'extrinsic/' is an alias: search results linked it for months while
+        // only 'tx/' had a page (audit F-065), so shared links exist in the
+        // wild and must keep resolving.
         mainTarget = 'tx-details';
         detailId = target.split('/')[1];
         detailId2 = target.split('/')[2];
@@ -4512,6 +4610,14 @@ function routeTo(target) {
     // Refresh SEO metadata for the new route. Detail pages (block/validator/
     // wallet/etc.) will call updateSeoMeta() again with concrete data once the
     // fetcher resolves so titles/descriptions reflect real content.
+    // Audit F-124: an unknown path used to fall through — every section
+    // hidden (blank pane) while the SEO block inherited the HOMEPAGE's title
+    // and index,follow, so any typo'd inbound link became a crawlable
+    // duplicate of the home page. Rewrite to the explicit 404 pane instead.
+    {
+        const known = Array.from(pageSections).some(pg => pg.getAttribute('data-page') === mainTarget);
+        if (!known) mainTarget = 'not-found';
+    }
     updateSeoMeta(mainTarget, { canonicalPath: '/' + (target === 'home' ? '' : target) });
 
     // Show target page
@@ -5110,14 +5216,13 @@ function buildPriceStatsHtml(history, days) {
 // angle brackets — SCALE type names like `Vec<AccountId32>` would otherwise be
 // parsed as tags and silently mangle the output, quite apart from the
 // injection risk. Defined here because the codebase had no such helper.
+// Audit F-133: the codebase had grown three HTML-escape helpers that could
+// drift apart — and an escape helper that drifts is an XSS waiting for the
+// divergence. This name survives because ~19 call sites use it, but it is now
+// an alias of the canonical stakingEscapeHtml (261 call sites), not a second
+// implementation.
 function escapeHtml(value) {
-    if (value === null || value === undefined) return '';
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+    return stakingEscapeHtml(value);
 }
 
 // ─── /chain-state ────────────────────────────────────────────────────────────
@@ -6326,8 +6431,8 @@ async function fetchAccountDetails(address) {
                         <td style="padding: 12px 20px;">${data.balanceTotal.toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
                     </tr>
                     <tr>
-                        <td style="padding: 12px 20px; font-weight: 600;">balance frozen</td>
-                        <td style="padding: 12px 20px;">${data.balanceFrozen.toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
+                        <td style="padding: 12px 20px; font-weight: 600;">balance reserved</td>
+                        <td style="padding: 12px 20px;">${Number(data.balanceReserved != null ? data.balanceReserved : data.balanceFrozen).toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
                     </tr>
                     <tr style="background: rgba(255,255,255,0.02);">
                         <td style="padding: 12px 20px; font-weight: 600;">balance free</td>
@@ -6339,7 +6444,7 @@ async function fetchAccountDetails(address) {
                     </tr>
                     <tr style="background: rgba(255,255,255,0.02);">
                         <td style="padding: 12px 20px; font-weight: 600;">Rating(top)</td>
-                        <td style="padding: 12px 20px;">${data.rank === "0" ? "N/A" : data.rank}</td>
+                        <td style="padding: 12px 20px;">${(data.rank == null || data.rank === "0") ? "outside the top 500" : '#' + stakingEscapeHtml(String(data.rank))}</td>
                     </tr>
                 </table>
             </div>
@@ -8178,7 +8283,7 @@ const MOBILE_WALLETS = [
 // Each account is returned with two address fields:
 //   `address`    — the Polkadex-prefixed form (starts with "e…") for display
 //                  and for everything the user/UI persists.
-//   `rawAddress` — the extension's native SS58 form (often "1…" or "5…")
+//   (a former `rawAddress` field was removed — audit F-117: never read)
 //                  needed by the wallet's `signAndSend` so the injected
 //                  signer recognises the account.
 async function getInjectedAccounts({ retries = 6, retryDelayMs = 250 } = {}) {
@@ -8199,7 +8304,11 @@ async function getInjectedAccounts({ retries = 6, retryDelayMs = 250 } = {}) {
                 const accs = await ext.accounts.get();
                 for (const a of accs) {
                     const pdex = toPolkadexAddress(a.address);
-                    accounts.push({ address: pdex, rawAddress: a.address, name: a.name || key, source: key });
+                    // Audit F-117: a `rawAddress` field used to be stored here
+                    // "for the injected signer", but nothing ever read it —
+                    // every signAndSend call site passes account.address and
+                    // extensions accept any SS58 encoding of a key they own.
+                    accounts.push({ address: pdex, name: a.name || key, source: key });
                 }
             }
         } catch (e) { /* user rejected this extension */ }
@@ -9171,10 +9280,19 @@ async function loadValidatorsForPicker() {
 // unit-tested in test/wallet-safety.test.js.
 
 // Some Substrate runtimes use batch / batchAll / forceBatch under utility.
+// Audit F-055: this used to PREFER utility.batchAll, which is atomic — one
+// inner failure reverts every call in the batch. For reward payouts that is
+// the wrong semantics: payoutStakers(validator, era) pairs are independent,
+// and a single AlreadyClaimed (someone else triggered that validator's payout
+// minutes ago — anyone can) would revert 29 perfectly good claims and charge
+// the user a fee for nothing. forceBatch executes every call and reports
+// per-item failures; batch stops at the first failure but keeps what already
+// executed. batchAll is now the LAST resort, not the first.
 function batchTx(api, calls) {
     if (calls.length === 1) return calls[0];
-    if (api.tx.utility && api.tx.utility.batchAll) return api.tx.utility.batchAll(calls);
+    if (api.tx.utility && api.tx.utility.forceBatch) return api.tx.utility.forceBatch(calls);
     if (api.tx.utility && api.tx.utility.batch) return api.tx.utility.batch(calls);
+    if (api.tx.utility && api.tx.utility.batchAll) return api.tx.utility.batchAll(calls);
     throw new Error('utility.batch / batchAll is not available on this runtime.');
 }
 
@@ -9418,7 +9536,7 @@ function openPayoutModal() {
 
 async function submitPayoutTx() {
     const errEl = document.getElementById('payout-modal-error');
-    const fail = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } };
+    const fail = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; errEl.style.color = ''; } };
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     const data = currentWalletData;
     if (!data) return fail('Wallet data is not loaded.');
@@ -9427,6 +9545,15 @@ async function submitPayoutTx() {
     // Cap at 30 per tx to stay well under per-block weight limits; user can re-trigger.
     const batch = entries.slice(0, 30);
     const truncated = entries.length > batch.length;
+    // F-055: say so BEFORE signing, where the decision is made — the tx label
+    // alone only tells the user after the fact.
+    // NOTE the fail() below resets colour — a review caught this grey staying
+    // on a subsequent real error.
+    if (truncated && errEl) {
+        errEl.style.display = 'block';
+        errEl.style.color = 'var(--text-secondary)';
+        errEl.textContent = `Claiming the first ${batch.length} of ${entries.length} entries — run Pay Out again afterwards for the rest.`;
+    }
     await submitSignedTx({
         buildTx: (api) => batchTx(api, batch.map(e => buildPayoutCall(api, e.validator, e.era))),
         label: 'Payout rewards' + (truncated ? ` (${batch.length} of ${entries.length})` : ''),
@@ -9481,6 +9608,123 @@ function openUnstakeModal() {
         ? stakingFormatPDEX(minBond) + ' PDEX'
         : '—';
     document.getElementById('unstake-modal').style.display = 'flex';
+
+    // F-057: check whether any unbond chunks have MATURED. Unbonding is a
+    // two-step operation on Substrate — staking.unbond starts the clock, and
+    // staking.withdrawUnbonded is what actually releases the funds once the
+    // bonding duration passes. The explorer only ever signed step one, while
+    // the help page claimed it would "prompt you to withdraw": funds sat
+    // withdrawable forever for anyone who took that on faith. Fire-and-forget;
+    // the row stays hidden unless the chain confirms something is claimable.
+    refreshWithdrawableUnbonded(data.address).catch(() => {});
+}
+
+// Read the staking ledger and current era directly from the chain, compute
+// which unlocking chunks have matured, and reveal the withdraw button when
+// the answer is more than zero.
+// The account the staking ledger says must sign withdrawUnbonded (F-057).
+let withdrawControllerAddress = null;
+
+async function refreshWithdrawableUnbonded(address) {
+    withdrawControllerAddress = null;
+    const row = document.getElementById('unstake-withdrawable-row');
+    const valEl = document.getElementById('unstake-withdrawable');
+    const btn = document.getElementById('submit-withdraw-tx-btn');
+    // Hide FIRST, then bail. A review caught the guard preceding the hide:
+    // reopening the modal for a different account while the RPC was
+    // reconnecting left the previous account's withdrawable amount and an
+    // enabled button on screen, labelled as this account's.
+    if (row) row.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+    if (!row || !valEl || !btn || !globalApi) return;
+
+    const bondedOpt = await globalApi.query.staking.bonded(address);
+    const controller = (bondedOpt && bondedOpt.isSome) ? bondedOpt.unwrap().toString() : address;
+    const ledgerOpt = await globalApi.query.staking.ledger(controller);
+    if (!ledgerOpt || !ledgerOpt.isSome) return;
+    const ledger = ledgerOpt.unwrap();
+    // Remember whose key the runtime will demand. staking.withdrawUnbonded is
+    // a CONTROLLER call; on modern unified stash/controller setups they are
+    // the same account, but on a split setup signing with the stash fails with
+    // NotController — after the row had already told the user funds were
+    // ready. A review caught this.
+    withdrawControllerAddress = controller;
+
+    // A review caught this reading activeEra. pallet_staking's
+    // withdraw_unbonded calls consolidate_unlocked(Self::current_era()), and
+    // current_era >= active_era (current is set at session planning), so a
+    // chunk maturing at current_era is withdrawable on chain while an
+    // active_era test still hides the button — for up to a whole era, which is
+    // exactly the "we'll prompt you" promise F-057 is about. Prefer
+    // currentEra; fall back to activeEra only if the query is unavailable.
+    let currentEra = null;
+    try {
+        const cur = await globalApi.query.staking.currentEra();
+        if (cur && cur.isSome) currentEra = cur.unwrap().toNumber();
+    } catch (e) { /* fall through */ }
+    if (currentEra === null) {
+        const eraOpt = await globalApi.query.staking.activeEra();
+        if (!eraOpt || !eraOpt.isSome) return;
+        currentEra = eraOpt.unwrap().index.toNumber();
+    }
+
+    let withdrawablePlanck = 0n;
+    for (const chunk of (ledger.unlocking || [])) {
+        if (chunk.era.toNumber() <= currentEra) {
+            withdrawablePlanck += BigInt(chunk.value.toString());
+        }
+    }
+    if (withdrawablePlanck <= 0n) return;
+
+    // BigInt split, not Number(planck)/1e12 — the very bug F-043/F-067 fixed
+    // elsewhere in this batch, which a review caught me reintroducing here.
+    const whole = withdrawablePlanck / 1000000000000n;
+    const frac = Number(withdrawablePlanck % 1000000000000n) / 1e12;
+    valEl.textContent = stakingFormatPDEX(Number(whole) + frac) + ' PDEX';
+    row.style.display = '';
+    btn.style.display = '';
+    btn.textContent = 'Withdraw unbonded funds';
+}
+
+async function submitWithdrawUnbonded() {
+    const errEl = document.getElementById('unstake-modal-error');
+    const fail = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; errEl.style.color = ''; } };
+    // Clear any stale message first (submitUnstakeTx does; this didn't).
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    const data = currentWalletData;
+    if (!data) return fail('Wallet data is not loaded.');
+
+    // withdrawUnbonded takes the stash's slashing-span count; passing a low
+    // number when spans exist fails with IncorrectSlashingSpans, so read it.
+    let spans = 0;
+    try {
+        const spansOpt = await globalApi.query.staking.slashingSpans(data.address);
+        if (spansOpt && spansOpt.isSome) spans = spansOpt.unwrap().prior.length + 1;
+    } catch (e) { /* keep 0 — correct for a never-slashed stash */ }
+
+    // F-057: refuse rather than sign a call the runtime will reject. The
+    // connected wallet must BE the controller; when stash and controller
+    // differ, say which key is needed instead of failing with NotController
+    // after the user has already approved a signature.
+    const connected = getStoredWallet();
+    if (withdrawControllerAddress && connected && !isSameAddress(withdrawControllerAddress, connected)) {
+        return fail(`This stash's controller is a different account (${String(withdrawControllerAddress).slice(0, 12)}…). ` +
+            'Connect the controller account to withdraw — the runtime only accepts withdrawUnbonded from it.');
+    }
+
+    await submitSignedTx({
+        buildTx: (api) => api.tx.staking.withdrawUnbonded(spans),
+        label: 'Withdraw unbonded',
+        button: document.getElementById('submit-withdraw-tx-btn'),
+        busyText: 'Signing…',
+        idleText: 'Withdraw unbonded funds',
+        onError: fail,
+        onSuccess: () => {
+            const modal = document.getElementById('unstake-modal');
+            if (modal) modal.style.display = 'none';
+            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+        }
+    });
 }
 
 async function submitUnstakeTx() {
@@ -9889,6 +10133,18 @@ if (document.readyState === 'loading') {
 const SEND_FEE_BUFFER = 0.05; // PDEX held back from "Max" to cover fee + slippage.
 let sendFeeDebounce = null;
 let sendLastFeePDEX = null;     // last estimated fee in PDEX
+let sendFeeEstimateFailed = false; // F-116: true while paymentInfo is failing
+
+// F-116: the Sign button follows the estimator's health. Disabled only for an
+// estimator FAILURE — an idle/empty form is handled by validation on submit.
+function updateSendSignGate() {
+    const btn = document.getElementById('submit-send-tx-btn');
+    if (!btn) return;
+    btn.disabled = sendFeeEstimateFailed;
+    btn.title = sendFeeEstimateFailed
+        ? 'Fee estimation is failing — the node is not responding. Edit any field to retry.'
+        : '';
+}
 let sendValidRecipient = false; // cached so we don't re-validate on every keystroke
 
 function showSendError(msg) {
@@ -9915,8 +10171,16 @@ function getExistentialDepositPDEX() {
 // Re-estimate the network fee for the current recipient + amount and paint it
 // into the modal's summary row. Debounced so we don't spam the chain on every
 // keystroke. Falls back to a sensible buffer if estimation isn't available.
+// Monotonic token so a slow paymentInfo that resolves (or rejects) AFTER a
+// newer estimate started cannot write its result over the current state. A
+// review caught the debounce only cancelling pending TIMERS: an in-flight
+// request rejecting late would set sendFeeEstimateFailed on an already-cleared
+// form, disabling Sign with no matching fee text.
+let sendFeeRequestSeq = 0;
+
 function refreshSendFeeEstimate() {
     if (sendFeeDebounce) clearTimeout(sendFeeDebounce);
+    const mySeq = ++sendFeeRequestSeq;
     sendFeeDebounce = setTimeout(async () => {
         const data = currentWalletData;
         const feeEl = document.getElementById('send-fee');
@@ -9936,6 +10200,8 @@ function refreshSendFeeEstimate() {
             feeEl.textContent = '—';
             if (recvPreviewEl) recvPreviewEl.textContent = '—';
             sendLastFeePDEX = null;
+            sendFeeEstimateFailed = false;
+            updateSendSignGate();
             return;
         }
         try {
@@ -9943,15 +10209,25 @@ function refreshSendFeeEstimate() {
             const info = await tx.paymentInfo(data.address);
             const feePlanck = info && info.partialFee ? BigInt(info.partialFee.toString()) : 0n;
             const feePDEX = Number(feePlanck) / 1e12;
+            if (mySeq !== sendFeeRequestSeq) return;   // superseded — F-116
             sendLastFeePDEX = feePDEX;
+            sendFeeEstimateFailed = false;
+            updateSendSignGate();
             feeEl.textContent = feePDEX > 0 ? (stakingFormatPDEX(feePDEX) + ' PDEX') : '~0';
             if (recvPreviewEl) recvPreviewEl.textContent = stakingFormatPDEX(amt) + ' PDEX';
         } catch (e) {
-            // paymentInfo can fail before a node connection is ready; show a
-            // conservative placeholder rather than blocking the flow.
-            feeEl.textContent = '≈ ' + stakingFormatPDEX(SEND_FEE_BUFFER) + ' PDEX (est.)';
+            // Audit F-116: this used to paint "≈ 0.05 PDEX (est.)" — a number
+            // we invented — and leave Sign enabled, so a user could authorise
+            // a transfer whose fee nobody had measured, against a node that
+            // was demonstrably not answering. Say what actually happened and
+            // gate the button; the estimate retries on the next input event,
+            // and the user can retry by touching any field.
+            if (mySeq !== sendFeeRequestSeq) return;   // superseded — F-116
+            feeEl.textContent = 'unavailable — node not responding';
             sendLastFeePDEX = null;
-            if (recvPreviewEl) recvPreviewEl.textContent = stakingFormatPDEX(amt) + ' PDEX';
+            sendFeeEstimateFailed = true;
+            updateSendSignGate();
+            if (recvPreviewEl) recvPreviewEl.textContent = '—';
         }
     }, 250);
 }
@@ -10003,6 +10279,9 @@ function openSendModal() {
     if (availEl) availEl.textContent = stakingFormatPDEX(available);
     const feeEl = document.getElementById('send-fee');
     if (feeEl) feeEl.textContent = '—';
+    // F-116: a previous failure must not leave Sign disabled on a fresh open.
+    sendFeeEstimateFailed = false;
+    updateSendSignGate();
     const previewEl = document.getElementById('send-amount-preview');
     if (previewEl) previewEl.textContent = '—';
     const recvEl = document.getElementById('send-recv-preview');
@@ -10125,6 +10404,9 @@ async function submitSendTx() {
     });
     const unstakeSubmit = document.getElementById('submit-unstake-tx-btn');
     if (unstakeSubmit) unstakeSubmit.addEventListener('click', submitUnstakeTx);
+    // F-057: the second half of unbonding.
+    const withdrawBtn = document.getElementById('submit-withdraw-tx-btn');
+    if (withdrawBtn) withdrawBtn.addEventListener('click', submitWithdrawUnbonded);
 
     const payoutSubmit = document.getElementById('submit-payout-tx-btn');
     if (payoutSubmit) payoutSubmit.addEventListener('click', submitPayoutTx);
@@ -10253,8 +10535,33 @@ function initDonatePage() {
                 btn.classList.add('copied');
                 setTimeout(() => { btn.innerHTML = original; btn.classList.remove('copied'); }, 1600);
             };
+            // Audit F-130: this used to be clipboard-API-or-nothing — on a
+            // browser where the API is missing or the promise rejects, the
+            // button did NOTHING, and a donor could believe an address was
+            // copied when it wasn't. That is how funds get sent into the void.
+            // Fall back to execCommand, and if BOTH fail say so out loud.
+            const fallbackCopy = () => {
+                const ta = document.createElement('textarea');
+                ta.value = addr;
+                ta.setAttribute('readonly', '');
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+                document.body.removeChild(ta);
+                if (ok) done();
+                else {
+                    const original = btn.innerHTML;
+                    btn.innerHTML = "<i class='bx bx-error-circle'></i> Copy failed — select it manually";
+                    setTimeout(() => { btn.innerHTML = original; }, 2600);
+                }
+            };
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(addr).then(done).catch(() => { });
+                navigator.clipboard.writeText(addr).then(done).catch(fallbackCopy);
+            } else {
+                fallbackCopy();
             }
         });
     });
@@ -11819,41 +12126,30 @@ function checkWalletForCouncil(modalType) {
     if (activeDivId) document.getElementById(activeDivId).innerText = address;
 }
 
+// Audit F-056: this used to run its own private signAndSend that watched
+// ONLY status.isInBlock — a candidacy rejected by the runtime (for example
+// elections.InsufficientCandidateFunds) still alerted "Transaction included"
+// and closed the modal, because a failed extrinsic is still included in a
+// block; inclusion and success are different facts. submitSignedTx watches
+// dispatchError and says which one happened.
 async function submitCouncilCandidacy() {
-    const address = getStoredWallet();
-    if (!address) return alert('Please connect your wallet first');
-    
+    const btn = document.getElementById('submit-candidacy-tx-btn');
+    let candidateCount = 0;
     try {
-        const injected = await getInjectedAccounts();
-        if (!injected || injected.length === 0) return alert('No wallet extension found. Please install Polkadot.js or Talisman.');
-        
-        const account = injected.find(a => isSameAddress(a.address, address));
-        if (!account) return alert('Connected account not found in wallet extension. Please reconnect.');
-
-        const provider = window.injectedWeb3[account.source];
-        const ext = await provider.enable('Polkadex Explorer');
-
-        document.getElementById('submit-candidacy-tx-btn').innerText = 'Signing...';
-
         const response = await fetch('/api/council');
-        const data = await response.json();
-        const candidateCount = (data.candidates || []).length;
-
-        const unsub = await globalApi.tx[councilPalletName].submitCandidacy(candidateCount)
-            .signAndSend(account.address, { signer: ext.signer }, ({ status }) => {
-                if (status.isInBlock) {
-                    alert(`Transaction included at blockHash ${status.asInBlock}`);
-                    candidacyModal.style.display = 'none';
-                    unsub();
-                    document.getElementById('submit-candidacy-tx-btn').innerText = 'Sign & Submit Candidacy';
-                }
-            });
-            
-    } catch (err) {
-        console.error(err);
-        alert('Transaction failed: ' + err.message);
-        document.getElementById('submit-candidacy-tx-btn').innerText = 'Sign & Submit Candidacy';
+        const data = await parseJsonResponse(response);
+        candidateCount = (data.candidates || []).length;
+    } catch (e) {
+        return alert('Could not read the current candidate count: ' + (e && e.message ? e.message : e));
     }
+    await submitSignedTx({
+        buildTx: (api) => api.tx[councilPalletName].submitCandidacy(candidateCount),
+        label: 'Council candidacy',
+        button: btn,
+        busyText: 'Signing...',
+        idleText: 'Sign & Submit Candidacy',
+        onSuccess: () => { if (candidacyModal) candidacyModal.style.display = 'none'; }
+    });
 }
 
 if (document.getElementById('submit-candidacy-tx-btn')) {
@@ -11881,33 +12177,16 @@ async function submitCouncilVote() {
     // sign a stake that differs from what they typed.
     const stakePlanck = pdexToPlanck(stakeInput);
 
-    try {
-        const injected = await getInjectedAccounts();
-        if (!injected || injected.length === 0) return alert('No wallet extension found.');
-        
-        const account = injected.find(a => isSameAddress(a.address, address));
-        if (!account) return alert('Connected account not found in wallet extension.');
-
-        const provider = window.injectedWeb3[account.source];
-        const ext = await provider.enable('Polkadex Explorer');
-
-        document.getElementById('submit-vote-tx-btn').innerText = 'Signing...';
-
-        const unsub = await globalApi.tx[councilPalletName].vote(candidates, stakePlanck.toString())
-            .signAndSend(account.address, { signer: ext.signer }, ({ status }) => {
-                if (status.isInBlock) {
-                    alert(`Transaction included at blockHash ${status.asInBlock}`);
-                    voteModal.style.display = 'none';
-                    unsub();
-                    document.getElementById('submit-vote-tx-btn').innerText = 'Sign & Submit Vote';
-                }
-            });
-            
-    } catch (err) {
-        console.error(err);
-        alert('Transaction failed: ' + err.message);
-        document.getElementById('submit-vote-tx-btn').innerText = 'Sign & Submit Vote';
-    }
+    // F-056 — same fix as submitCouncilCandidacy: a vote the runtime rejects
+    // must not report "included" as if it were success.
+    await submitSignedTx({
+        buildTx: (api) => api.tx[councilPalletName].vote(candidates, stakePlanck.toString()),
+        label: 'Council vote',
+        button: document.getElementById('submit-vote-tx-btn'),
+        busyText: 'Signing...',
+        idleText: 'Sign & Submit Vote',
+        onSuccess: () => { if (voteModal) voteModal.style.display = 'none'; }
+    });
 }
 
 if (document.getElementById('submit-vote-tx-btn')) {
@@ -12516,6 +12795,14 @@ let pendingReferendumVote = null;   // { refIndex, side: 'aye'|'nay' }
 function openReferendumVoteModal(refIndex, side) {
     const modal = document.getElementById('referendum-vote-modal');
     if (!modal) return;
+    // Audit F-118: council motions digit-check their index; referenda did not.
+    // Number('') is 0 and Number(null) is NaN-or-0 depending on the path, and
+    // a Compact<u32> will happily SCALE-encode 0 — the user would sign a vote
+    // on referendum #0 instead of the one they clicked.
+    if (!/^\d+$/.test(String(refIndex))) {
+        alert('Invalid referendum index.');
+        return;
+    }
     pendingReferendumVote = { refIndex: Number(refIndex), side: side === 'nay' ? 'nay' : 'aye' };
 
     const idxLabel = document.getElementById('referendum-vote-modal-idx');

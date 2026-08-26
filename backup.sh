@@ -20,6 +20,7 @@
 #   sudo SRC=/var/lib/foo.db DEST=/mnt/bak ./backup.sh   # override paths
 #   sudo MIN_INTERVAL_HOURS=24 ./backup.sh        # back up daily instead
 #   sudo FORCE=1 ./backup.sh                      # bypass the interval check
+#   sudo BUSY_TIMEOUT_MS=120000 ./backup.sh       # wait longer for the indexer's write lock
 #
 # Designed to be invoked by cron — see /etc/cron.d/pdexplorer-backup, written
 # by the `backup` phase of provision-ubuntu.sh.
@@ -53,7 +54,8 @@
 #
 # Exit codes:
 #   0   success, OR skipped because a recent backup already exists
-#   1   misconfiguration (missing sqlite3, source DB, or write perms on DEST)
+#   1   misconfiguration (missing sqlite3, source DB, or write perms on DEST),
+#       or the source DB stayed write-locked through BUSY_TIMEOUT_MS twice
 #   2   backup ran but integrity_check failed — old backups retained, new
 #       backup left in place under a .CORRUPT suffix for inspection
 #   3   local backup succeeded but the off-box push failed (on-disk copy is
@@ -312,7 +314,33 @@ START=$(date +%s)
 # (writers proceed uninterrupted), never restarts, and emits a compacted,
 # single-file copy (no -wal/-shm to ship). Requires SQLite >= 3.27 (2019).
 # Run under the idle I/O class so it never starves serving.
-${IONICE}sqlite3 "$SRC" "VACUUM INTO '$TMP'"
+#
+# Audit F-095: `.timeout` is not optional here. The sqlite3 CLI's default busy
+# timeout is ZERO — it does not wait, it returns "database is locked" the instant
+# it collides with a writer. VACUUM INTO needs a read transaction, and the
+# indexer holds the write lock in bursts every ~12s, so an unqualified
+# invocation loses that race often enough to skip nightly backups silently
+# (cron mails the error to a mailbox nobody reads). The backend's own connection
+# sets busy_timeout via PRAGMA; this CLI shares none of that config.
+#
+# 60s of patience, then one retry after a short sleep — a collision is a
+# transient lock, not a broken database, and a second attempt from a cron job
+# that runs once a night is free.
+BUSY_TIMEOUT_MS="${BUSY_TIMEOUT_MS:-60000}"
+vacuum_into() {
+    ${IONICE}sqlite3 "$SRC" ".timeout $BUSY_TIMEOUT_MS" "VACUUM INTO '$1'"
+}
+
+if ! vacuum_into "$TMP"; then
+    log "VACUUM INTO failed (likely SQLITE_BUSY after ${BUSY_TIMEOUT_MS}ms) — retrying once in 30s"
+    rm -f "$TMP"
+    sleep 30
+    if ! vacuum_into "$TMP"; then
+        rm -f "$TMP"
+        die "VACUUM INTO failed twice — the source DB stayed locked. Check whether the indexer is stuck mid-transaction ('docker compose logs backend | grep chain-index')."
+    fi
+    log "Retry succeeded"
+fi
 
 ELAPSED=$(( $(date +%s) - START ))
 SIZE_HUMAN=$(du -h "$TMP" | cut -f1)

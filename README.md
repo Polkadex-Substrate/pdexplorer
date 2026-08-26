@@ -252,9 +252,17 @@ All knobs are env vars. None are required to start — every value has a sensibl
 | Env var              | Default                       | Notes                                                         |
 | -------------------- | ----------------------------- | ------------------------------------------------------------- |
 | `PORT`               | `3001`                        | Backend HTTP port (proxied by nginx)                          |
-| `DATA_DIR`           | `./data`                      | SQLite directory (host bind-mount → container `/app/data`)    |
+| `DATA_PATH`          | `./data`                      | **Compose-only.** Host directory bind-mounted to `/app/data` (`${DATA_PATH:-./data}:/app/data` in `docker-compose.yml`). Point it at an absolute path outside the checkout. |
 | `SITE_URL`           | `https://explorer.polkadex.ee`| Used in sitemap.xml and robots.txt                            |
 | `ALLOWED_ORIGINS`    | `https://explorer.polkadex.ee,http://localhost:3000` | Comma-separated CORS allowlist          |
+
+> **There is no `DATA_DIR` env var** (audit F-099 — this table used to list one).
+> `server.js` hard-codes the database directory as `path.join(process.cwd(), 'data')`,
+> i.e. `/app/data` inside the container, and reads nothing from the environment
+> to get there. The only knob is `DATA_PATH`, which Compose interpolates into
+> the *host* side of the bind mount. Setting `DATA_DIR` has no effect; if you
+> run the backend outside Docker, `cd` into the checkout so `process.cwd()/data`
+> is the directory you mean.
 
 ### Chain RPC
 
@@ -371,6 +379,26 @@ pdexplorer/
 
 All endpoints under `/api/*` return JSON. Most are read-only and public; a small subset requires a wallet-signed session token (see "Authenticated" below). The full developer-facing version of this reference is also served at [`/developers`](https://explorer.polkadex.ee/developers).
 
+> **Four hand-maintained copies of this route list** (audit F-060 / F-154).
+> Nothing is generated from the Express registrations, so adding a route means
+> editing all four or the docs start lying:
+>
+> 1. this section of `README.md`;
+> 2. `public/llms.txt` — the machine-readable copy for bots and AI clients;
+> 3. `DEVELOPERS_HTML`, a string constant in `server.js` — what a **hard load**
+>    of `/developers` serves (nginx proxies that path to the backend);
+> 4. `renderDevelopersPage()` in `script.js` — what **in-app navigation** to
+>    `/developers` paints, which is a *different document* from (3).
+>
+> Two consequences worth knowing: `/developers` genuinely renders differently
+> depending on how you arrived at it, and the Vite dev proxy does not forward
+> `/developers`, so `npm run dev` only ever shows the SPA copy. To enumerate
+> the real route set, grep the source rather than trusting any of the four:
+>
+> ```bash
+> grep -nE "^app\.(get|post|put|delete)\('" server.js
+> ```
+
 ### CORS — who can call the API
 
 The CORS policy in `server.js` allows three caller categories:
@@ -389,27 +417,55 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 | Tier | Used by | Header |
 |---|---|---|
-| **Short** | High-velocity feeds (`/api/blocks`, `/api/transactions`, `/api/events`) | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
-| **Medium** | Wallet dashboard, validators, network info, price-latest | `public, max-age=30, s-maxage=60, stale-while-revalidate=300` |
-| **Long** | Historical (`/api/price-history`, `/api/staking-rewards/:addr`, holders, sitemap) | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
+| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/governance/latest` | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
+| **Medium** | `/api/validators`, `/api/network-info`, `/api/holders`, `/api/price-latest`, `/api/staking-rewards-status`, `/api/discussions`, `/api/analytics/*`, `/api/labels/:address` (anonymous only), `/api/consts/*` + `/api/runtime` at head | `public, max-age=30, s-maxage=60, stale-while-revalidate=120` |
+| **Long** | `/api/price-history`, `/api/treasury`, `/api/democracy`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and any inspection route pinned to a past block with `?at=` | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
+
+`/sitemap.xml` sets its own `public, max-age=300, s-maxage=300`. Anything not
+listed above sends **no** `Cache-Control` at all — including
+`/api/block/:id`, `/api/extrinsic/*`, `/api/validator/:address`,
+`/api/wallet/:address`, `/api/account/:address`, `/api/staking-rewards/:address`
+and `/api/transactions/older`. Treat "no header" as "don't share-cache this",
+and see the Cloudflare notes under *Scaling* — a "Cache Everything" rule will
+otherwise apply its own default TTL to them.
 
 ### Chain data (read-only, public)
 
 - `GET /api/blocks` — most recent blocks
 - `GET /api/block/:number` — single-block detail with extrinsics + events
 - `GET /api/events` — most recent on-chain events
-- `GET /api/transactions` — most recent transactions
+- `GET /api/transactions` — most recent transactions. **Balance transfers only** — see the note below.
 - `GET /api/transactions/older?before=<n>` — pagination further back
 - `GET /api/extrinsic/:block/:txHash` — single-extrinsic detail
+- `GET /api/extrinsic-by-hash/:txHash` — locate an extrinsic when you don't know its block, by scanning **recent blocks backwards from the head** (`?recent=` blocks, default 200 ≈ 40 min, max 2000 ≈ 6 h). Returns `{ found, block, txHash, scanned }` — a block number to feed to `/api/extrinsic/:block/:txHash`, not the extrinsic itself. `found: false` means "not in the scanned window", not "does not exist".
 - `GET /api/validators` — full validator set with stake + commission
 - `GET /api/validator/:address` — per-validator era history
 - `GET /api/holders` — top-balance accounts
 - `GET /api/account/:address` — account-level summary
 - `GET /api/network-info` — home-page network metrics
-- `GET /api/search/:query` — block / extrinsic / account lookup
+- `GET /api/search/:query` — **live-RPC** block-hash / block-number / account lookup. Does *not* query the SQLite index and does *not* resolve extrinsic hashes — see the note below.
 - `GET /api/staking-rewards/:address` — per-address reward history
 - `GET /api/staking-rewards-status` — backfill progress
 - `GET /api/wallet/:address` — wallet dashboard payload (balances, staking incl. **`activeStakedPlanck`** — the u128 active-stake value as a string for precision-safe full-unbonds — unpaid rewards, recent activity)
+
+> **`/api/transactions` is `balances.Transfer` only** (audit F-051). The indexer
+> builds the `transactions` table from `balances.Transfer` events and nothing
+> else — see `lib/tx-from-event.js`, where every row is stamped
+> `method: 'balances.Transfer'`. `balances.Deposit`, `Withdraw`, `Minted`,
+> `Burned`, `DustLost`, treasury payouts, vesting
+> releases and OCEX settlement movements are all real balance changes that
+> **never appear** in this feed, so summing `/api/transactions` does not
+> reconcile an account. Use `/api/events` (the full decoded event stream) or
+> `/api/decode/:block` when you need every movement.
+
+> **`/api/search/:query` is a live-RPC probe, not an index search** (audit
+> F-086). The handler never touches SQLite. It tries, in order: an all-digits
+> query as a block **number**, a 66-char `0x…` as a block **hash**, then the
+> query as an **account** via `system.account`. An extrinsic hash therefore
+> comes back `404` even when `/api/extrinsic-by-hash/:txHash` could have found
+> it in the recent-block window — use that endpoint (or
+> `/api/extrinsic/:block/:txHash`) for transactions.
+> Because it is RPC-backed it also returns `503` while the node is unreachable.
 
 ### Price feed (multi-provider)
 
@@ -421,6 +477,49 @@ Providers are pluggable via `PRICE_PROVIDERS` env (csv; **default `coingecko`**)
 **AscendEX was removed after the exchange shut down in July 2026.** Setting `PRICE_PROVIDERS=ascendex` polls nothing; historical rows tagged `ascendex` / `ascendex-backfill` remain in `price_history` and still render on the chart.
 
 There is no price-history backfill script in the repo (audit F-025 — the README and INSTALL previously pointed at a `backfill-price-history.mjs` that does not exist). Existing historical rows were imported ad-hoc; a fresh install builds its chart from the first live poll onward.
+
+### Chain inspection (polkadot.js-style, read-only)
+
+Generic access to runtime metadata, storage and constants at any block — this is
+what makes an on-chain claim independently checkable without polkadot.js Apps.
+All of these need the chain RPC, so they answer `503` while it is down, and all
+are per-IP rate-limited (`DEV_API_RATE_LIMIT_PER_MIN`, default 60/min).
+
+- `GET /api/rpc/metadata` — every pallet with its storage items (key arity + key types), constants, calls, events, errors
+- `GET /api/state/:pallet/:item` — read any storage item. `?args=` keys (repeat or comma-separate for multi-key maps), `?at=` block number or hash, `?entries=1` to page a map's entries
+- `GET /api/consts/:pallet/:item` — runtime constants; `?at=` supported
+- `GET /api/runtime` — runtime spec/impl version; `?at=` supported
+- `GET /api/decode/:block` — every extrinsic in a block decoded argument by argument (name, declared type, human, JSON, raw hex). Filters: `?section=` `?method=` `?index=`
+- `GET /api/rpc/call` — the allowlist of permitted read-only RPC methods
+- `POST /api/rpc/call` — `{ "method": "…", "params": [ … ] }` against that allowlist
+
+Read-only by construction: only `api.query`, `api.consts` and allowlisted read
+RPCs are reachable — no endpoint can submit an extrinsic. `?at=` older than the
+node's pruning window needs an archive node.
+
+### Account inspection (RPC-backed)
+
+- `GET /api/identity/:address` — on-chain identity, resolving `identity.superOf` → `identityOf` for sub-accounts. `501` if the runtime has no identity pallet
+- `GET /api/proxies/:address` — proxy delegations declared by the address. `501` if no proxy pallet
+- `GET /api/proxy-types` — the runtime's `ProxyType` enum variants, read out of the metadata
+- `GET /api/multisigs/:address` — pending multisig calls for the address. `501` if no multisig pallet
+
+### Community labels
+
+Crowd-sourced address labels. The read is public; every write requires a
+wallet-signed session (`401` without one) — see "Authenticated" below.
+
+- `GET /api/labels/:address` — labels with score, up/down votes, report count, veto flag, plus `topLabel`. When a session is presented the payload also carries the caller's own `viewerVote`, so **only the anonymous response is CDN-cacheable**
+- `POST /api/labels/:address` — add/replace the caller's own label for that address
+- `DELETE /api/labels/:address` — remove the caller's own label
+- `POST /api/labels/:address/:signer/vote` — up/down-vote someone else's label
+- `POST /api/labels/:address/:signer/report` — report a label (self-reports rejected)
+- `POST /api/labels/:address/:signer/veto` — veto a label on your **own** address (caller must be `:address`)
+
+### Analytics
+
+- `GET /api/analytics/timeseries?days=N` — daily series (N clamped to 1–365). The 7/30/90/365 windows are pre-warmed by the indexer; other windows are aggregated live
+- `GET /api/analytics/snapshot` — current KPI rollup (issuance, bonded, validator/nominator counts, indexed row counts)
 
 ### Governance
 
@@ -458,9 +557,22 @@ Wallet-signed nonce login. Sessions are 192-bit random tokens with a TTL.
 - `POST /api/auth/logout`
 - `POST /api/discussions/:id/posts` — post to a discussion (rate-limited, requires session)
 
+### Build provenance + liveness (public, `no-store`)
+
+- `GET /api/version` — `{ component: 'backend', gitSha, builtAt, dirty, startedAt, specVersion, rpcConnected }`. `dirty: true` means the image was built from a tree with uncommitted changes, so the SHA alone does not identify the running code. Node version, pid and raw uptime are deliberately **not** published (audit F-142) — they live on `/api/diag/*`. The frontend publishes its own `{ component, gitSha, builtAt }` as a static `GET /version.json`
+- `GET /api/health` — `{ healthy: <bool> }`, true only when the chain RPC is connected
+
 ### Diagnostics (operator-facing)
 
+All `/api/diag/*` routes sit behind the same gate (audit F-038): a
+`Bearer $DIAG_TOKEN` header, or a loopback source address when `DIAG_TOKEN` is
+unset. They are not part of the public API contract and may change without
+notice.
+
 - `GET /api/diag/email` — email transport status
+- `GET /api/diag/rpc-cache` — hit/miss stats for the block, block-hash and events-at caches
+- `GET /api/diag/rpc-health` — RPC connectivity, peer count, sync flag, head freshness
+- `GET /api/diag/subquery-lag` — SubQuery indexer lag in blocks/seconds vs `SUBQUERY_MAX_LAG_BLOCKS`
 
 ### Static / SEO
 
@@ -469,7 +581,27 @@ Wallet-signed nonce login. Sessions are 192-bit random tokens with a TTL.
 
 ### Error envelope
 
-Most failures return a 4xx/5xx with `{ "error": "<message>" }`. RPC-dependent endpoints surface **503** with `{ "error": "rpc not connected" }` during chain RPC outages — treat 503 as "retry with backoff," not a permanent failure.
+Most failures return a 4xx/5xx with `{ "error": "<message>" }`. The `error`
+string is a human-readable sentence intended for display; **do not match on
+it** — it is reworded freely between releases.
+
+RPC-dependent endpoints surface **503** during chain RPC outages. That one
+response carries a stable machine-readable discriminator alongside the prose,
+and is also sent `Retry-After: 5` and `Cache-Control: no-store` so an edge cache
+cannot pin it:
+
+```json
+{
+  "error": "Live blockchain data is not available right now — the explorer is still connecting to the Polkadex node. Please refresh in a few seconds.",
+  "code": "RPC_NOT_READY"
+}
+```
+
+Branch on `code === "RPC_NOT_READY"` (or simply on the 503 status) and retry with
+backoff — it is not a permanent failure. Audit F-155: this section used to
+promise the short string `{ "error": "rpc not connected" }`, which `requireRpc()`
+has never sent; clients matching that literal treated every RPC outage as an
+unknown error. `RPC_NOT_READY` is currently the only `code` the API emits.
 
 ### Address format
 
@@ -508,6 +640,48 @@ The signing helper (`submitSignedTx`):
 5. Reports `InBlock` / `Finalized` / error states back into the modal
 
 If `window.injectedWeb3` is empty when the user lands on their own dashboard, the action bar is replaced with a "read-only mode" callout plus deep-link buttons to mobile wallets — so the buttons never lead to a confusing "no wallet" error after click.
+
+### ⚠️ `@polkadot/api` 10.13.1 and the manual `CheckMetadataHash` — one change, two files
+
+**Read this before touching `@polkadot/api` in `package.json`.** The exact pin
+and a hand-written signed-extension declaration are a single mechanism spread
+across three files, and splitting them breaks signing on mainnet.
+
+The Polkadex runtime declares the `CheckMetadataHash` signed extension.
+`@polkadot/api` **10.13.1 predates support for it**: it logs
+`Unknown signed extensions CheckMetadataHash ... no-effect` and then encodes
+*nothing* for it. The runtime still expects a `Mode` byte in the signed extra and
+an `Option<[u8;32]>` in the signing payload, so every signed extrinsic decoded
+misaligned on-chain and panicked inside
+`TaggedTransactionQueue_validate_transaction` — which reached the user as
+`wasm 'unreachable' instruction executed`. Every transfer, stake and vote failed.
+
+The fix is to declare the shape by hand, so 10.13.1 encodes `Mode::Disabled (0)`
++ `None` — byte-identical to what a current api sends when metadata-hash
+checking is off. That declaration exists at **both** `ApiPromise.create` call
+sites, for two different reasons:
+
+| Where | Why it needs the declaration |
+| --- | --- |
+| `script.js` (frontend, `ApiPromise.create`) | It **signs**. Without it, submitted extrinsics are rejected by the runtime. |
+| `server.js` (backend, `connectRpc` → `ApiPromise.create`) | It **decodes**. Without it the Mode byte is skipped when reading a signed extra, and every field after it (era, nonce, tip) is read from the wrong offset — silently wrong output from `/api/decode/:block` and the block indexer. |
+
+The invariant, therefore:
+
+- **`"@polkadot/api": "10.13.1"` is an exact pin, not a floor.** No caret, no
+  tilde. A range would let `npm ci` resolve a version that knows the extension
+  natively, and a native codec fighting a user-supplied override is undefined
+  behaviour. `npm ci` (both Dockerfiles) installs the lockfile verbatim, which
+  is the other half of this guarantee.
+- **Bumping the api means deleting the `signedExtensions` block in BOTH files,
+  in the same commit.** Removing it from one leaves the other's extrinsics
+  misencoded; keeping both after the bump is the codec conflict.
+- **Verify on-chain, not in the console.** The original bug produced a *warning*,
+  not an error, and only failed at runtime validation. After any change here,
+  sign one real `balances.transferKeepAlive` on mainnet and confirm it reaches
+  `InBlock` — a green console is not evidence.
+
+Audit F-119.
 
 ---
 
@@ -552,7 +726,31 @@ If `/api/network-info` returns 502, the backend isn't listening on 3001 — chec
 
 The backend uses Node's built-in `cluster` module to spread HTTP traffic across all CPU cores while keeping the chain indexer as a single writer. With Cloudflare in front, the combination raises practical sustained throughput from ~150 req/s (single-process) to several thousand req/s of user-perceived load.
 
-**Topology.** The container's entrypoint runs as the cluster *primary*. It forks N workers (default = CPU count, capped at 8). Exactly one worker is started with `INDEXER_ROLE=on` — that worker handles HTTP *and* runs all the chain sync loops (`syncChainIndex`, `syncStakingRewards`, `syncCouncil`, etc.). The other workers serve HTTP only. Inbound connections are load-balanced across all workers by the OS, so all cores actively serve requests. SQLite's WAL mode handles multi-process readers natively; the single-writer invariant is preserved because only the indexer worker mutates the database.
+**Topology.** The container's entrypoint runs as the cluster *primary*. It forks N workers (default = CPU count, capped at 8). Exactly one worker is started with `INDEXER_ROLE=on` — that worker runs all the chain sync loops (`syncChainIndex`, `syncStakingRewards`, `syncCouncil`, etc.). SQLite's WAL mode handles multi-process readers natively.
+
+**The indexer worker does NOT serve HTTP when clustered** (audit F-156 — this
+paragraph used to say it did). The decision is one line:
+
+```js
+const serveHttp = !indexer || WORKERS <= 1;
+```
+
+So:
+
+| `WORKERS` | Processes that `app.listen()` | Indexer |
+| --- | --- | --- |
+| `1` | 1 (the same process) | same process, shares its event loop |
+| `N > 1` | **`N − 1`** | a dedicated worker, no HTTP |
+
+Sizing follows from that: `WORKERS=4` on a 4-core box gives you **three** HTTP
+workers, not four. Inbound connections are load-balanced across the HTTP workers
+by the OS. Keeping the indexer off the listen socket is the point — a heavy
+backfill tick can block its event loop for seconds, and when it was also an HTTP
+worker the OS kept handing it a share of requests that then stalled.
+
+One consequence to know about: an operator running `WORKERS=1` for cleaner logs
+is running a materially different topology, where indexer stalls *are* visible
+as request latency.
 
 **Crash recovery.** If any worker exits, the primary forks a replacement. If the *indexer* worker died, the replacement inherits the indexer role automatically so chain indexing resumes within a couple of seconds. Crashes are logged with `[cluster]` prefix to make this visible: `[cluster] worker N (pid …) exited (code=…, signal=…, was-indexer=true) — restarting`.
 
@@ -576,7 +774,24 @@ For a 4-core VPS, the default forks 4 workers and uses all four cores. For an 8-
 
 The `stale-while-revalidate` clause means users never block on a cache refresh — Cloudflare serves the stale copy instantly and asynchronously fetches a fresh one. Caches are only set on 200-success responses; errors are never cached so a transient 5xx can't get pinned at the edge.
 
-**Per-user endpoints are NOT cached.** `/api/account/:address`, `/api/staking-rewards/:address`, `/api/block/:id`, `/api/search/:query`, and everything under `/api/auth/*` and `/api/discussions/*/posts` deliberately have no cache headers. They're either per-user, mutation-bearing, or have a URL space large enough that CDN caching wouldn't help.
+**Endpoints that must not be shared-cached.** These are either per-viewer,
+mutation-bearing, or have a URL space large enough that CDN caching wouldn't
+help:
+
+- `/api/account/:address`, `/api/wallet/:address`, `/api/staking-rewards/:address`
+- `/api/search/:query`, `/api/block/:id`, `/api/extrinsic/*`, `/api/validator/:address`
+- every `/api/labels/*` route — the GET's payload contains the *caller's own* `viewerVote`, so caching one user's response would show their vote to everyone
+- everything under `/api/auth/*`, `/api/email/*`, `/api/discussions/*/posts`
+- `/api/version`, `/api/health`, `/api/identity/:address`, and all of `/api/diag/*`
+
+Audit F-083: this list previously omitted `/api/wallet/:address` and the label
+routes. Two of them are still weaker than the list implies —
+`GET /api/labels/:address` sets `cacheMedium` for anonymous callers and simply
+*omits* a header when a session is present, and `GET /api/wallet/:address` sets
+no header at all. "No `Cache-Control`" is not "don't cache": a CDN configured
+with "Cache Everything" applies its own default TTL. Both should send an explicit
+`no-store`; until they do, keep the Cloudflare rules in "Configuring Cloudflare"
+below as the actual enforcement point.
 
 **Configuring Cloudflare to honor the headers.** Default Cloudflare settings already respect `s-maxage`. If you've enabled "Cache Everything" page rules, make sure they don't override the headers; the per-endpoint headers above are stricter than Cloudflare's auto-cache defaults for HTML and will give you better behavior. Confirm with `curl -sI https://explorer.polkadex.ee/api/network-info` — look for `cf-cache-status: HIT` on the second request.
 
@@ -594,7 +809,7 @@ The provision script installs a nightly SQLite backup pipeline as the `backup` p
 
 **What's installed:**
 
-- `/opt/pdexplorer/backup.sh` — the actual backup script (uses SQLite's online backup API, WAL-safe)
+- `/opt/pdexplorer/backup.sh` — the actual backup script. WAL-safe, but note the method: it uses **`VACUUM INTO`**, *not* SQLite's `.backup` online-backup API (audit F-095 — this line used to say the latter). `.backup` restarts the copy from scratch every time another connection writes the source, and the indexer writes every ~12s, so on a multi-GB DB it thrashed and never finished. `VACUUM INTO` reads one consistent snapshot while writers proceed, and emits a compacted single file with no `-wal`/`-shm` to ship. It runs with `.timeout 60000` (override `BUSY_TIMEOUT_MS`) plus one retry, because the sqlite3 CLI's default busy timeout is zero and would otherwise lose the race against the indexer.
 - `/etc/cron.d/pdexplorer-backup` — invokes it nightly at 03:00 UTC as root
 - `/etc/logrotate.d/pdexplorer-backup` — weekly rotation of the backup log, 8 weeks retained
 - `/var/backup/` — destination dir, mode 0750

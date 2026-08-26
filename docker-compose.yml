@@ -1,3 +1,34 @@
+# Audit F-108 — container hardening. What is applied, and what deliberately is
+# NOT, because a wrong guess here fails at 03:00 on a renewal night:
+#
+#   security_opt: no-new-privileges  — all three services. Blocks setuid/setgid
+#     escalation inside the container. The Docker DAEMON default is also set to
+#     no-new-privileges by provision-ubuntu.sh (`install_docker`); repeating it
+#     per service means the guarantee survives a hand-run `docker compose up`
+#     on a box that was never provisioned by that script.
+#
+#   pids_limit — all three. A fork bomb in any container can otherwise exhaust
+#     the HOST pid table and take the other containers (and sshd) with it.
+#     Values are generous: the backend forks WORKERS (≤16) node processes, each
+#     with its own libuv threadpool.
+#
+#   cap_drop: [ALL] — backend and frontend only. Both already run as non-root
+#     (Dockerfile.backend `USER node` = uid 1000; nginx-unprivileged = uid 101)
+#     and both listen ABOVE 1024 (3001, 8080/8443), so neither needs
+#     NET_BIND_SERVICE or anything else. certbot is deliberately left alone: it
+#     runs as uid 0 and is the only thing that WRITES the TLS material, so an
+#     EPERM from a dropped capability would surface as a silently failed
+#     `certbot renew` ~60 days later — not something a repo edit can verify.
+#
+#   read_only: true — NOT set on any service, on purpose:
+#     * backend  — SQLite writes explorer.db/-wal/-shm into the /app/data bind
+#       mount (that part is fine) but ALSO spills temp b-trees for large sorts,
+#       and node writes to /tmp. read_only needs a matching `tmpfs: [/tmp]` and
+#       a verified `PRAGMA temp_store`, which is a tested change, not a config
+#       tweak.
+#     * frontend — the unprivileged nginx image writes its pid file and the
+#       proxy/fastcgi/client-body temp dirs under /tmp at startup.
+#     * certbot  — writes /etc/letsencrypt and /var/www/certbot by definition.
 
 services:
   backend:
@@ -11,6 +42,13 @@ services:
         BUILD_TIME: ${BUILD_TIME:-unknown}
     container_name: pdexplorer-backend
     restart: unless-stopped
+    # See the F-108 block at the top of this file for why these three and not
+    # read_only. Runs as uid 1000 and binds 3001, so it needs no capabilities.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
     ports:
       # Bind to loopback only. The frontend nginx container reaches the
       # backend over the Docker bridge network using DNS 'backend:3001',
@@ -43,6 +81,14 @@ services:
         BUILD_TIME: ${BUILD_TIME:-unknown}
     container_name: pdexplorer-frontend
     restart: unless-stopped
+    # nginx-unprivileged runs as uid 101 and listens on 8080/8443, so no
+    # NET_BIND_SERVICE (or anything else) is required. Not read_only: the
+    # unprivileged image writes its pid + temp dirs under /tmp.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
     ports:
       # Container listens on 8080/8443 because nginx runs as the unprivileged
       # uid 101 (audit F-040) and non-root can't bind <1024. The HOST still
@@ -73,6 +119,14 @@ services:
     # then write image: certbot/certbot:<ver>@sha256:…
     image: certbot/certbot:v2.11.0
     container_name: certbot
+    # NO cap_drop here — see the F-108 block at the top of this file. certbot is
+    # the one service that runs as uid 0 and rewrites the TLS private key; a
+    # capability it turns out to need would fail a renewal ~60 days from now,
+    # which no repo-level check catches. no-new-privileges and pids_limit are
+    # both inert for what this container does, so they go in.
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
     volumes:
       # RELATIVE paths here resolve against the directory Compose runs in, so
       # deploying from a different checkout silently hands nginx an EMPTY cert

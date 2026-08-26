@@ -12,6 +12,7 @@ import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/rew
 import { attributeBatchRewards, isBatchDelimiter, isAttributableBatch } from './lib/reward-attribution.js';
 import { resolveClientIp } from './lib/client-ip.js';
 import { planReorgSweep, hashesDiffer, heightsToVerify } from './lib/reorg.js';
+import { planTxPage } from './lib/tx-paging.js';
 import { buildTxRowFromEventRow, eventTxId, rewardId } from './lib/tx-from-event.js';
 import {
     selectDispatchable, selectNewlyResolved, isTerminalRefStatus, describeRefOutcome
@@ -692,12 +693,27 @@ function readPositiveInteger(value, fallback) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function formatPDEX(balance) { return Number(balance) / 10 ** 12; }
+// Audit F-043: this was `Number(balance) / 10 ** 12`. A u128 above 2^53
+// planck (≈9007 PDEX) loses low digits BEFORE the division, so large transfer
+// amounts and whale balances were subtly wrong in the database and every KPI
+// summed from them. BigInt splits whole tokens from the fractional remainder
+// so precision loss is confined to sub-planck display rounding.
+function formatPDEX(balance) {
+    try {
+        const planck = BigInt(balance.toString());
+        const whole = planck / 1000000000000n;
+        const frac = Number(planck % 1000000000000n) / 1e12;
+        return Number(whole) + frac;
+    } catch (e) {
+        return Number(balance) / 10 ** 12;
+    }
+}
 
 // Convert a chain Balance codec to a PDEX number safely for large u128 values.
 function balanceToPDEX(balance) {
-    try { return Number(BigInt(balance.toString())) / 10 ** 12; }
-    catch (e) { return Number(balance) / 10 ** 12; }
+    // Same precision rules as formatPDEX (F-043) — Number(BigInt(x)) rounds
+    // above 2^53 just like Number(x) does.
+    return formatPDEX(balance);
 }
 
 // True when the string decodes as a valid SS58 address.
@@ -1040,8 +1056,13 @@ async function getOnChainIdentity(api, address) {
     return name;
 }
 
+// Audit F-114: the fallback was Date.now() — so a block whose timestamp.set
+// extrinsic couldn't be read got stamped with the moment the INDEXER looked at
+// it. During the historical backfill that means a 2022 block dated today,
+// which corrupts the analytics day-buckets and makes timeAgo nonsense. Null
+// says "unknown", and callers already treat a null timestamp as unknown.
 function getBlockTimestamp(signedBlock) {
-    let timestamp = Date.now();
+    let timestamp = null;
     signedBlock.block.extrinsics.forEach((ex) => {
         if (ex.method.section === 'timestamp' && ex.method.method === 'set') timestamp = ex.method.args[0].toNumber();
     });
@@ -1161,8 +1182,16 @@ function buildFinancialTransactionFromEvent(record, eventIndex, blockNumber, blo
     const event = record.event;
     if (event.section !== 'balances' || event.method !== 'Transfer' || event.data.length < 3) return null;
 
-    const from = event.data[0].toString();
-    const to = event.data[1].toString();
+    // Audit F-080: these were raw `.toString()` — whatever SS58 prefix the
+    // codec happened to render — while getTransactionsByAddress compares the
+    // stored string to the queried one. A prefix-42 and a prefix-88 encoding
+    // of the SAME AccountId therefore returned different (often empty)
+    // histories. staking_rewards already normalised at write time; transfers
+    // now do the same, so one account has one spelling in the table.
+    let from = event.data[0].toString();
+    let to = event.data[1].toString();
+    try { from = normalizeAddress(from); } catch (e) { /* keep raw */ }
+    try { to = normalizeAddress(to); } catch (e) { /* keep raw */ }
     const numericAmount = formatPDEX(event.data[2]);
     return {
         // F-021: hash-keyed, so a fork row and its canonical replacement can
@@ -1281,11 +1310,20 @@ async function scanFinancialTransactions({
     limit = TX_CACHE_LIMIT,
     maxBlocks = TX_INITIAL_SCAN_BLOCKS,
     onProgress = null,
-    progressInterval = 100
+    progressInterval = 100,
+    // F-078 intra-block resume: the height the caller already read part of,
+    // and how many of its rows it received.
+    skipBlock = -1,
+    skipCount = 0
 }) {
     const transactions = [];
     let scannedBlocks = 0;
     let lastScannedBlock = startBlock;
+    let lastEmittedBlock = null;   // F-078: last height fully returned to the caller
+    // F-078 intra-block paging: where to resume inside a partially-returned
+    // height, and where the caller told us it had already read to.
+    let resumeInBlock = null;
+    const skipInBlock = { block: Number(skipBlock) || -1, count: Number(skipCount) || 0 };
 
     for (let nextBlock = startBlock; nextBlock >= stopBlock && transactions.length < limit && scannedBlocks < maxBlocks;) {
         const blockNumbers = [];
@@ -1301,12 +1339,38 @@ async function scanFinancialTransactions({
 
         scannedBlocks += blockNumbers.length;
         lastScannedBlock = blockNumbers[blockNumbers.length - 1];
-        for (const result of batchResults.sort((a, b) => b.blockNumber - a.blockNumber)) {
-            for (const tx of result.transactions) {
-                if (transactions.length >= limit) break;
-                transactions.push(tx);
-            }
-            if (transactions.length >= limit) break;
+        // Audit F-078: the cursor used to be the oldest height in the BATCH,
+        // regardless of where the `limit` cut the results. If the limit filled
+        // mid-batch, every remaining tx in the batch's older blocks was
+        // skipped — the next page started below them and those transfers were
+        // unreachable through the UI. Track the last height we actually
+        // emitted from, and stop the cursor there.
+        // A review caught two defects in the first version of this. (1) It set
+        // `truncatedAt` even when the limit was reached on a block's LAST tx —
+        // a fully-drained block re-served every page. (2) Re-serving via
+        // `truncatedAt + 1` meant that if the limit filled inside the FIRST
+        // block of the scan, nextBeforeBlock came back equal to the caller's
+        // beforeBlock: the cursor stalled and any block holding >= limit
+        // transfers became a permanent dead end — the exact case F-078's close
+        // test names. Fixed by tracking the leftover explicitly and paging
+        // WITHIN the block by transaction offset.
+        // The cursor arithmetic lives in lib/tx-paging.js, where its PROGRESS
+        // and COMPLETENESS properties are asserted over simulated full runs.
+        // It was written inline here twice and wrong both times (see that
+        // file's header), so it is deliberately no longer inline.
+        const page = planTxPage({
+            blocks: batchResults,
+            limit: limit - transactions.length,   // remaining budget for this scan
+            skip: skipInBlock.block >= 0 ? skipInBlock : null
+        });
+        for (const tx of page.emitted) transactions.push(tx);
+        if (page.nextBeforeBlock !== null && page.resumeInBlock === null) {
+            lastEmittedBlock = page.nextBeforeBlock;
+        }
+        if (page.resumeInBlock) {
+            lastEmittedBlock = page.resumeInBlock.block + 1;
+            resumeInBlock = page.resumeInBlock;
+            break;
         }
 
         if (onProgress && (scannedBlocks % progressInterval === 0 || transactions.length >= limit)) {
@@ -1322,7 +1386,16 @@ async function scanFinancialTransactions({
     return {
         transactions,
         scannedBlocks,
-        nextBeforeBlock: scannedBlocks > 0 ? Math.max(lastScannedBlock, 0) : Math.max(startBlock, 0),
+        // F-078: prefer the last height whose transactions were actually
+        // returned; fall back to the scan floor when nothing matched (a run of
+        // transfer-free blocks still has to advance or paging would stall).
+        nextBeforeBlock: lastEmittedBlock !== null
+            ? Math.max(lastEmittedBlock, 0)
+            : (scannedBlocks > 0 ? Math.max(lastScannedBlock, 0) : Math.max(startBlock, 0)),
+        // Non-null when the last height was only partly returned: the caller
+        // echoes these back so the next page resumes mid-block instead of
+        // stalling or re-serving rows.
+        resumeInBlock,
         oldestScannedBlock: scannedBlocks > 0 ? lastScannedBlock : 0
     };
 }
@@ -1539,6 +1612,14 @@ function devApiGate(req, res) {
 const DIAG_TOKEN = (process.env.DIAG_TOKEN || '').trim();
 function diagGate(req, res) {
     res.set('Cache-Control', 'no-store');
+    // Audit F-074: the diag routes had no rate limit at all, and
+    // /api/diag/subquery-lag makes an OUTBOUND request per call — an
+    // amplification proxy for anyone holding (or guessing at) the token.
+    // Reuse the dev-API limiter so the budget is shared and per-IP.
+    if (!devApiRateOk(clientIp(req))) {
+        res.status(429).json({ error: 'Too many diagnostic requests.' });
+        return false;
+    }
     if (DIAG_TOKEN) {
         const auth = String(req.headers['authorization'] || '');
         const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
@@ -1675,7 +1756,7 @@ app.get('/api/rpc/metadata', async (req, res) => {
         res.json(payload);
     } catch (err) {
         res.set('Cache-Control', 'no-store');
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -1921,7 +2002,12 @@ app.get('/api/runtime', async (req, res) => {
 // upstream RPC method can't quietly become reachable.
 const RPC_ALLOWLIST = new Set([
     'chain_getBlock', 'chain_getBlockHash', 'chain_getFinalizedHead', 'chain_getHeader',
-    'state_getRuntimeVersion', 'state_getStorage', 'state_getKeysPaged', 'state_queryStorageAt', 'state_getStorageHash', 'state_getStorageSize',
+    // Audit F-077: state_queryStorageAt was reachable here. It takes an
+    // ARRAY of keys and answers for all of them in one call — an unbounded
+    // multiplier against the shared RPC node from a public endpoint, which is
+    // exactly what F-018 removed from /api/state. state_getKeysPaged stays
+    // (it is paged by construction and needs an explicit page size).
+    'state_getRuntimeVersion', 'state_getStorage', 'state_getKeysPaged', 'state_getStorageHash', 'state_getStorageSize',
     'system_chain', 'system_chainType', 'system_health', 'system_name', 'system_properties', 'system_version', 'system_syncState',
     'payment_queryInfo'
 ]);
@@ -1958,9 +2044,29 @@ app.post('/api/rpc/call', async (req, res) => {
         res.json({ method, params, ...serialiseCodec(value) });
     } catch (err) {
         res.set('Cache-Control', 'no-store');
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
+
+// Audit F-084: handlers echoed `err.message` straight to the client. Those
+// strings come from SQLite, polkadot.js and the filesystem, and carry absolute
+// paths, SQL fragments, internal hostnames and RPC URLs — free reconnaissance
+// on any endpoint you can make throw. Clients get a stable generic message;
+// the real error is logged server-side where operators can read it.
+//
+// Deliberately NOT applied to the 4xx validation replies: "Invalid Polkadex
+// address." is our own text and is the useful thing to say.
+function serverError(res, err, context) {
+    const detail = err && err.message ? err.message : String(err);
+    console.error(`[api] ${context || 'request'} failed:`, err && err.stack ? err.stack : detail);
+    if (!res.headersSent) {
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ error: 'Internal error. If this persists, please report it with the time and the URL.' });
+    }
+}
+
+// Response ceiling for /api/decode (audit F-072).
+const DECODE_MAX_EXTRINSICS = readPositiveInteger(process.env.DECODE_MAX_EXTRINSICS, 50);
 
 // ---- GET /api/decode/:block -------------------------------------------------
 // Every extrinsic in a block, decoded argument by argument, with each argument's
@@ -2004,14 +2110,30 @@ app.get('/api/decode/:block', async (req, res) => {
         const wantMethod = req.query.method ? norm(req.query.method) : null;
         const wantIndex = req.query.index !== undefined ? parseInt(req.query.index, 10) : null;
 
+        // Audit F-072: this decoded EVERY extrinsic with full human + JSON +
+        // hex per argument and no ceiling on the response. A block packed with
+        // large calls could produce a multi-megabyte JSON body from one
+        // request, CDN-cacheable, from a public endpoint. Cap the number of
+        // extrinsics decoded per response; `?index=` and the section/method
+        // filters already exist for reaching a specific one.
         const out = [];
         const extrinsics = signedBlock.block.extrinsics || [];
+        let decodeBudget = DECODE_MAX_EXTRINSICS;
+        let decodeTruncated = false;
         for (let i = 0; i < extrinsics.length; i++) {
             if (wantIndex !== null && i !== wantIndex) continue;
             const ex = extrinsics[i];
             const call = ex.method;
             const section = call.section, method = call.method;
             if (wantSection && norm(section) !== wantSection) continue;
+            // The budget is spent on MATCHES, not on candidates. A review
+            // caught the first version decrementing before these filters, so a
+            // 200-extrinsic block with the target at index 150 returned [] —
+            // while the response note told the caller to use ?section=, which
+            // could not reach it. Now the cap bounds the RESPONSE, which is
+            // what F-072 is about, and the filters stay usable.
+            if (decodeBudget <= 0) { decodeTruncated = true; break; }
+            decodeBudget--;
             if (wantMethod && norm(method) !== wantMethod) continue;
 
             // Pair each decoded value with its declared name and type from the
@@ -2047,13 +2169,20 @@ app.get('/api/decode/:block', async (req, res) => {
             blockHash,
             extrinsicCount: extrinsics.length,
             returned: out.length,
+            // F-072: say so when the cap bit, so a client can page with
+            // ?index= rather than silently believing it saw the whole block.
+            truncated: decodeTruncated,
+            limit: DECODE_MAX_EXTRINSICS,
             extrinsics: out
         };
+        if (decodeTruncated) {
+            body.note = `Only the first ${DECODE_MAX_EXTRINSICS} extrinsics are decoded per request. Use ?index=<n>, or ?section=/?method= to narrow.`;
+        }
         // A filter that matches nothing returns [], which reads identically to
         // "that call is not in this block". For an audit tool those are very
         // different statements, so when a filter eliminated everything, list
         // what the block actually contains.
-        if (!out.length && (wantSection || wantMethod || wantIndex !== null)) {
+        if (!out.length && !decodeTruncated && (wantSection || wantMethod || wantIndex !== null)) {
             body.note = 'No extrinsic in this block matched the filter. Section/method matching ignores case and underscores, so submit_snapshot and submitSnapshot are equivalent.';
             body.present = extrinsics.map((ex, i) => `${i}: ${ex.method.section}.${ex.method.method}`);
         }
@@ -2087,10 +2216,13 @@ app.get('/api/version', (req, res) => {
         // `-dirty` means the tree had uncommitted changes when the image was
         // built, so the SHA alone does NOT identify the running code.
         dirty: /-dirty$/.test(process.env.GIT_SHA || ''),
-        node: process.version,
-        pid: process.pid,
-        startedAt: new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString(),
-        uptimeSeconds: Math.round(process.uptime()),
+        // Audit F-142: node version, pid, uptime AND startedAt were public.
+        // The build SHA is the useful part (it answers "is my fix deployed?");
+        // the rest is reconnaissance — an exact Node patch level maps to known
+        // CVEs, and process start time is "when did you last patch", which is
+        // why removing uptimeSeconds while keeping startedAt (as a first pass
+        // here did) achieved nothing. Operators get the full detail on
+        // /api/diag/* behind DIAG_TOKEN.
         specVersion: globalApi && globalApi.runtimeVersion ? globalApi.runtimeVersion.specVersion.toNumber() : null,
         rpcConnected: !!(globalApi && globalApi.isConnected)
     });
@@ -2732,7 +2864,7 @@ app.get('/api/diag/rpc-health', async (req, res) => {
 // --- LIST ENDPOINTS (served from SQLite) ---
 app.get('/api/validators', (req, res) => {
     try { cacheMedium(res); res.json(db.getValidators()); }
-    catch (err) { res.status(500).json({ validators: [], status: 'Error', error: err.message }); }
+    catch (err) { /* F-084 */ console.error('[api] /api/validators failed:', err && err.stack ? err.stack : err); res.status(500).json({ validators: [], status: 'Error', error: 'Internal error.' }); }
 });
 app.get('/api/network-info', async (req, res) => {
     try {
@@ -2765,7 +2897,7 @@ app.get('/api/network-info', async (req, res) => {
         // default TTL; no-store is unambiguous.
         res.set('Cache-Control', 'no-store');
         const cacheData = db.getKv('network_info') || { networkInfo: null, lastSync: 0, status: 'Initializing' };
-        res.json({ ...cacheData, status: 'Error', error: err.message });
+        /* F-084 */ console.error('[api] network-info stale-serve path failed:', err && err.stack ? err.stack : err); res.json({ ...cacheData, status: 'Error', error: 'Internal error.' });
     }
 });
 app.get('/api/holders', async (req, res) => {
@@ -2774,7 +2906,7 @@ app.get('/api/holders', async (req, res) => {
         cacheData.holders = await applyDisplayNameOverridesToHolders(cacheData.holders);
         cacheMedium(res);
         res.json(cacheData);
-    } catch (err) { res.status(500).json({ holders: [], status: 'Error', error: err.message }); }
+    } catch (err) { /* F-084 */ console.error('[api] /api/holders failed:', err && err.stack ? err.stack : err); res.status(500).json({ holders: [], status: 'Error', error: 'Internal error.' }); }
 });
 app.get('/api/transactions', (req, res) => {
     try {
@@ -2792,7 +2924,7 @@ app.get('/api/transactions', (req, res) => {
             backfillComplete: !!state.txBackfillComplete,
             detail: state.detail || null
         });
-    } catch (err) { res.status(500).json({ transactions: [], status: 'Error', error: err.message }); }
+    } catch (err) { /* F-084 */ console.error('[api] /api/transactions failed:', err && err.stack ? err.stack : err); res.status(500).json({ transactions: [], status: 'Error', error: 'Internal error.' }); }
 });
 app.get('/api/transactions/older', async (req, res) => {
     if (!requireRpc(res)) return;
@@ -2801,21 +2933,60 @@ app.get('/api/transactions/older', async (req, res) => {
     try {
         const latestHeader = await globalApi.rpc.chain.getHeader();
         const latestBlock = latestHeader.number.toNumber();
-        const beforeBlock = Math.min(parseInt(req.query.beforeBlock || latestBlock + 1, 10) || latestBlock + 1, latestBlock + 1);
+        // Audit F-079: was `parseInt(q || latest+1) || latest+1` — a double
+        // falsy trap. beforeBlock=0 means "I have paged to genesis", but `0 ||`
+        // read it as absent and RESET the cursor to the chain head, so the
+        // Load-Older button silently looped back to the newest page. Also
+        // accept `?before=` since /developers documents that name.
+        const rawBefore = (req.query.beforeBlock !== undefined && req.query.beforeBlock !== '')
+            ? req.query.beforeBlock
+            : req.query.before;
+        let beforeBlock;
+        if (rawBefore === undefined || rawBefore === '') {
+            beforeBlock = latestBlock + 1;
+        } else {
+            const parsed = Number.parseInt(rawBefore, 10);
+            if (!Number.isFinite(parsed) || parsed < 0) {
+                return res.status(400).json({ error: 'beforeBlock must be a non-negative integer.' });
+            }
+            beforeBlock = Math.min(parsed, latestBlock + 1);
+        }
+        if (beforeBlock === 0) {
+            // Genesis reached: nothing older exists. Say so instead of wrapping.
+            return res.json({ transactions: [], nextBeforeBlock: 0, scannedBlocks: 0, endOfChain: true, status: 'Synced' });
+        }
+        // F-078: when the previous page stopped mid-block it returned
+        // resumeInBlock; the client echoes it as ?resumeBlock=&resumeCount= so
+        // this page continues after the rows it already has. Without this the
+        // cursor could not advance inside a block with >= limit transfers.
+        const resumeBlock = Number.parseInt(req.query.resumeBlock, 10);
+        const resumeCount = Number.parseInt(req.query.resumeCount, 10);
+        const hasResume = Number.isFinite(resumeBlock) && resumeBlock >= 0 && Number.isFinite(resumeCount) && resumeCount > 0;
+
         const scan = await scanFinancialTransactions({
-            startBlock: Math.max(beforeBlock - 1, 0),
+            // Resuming inside a height means starting AT it, not below it.
+            startBlock: hasResume ? resumeBlock : Math.max(beforeBlock - 1, 0),
             limit,
-            maxBlocks
+            maxBlocks,
+            skipBlock: hasResume ? resumeBlock : -1,
+            skipCount: hasResume ? resumeCount : 0
         });
 
         res.json({
             transactions: scan.transactions,
             nextBeforeBlock: scan.nextBeforeBlock,
+            // F-078: when a single block holds more transfers than one page,
+            // `nextBeforeBlock` alone cannot express "resume in the middle of
+            // block N". When resumeRequired is true a client MUST echo
+            // resumeInBlock back as ?resumeBlock=&resumeCount= — following the
+            // height cursor alone will re-read the same block.
+            resumeInBlock: scan.resumeInBlock || null,
+            resumeRequired: !!scan.resumeInBlock,
             scannedBlocks: scan.scannedBlocks,
             status: 'Synced'
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 // Audit F-020: these two endpoints used to read getSyncState('blocks') and
@@ -2842,14 +3013,14 @@ app.get('/api/blocks', (req, res) => {
         const state = db.getSyncState('chain_index');
         cacheShort(res);
         res.json({ blocks: db.getRecentBlocks(200), lastSync: state.lastSync || 0, status: state.status || 'Initializing', coverage: coverageOf(state) });
-    } catch (err) { res.status(500).json({ blocks: [], status: 'Error', error: err.message }); }
+    } catch (err) { /* F-084 */ console.error('[api] /api/blocks failed:', err && err.stack ? err.stack : err); res.status(500).json({ blocks: [], status: 'Error', error: 'Internal error.' }); }
 });
 app.get('/api/events', (req, res) => {
     try {
         const state = db.getSyncState('chain_index');
         cacheShort(res);
         res.json({ events: db.getRecentEvents(500), lastSync: state.lastSync || 0, status: state.status || 'Initializing', coverage: coverageOf(state) });
-    } catch (err) { res.status(500).json({ events: [], status: 'Error', error: err.message }); }
+    } catch (err) { /* F-084 */ console.error('[api] /api/events failed:', err && err.stack ? err.stack : err); res.status(500).json({ events: [], status: 'Error', error: 'Internal error.' }); }
 });
 
 // --- DETAIL ENDPOINTS (Restored) ---
@@ -2872,7 +3043,7 @@ app.get('/api/block/:id', async (req, res) => {
             date: timestamp,
             block: signedBlock.toHuman().block
         });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 // Normalise an extrinsic hash as it might appear in a URL or shared link:
@@ -2990,7 +3161,7 @@ app.get('/api/extrinsic/:block/:txHash', async (req, res) => {
             extrinsic: targetExt.toHuman(),
             events: txEvents.map(e => e.toHuman().event)
         });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 // Locate a transaction by hash when the user has the hash but not the
@@ -3045,7 +3216,7 @@ app.get('/api/extrinsic-by-hash/:txHash', async (req, res) => {
         res.json({ found: false, txHash, scanned, fromBlock, toBlock });
     } catch (err) {
         console.error('API Error /api/extrinsic-by-hash/:txHash:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -3074,7 +3245,7 @@ app.get('/api/validator/:address', async (req, res) => {
         const scorecard = computeValidatorScorecard(history, triggers);
 
         res.json({ address, identity, controller, history, triggers, scorecard });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 // Pure function — derives summary metrics from a validator's per-era history.
@@ -3143,33 +3314,51 @@ app.get('/api/search/:query', async (req, res) => {
         try {
             const accountInfo = await globalApi.query.system.account(q);
             const name = await getIdentity(globalApi, q);
-            const free = Number(accountInfo.data.free) / 10 ** 12;
-            const reserved = Number(accountInfo.data.reserved) / 10 ** 12;
+            const free = formatPDEX(accountInfo.data.free);
+            const reserved = formatPDEX(accountInfo.data.reserved); // F-043: BigInt-safe
             if (free > 0 || reserved > 0 || name !== "Unknown") return res.json({ type: 'account', data: { address: q, name: name, balance: free + reserved, free: free, reserved: reserved } });
         } catch (e) { }
         res.status(404).json({ error: 'No exact deep network match found.' });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 app.get('/api/account/:address', async (req, res) => {
-    const address = req.params.address.trim();
+    // Audit F-080 / F-082: this endpoint took the path segment raw — no
+    // validation, no SS58 normalisation — so a prefix-42 spelling of an
+    // account returned a different (usually empty) transaction list than the
+    // prefix-88 one, and garbage reached the chain query. Every other address
+    // route already validates + normalises; this one now shares that gate,
+    // and the raw form is passed alongside so history written before the
+    // writer normalised is still found.
+    const raw = (req.params.address || '').trim();
+    if (!isValidAddress(raw)) return res.status(400).json({ error: 'Invalid Polkadex address.' });
+    let address;
+    try { address = normalizeAddress(raw); }
+    catch (e) { return res.status(400).json({ error: 'Invalid Polkadex address.' }); }
     if (!requireRpc(res)) return;
     try {
         const accountInfo = await globalApi.query.system.account(address);
         const name = await getIdentity(globalApi, address);
-        const free = Number(accountInfo.data.free) / 10 ** 12;
-        const reserved = Number(accountInfo.data.reserved) / 10 ** 12;
+        const free = formatPDEX(accountInfo.data.free);
+        const reserved = formatPDEX(accountInfo.data.reserved); // F-043: BigInt-safe
 
-        let txs = [], evs = [], rank = "0";
+        // F-053: rank is null when the address is outside the top-500
+        // snapshot — "0" read as a rank better than #1.
+        let txs = [], evs = [], rank = null;
         try {
             const holderRank = db.getHolderRank(address);
             if (holderRank) rank = holderRank.toString();
-            txs = db.getTransactionsByAddress(address, 200);
+            txs = db.getTransactionsByAddress(address, 200, raw);
             evs = db.getEventsByAddress(address, 200);
         } catch (e) { }
 
-        res.json({ account: address, display: name, balanceTotal: free + reserved, balanceFree: free, balanceFrozen: reserved, roles: "User", rank: rank, transactions: txs, events: evs, status: 'Synced' });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+        // Audit F-136: `reserved` was published as `balanceFrozen`. Reserved
+        // and frozen are DIFFERENT Substrate concepts (reserves back deposits;
+        // freezes back locks like vesting/staking) and labelling one as the
+        // other misinforms anyone reconciling an account. `balanceFrozen`
+        // stays one release as a deprecated alias.
+        res.json({ account: address, display: name, balanceTotal: free + reserved, balanceFree: free, balanceReserved: reserved, balanceFrozen: reserved, roles: "User", rank: rank, transactions: txs, events: evs, status: 'Synced' });
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 // --- STAKING REWARDS ENDPOINTS ---
@@ -3187,7 +3376,7 @@ app.get('/api/staking-rewards-status', (req, res) => {
             status: s.status || 'Initializing'
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -3301,7 +3490,7 @@ app.get('/api/staking-rewards/:address', async (req, res) => {
             status: syncState.status || 'Initializing'
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -3343,7 +3532,7 @@ app.get('/api/price-latest', (req, res) => {
             providers: PRICE_PROVIDERS,
             bySource: buildProviderRollup(),
         });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 app.get('/api/price-history', (req, res) => {
     try {
@@ -3362,7 +3551,7 @@ app.get('/api/price-history', (req, res) => {
             providers: PRICE_PROVIDERS,
             bySource: buildProviderRollup(),
         });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 // --- WALLET DASHBOARD ENDPOINT ---
@@ -3698,7 +3887,13 @@ app.post('/api/auth/verify', (req, res) => {
         valid = signatureVerify(message, signature, address).isValid
             || signatureVerify(u8aWrapBytes(message), signature, address).isValid;
     } catch (e) { valid = false; }
-    if (!valid) return res.status(401).json({ error: 'Signature verification failed.' });
+    if (!valid) {
+        // Audit F-134: a failed verify used to LEAVE the challenge row, so the
+        // same nonce could be attacked repeatedly for its whole 10-minute TTL.
+        // One nonce, one attempt — the client simply requests a new challenge.
+        db.deleteChallenge(address);
+        return res.status(401).json({ error: 'Signature verification failed — request a new login challenge.' });
+    }
     db.deleteChallenge(address);
     const token = randomAsHex(24);
     db.createSession(token, address, AUTH_SESSION_TTL);
@@ -3818,9 +4013,15 @@ function normalizePrefs(input) {
 // Build the user-facing site URL (origin only) — used in confirmation +
 // unsubscribe links. Honors SITE_URL env if set, otherwise falls back to
 // the request's host header so dev / staging deploys work out of the box.
-function siteOrigin(req) {
-    if (process.env.SITE_URL) return process.env.SITE_URL.replace(/\/+$/, '');
-    return `${req.protocol}://${req.get('host')}`.replace(/\/+$/, '');
+// Audit F-037: this fell back to `req.protocol://Host` when SITE_URL was
+// unset. Behind nginx→backend the protocol on that hop is http, and Host is
+// attacker-controllable, so a confirmation link could be minted as
+// http://whatever-they-sent/ — mailed to a real person, over a bearer token.
+// emailSiteOrigin() is what every ALERT mail already used; confirmation mail
+// now shares it, so there is exactly one answer to "what is our origin".
+// `req` is kept in the signature for call-site compatibility and ignored.
+function siteOrigin(_req) {
+    return emailSiteOrigin();
 }
 
 // HTML-escape for token values that go into URLs and templates.
@@ -3874,15 +4075,32 @@ app.post('/api/email/subscribe', async (req, res) => {
         email, confirmationToken, unsubscribeToken, eventPrefs: prefs, source, walletAddress
     });
 
-    // Already-confirmed row: short-circuit, no email.
-    if (!created && subscriber && subscriber.confirmedAt) {
+    // Already-confirmed AND still subscribed: short-circuit, no email.
+    //
+    // Audit F-042: this used to test `confirmedAt` alone, so anyone who had
+    // ever unsubscribed was told "already-confirmed" forever and could never
+    // opt back in — the UI reported success while the row stayed
+    // unsubscribed and getConfirmedEmailSubscribers kept excluding it. A
+    // previously-unsubscribed row now gets a fresh confirmation mail, and
+    // confirming it clears unsubscribed_at (db.confirmEmailSubscriber).
+    if (!created && subscriber && subscriber.confirmedAt && !subscriber.unsubscribedAt) {
         return res.json({ status: 'already-confirmed', email: subscriber.email });
     }
 
-    // For existing-but-not-confirmed rows we reuse the original tokens (the
-    // confirmation link the user got earlier still works); we just resend
-    // the email so they get a fresh link in their inbox.
-    const effective = subscriber;
+    // Audit F-110: we used to REUSE the original confirmation token on a
+    // resend, so every link ever mailed stayed live forever. Rotate on resend:
+    // the newest mail is the only one that works, and its 24h clock restarts.
+    // Rotate on ANY resend, not just for never-confirmed rows. A review caught
+    // the gap: a confirmed-then-unsubscribed subscriber taking the F-042
+    // resubscribe path fell through with its ORIGINAL, never-rotated token,
+    // and the freshness checks skip confirmed rows — so that path preserved
+    // exactly the "a months-old link is still a live opt-in credential"
+    // property F-110 exists to remove.
+    let effective = subscriber;
+    if (!created && subscriber) {
+        try { effective = db.rotateConfirmationToken(subscriber.id, confirmationToken) || subscriber; }
+        catch (e) { console.warn('[email] confirmation token rotation failed:', e && e.message ? e.message : e); }
+    }
     const origin = siteOrigin(req);
     const confirmUrl     = `${origin}/api/email/confirm?token=${encodeURIComponent(effective.confirmationToken)}`;
     const unsubscribeUrl = `${origin}/api/email/unsubscribe?token=${encodeURIComponent(effective.unsubscribeToken)}`;
@@ -3956,6 +4174,21 @@ Unsubscribe at any time: ${unsubscribeUrl}
 app.get('/api/email/confirm', (req, res) => {
     const token = String(req.query.token || '').trim();
     const subscriber = db.getEmailSubscriberByConfirmationToken(token);
+    // Audit F-110: enforce the 24h the subscribe modal promises. An expired
+    // link reads as "not recognised" and the user requests a fresh one.
+    // Expiry applies to any link that still has work to do — a never-confirmed
+    // row, OR a confirmed-but-unsubscribed one going through the F-042
+    // resubscribe path (that link reactivates a subscription, so it is just as
+    // much a live credential).
+    const needsConfirmAction = subscriber && (!subscriber.confirmedAt || subscriber.unsubscribedAt);
+    if (needsConfirmAction && !db.isConfirmationTokenFresh(subscriber)) {
+        res.set('Cache-Control', 'no-store');
+        return res.status(410).type('html').send(confirmResultPage({
+            title: 'This confirmation link has expired',
+            body: '<p>Confirmation links are valid for 24 hours. Request a new one from the explorer and we\'ll email you a fresh link.</p>',
+            isError: true
+        }));
+    }
     res.set('Cache-Control', 'no-store');
     res.set('X-Robots-Tag', 'noindex, nofollow');
     if (!subscriber) {
@@ -3993,6 +4226,17 @@ app.get('/api/email/confirm', (req, res) => {
 // POST /api/email/confirm — the actual write.
 app.post('/api/email/confirm', formBody, (req, res) => {
     const token = String((req.body && req.body.token) || req.query.token || '').trim();
+    // F-110: re-check freshness on the write path too — the GET could have
+    // been rendered while still valid and submitted much later.
+    const pending = db.getEmailSubscriberByConfirmationToken(token);
+    if (pending && (!pending.confirmedAt || pending.unsubscribedAt) && !db.isConfirmationTokenFresh(pending)) {
+        res.set('Cache-Control', 'no-store');
+        return res.status(410).type('html').send(confirmResultPage({
+            title: 'This confirmation link has expired',
+            body: '<p>Confirmation links are valid for 24 hours. Request a new one from the explorer.</p>',
+            isError: true
+        }));
+    }
     const subscriber = db.confirmEmailSubscriber(token);
     res.set('Cache-Control', 'no-store');
     res.set('X-Robots-Tag', 'noindex, nofollow');
@@ -4177,7 +4421,7 @@ app.get('/api/proxies/:address', async (req, res) => {
         });
     } catch (err) {
         console.error('API Error /api/proxies/:address:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4206,7 +4450,7 @@ app.get('/api/proxy-types', async (req, res) => {
         res.json({ types });
     } catch (err) {
         console.error('API Error /api/proxy-types:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4245,7 +4489,7 @@ app.get('/api/multisigs/:address', async (req, res) => {
         res.json({ account: address, pending });
     } catch (err) {
         console.error('API Error /api/multisigs/:address:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4350,7 +4594,7 @@ app.get('/api/identity/:address', async (req, res) => {
         });
     } catch (err) {
         console.error('API Error /api/identity/:address:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4385,7 +4629,10 @@ app.get('/api/labels/:address', (req, res) => {
         // Endpoint must NOT be cached at the CDN when there's a viewer-
         // specific viewerVote in the payload — Cloudflare would otherwise
         // pin one user's vote state for everyone else.
-        if (!viewer) cacheMedium(res);
+        // Audit F-083: a viewer-specific response is per-USER content; sending it
+    // with a shared cacheMedium header lets Cloudflare serve one visitor's
+    // view to the next. no-store when a viewer is present.
+    if (viewer) res.set('Cache-Control', 'no-store'); else cacheMedium(res);
         res.json({
             address,
             labels,
@@ -4397,7 +4644,7 @@ app.get('/api/labels/:address', (req, res) => {
         });
     } catch (err) {
         console.error('API Error /api/labels/:address:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4443,7 +4690,7 @@ app.post('/api/labels/:address', express.json({ limit: '4kb' }), (req, res) => {
         res.json({ address, label, signer, isSelf: signer === address, ok: true });
     } catch (err) {
         console.error('API Error POST /api/labels/:address:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4461,7 +4708,7 @@ app.delete('/api/labels/:address', (req, res) => {
         res.json({ ok: true });
     } catch (err) {
         console.error('API Error DELETE /api/labels/:address:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4484,7 +4731,7 @@ app.post('/api/labels/:address/:signer/vote', express.json({ limit: '1kb' }), (r
         res.json({ ok: true, label: row });
     } catch (err) {
         console.error('API Error POST /api/labels/:address/:signer/vote:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4506,7 +4753,7 @@ app.post('/api/labels/:address/:signer/report', express.json({ limit: '1kb' }), 
         res.json({ ok: true });
     } catch (err) {
         console.error('API Error POST /api/labels/:address/:signer/report:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4531,7 +4778,7 @@ app.post('/api/labels/:address/:signer/veto', express.json({ limit: '1kb' }), (r
         res.json({ ok: true, vetoed });
     } catch (err) {
         console.error('API Error POST /api/labels/:address/:signer/veto:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4540,7 +4787,7 @@ app.get('/api/discussions', (req, res) => {
         const kind = (req.query.kind === 'proposal' || req.query.kind === 'motion') ? req.query.kind : null;
         cacheMedium(res);
         res.json({ threads: db.getThreads(kind) });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 // --- ANALYTICS ENDPOINTS ---
@@ -4561,7 +4808,7 @@ app.get('/api/analytics/timeseries', (req, res) => {
         res.json({ days, since: sinceTs, series: db.getDailyAnalytics(sinceTs), computedAt: Date.now() });
     } catch (err) {
         console.error('API Error /api/analytics/timeseries:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4617,7 +4864,7 @@ app.get('/api/analytics/snapshot', (req, res) => {
         });
     } catch (err) {
         console.error('API Error /api/analytics/snapshot:', err);
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -4626,7 +4873,7 @@ app.get('/api/discussions/:id', (req, res) => {
         const thread = db.getThread(req.params.id);
         if (!thread) return res.status(404).json({ error: 'Discussion thread not found.' });
         res.json({ thread, posts: db.getPosts(thread.id) });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 app.post('/api/discussions/:id/posts', async (req, res) => {
@@ -4651,7 +4898,7 @@ app.post('/api/discussions/:id/posts', async (req, res) => {
         try { authorName = await getIdentity(globalApi, address); } catch (e) { }
         db.createPost({ threadId: thread.id, author: address, authorName, content });
         res.json({ thread: db.getThread(thread.id), posts: db.getPosts(thread.id) });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { serverError(res, err, req.path); }
 });
 
 // Auto-create one discussion thread per active item and close threads whose
@@ -4681,6 +4928,11 @@ function reconcileMotionThreads(motions) {
 }
 
 app.get('/api/wallet/:address', async (req, res) => {
+    // Audit F-083: this handler set NO Cache-Control at all, so the response
+    // fell through to nginx's `map` default (`public, max-age=300`) — one
+    // visitor's balance, staking positions and unpaid rewards, cacheable at
+    // the edge for five minutes under a URL that only differs by address.
+    res.set('Cache-Control', 'no-store');
     const raw = (req.params.address || '').trim();
     if (!isValidAddress(raw)) return res.status(400).json({ error: 'Invalid Polkadex wallet address.' });
     if (!requireRpc(res)) return;
@@ -4768,6 +5020,14 @@ app.get('/api/wallet/:address', async (req, res) => {
             // includes bonded/staked tokens (they're locked, not reserved).
             // `transferable` excludes the staked amount so the staking UI can
             // show what's actually available to bond on top of the current stake.
+            // F-136 note: the audit's close test asks transferable to also
+            // subtract `reserved`, but on Substrate reserved is NOT part of
+            // `free` — locks (staking) live inside free, reserves live beside
+            // it — so `free - staked` is the correct spendable figure and
+            // subtracting reserved again would understate it. The real F-136
+            // defect was /api/account LABELLING reserved as "frozen", fixed
+            // there. Left as a comment so the next reader doesn't "fix" this
+            // into a double subtraction.
             balance: { free, reserved, total: free + reserved, transferable: Math.max(0, free - totalStaked) },
             staking: {
                 isStaker: totalStaked > 0,
@@ -4801,7 +5061,7 @@ app.get('/api/wallet/:address', async (req, res) => {
                 // "Pay out rewards" action.
                 unpaidEntries: unclaimed.slice(0, 200)
             },
-            recentTransactions: db.getTransactionsByAddress(address, 10),
+            recentTransactions: db.getTransactionsByAddress(address, 10, raw), // F-080
             network: {
                 currentEra: activeEraOpt && activeEraOpt.isSome ? activeEraOpt.unwrap().index.toNumber() : 0,
                 activeValidators: ni ? ni.validators.active : sessionValAddrs.length,
@@ -4817,7 +5077,7 @@ app.get('/api/wallet/:address', async (req, res) => {
             price: db.getLatestPrice()
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        serverError(res, err, req.path);
     }
 });
 
@@ -5580,7 +5840,11 @@ async function dispatchToSubscribers({ eventKind, eventId, prefMatches, makeEmai
                 eventKind, eventId: String(eventId), subscriberId: s.id,
                 providerId: null, result: 'failed'
             });
-            console.warn(`[email] send to ${s.email} failed (${eventKind}/${eventId}):`, err && err.message ? err.message : err);
+            // Audit F-090: this printed the subscriber's address into the
+            // app log (and thus into journald/docker logs, retained and
+            // shipped). The subscriber id is enough to trace a failure
+            // through the email_dispatches table.
+            console.warn(`[email] send to subscriber #${s.id} failed (${eventKind}/${eventId}):`, err && err.message ? err.message : err);
         }
     }
     if (sentCount > 0) {
@@ -6073,7 +6337,12 @@ async function syncData() {
             const commissionPct = getCommissionPercent(prefs);
             const currentApy = 23.09 * (1 - (commissionPct / 100));
 
-            validatorData.push({ address: addrStr, name: name, totalStake: formatPDEX(totalStake), commission: commissionPct, realApy: currentApy, avg30DayApy: currentApy });
+            // Audit F-044: `avg30DayApy` used to be THIS SAME current-prefs
+            // number wearing a "(30d)" label. It is the nominal max APY
+            // adjusted for today's commission — a projection, not a measured
+            // average — and the field name now says so. The old key is kept
+            // one release for SPA compatibility and mirrors the same value.
+            validatorData.push({ address: addrStr, name: name, totalStake: formatPDEX(totalStake), commission: commissionPct, realApy: currentApy, currentApy, avg30DayApy: currentApy });
         }
         await syncValidatorHistory(activeEra, validators);
         db.replaceValidators(validatorData, { totalCount: validators.length, lastSync: Date.now(), status: 'Synced' });
@@ -6090,7 +6359,10 @@ async function syncHolders() {
         console.log("Starting holder indexer sync...");
         const entries = await globalApi.query.system.account.entries();
         const totalIssuance = formatPDEX(await globalApi.query.balances.totalIssuance());
-        const balances = entries.map(([key, data]) => ({ address: key.args[0].toString(), free: Number(data.data.free) / 10 ** 12, reserved: Number(data.data.reserved) / 10 ** 12 }))
+        // Audit F-043: converted through formatPDEX (BigInt-safe) instead of
+        // Number(...)/1e12 — whale balances above 2^53 planck sorted and
+        // displayed with silently truncated low digits.
+        const balances = entries.map(([key, data]) => ({ address: key.args[0].toString(), free: formatPDEX(data.data.free), reserved: formatPDEX(data.data.reserved) }))
             .sort((a, b) => (b.free + b.reserved) - (a.free + a.reserved));
 
         const topHolders = balances.slice(0, 500);
@@ -6395,8 +6667,11 @@ const REORG_TAIL_MAX = readPositiveInteger(process.env.REORG_TAIL_MAX, 64);
 // events for repaired heights that the backfill cursor has long passed, so
 // someone has to re-derive or those transfers never reach the tx table).
 function deriveTransactionsFromLocalEvents(lo, hi) {
+    // F-080: pass the normaliser so backfilled rows carry the SAME SS58
+    // spelling as live-indexed ones. A review caught that only the live writer
+    // normalised, while this path produces the bulk of the table.
     const rows = db.getTransferEventRowsRange(lo, hi)
-        .map(buildTxRowFromEventRow)
+        .map(ev => buildTxRowFromEventRow(ev, normalizeAddress))
         .filter(Boolean);
     if (rows.length) db.insertTransactions(rows);
     return rows.length;
@@ -7818,8 +8093,16 @@ async function chainHeadWatchdog() {
 //      cached metadata refs, etc., and re-establish from a clean slate.
 //
 //   2. > RPC_EXIT_AFTER_MS (default 30 min): even rebuilding the api hasn't
-//      restored service. Exit the process; the Docker `restart: unless-stopped`
-//      policy will spin up a fresh container. Last-resort backstop that should
+//      restored service. Exit the process.
+//
+//      IMPORTANT (audit F-144): what that exit achieves depends on the
+//      topology. With WORKERS>1 the exiting process is a cluster WORKER —
+//      `cluster.on('exit')` reforks it in place (with backoff, F-145) and the
+//      container never restarts, so a genuinely wedged upstream is retried by
+//      a fresh worker rather than by a fresh container. Only in single-process
+//      mode (WORKERS<=1), where this process IS pid 1, does the Docker
+//      `restart: unless-stopped`
+//      policy spin up a fresh container. Last-resort backstop that should
 //      essentially never fire — but when it does, it ensures the explorer
 //      doesn't sit silently broken for hours waiting for human intervention.
 //
@@ -7950,7 +8233,118 @@ function runWorker({ indexer }) {
     // every time.
     if (indexer) setInterval(chainHeadWatchdog, CHAIN_HEAD_WATCHDOG_INTERVAL_MS);
 
-    if (indexer) startIndexerLoops();
+    // Audit F-092: "exactly one indexer" was enforced only WITHIN a process
+    // tree. Two containers (a stale one during a deploy, a manually started
+    // second stack) both pointed at the same SQLite file would both run the
+    // write loops and could restore an older watermark over a newer one —
+    // silent index corruption. A DB-backed lease makes the invariant global to
+    // the database, which is the thing actually being protected.
+    if (indexer) startIndexerLoopsWhenLeaseAvailable();
+}
+
+// ---- Single-indexer lease (audit F-092) ------------------------------------
+// A row in kv holding { owner, expiresAt }. Taking it requires it to be absent
+// or expired; the holder renews. Deliberately simple: the failure this guards
+// against is an OPERATOR one (two stacks on one DB), not a Byzantine one, and
+// a lease that a dead process releases on its own is the property that matters.
+const INDEXER_LEASE_TTL_MS = readPositiveInteger(process.env.INDEXER_LEASE_TTL_MS, 90_000);
+const INDEXER_LEASE_RENEW_MS = readPositiveInteger(process.env.INDEXER_LEASE_RENEW_MS, 30_000);
+const INDEXER_LEASE_OWNER = `${process.env.HOSTNAME || 'host'}:${process.pid}`;
+
+// Take the lease when it becomes available, and KEEP TRYING.
+//
+// A batch review caught the first version of this failing in the most
+// embarrassing possible way: it tried exactly once, at boot. The old
+// process's lease is valid for up to TTL after it dies, and the owner id
+// contains the pid — so on every ordinary restart the new process saw a live
+// lease owned by "someone else", logged a line, and ran HTTP-only FOREVER.
+// Indexing would have stopped silently at the next deploy. Three changes:
+// release on shutdown, retry on an interval, and treat our own hostname as
+// reclaimable (a container has one indexer; a new pid on the same host is the
+// SAME logical indexer restarting).
+function startIndexerLoopsWhenLeaseAvailable() {
+    if (acquireIndexerLease()) {
+        startIndexerLoops();
+        setInterval(renewIndexerLease, INDEXER_LEASE_RENEW_MS).unref();
+        return;
+    }
+    const waitMs = Math.min(INDEXER_LEASE_RENEW_MS, 15_000);
+    console.warn(`[indexer] lease unavailable — retrying every ${Math.round(waitMs / 1000)}s. ` +
+        'Indexing starts as soon as the current holder releases it or its TTL expires.');
+    const retry = setInterval(() => {
+        if (acquireIndexerLease()) {
+            clearInterval(retry);
+            console.log('[indexer] lease acquired on retry — starting indexer loops');
+            startIndexerLoops();
+            setInterval(renewIndexerLease, INDEXER_LEASE_RENEW_MS).unref();
+        }
+    }, waitMs);
+    retry.unref();
+}
+
+// Release on the way out so a restart doesn't wait out the TTL.
+function releaseIndexerLease() {
+    try {
+        const cur = db.getKv('indexer:lease');
+        if (cur && cur.owner === INDEXER_LEASE_OWNER) {
+            db.setKv('indexer:lease', { owner: null, expiresAt: 0, releasedBy: INDEXER_LEASE_OWNER, releasedAt: Date.now() });
+        }
+    } catch (e) { /* best effort — the TTL is the backstop */ }
+}
+for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.on(sig, () => { releaseIndexerLease(); process.exit(0); });
+}
+process.on('exit', releaseIndexerLease);
+
+function acquireIndexerLease() {
+    try {
+        const cur = db.getKv('indexer:lease');
+        const now = Date.now();
+        const host = o => String(o || '').split(':')[0];
+        // A live lease blocks us UNLESS it belongs to this same host — that is
+        // our own previous process, and one host runs one indexer, so a new pid
+        // there is this indexer restarting rather than a competitor.
+        if (cur && cur.owner
+            && cur.owner !== INDEXER_LEASE_OWNER
+            && host(cur.owner) !== host(INDEXER_LEASE_OWNER)
+            && Number(cur.expiresAt) > now) {
+            console.warn(`[indexer] lease held by ${cur.owner} until ${new Date(Number(cur.expiresAt)).toISOString()}`);
+            return false;
+        }
+        if (cur && cur.owner && host(cur.owner) === host(INDEXER_LEASE_OWNER) && cur.owner !== INDEXER_LEASE_OWNER) {
+            console.log(`[indexer] reclaiming the lease from our own previous process (${cur.owner})`);
+        }
+        db.setKv('indexer:lease', { owner: INDEXER_LEASE_OWNER, expiresAt: now + INDEXER_LEASE_TTL_MS });
+        console.log(`[indexer] lease acquired by ${INDEXER_LEASE_OWNER}`);
+        return true;
+    } catch (err) {
+        // A lease we cannot read must not stop indexing — that would trade a
+        // rare operator mistake for a guaranteed outage.
+        console.warn('[indexer] lease check failed, proceeding:', err && err.message ? err.message : err);
+        return true;
+    }
+}
+
+function renewIndexerLease() {
+    try {
+        const cur = db.getKv('indexer:lease');
+        const host = o => String(o || '').split(':')[0];
+        if (cur && cur.owner
+            && cur.owner !== INDEXER_LEASE_OWNER
+            && host(cur.owner) !== host(INDEXER_LEASE_OWNER)
+            && Number(cur.expiresAt) > Date.now()) {
+            // A DIFFERENT HOST took it while we were running: stop writing
+            // rather than race. Exit; the refork comes back and (per
+            // startIndexerLoopsWhenLeaseAvailable) retries until it can take
+            // over — the first version exited into a permanent HTTP-only state.
+            console.error(`[indexer] lease was taken over by ${cur.owner} — exiting so this worker restarts and waits for it`);
+            setTimeout(() => process.exit(1), 100).unref();
+            return;
+        }
+        db.setKv('indexer:lease', { owner: INDEXER_LEASE_OWNER, expiresAt: Date.now() + INDEXER_LEASE_TTL_MS });
+    } catch (err) {
+        console.warn('[indexer] lease renew failed:', err && err.message ? err.message : err);
+    }
 }
 
 // ---- Indexer loops ---------------------------------------------------------
@@ -8123,9 +8517,22 @@ process.on('unhandledRejection', (err) => {
 });
 process.on('uncaughtException', (err) => {
     console.error('Uncaught exception:', err && err.stack ? err.stack : err);
+    // A wedged WebSocket is a KNOWN, recoverable condition — rebuild and keep
+    // going, that path is well understood.
     if (isPolkadotWsRequestTimeout(err)) {
         setImmediate(() => rebuildApiOnce('60s request timeout (exception)'));
+        return;
     }
+    // Audit F-094: anything else used to be logged and then IGNORED. After an
+    // unknown throw the process keeps serving with arbitrary invariants
+    // broken — an indexer mid-transaction, a sync flag stuck true so that
+    // crawler never runs again — and it looks healthy from outside. Node's own
+    // guidance is that uncaughtException leaves the process in an undefined
+    // state. Exit and let Docker's restart policy (and the cluster's refork)
+    // give us a process whose state we can reason about. Same reasoning as
+    // F-022's initDb fail-fast.
+    console.error('[fatal] exiting after an unrecoverable uncaught exception — the supervisor will restart this process');
+    setTimeout(() => process.exit(1), 100).unref();
 });
 
 // ---- Bootstrap: cluster primary vs worker ---------------------------------
@@ -8147,21 +8554,34 @@ process.on('uncaughtException', (err) => {
 //                   for local dev and `node --check`-style smoke tests).
 //     WORKERS=N   → fork N workers (default = cpu count, clamped to ≤8).
 //     WORKERS=0   → equivalent to WORKERS=1.
+// One ceiling for both the env override and the CPU-derived default (F-177).
+const WORKERS_MAX = readPositiveInteger(process.env.WORKERS_MAX, 8);
 const WORKERS = (() => {
     const raw = process.env.WORKERS;
     if (raw === '1' || raw === '0') return 1;
     const n = parseInt(raw || '', 10);
-    if (Number.isFinite(n) && n > 0) return Math.min(n, 16);
-    // Default: one worker per CPU, capped at 8 so we don't blow up on
-    // big-iron hosts (the indexer + RPC connection scale with neither cores
-    // nor workers, so >8 is overkill for the explorer's read load).
-    return Math.min(cpus().length, 8);
+    // Audit F-177: the env path capped at 16 while the default capped at 8,
+    // for no stated reason — an operator setting WORKERS=16 got double what
+    // the code's own comment called "overkill", each worker carrying its own
+    // SQLite page cache and mmap window (see F-093). One ceiling.
+    if (Number.isFinite(n) && n > 0) return Math.min(n, WORKERS_MAX);
+    // Default: one worker per CPU, capped so we don't blow up on big-iron
+    // hosts (the indexer + RPC connection scale with neither cores nor
+    // workers, so more is overkill for the explorer's read load).
+    return Math.min(cpus().length, WORKERS_MAX);
 })();
 
 function bootstrapCluster() {
     if (WORKERS <= 1) {
-        // Single-process mode: behaves exactly like the pre-cluster code.
-        runWorker({ indexer: true });
+        // Single-process mode. Audit F-092's close test: "INDEXER_ROLE=off is
+        // honoured when WORKERS<=1". It was not — this hardcoded
+        // `indexer: true`, so an operator who deliberately started a
+        // read-only/second instance with INDEXER_ROLE=off still got a full
+        // writer against the same SQLite file, which is the two-writer
+        // scenario the lease exists to prevent.
+        const wantsIndexer = process.env.INDEXER_ROLE !== 'off';
+        if (!wantsIndexer) console.log('[cluster] single-process mode with INDEXER_ROLE=off — serving HTTP only, no indexing');
+        runWorker({ indexer: wantsIndexer });
         return;
     }
 
@@ -8182,15 +8602,36 @@ function bootstrapCluster() {
         forkOne('indexer');
         for (let i = 1; i < WORKERS; i++) forkOne('http');
 
+        // Audit F-145: refork was immediate and unconditional. A worker that
+        // dies on startup — a bad migration, a missing module (this actually
+        // happened: ERR_MODULE_NOT_FOUND on 2026-08-22), a corrupt DB — got
+        // re-forked in a tight loop that pinned a core and buried the real
+        // error under thousands of identical lines. Exponential backoff keeps
+        // the restart behaviour while making the logs readable and leaving CPU
+        // for whoever is debugging.
+        let reforkDelayMs = 0;
+        let lastExitAt = 0;
+        const REFORK_MAX_MS = readPositiveInteger(process.env.REFORK_MAX_MS, 30_000);
         cluster.on('exit', (worker, code, signal) => {
             const wasIndexer = indexerWorkerIds.has(worker.id);
             indexerWorkerIds.delete(worker.id);
+            const now = Date.now();
+            // A worker that ran a healthy while is not crash-looping: reset.
+            if (now - lastExitAt > 60_000) reforkDelayMs = 0;
+            lastExitAt = now;
             console.warn(`[cluster] worker ${worker.id} (pid ${worker.process.pid}) exited` +
-                ` (code=${code}, signal=${signal || 'none'}, was-indexer=${wasIndexer}) — restarting`);
+                ` (code=${code}, signal=${signal || 'none'}, was-indexer=${wasIndexer}) — restarting` +
+                (reforkDelayMs ? ` in ${reforkDelayMs}ms` : ''));
             // Preserve the single-indexer invariant: if the indexer worker
             // died, the replacement takes over that role; otherwise we just
             // fork a new HTTP-only worker.
-            forkOne(wasIndexer ? 'indexer' : 'http');
+            const role = wasIndexer ? 'indexer' : 'http';
+            if (reforkDelayMs === 0) {
+                forkOne(role);
+            } else {
+                setTimeout(() => forkOne(role), reforkDelayMs).unref();
+            }
+            reforkDelayMs = Math.min(reforkDelayMs === 0 ? 1000 : reforkDelayMs * 2, REFORK_MAX_MS);
         });
     } else {
         // Inside a worker — INDEXER_ROLE was set by the primary above.
