@@ -18,6 +18,7 @@ import { checkUserText } from './lib/user-text.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
+import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise } from './lib/commission-history.js';
 import {
     selectDispatchable, selectNewlyResolved, isTerminalRefStatus, describeRefOutcome
 } from './lib/email-events.js';
@@ -416,6 +417,9 @@ const TX_SCAN_BATCH_SIZE = readPositiveInteger(process.env.TX_SCAN_BATCH_SIZE, 2
 // that changing the writer without a migration just creates duplicates.
 const FINANCIAL_TX_SCANNER_VERSION = 3;
 const VALIDATOR_HISTORY_ERAS = readPositiveInteger(process.env.VALIDATOR_HISTORY_ERAS, 30);
+// How often to re-walk the validator set + per-era commission history.
+// Eras are ~24h on Polkadex, so hourly catches every boundary with margin.
+const VALIDATOR_SYNC_INTERVAL_MS = readPositiveInteger(process.env.VALIDATOR_SYNC_INTERVAL_MS, 60 * 60 * 1000);
 // Staking rewards indexer tuning. The crawler scans blocks for staking.Rewarded
 // events (claimed payouts) and appends them to a local per-address index.
 // Steady-state defaults (post-backfill). These knobs only matter during
@@ -1476,7 +1480,27 @@ async function syncValidatorHistory(activeEra, validators) {
     if (!globalApi || !globalApi.query.staking.erasValidatorPrefs) return;
 
     const validatorAddresses = validators.map(address => address.toString());
-    const firstEra = Math.max(activeEra - VALIDATOR_HISTORY_ERAS + 1, 0);
+
+    // Clamp the window to the chain's own HistoryDepth.
+    //
+    // staking.erasValidatorPrefs is PRUNED past HistoryDepth (84 by default)
+    // and is a ValueQuery, so reading a pruned era returns default prefs —
+    // 0% commission — rather than failing. Because upsertValidatorHistory is
+    // INSERT OR REPLACE, setting VALIDATOR_HISTORY_ERAS above HistoryDepth
+    // would write 0% rows for every validator for every pruned era AND
+    // overwrite anything true we had already stored there. That is a genuine
+    // history rewrite, triggerable by one env var, and it would feed straight
+    // into the commission-history feature as fabricated "raised from 0%" moves.
+    let depthCap = VALIDATOR_HISTORY_ERAS;
+    try {
+        const hd = Number(globalApi.consts?.staking?.historyDepth ?? 0);
+        if (Number.isFinite(hd) && hd > 0 && VALIDATOR_HISTORY_ERAS > hd) {
+            console.warn(`[validators] VALIDATOR_HISTORY_ERAS=${VALIDATOR_HISTORY_ERAS} exceeds the chain's historyDepth=${hd}; clamping. Eras beyond it are pruned and would read back as 0% commission.`);
+            depthCap = hd;
+        }
+    } catch (e) { /* consts unavailable — keep the configured value */ }
+
+    const firstEra = Math.max(activeEra - depthCap + 1, 0);
     const historyRows = [];
     const perAddress = {};
 
@@ -3038,7 +3062,67 @@ app.get('/api/diag/rpc-health', async (req, res) => {
 
 // --- LIST ENDPOINTS (served from SQLite) ---
 app.get('/api/validators', (req, res) => {
-    try { cacheMedium(res); res.json(db.getValidators()); }
+    try {
+        const payload = db.getValidators();
+
+        // Commission track record, per validator.
+        //
+        // A nominator told us the list was "useless" because validators raise
+        // commission right after being nominated — and they were right that the
+        // page gave them no way to see it. Every number on this list (including
+        // the APY, which F-044 relabelled) derives from the CURRENT commission,
+        // so it could not distinguish a validator that has held 1% for forty
+        // eras from one that dropped to 1% yesterday.
+        //
+        // Attached here rather than stored: see db.getCommissionHistoryByValidator.
+        // Best-effort — a failure must degrade the extra column, never the list
+        // itself, which is the page's actual job.
+        try {
+            const byAddress = db.getCommissionHistoryByValidator();
+            const activeEra = Number((db.getKv('network_info') || {}).networkInfo?.activeEra) || null;
+            payload.validators = payload.validators.map(v => {
+                const summary = summarizeCommissionHistory(byAddress[v.address]);
+                return {
+                    ...v,
+                    commissionHistory: {
+                        erasTracked: summary.erasTracked,
+                        min: summary.min,
+                        max: summary.max,
+                        changes: summary.changes,
+                        raises: summary.raises,
+                        cuts: summary.cuts,
+                        lastChange: summary.lastChange,
+                        volatility: summary.volatility,
+                        // Pre-rendered so the list, the validator page and any
+                        // third-party consumer describe it identically.
+                        note: describeCommissionHistory(summary),
+                        raisedRecently: raisedRecently(summary, activeEra),
+                        // The live commission has already moved past the newest
+                        // era we hold history for. erasValidatorPrefs is stamped
+                        // at era start, so a raise made today does not enter
+                        // history until the next boundary (~24h) — which is
+                        // exactly the "day after you nominate them" window this
+                        // feature exists for, and would otherwise be invisible.
+                        pendingRaise: pendingRaise(summary, v.commission),
+                        // How much of the span the tracked eras actually cover,
+                        // so a client can weigh the claim (see `note`).
+                        eraSpan: summary.eraSpan,
+                        gaps: summary.gaps
+                    }
+                };
+            });
+            // The era every `raisedRecently` above was measured against. Null
+            // means recency checking was OFF for this response (cold
+            // network_info) — without it a client cannot tell "nobody raised
+            // recently" from "we could not check".
+            payload.commissionHistoryEra = activeEra;
+        } catch (e) {
+            console.warn('[api] commission-history enrichment skipped:', e && e.message);
+        }
+
+        cacheMedium(res);
+        res.json(payload);
+    }
     catch (err) { /* F-084 */ console.error('[api] /api/validators failed:', err && err.stack ? err.stack : err); res.status(500).json({ validators: [], status: 'Error', error: 'Internal error.' }); }
 });
 app.get('/api/network-info', async (req, res) => {
@@ -8851,6 +8935,25 @@ function startIndexerLoops() {
     // chainHeadWatchdog at the moment an episode starts.
     setTimeout(dispatchNetworkEmails, 12_000);
     setInterval(dispatchNetworkEmails, NETWORK_EMAIL_CHECK_MS);
+    // syncData refreshes the validator set, per-era commission history and the
+    // scorecard inputs. It had NO interval — only a one-shot setTimeout at boot
+    // and a re-kick on RPC reconnect — while every sibling sync above and below
+    // this line has one. Everything it writes therefore froze at boot:
+    //
+    //   * `validators.commission`, which is line one of every row on
+    //     /validators, went stale the moment a validator changed it;
+    //   * `validator_history` stopped gaining eras, so the newest era we held
+    //     drifted further behind the chain every day. A review caught what that
+    //     does to the commission-history feature specifically: `raisedRecently`
+    //     compares a FRESH activeEra (network_info does refresh) against a
+    //     STALE last-change era, so the "RAISED RECENTLY" badge — the one thing
+    //     that answers "they raised it the day after I nominated" — would stop
+    //     firing about a week after each deploy and never fire again.
+    //
+    // Hourly: eras are ~24h on this chain, so this is comfortably often enough
+    // to catch every era boundary while staying far cheaper than the per-era
+    // RPC walk it performs.
+    setInterval(syncData, VALIDATOR_SYNC_INTERVAL_MS);
     setInterval(syncHolders, THIRTY_MINUTES);
     setInterval(syncCouncil,   COUNCIL_REFRESH_MS);
     setInterval(syncTreasury,  TREASURY_REFRESH_MS);

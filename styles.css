@@ -4145,3 +4145,28 @@ h1, h2, h3 { font-weight: 600; }
     border: 1px solid rgba(230, 0, 122, 0.45);
     color: var(--text-primary);
 }
+
+/* "RAISED RECENTLY" on the validators list.
+   Amber, not red: a validator raising its commission is legitimate behaviour
+   that a nominator is entitled to KNOW about, not misconduct we are accusing
+   them of. Red is reserved for commission above 50% (HIGH RISK), where the
+   nominator's share is genuinely marginal. */
+.badge.commission-raised {
+    background: rgba(245, 166, 35, 0.18);
+    color: var(--warning, #f5a623);
+    border: 1px solid rgba(245, 166, 35, 0.45);
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
+    cursor: help;
+}
+
+/* Commission track record inside the stake/nominate picker. */
+.stake-val-history {
+    font-size: 0.66rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+    line-height: 1.35;
+}
+.stake-val-history.is-volatile {
+    color: var(--warning, #f5a623);
+}

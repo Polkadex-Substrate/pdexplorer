@@ -37,6 +37,65 @@ function toPolkadexAddress(addr) {
 // This is the whole visible half of F-064 — the rest of the fix is refusing to
 // invent the missing fields, and this is how a reader learns that the row is
 // provisional rather than that the explorer is missing data.
+// Commission, with its history.
+//
+// Two lines: the current value (what you earn today) and what it has done
+// (whether you can expect that to hold). The second line is the whole point —
+// see the column comment in the validators table for the complaint that
+// prompted it.
+//
+// Tone is deliberate. This states EVIDENCE, never a verdict: "raised 3× in 30
+// tracked eras · range 1.00–20.00%", not "untrustworthy". An explorer that
+// editorialises about named operators on a page where they cannot reply is
+// doing something other than reporting, and a validator with one honest raise
+// would be tarred the same as a serial one. The nominator makes the call.
+function commissionCell(row) {
+    const pct = Number(row.commission);
+    const h = row.commissionHistory || null;
+
+    let html = `<span style="font-weight:600;">${stakingEscapeHtml(pct.toFixed(2))}%</span>`;
+    if (pct > 50) {
+        html += ` <span class="badge" style="background: var(--error);">HIGH RISK</span>`;
+    }
+    if (h && h.pendingRaise) {
+        // The live commission has already moved past the newest era we hold
+        // history for. This is the sharpest version of the reported case: the
+        // raise has happened on chain and has not reached an era boundary yet.
+        html += ` <span class="badge commission-raised" title="The validator's current commission is higher than the last era we have history for — a raise that has not yet reached an era boundary.">RAISING NOW</span>`;
+    } else if (h && h.raisedRecently && h.lastChange) {
+        // A raise you may not have seen yet. `certain` distinguishes "we saw
+        // consecutive eras, so this IS when it happened" from "somewhere in a
+        // gap in our coverage" — saying "in era N" for the latter would be a
+        // precision we do not have.
+        // Escaped here even though `when` is escaped again at the point of
+        // insertion. These are era numbers from our own API, so the risk is
+        // nil — but the escaping contract test (test/escaping.test.js) applies
+        // default-deny to every interpolation, and an exemption for "this one
+        // is only numbers" is how the next field that ISN'T gets waved through.
+        const when = h.lastChange.certain
+            ? `in era ${stakingEscapeHtml(h.lastChange.era)}`
+            : `between eras ${stakingEscapeHtml(h.lastChange.earliestEra)} and ${stakingEscapeHtml(h.lastChange.era)}`;
+        html += ` <span class="badge commission-raised" title="Raised from `
+             + `${stakingEscapeHtml(Number(h.lastChange.from).toFixed(2))}% to `
+             + `${stakingEscapeHtml(Number(h.lastChange.to).toFixed(2))}% `
+             + `${stakingEscapeHtml(when)} — recently enough that it may postdate an existing nomination.">`
+             + `RAISED RECENTLY</span>`;
+    }
+    if (h && h.note) {
+        const tone = h.volatility === 'stable' ? 'var(--text-muted)'
+                   : h.volatility === 'volatile' ? 'var(--warning, #f5a623)'
+                   : 'var(--text-secondary)';
+        // No white-space:nowrap — the note runs to ~55 characters and forcing
+        // it onto one line widened the entire validators table.
+        html += `<div style="font-size:0.68rem;color:${tone};margin-top:2px;max-width:22ch;line-height:1.3;">`
+             + `${stakingEscapeHtml(h.note)}</div>`;
+    } else if (h && h.volatility === 'unknown') {
+        // Say so rather than implying stability we have not observed.
+        html += `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;">history not yet indexed</div>`;
+    }
+    return html;
+}
+
 // One renderer for every dispatch-status badge.
 //
 // F-064 added a third status, 'unknown'. There were two independent copies of
@@ -212,7 +271,46 @@ function makeTable(config) {
                     return raw != null && String(raw).toLowerCase().includes(q);
                 });
             } else if (col.filter && col.filter.type === 'select') {
-                out = out.filter(row => String(row[col.key] ?? '') === String(val));
+                // `derive` lets a column filter on something COMPUTED rather
+                // than on the raw cell value. Added for the validators'
+                // commission column, which filters by track record ('raised
+                // recently', 'changes often') while the cell itself holds a
+                // percentage.
+                //
+                // It is called `derive` and NOT `valueOf`, which is what the
+                // first version used. `valueOf` is on Object.prototype, so
+                // `col.filter.valueOf` is truthy and `typeof === 'function'`
+                // for EVERY plain object — the fallback could never be reached,
+                // and calling the inherited Object.prototype.valueOf with an
+                // undefined `this` (ESM is strict mode) throws
+                // "Cannot convert undefined or null to object". That threw
+                // inside applyFilters → render(), from an un-try/caught change
+                // handler, AFTER colFilters had already been mutated — so all
+                // twelve pre-existing select filters in this file would have
+                // wedged their table until a page reload, with no way back
+                // because the "Clear filters" button only renders on a
+                // successful pass.
+                //
+                // hasOwnProperty, not truthiness: the lesson generalises to any
+                // option name that might collide with Object.prototype
+                // (constructor, toString, hasOwnProperty itself).
+                const hasDerive = Object.prototype.hasOwnProperty.call(col.filter, 'derive')
+                    && typeof col.filter.derive === 'function';
+                const pick = hasDerive ? col.filter.derive : (row) => row[col.key];
+                // `derive` may return an ARRAY of tags when a row can belong to
+                // more than one filterable class at once. The commission column
+                // needs this: "changes often" and "raised recently" are
+                // independent facts about the same validator, and the first
+                // version returned a single value with 'raised' checked first —
+                // so choosing "Changes often" silently EXCLUDED the validators
+                // that both change often and had just raised, i.e. exactly the
+                // ones the filter exists to surface.
+                out = out.filter(row => {
+                    const got = pick(row);
+                    return Array.isArray(got)
+                        ? got.some(t => String(t) === String(val))
+                        : String(got ?? '') === String(val);
+                });
             }
         }
         return out;
@@ -1871,13 +1969,52 @@ function renderValidators() {
                     format: row => `${Number(row.totalStake).toLocaleString('en-US', { maximumFractionDigits: 2 })} <span class="unit">PDEX</span>`
                 },
                 {
+                    // Reported by a nominator: "every validator changes rewards
+                    // amount to 1 percent the day after you nominate them", and
+                    // the list gave no way to see that. It showed ONE number —
+                    // the current commission — so a validator that had held 1%
+                    // for forty eras and one that dropped to 1% yesterday to
+                    // attract nominations rendered identically. The number was
+                    // right; the impression it created was not, which is why the
+                    // complaint could only be phrased as "useless".
+                    //
+                    // Now the cell carries the track record underneath the
+                    // current value, and the column can be FILTERED by that
+                    // track record (see `derive` below). Sorting is still by
+                    // the current percentage — the numeric thing a column sort
+                    // can meaningfully order.
                     key: 'commission', label: 'Commission',
                     sort: (a, b) => (a.commission || 0) - (b.commission || 0),
-                    format: row => {
-                        let html = `${Number(row.commission).toFixed(2)}%`;
-                        if (row.commission > 50) html += ` <span class="badge" style="background: var(--error);">HIGH RISK</span>`;
-                        return html;
-                    }
+                    filter: {
+                        type: 'select',
+                        options: [
+                            { value: 'stable',   label: 'Never changed' },
+                            { value: 'moved',    label: 'Changed once' },
+                            { value: 'volatile', label: 'Changes often' },
+                            { value: 'unknown',  label: 'Not enough history' },
+                            { value: 'raised',   label: 'Raised recently' },
+                            { value: 'pending',  label: 'Raise not yet in history' }
+                        ],
+                        // Match against the derived class, not the raw number.
+                        //
+                        // A review caught the first version returning 'raised'
+                        // BEFORE checking volatility, so selecting "Changes
+                        // often" excluded any validator that changes often AND
+                        // had just raised — hiding the worst offenders from the
+                        // filter built to find them. 'Raised recently' is an
+                        // independent signal, so it gets its own option value
+                        // and the volatility classes stay complete.
+                        derive: row => {
+                            const h = row.commissionHistory;
+                            if (!h) return ['unknown'];
+                            // Independent tags, not a priority order.
+                            const tags = [h.volatility];
+                            if (h.raisedRecently) tags.push('raised');
+                            if (h.pendingRaise) tags.push('pending');
+                            return tags;
+                        }
+                    },
+                    format: row => commissionCell(row)
                 },
                 {
                     // Audit F-044: this column was labelled "Real APY (30d)"
@@ -9949,10 +10086,33 @@ function renderStakeValidatorList(filterStr) {
         const isSelected = stakeSelected.has(v.address);
         const name = v.name && v.name !== 'Unknown' ? v.name : stakingShortAddress(v.address);
         const commission = (Number(v.commission) || 0).toFixed(1);
+        // The commission track record, at the moment of the decision.
+        //
+        // The list view showing it is necessary but not sufficient — this
+        // picker is where someone actually chooses who to nominate, and a
+        // nominator told us the problem is validators raising commission
+        // "the day after you nominate them". Putting the history only on the
+        // browse page and not here would leave the warning one screen away
+        // from the action it is about.
+        const ch = v.commissionHistory || null;
+        const chNote = ch && ch.note
+            ? `<div class="stake-val-history${ch.volatility === 'volatile' ? ' is-volatile' : ''}">${stakingEscapeHtml(ch.note)}</div>`
+            : '';
+        // The badge goes on the META line, not inside .stake-val-name.
+        //
+        // A review caught the first version putting it inside the name element,
+        // which is `white-space: nowrap; overflow: hidden; text-overflow:
+        // ellipsis` — so for any validator with a realistic identity (Polkadex
+        // has names like "MASTER VALIDATOR / 13") the badge was ellipsised
+        // straight off the edge. Invisible in the picker, which is the one
+        // screen where the warning has to land.
+        const chBadge = ch && (ch.raisedRecently || ch.pendingRaise)
+            ? ` <span class="badge commission-raised">${ch.pendingRaise ? 'RAISING NOW' : 'RAISED RECENTLY'}</span>` : '';
         return `<div class="stake-validator-item${isSelected ? ' selected' : ''}" data-addr="${stakingEscapeHtml(v.address)}">
             <div class="stake-val-info">
                 <div class="stake-val-name">${stakingEscapeHtml(name)}</div>
-                <div class="stake-val-meta">${stakingFormatPDEX(v.totalStake)} PDEX &middot; ${commission}% comm</div>
+                <div class="stake-val-meta">${stakingFormatPDEX(v.totalStake)} PDEX &middot; ${commission}% comm${chBadge}</div>
+                ${chNote}
             </div>
             <button type="button" class="stake-val-add" ${isSelected ? 'disabled aria-label="Already selected"' : 'aria-label="Add to selection"'}>${isSelected ? '✓' : '+'}</button>
         </div>`;

@@ -856,6 +856,61 @@ export function getValidators() {
     return { validators, totalCount: s.totalCount ?? validators.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing', error: s.error };
 }
 
+// Per-era commission history for EVERY validator, for the list view.
+//
+// Reported by a nominator: "every validator changes rewards amount to 1 percent
+// the day after you nominate them" — and the validators list, which is what you
+// pick from, showed only the CURRENT commission. So a validator that has held
+// 1% for forty eras looked exactly like one that dropped to 1% yesterday.
+//
+// Deliberately NOT denormalised into the `validators` table. That table is
+// DELETE-and-rebuild on every sync (replaceValidators), so a cached volatility
+// column would be one more thing to keep in step with a source of truth that is
+// right here — and this is the shape of bug the audit kept finding (F-045,
+// F-109: two copies of one fact drift). validator_history is validators × eras
+// tracked, i.e. hundreds to low thousands of rows on this chain, and
+// /api/validators is cached for 60s at the edge, so grouping at read time costs
+// nothing worth optimising.
+//
+// Returns a plain object keyed by address: { [address]: [{ era, commission }] }
+// ordered oldest-first, ready for lib/commission-history.js.
+export function getCommissionHistoryByValidator() {
+    // `stake` is selected because it is the ONLY way to tell an era the
+    // validator was actually elected in from one it was not.
+    //
+    // staking.erasValidatorPrefs is a ValueQuery double map — no Option — so
+    // querying it for an era in which the validator was NOT in the active set
+    // returns the DEFAULT ValidatorPrefs, and getCommissionPercent reads that
+    // as 0%. The history scan loops the CURRENT validator set over the last N
+    // eras, so every validator that joined the set recently has a run of
+    // {commission: 0, stake: 0} rows for the eras before it joined.
+    //
+    // Reading those as real history turns "this validator was not elected yet"
+    // into "this validator raised its commission from 0% to 1%" — a fabricated
+    // accusation against a named operator on a page they cannot reply on, which
+    // is precisely what lib/commission-history.js is written to avoid.
+    // computeValidatorScorecard already filters `Number(h.stake) > 0` for the
+    // same reason; the filtering happens in the caller so this function stays a
+    // plain read.
+    //
+    // No ORDER BY: summarizeCommissionHistory sorts by era itself, and asking
+    // SQLite for (address, era) order forced a temp B-tree on top of a
+    // non-covering index scan for nothing.
+    const rows = db.prepare(
+        'SELECT address, era, commission, stake FROM validator_history'
+    ).all();
+    const out = Object.create(null);
+    for (const r of rows) {
+        if (!r || !r.address) continue;
+        (out[r.address] || (out[r.address] = [])).push({
+            era: Number(r.era),
+            commission: Number(r.commission),
+            stake: Number(r.stake)
+        });
+    }
+    return out;
+}
+
 // --- holders ---
 export function replaceHolders(list, meta) {
     runTx(() => {
