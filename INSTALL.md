@@ -213,9 +213,9 @@ one on the new box before pointing DNS at it:
 
 ```bash
 cd /opt/pdexplorer
-# NOTE: --entrypoint certbot is required — the compose certbot service's
-# entrypoint is overridden to a renew-loop, so without it 'certonly' never runs.
-sudo docker compose run --rm --entrypoint certbot certbot \
+# No --entrypoint override needed (audit F-096): the compose entrypoint execs
+# certbot when it is given arguments and only runs the renew loop when it is not.
+sudo docker compose run --rm certbot \
   certonly --webroot -w /var/www/certbot \
   -d explorer.polkadex.ee -m business@polkadex.ee --agree-tos --non-interactive
 sudo docker compose exec frontend nginx -s reload

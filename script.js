@@ -11,6 +11,10 @@ import { pdexToPlanck, isPositiveNumberInput, isValidPolkadexAddress,
 // Audit F-017 — folding REST snapshots into the live arrays instead of
 // replacing them. See lib/merge-rows.js for the rules.
 import { mergeRows, blockRank, txRank } from './lib/merge-rows.js';
+// Audit F-107 — same-origin redirect validation. Deliberately NOT a regex:
+// see lib/safe-return.js for why every string-shaped check of a URL loses.
+import { safeReturnPath } from './lib/safe-return.js';
+import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -26,6 +30,42 @@ function toPolkadexAddress(addr) {
 }
 
 // Utility to generate human readable relative time
+// Audit F-064. A row that arrived over the WebSocket has NOT been through the
+// indexer: nobody has verified its finality, nothing has resolved its author,
+// and a reorg can still take it away. It looked identical to an indexed row.
+//
+// This is the whole visible half of F-064 — the rest of the fix is refusing to
+// invent the missing fields, and this is how a reader learns that the row is
+// provisional rather than that the explorer is missing data.
+// One renderer for every dispatch-status badge.
+//
+// F-064 added a third status, 'unknown'. There were two independent copies of
+// `status === 'failed' ? error : success`, so 'unknown' painted GREEN in both —
+// the same two-copies-drift shape as F-045. One function, used by both tables.
+// `soft` renders the translucent-background variant the account-extrinsics
+// table already used, so adopting the shared helper there did not restyle it.
+function statusBadge(status, extraStyle = '', { soft = false } = {}) {
+    const st = String(status || 'unknown');
+    const SOFT = {
+        success: 'background: rgba(46, 204, 113, 0.2); color: #2ecc71;',
+        failed:  'background: rgba(231, 76, 60, 0.2); color: #e74c3c;',
+        unknown: 'background: rgba(255, 255, 255, 0.08); color: var(--text-muted);'
+    };
+    const key = (st === 'success' || st === 'failed') ? st : 'unknown';
+    const style = soft
+        ? SOFT[key]
+        : `background: ${key === 'failed' ? 'var(--error)' : key === 'success' ? 'var(--success)' : 'var(--text-muted)'};`;
+    const label = st === 'success' ? 'Success' : st === 'failed' ? 'Failed' : st;
+    const title = key === 'unknown'
+        ? ' title="Seen live; the dispatch result has not been read yet."'
+        : '';
+    return `<span class="badge"${title} style="${style}${extraStyle}">${stakingEscapeHtml(label)}</span>`;
+}
+
+function liveBadge() {
+    return '<span class="live-badge" title="Seen live over the node connection. Not yet confirmed by the indexer; the author and event count fill in once it is.">live</span>';
+}
+
 function timeAgo(timestamp) {
     // F-114 made getBlockTimestamp return null for a block whose timestamp
     // couldn't be read — correct, but a review caught the interaction: with
@@ -533,7 +573,106 @@ const RECENT_REFRESH_MS = 12000;
 // 2000 is ~20 pages of "Load Older 100" and a few MB at most.
 const TX_ROW_CAP = 2000;
 
+// How long the first paint waits on the WebSocket before continuing without it
+// (F-063). Not a give-up: the provider keeps retrying and adoptChainApi picks
+// the connection up whenever it lands.
+const WS_HANDSHAKE_BUDGET_MS = 6000;
+
+// Wire up everything that needs a live chain connection. Safe to call twice —
+// the WS may arrive after init() has already moved on, and on a flaky link the
+// promise and the timeout can race closely enough that both paths run.
+let chainApiAdopted = false;
+function adoptChainApi(api) {
+    if (chainApiAdopted || !api) return;
+    chainApiAdopted = true;
+    globalApi = api;
+
+    networkStatusText.innerText = "Polkadex Connected";
+    networkStatusText.title = '';
+    statusIndicator.classList.add('live');
+    statusIndicator.style.background = 'var(--success)';
+
+    // Chain-derived stat cards. These DO need the api.
+    fetchNetworkStats(globalApi);
+    subscribeNewBlocks(globalApi);
+
+    // F-063 review catch: anything that no-opped because globalApi was null
+    // during the pre-handshake window has to be re-driven here, or it stays
+    // permanently blank on a slow connection with no way to recover short of a
+    // reload. refreshWithdrawableUnbonded is the one that matters — it decides
+    // whether the "Withdraw unbonded" row appears at all (F-057).
+    try {
+        if (typeof refreshWithdrawableUnbonded === 'function'
+            && currentWalletData && currentWalletData.address) {
+            refreshWithdrawableUnbonded(currentWalletData.address);
+        }
+    } catch (e) { /* best effort — the dashboard is already usable */ }
+}
+
+// F-063: be specific. "Connection Failed" on its own reads as "the explorer is
+// broken", when in fact everything on screen is live and only the direct node
+// link is down. The distinction matters because the two have different
+// remedies — this one is usually the visitor's own network blocking
+// WebSockets, and there is nothing the operator can do about it.
+function markNodeLinkOffline() {
+    if (chainApiAdopted) return;   // it came up after all
+    networkStatusText.innerText = "Node link offline";
+    networkStatusText.title = 'Could not open a direct WebSocket to the Polkadex node. '
+        + 'Explorer data is still live via the indexer; sending and staking need this link.';
+    statusIndicator.style.background = 'var(--error)';
+    statusIndicator.classList.remove('live');
+}
+
+// The REST half of the first paint (F-063). Extracted from init() so it can run
+// before — and independently of — the WebSocket handshake.
+//
+// A review caught the first version of this being a verbatim lift of the code
+// it replaced, which did `transactions = ...` and `blocks = ...` — straight
+// ASSIGNMENTS. That was safe only because of where it used to sit: after the
+// handshake and before routeTo(), when nothing else had touched those arrays.
+// Moving it earlier and un-awaiting it made it a THIRD concurrent writer,
+// racing subscribeNewBlocks (which unshifts live rows) and the paged
+// /transactions view. Whichever fetch was slower would land after the WS had
+// delivered a head or two and wipe them — audit F-017, reintroduced by the fix
+// for F-063 — and on a deep link to /transactions it would truncate the array
+// while leaving `olderTxBeforeBlock` untouched, which is the mid-list hole that
+// TX_ROW_CAP exists to prevent.
+//
+// refreshDashboardLists() already merges correctly, honours TX_ROW_CAP and the
+// 10-row block cap, and updates transactionCacheMeta. Calling it is strictly
+// better than owning a second copy of the same logic — the same argument as
+// F-045. The only reason this wrapper exists at all is to name WHY the call
+// happens here, and to keep the "must not wait on the WS" property findable.
+async function bootstrapRecentListsFromRest() {
+    // Same fetches, same merge, same caps — one implementation.
+    await refreshDashboardLists();
+}
+
 async function init() {
+    // ─── Audit F-063: nothing here may wait on the WebSocket ────────────────
+    //
+    // Everything below used to sit AFTER `await ApiPromise.create(...)`, so the
+    // entire page was gated on a successful WSS handshake with
+    // rpc.polkadex.ee. When that handshake cannot complete — a corporate proxy
+    // that blocks WebSockets, a captive portal, a mobile carrier interfering,
+    // or simply the node being down — the promise does not reject quickly, it
+    // HANGS. The visitor got an empty explorer with "Connecting…" and no
+    // indication that anything was wrong, even though the backend REST API,
+    // the localStorage cache and the price and governance pollers were all
+    // perfectly reachable over ordinary HTTPS.
+    //
+    // Almost nothing on this site actually needs the WebSocket. Blocks,
+    // transactions, accounts, governance, staking, price — all of it comes
+    // from /api/*, served by the indexer. The WS adds live block streaming and
+    // is required for SIGNING. So the REST-backed explorer starts first and
+    // unconditionally; the WS is an enhancement layered on top, and its failure
+    // degrades one feature instead of the whole page.
+    paintHomeFromCache();
+    fetchNetworkInformation();
+    startGovernancePolling();
+    startPriceTickerPolling();
+    bootstrapRecentListsFromRest();
+
     try {
         networkStatusText.innerText = "Connecting...";
         statusIndicator.classList.remove('live');
@@ -543,7 +682,19 @@ async function init() {
         // (so.polkadex.ee, polkadex-rpc.faradaynodes.com, ...) so this single
         // URL is resilient without the frontend needing to know the topology.
         const wsProvider = new WsProvider('wss://rpc.polkadex.ee');
-        globalApi = await ApiPromise.create({
+        // F-063: `await ApiPromise.create(...)` does not REJECT when the
+        // WebSocket cannot be established — WsProvider retries forever, so the
+        // promise simply never settles. That is why the old ordering was so
+        // damaging: the code after it, INCLUDING bootSeoRouter() and routeTo(),
+        // never ran at all, so a blocked WSS left a page that could not even
+        // navigate. A try/catch cannot help with a promise that never settles;
+        // only a race can.
+        //
+        // Losing the race is not fatal and is not an error: the provider keeps
+        // trying in the background, and the continuation below adopts the
+        // connection whenever it does arrive. So a slow network gets a fully
+        // working REST explorer now and live streaming a moment later.
+        const apiPromise = ApiPromise.create({
             provider: wsProvider,
             // The runtime declares the CheckMetadataHash signed extension, but
             // @polkadot/api 10.13.1 predates support for it and logs
@@ -566,71 +717,40 @@ async function init() {
             }
         });
 
-        networkStatusText.innerText = "Polkadex Connected";
-        statusIndicator.classList.add('live');
-        statusIndicator.style.background = 'var(--success)';
+        // Adopt the connection whenever it lands — this tick or in five
+        // minutes. Idempotent: adoptChainApi guards against running twice.
+        apiPromise.then(api => adoptChainApi(api)).catch(err => {
+            console.error('Polkadex node connection failed', err);
+            markNodeLinkOffline();
+        });
 
-        fetchNetworkStats(globalApi);
-        fetchNetworkInformation();
-        // Paint the home-page stat cards from localStorage cache BEFORE any
-        // network fetches resolve. Returning visitors see populated cells
-        // immediately; cells stay at their HTML "—" placeholder for first-
-        // ever visitors (no cache yet) until the live fetches below land.
-        paintHomeFromCache();
-        // Start the governance notification poller — runs every minute,
-        // surfaces homepage banner + toast when a new referendum or proposal
-        // is detected since the user's last seen index. Safe no-op if the
-        // endpoint isn't reachable.
-        startGovernancePolling();
-        // Sidebar price ticker — polls /api/price-latest on a 60s cadence so
-        // the bottom-left "PDEX Price" cell stays current. The whole row is
-        // wrapped in an <a href="/price"> for click-through to the chart.
-        startPriceTickerPolling();
-
-        // Fetch initial dashboard data so it isn't empty on load
-        try {
-            const [txRes, bRes] = await Promise.all([
-                fetch('/api/transactions').catch(() => null),
-                fetch('/api/blocks').catch(() => null)
-            ]);
-            // Only repaint the dashboard widgets when the user is actually
-            // viewing the home page — avoids flicker when they deep-linked to
-            // another route.
-            const onHome = () => {
-                const path = (window.location.pathname || '/').replace(/^\/+|\/+$/g, '');
-                return path === '' || path === 'home';
-            };
-            if (txRes) {
-                const txData = await txRes.json();
-                if (txData.transactions && txData.transactions.length > 0) {
-                    transactions = financialTransactionRows(txData.transactions);
-                    if (onHome()) renderTransactions();
-                }
-            }
-            if (bRes) {
-                const bData = await bRes.json();
-                if (bData.blocks && bData.blocks.length > 0) {
-                    blocks = bData.blocks;
-                    if (onHome()) renderBlocks();
-                }
-            }
-        } catch (e) { }
-
-        // Subscribe to new blocks
-        subscribeNewBlocks(globalApi);
-        setInterval(refreshRecentViews, RECENT_REFRESH_MS);
+        globalApi = await Promise.race([
+            apiPromise,
+            new Promise((_, reject) => setTimeout(
+                () => reject(new Error('WS_HANDSHAKE_TIMEOUT')), WS_HANDSHAKE_BUDGET_MS))
+        ]);
 
     } catch (error) {
-        console.error("Failed to connect to Polkadex node", error);
-        networkStatusText.innerText = "Connection Failed";
-        statusIndicator.style.background = 'var(--error)';
-        statusIndicator.classList.remove('live');
+        if (error && error.message === 'WS_HANDSHAKE_TIMEOUT') {
+            // Still pending, not failed. Say "connecting" and carry on booting;
+            // adoptChainApi flips the indicator if it arrives.
+            console.warn('[chain] node link still connecting after '
+                + WS_HANDSHAKE_BUDGET_MS + 'ms — continuing with REST data');
+            networkStatusText.innerText = 'Connecting to node…';
+            statusIndicator.style.background = 'orange';
+        } else {
+            console.error("Failed to connect to Polkadex node", error);
+            markNodeLinkOffline();
+        }
     }
+    // Runs whether or not the WS came up.
+    setInterval(refreshRecentViews, RECENT_REFRESH_MS);
 
     // Initialize routing once after data subscriptions are ready. The router
     // boot wires popstate + the delegated click handler and rewrites any
     // legacy "#X" URL to a clean "/X" URL so canonical/og:url stay accurate.
     bootSeoRouter();
+    wireModalAccessibility();   // F-126: Escape + focus trap for every .modal
     routeTo(readRouteFromLocation());
 }
 
@@ -664,11 +784,12 @@ function readHomeCache() {
     } catch (_) { return null; }
 }
 function writeHomeCache(patch) {
-    try {
-        const current = readHomeCache() || {};
-        const merged = { ...current, ...patch, savedAt: Date.now() };
-        localStorage.setItem(HOME_CACHE_KEY, JSON.stringify(merged));
-    } catch (_) {}
+    const current = readHomeCache() || {};
+    const merged = { ...current, ...patch, savedAt: Date.now() };
+    safeSetItem(HOME_CACHE_KEY, JSON.stringify(merged), {
+        evict: () => evictExpiredWalletCaches(),
+        label: 'the home page snapshot'
+    });
 }
 // Per-address cache of the last successful Wallet dashboard render. Keyed
 // by SS58 address so multiple wallets can be cached independently. Used by
@@ -685,16 +806,105 @@ function readWalletCache(address) {
         if (!raw) return null;
         const cached = JSON.parse(raw);
         if (!cached || typeof cached !== 'object') return null;
-        if (Date.now() - (Number(cached.savedAt) || 0) > WALLET_CACHE_MAX_AGE_MS) return null;
+        if (Date.now() - (Number(cached.savedAt) || 0) > WALLET_CACHE_MAX_AGE_MS) {
+            // F-125: an expired snapshot used to be ignored but LEFT IN PLACE,
+            // so the pdex_wallet_dashboard: namespace grew by one key for every
+            // address ever viewed and never shrank. Expiry now means deletion.
+            try { localStorage.removeItem(WALLET_CACHE_KEY_PREFIX + address); } catch (_) {}
+            return null;
+        }
         return cached;
     } catch (_) { return null; }
 }
 function writeWalletCache(address, patch) {
+    const current = readWalletCache(address) || {};
+    const merged = { ...current, ...patch, savedAt: Date.now() };
+    safeSetItem(WALLET_CACHE_KEY_PREFIX + address, JSON.stringify(merged), {
+        // The wallet snapshot is the single biggest thing we store and the
+        // most disposable — if quota is tight, drop other addresses' stale
+        // snapshots before giving up on this one.
+        evict: () => evictExpiredWalletCaches(address)
+    });
+}
+
+// ─── Audit F-125: localStorage is not infinite, and it is not always writable ─
+//
+// Almost every setItem in this file was wrapped in `catch (_) {}`. That is the
+// right INSTINCT — a storage failure must never break the page — but as written
+// it made three different situations indistinguishable and all of them silent:
+//
+//   • Safari private browsing, where setItem throws on every write
+//   • quota exhausted, which is reachable here because per-address wallet
+//     snapshots accumulate one key per address ever viewed and nothing ever
+//     removed them (their 30-minute TTL only stops them being READ)
+//   • a genuine bug in the value being written
+//
+// The user's experience of all three was "my watchlist doesn't save and nothing
+// says why". So: try to make room, retry once, and if it still fails, tell them
+// exactly once per session rather than never or on every keystroke.
+let storageWarningShown = false;
+
+function safeSetItem(key, value, { evict = null, label = 'your settings' } = {}) {
     try {
-        const current = readWalletCache(address) || {};
-        const merged = { ...current, ...patch, savedAt: Date.now() };
-        localStorage.setItem(WALLET_CACHE_KEY_PREFIX + address, JSON.stringify(merged));
-    } catch (_) {}
+        localStorage.setItem(key, value);
+        return true;
+    } catch (err) {
+        // QuotaExceededError has different names across browsers (and Firefox
+        // historically used code 1014), so recognise it broadly rather than by
+        // one spelling.
+        const quota = err && (err.name === 'QuotaExceededError'
+            || err.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+            || err.code === 22 || err.code === 1014);
+        if (quota && typeof evict === 'function') {
+            try {
+                evict();
+                localStorage.setItem(key, value);
+                return true;
+            } catch (_) { /* still no room */ }
+        }
+        warnStorageUnavailable(label);
+        return false;
+    }
+}
+
+function warnStorageUnavailable(label) {
+    if (storageWarningShown) return;   // once per session, not once per write
+    storageWarningShown = true;
+    console.warn('[pdexplorer] Browser storage is unavailable or full; ' + label + ' will not persist.');
+    // Reuse the governance toast zone rather than inventing a second
+    // notification system. The href is '#' because there is nowhere useful to
+    // send someone — the fix is in their browser settings, not on our site.
+    try {
+        showGovernanceToast(
+            `Couldn't save ${stakingEscapeHtml(label)} — browser storage is full or disabled.`,
+            '#'
+        );
+    } catch (_) { /* toast zone unavailable; the console warning stands */ }
+}
+
+// Delete wallet snapshots that are past their TTL. Called on read (so the
+// namespace self-cleans during normal use) and again as the quota fallback.
+// `keepAddress` is never evicted — it is the one we are actively writing.
+function evictExpiredWalletCaches(keepAddress = null) {
+    let removed = 0;
+    try {
+        const doomed = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith(WALLET_CACHE_KEY_PREFIX)) continue;
+            if (keepAddress && key === WALLET_CACHE_KEY_PREFIX + keepAddress) continue;
+            let expired = true;   // unparseable rows are garbage; drop them
+            try {
+                const parsed = JSON.parse(localStorage.getItem(key));
+                expired = !parsed || (Date.now() - (Number(parsed.savedAt) || 0)) > WALLET_CACHE_MAX_AGE_MS;
+            } catch (_) { /* keep expired = true */ }
+            if (expired) doomed.push(key);
+        }
+        // Collect first, delete after: removing during the index walk shifts
+        // localStorage.key(i) and silently skips entries.
+        doomed.forEach(k => { try { localStorage.removeItem(k); removed++; } catch (_) {} });
+    } catch (_) { /* storage entirely unavailable */ }
+    return removed;
 }
 
 // Hydrate every home-page cell from cache (if any). Safe to call early in
@@ -1278,6 +1488,33 @@ document.addEventListener('click', (e) => {
     }
 });
 
+// Audit F-064. This subscription used to invent four values and present them
+// with the same confidence as indexed data:
+//
+//   timestamp: Date.now()   the browser's wall clock, not the block's. The
+//                           server stopped doing exactly this in F-114; the
+//                           client kept doing it. A clock-skewed laptop showed
+//                           blocks minutes old or in the future.
+//   author: "Validator " + preRuntime.toHex().slice(0,8)
+//                           the pre-runtime digest holds a slot number and an
+//                           authority INDEX, not an address. That string named
+//                           nobody. It was also load-bearing: the /blocks table
+//                           special-cases names starting with "Validator" to
+//                           avoid linking them, which is the tell that someone
+//                           already noticed it was not an account.
+//   events: 0               a block with zero events does not exist — every
+//                           block emits at least System.ExtrinsicSuccess.
+//   status: 'success'       stamped on transfers with no dispatch check, so a
+//                           reverted transfer rendered as a completed one.
+//
+// Three of the four have a real answer one RPC call away: system.events at the
+// block hash gives the true event count AND the per-extrinsic dispatch result,
+// and the timestamp.set inherent carries the chain's own timestamp. We fetch
+// those. The author genuinely cannot be resolved client-side without the
+// session-key mapping, so it stays null and renders as "—" until the indexer
+// row arrives and merges over this one (F-017).
+//
+// Where a value is unknown it is now null, never a plausible-looking default.
 function subscribeNewBlocks(api) {
     api.rpc.chain.subscribeNewHeads(async (header) => {
         const blockNumber = header.number.toNumber();
@@ -1287,16 +1524,34 @@ function subscribeNewBlocks(api) {
             number: blockNumber,
             hash: blockHash,
             extrinsics: "-",
-            timestamp: Date.now()
+            timestamp: null,      // filled from the chain below, not guessed
+            unconfirmed: true     // live WS row: not yet seen by the indexer
         };
 
-        // Fetch the full block to get extrinsics count and transactions
-        api.rpc.chain.getBlock(blockHash).then(signedBlock => {
+        // Fetch the full block to get extrinsics count and transactions.
+        // Events come alongside so dispatch results and the event count are
+        // read rather than assumed; if that call fails we keep nulls.
+        Promise.all([
+            api.rpc.chain.getBlock(blockHash),
+            readEventsAt(api, blockHash)
+        ]).then(([signedBlock, events]) => {
             newBlock.extrinsics = signedBlock.block.extrinsics.length;
+
+            // The chain's own timestamp, from the timestamp.set inherent every
+            // block carries. Falls back to null — an unknown time renders as
+            // "—", which is honest, where Date.now() was confidently wrong.
+            const blockTimestamp = readBlockTimestamp(signedBlock);
+            newBlock.timestamp = blockTimestamp;
+
+            // Per-extrinsic dispatch outcome, indexed by extrinsic position.
+            // null when the events query failed: unknown, not success.
+            const outcomes = extrinsicOutcomes(events, signedBlock.block.extrinsics.length);
+            const eventsCount = events ? events.length : null;
+
             renderBlocks(); // re-render when we have the count
 
             // Extract transactions
-            signedBlock.block.extrinsics.forEach((ex) => {
+            signedBlock.block.extrinsics.forEach((ex, exIndex) => {
                 const summary = getLiveExtrinsicAmountSummary(ex);
                 if (summary.amount === '-') return;
                 const tx = {
@@ -1308,8 +1563,12 @@ function subscribeNewBlocks(api) {
                     amount: summary.amount,
                     numericAmount: summary.numericAmount,
                     value: '-',
-                    status: 'success',
-                    timestamp: Date.now()
+                    // F-064: was hardcoded 'success'. A failed transfer still
+                    // appears in the block; only the events say whether it
+                    // actually moved money.
+                    status: outcomes ? (outcomes[exIndex] || 'unknown') : 'unknown',
+                    timestamp: blockTimestamp,
+                    unconfirmed: true
                 };
                 if (!transactions.find(existing => existing.hash === tx.hash)) transactions.unshift(tx);
                 if (currentTxSort.field === null) sortTransactions(); // Keeps it sorted if needed
@@ -1320,20 +1579,14 @@ function subscribeNewBlocks(api) {
                 renderFullTransactions();
             }
 
-            let author = "System";
-            const digest = signedBlock.block.header.digest;
-            const preRuntime = digest.logs.find(l => l.isPreRuntime);
-            if (preRuntime) {
-                author = "Validator " + String(preRuntime.value.toHex()).substring(0, 8);
-            }
-
             const completedBlock = {
                 number: blockNumber,
                 hash: signedBlock.block.header.hash.toHex(),
-                author: author,
-                timestamp: Date.now(),
+                author: null,          // F-064: not derivable client-side
+                timestamp: blockTimestamp,
                 extrinsics: signedBlock.block.extrinsics.length,
-                events: 0 // <--- FIX HERE
+                events: eventsCount,
+                unconfirmed: true
             };
 
             blocks.unshift(completedBlock);
@@ -1343,11 +1596,12 @@ function subscribeNewBlocks(api) {
             const newFullBlock = {
                 number: blockNumber,
                 hash: signedBlock.block.header.hash.toHex(),
-                authorAddress: author,
-                authorName: author,
+                authorAddress: null,
+                authorName: null,
                 extrinsicsCount: signedBlock.block.extrinsics.length,
-                eventsCount: 0, // <--- FIX HERE
-                timestamp: Date.now()
+                eventsCount: eventsCount,
+                timestamp: blockTimestamp,
+                unconfirmed: true
             };
 
             fullBlocks.unshift(newFullBlock);
@@ -1358,6 +1612,89 @@ function subscribeNewBlocks(api) {
         }).catch(console.error);
     });
 }
+
+// Events at a specific block, or null.
+//
+// The obvious spelling is `api.query.system.events.at(blockHash)`, and that is
+// what the first version of this fix used. A review priced it: `.at()` resolves
+// a per-block type registry, and because the cache holds exactly one hash it
+// misses on every new head. Each call then issues chain_getHeader plus
+// state_getRuntimeVersion (Polkadex's genesis hash is not in @polkadot/api's
+// hard-coded upgrade table, so the version shortcut cannot fire) and rebuilds
+// the ENTIRE decorated API — every pallet's query/tx/consts — on the browser's
+// main thread. Four RPCs and a full metadata decoration every ~12 seconds, per
+// open tab, against rpc.polkadex.ee, which browsers dial directly.
+//
+// A raw storage read at the same block is one RPC and no decoration. The
+// trade-off is that it decodes with the CURRENT registry rather than the
+// block's: correct except across a runtime-upgrade boundary, where the decode
+// throws, we return null, and the caller renders "unknown" — which is the
+// honest answer for a block whose events we could not read, and is the same
+// fallback the failure path already had.
+function readEventsAt(api, blockHash) {
+    try {
+        const key = api.query.system.events.key();
+        return api.rpc.state.getStorage(key, blockHash).then(raw => {
+            try {
+                if (!raw) return null;
+                // state_getStorage may hand back Option<StorageData> or the
+                // bytes directly depending on how the key is typed.
+                const bytes = (raw.isSome === true) ? raw.unwrap()
+                            : (raw.isNone === true) ? null
+                            : raw;
+                if (!bytes) return null;
+                return api.registry.createType('Vec<EventRecord>', bytes);
+            } catch (_) {
+                return null;   // registry mismatch across a runtime upgrade
+            }
+        }).catch(() => null);
+    } catch (_) {
+        return Promise.resolve(null);
+    }
+}
+
+// The chain's timestamp for a block, in ms, or null.
+//
+// Every Substrate block's first inherent is timestamp.set(now). Reading it is
+// the only way to get the block's OWN time on the client; Date.now() is the
+// time the browser happened to receive the header, which differs by network
+// latency and by however wrong the user's clock is.
+function readBlockTimestamp(signedBlock) {
+    try {
+        for (const ex of signedBlock.block.extrinsics) {
+            if (ex.method.section === 'timestamp' && ex.method.method === 'set') {
+                const ms = Number(ex.method.args[0].toString());
+                return Number.isFinite(ms) && ms > 0 ? ms : null;
+            }
+        }
+    } catch (e) { /* fall through */ }
+    return null;
+}
+
+// Map extrinsic index → 'success' | 'failed', or null if we could not read the
+// events at all.
+//
+// Returning null rather than an empty array matters: an empty array would read
+// as "every extrinsic has no outcome", which the caller would render the same
+// way as "we checked and it failed". The caller distinguishes them.
+function extrinsicOutcomes(events, extrinsicCount) {
+    if (!events) return null;
+    try {
+        const out = new Array(extrinsicCount).fill(null);
+        events.forEach((record) => {
+            const { event, phase } = record;
+            if (!phase || !phase.isApplyExtrinsic) return;
+            const idx = phase.asApplyExtrinsic.toNumber();
+            if (idx < 0 || idx >= extrinsicCount) return;
+            if (event.section === 'system' && event.method === 'ExtrinsicSuccess') out[idx] = 'success';
+            else if (event.section === 'system' && event.method === 'ExtrinsicFailed') out[idx] = 'failed';
+        });
+        return out;
+    } catch (e) {
+        return null;
+    }
+}
+
 
 // Audit F-067: was Number(balance)/1e12 — a codec u128 above 2^53 planck
 // (~9007 PDEX) truncates BEFORE the division, so a live whale transfer painted
@@ -1374,29 +1711,11 @@ function formatLivePDEX(balance) {
     }
 }
 
+// Audit F-045: shares lib/extrinsic-summary.js with the server's
+// getExtrinsicAmountSummary. The two used to be copy-paste twins, so a new
+// transfer variant taught to one would show an amount live and "-" on refresh.
 function getLiveExtrinsicAmountSummary(ex) {
-    const method = `${ex.method.section}.${ex.method.method}`;
-    const args = ex.method.args || [];
-    let to = method;
-    let numericAmount = 0;
-    let amount = '-';
-
-    if (ex.method.section === 'balances') {
-        if (['transfer', 'transferAllowDeath', 'transferKeepAlive'].includes(ex.method.method) && args.length >= 2) {
-            to = args[0].toString();
-            numericAmount = formatLivePDEX(args[1]);
-            amount = `${numericAmount.toLocaleString('en-US', { maximumFractionDigits: 4 })} PDEX`;
-        } else if (ex.method.method === 'forceTransfer' && args.length >= 3) {
-            to = args[1].toString();
-            numericAmount = formatLivePDEX(args[2]);
-            amount = `${numericAmount.toLocaleString('en-US', { maximumFractionDigits: 4 })} PDEX`;
-        } else if (ex.method.method === 'transferAll' && args.length >= 1) {
-            to = args[0].toString();
-            amount = 'All';
-        }
-    }
-
-    return { method, to, amount, numericAmount };
+    return summarizeExtrinsicAmount(ex, formatLivePDEX);
 }
 
 // --- Rendering ---
@@ -1415,17 +1734,18 @@ function renderBlocks() {
             <div class="item-main">
                 <div class="item-icon"><i class='bx bx-cube-alt'></i></div>
                 <div class="item-details">
-                    <a href="/block/${block.number}" class="item-title">${block.number}</a>
+                    <a href="/block/${encodeURIComponent(block.number)}" class="item-title">${stakingEscapeHtml(block.number)}</a>
                     <div class="item-sub">
-                        Hash: <a href="/block/${block.hash}" class="item-link">${block.hash.substring(0, 10)}...</a>
+                        Hash: <a href="/block/${encodeURIComponent(block.hash)}" class="item-link">${stakingEscapeHtml(String(block.hash).substring(0, 10))}...</a>
                     </div>
                     <div class="item-sub">
-                        Extrinsics: ${block.extrinsics ?? block.extrinsicsCount ?? '—'}
+                        Extrinsics: ${stakingEscapeHtml(block.extrinsics ?? block.extrinsicsCount ?? '—')}
                     </div>
                 </div>
             </div>
             <div class="item-meta">
-                <span class="item-time">${timeAgo(block.timestamp)}</span>
+                ${block.unconfirmed ? liveBadge() : ''}
+                <span class="item-time">${stakingEscapeHtml(timeAgo(block.timestamp))}</span>
             </div>
         `;
         blocksListEl.appendChild(el);
@@ -1443,16 +1763,22 @@ function renderTransactions() {
         const el = document.createElement('div');
         el.className = `list-item ${index === 0 ? 'animate-in' : ''}`;
 
-        const shortHash = tx.hash.substring(0, 10) + '...';
-        const shortFrom = tx.from.substring(0, 8) + '...';
-        let shortTo = tx.to.toString();
+        // Audit F-121: these rows are built from indexer and live-WS fields —
+        // addresses, hashes and amounts that originate off-chain-of-our-control
+        // — and were interpolated RAW, while the /blocks and /transactions
+        // pages showing the same data escape them. One unescaped sink is all an
+        // XSS needs, and this one is on the home page.
+        const shortHash = stakingEscapeHtml(String(tx.hash).substring(0, 10)) + '...';
+        const shortFrom = stakingEscapeHtml(String(tx.from).substring(0, 8)) + '...';
+        let shortTo = String(tx.to);
         if (shortTo.length > 10) shortTo = shortTo.substring(0, 8) + '...';
+        shortTo = stakingEscapeHtml(shortTo);
         // Belt-and-braces: link to /block/ if the row is event-derived OR the
         // hash isn't a real tx hash (defensive against any new sources that
         // forget to set eventDerived).
         const titleHtml = (tx.eventDerived || !looksLikeTxHash(tx.hash))
-            ? `<a href="/block/${tx.block}" class="item-title">${shortHash}</a>`
-            : `<a href="/tx/${tx.block}/${tx.hash}" class="item-title">${shortHash}</a>`;
+            ? `<a href="/block/${encodeURIComponent(tx.block)}" class="item-title">${shortHash}</a>`
+            : `<a href="/tx/${encodeURIComponent(tx.block)}/${encodeURIComponent(tx.hash)}" class="item-title">${shortHash}</a>`;
 
         el.innerHTML = `
             <div class="item-main">
@@ -1460,16 +1786,17 @@ function renderTransactions() {
                 <div class="item-details">
                     ${titleHtml}
                     <div class="item-sub">
-                        From: ${tx.from === 'System' ? shortFrom : `<a href="/account/${tx.from}" class="item-link">${shortFrom}</a>`}
+                        From: ${tx.from === 'System' ? shortFrom : `<a href="/account/${encodeURIComponent(tx.from)}" class="item-link">${shortFrom}</a>`}
                     </div>
                     <div class="item-sub">
-                        To: ${tx.to === tx.amount ? shortTo : `<a href="/account/${tx.to}" class="item-link">${shortTo}</a>`}
+                        To: ${tx.to === tx.amount ? shortTo : `<a href="/account/${encodeURIComponent(tx.to)}" class="item-link">${shortTo}</a>`}
                     </div>
                 </div>
             </div>
             <div class="item-meta">
-                <span class="item-amount">${tx.amount}</span>
-                <span class="item-time">${timeAgo(tx.timestamp)} / Block <a href="/block/${tx.block}" class="item-link">${tx.block}</a></span>
+                ${tx.unconfirmed ? liveBadge() : ''}
+                <span class="item-amount">${stakingEscapeHtml(tx.amount)}</span>
+                <span class="item-time">${stakingEscapeHtml(timeAgo(tx.timestamp))} / Block <a href="/block/${encodeURIComponent(tx.block)}" class="item-link">${stakingEscapeHtml(tx.block)}</a></span>
             </div>
         `;
         transactionsListEl.appendChild(el);
@@ -1875,8 +2202,14 @@ function renderFullTransactions() {
                 {
                     key: 'status', label: 'Status',
                     sort: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
-                    filter: { type: 'select', options: ['success', 'failed'] },
-                    format: row => `<span class="badge" style="background: ${row.status === 'failed' ? 'var(--error)' : 'var(--success)'};">${stakingEscapeHtml(row.status || '')}</span>`
+                    // F-064 introduced a THIRD status, 'unknown', for a live
+                    // row whose dispatch events could not be read. A review
+                    // caught that this ternary painted it success-green and the
+                    // filter could not select it — so an unverified transfer
+                    // rendered in the completed colour, which is the exact lie
+                    // F-064 exists to stop, wearing a different label.
+                    filter: { type: 'select', options: ['success', 'failed', 'unknown'] },
+                    format: row => statusBadge(row.status)
                 }
             ]
         });
@@ -2095,22 +2428,38 @@ function renderFullBlocks() {
                     format: row => {
                         const name = row.authorName;
                         const addr = row.authorAddress || '';
+                        // F-064: live WS rows carry a null author because the
+                        // client cannot resolve one. Previously they carried
+                        // "Validator 0x1234abcd" — a label derived from the
+                        // pre-runtime digest that names no account, which is
+                        // why the check below had to exclude it. Now an
+                        // unknown author renders as an em dash and, crucially,
+                        // is NOT a link: linking to /account/ with an empty
+                        // address produced a dead 404.
+                        if (!addr) {
+                            return `<span style="color: var(--text-muted);">${row.unconfirmed ? 'pending…' : '—'}</span>`;
+                        }
                         const short = addr.substring(0, 8) + '…';
                         if (name && name !== 'Unknown' && name !== 'System' && !String(name).startsWith('Validator')) {
-                            return `<a href="/account/${addr}" class="item-link">${stakingEscapeHtml(name)}</a>`;
+                            return `<a href="/account/${encodeURIComponent(addr)}" class="item-link">${stakingEscapeHtml(name)}</a>`;
                         }
-                        return `<a href="/account/${addr}" class="address-cell item-link">${stakingEscapeHtml(short)}</a>`;
+                        return `<a href="/account/${encodeURIComponent(addr)}" class="address-cell item-link">${stakingEscapeHtml(short)}</a>`;
                     }
                 },
                 {
                     key: 'extrinsicsCount', label: 'Extrinsics',
                     sort: (a, b) => (a.extrinsicsCount || 0) - (b.extrinsicsCount || 0),
-                    format: row => `<strong>${row.extrinsicsCount}</strong>`
+                    format: row => row.extrinsicsCount == null
+                        ? '<span style="color: var(--text-muted);">—</span>'
+                        : `<strong>${stakingEscapeHtml(row.extrinsicsCount)}</strong>`
                 },
                 {
                     key: 'eventsCount', label: 'Events',
                     sort: (a, b) => (a.eventsCount || 0) - (b.eventsCount || 0),
-                    format: row => `<strong>${row.eventsCount}</strong>`
+                    // F-064: null means the events query failed, not zero.
+                    format: row => row.eventsCount == null
+                        ? '<span style="color: var(--text-muted);">—</span>'
+                        : `<strong>${stakingEscapeHtml(row.eventsCount)}</strong>`
                 },
                 {
                     key: 'hash', label: 'Hash', searchable: true,
@@ -2293,8 +2642,8 @@ function renderFullEvents() {
                 {
                     key: 'status', label: 'Status',
                     sort: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
-                    filter: { type: 'select', options: ['success', 'failed'] },
-                    format: row => `<span class="badge" style="background: ${row.status === 'failed' ? 'var(--error)' : 'var(--success)'}; font-size:11px;">${stakingEscapeHtml(row.status || '')}</span>`
+                    filter: { type: 'select', options: ['success', 'failed', 'unknown'] },
+                    format: row => statusBadge(row.status, ' font-size:11px;')
                 },
                 {
                     key: 'signerAddress', label: 'Signer Address', searchable: true,
@@ -3062,9 +3411,17 @@ function updateSeoMeta(mainTarget, { title, description, canonicalPath, noindex 
 
     // robots: noindex pages (search results, personal wallet view) should not
     // surface in the SERP even though they're reachable.
-    setMetaContent('name', 'robots', shouldNoindex
+    const robotsValue = shouldNoindex
         ? 'noindex, nofollow'
-        : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1');
+        : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1';
+    setMetaContent('name', 'robots', robotsValue);
+    // Audit F-062: index.html ships a SEPARATE `googlebot` meta, and this
+    // function only ever rewrote `robots`. Google reads the more specific
+    // `googlebot` tag in preference, so every noindex route — /wallet, search
+    // results, the personal account view — kept telling Googlebot
+    // "index, follow" from the static tag while the generic tag said not to.
+    // The one crawler the noindex mattered most for was the one ignoring it.
+    setMetaContent('name', 'googlebot', robotsValue);
 
     // Open Graph
     setMetaContent('property', 'og:title', finalTitle);
@@ -3079,6 +3436,20 @@ function updateSeoMeta(mainTarget, { title, description, canonicalPath, noindex 
     // Clear any route-scoped JSON-LD by default; routes that own one (e.g.
     // /wallet) re-inject after this call returns.
     setRouteJsonLd(null);
+
+    // F-062: the homepage @graph is baked into index.html, which every route
+    // is served, so it stayed in the document on /block/123 and /validator/x —
+    // describing the SITE and the HOME page under that route's canonical URL.
+    // Disable it away from home rather than delete it, so returning home
+    // restores it without a reload. `type` is flipped instead of removing the
+    // node: a <script> with an unrecognised type is inert to parsers and still
+    // trivially reversible.
+    const homeLd = document.getElementById('home-jsonld');
+    if (homeLd) {
+        homeLd.type = (mainTarget === 'home')
+            ? 'application/ld+json'
+            : 'application/ld+json-disabled';
+    }
 }
 
 function setMetaContent(attr, key, value) {
@@ -4410,8 +4781,20 @@ function readRouteFromLocation() {
     const path = window.location.pathname || '/';
     const stripped = path.replace(/^\/+/, '').replace(/\/+$/, '');
     if (stripped) return stripped;
-    const hash = window.location.hash.replace(/^#/, '').trim();
+    // F-107: a legacy "#..." fragment is attacker-supplyable via a crafted
+    // link, and it is fed straight to routeTo(). Same normalisation as the
+    // rewrite below so the route we RUN and the URL we DISPLAY agree.
+    const hash = safeRouteToken(window.location.hash.replace(/^#/, '').trim());
     return hash || 'home';
+}
+
+// Reduce a legacy hash fragment to a bare same-origin route token, or ''.
+// Shares lib/safe-return.js so there is exactly one definition of "safe
+// destination" in the frontend.
+function safeRouteToken(raw) {
+    if (!raw) return '';
+    const path = safeReturnPath('/' + String(raw).replace(/^\/+/, ''), window.location.origin);
+    return path ? path.replace(/^\/+/, '') : '';
 }
 
 // Push a new history entry and route to it. All call sites that used to do
@@ -4442,7 +4825,12 @@ function navigateTo(target, { replace = false } = {}) {
 function bootSeoRouter() {
     // Rewrite any legacy "#X" URLs people might have bookmarked into clean URLs
     // so canonical/og:url match what the user sees.
-    const legacyHash = window.location.hash.replace(/^#/, '').trim();
+    // F-107: `'/' + legacyHash` turned "#/evil.com" into "//evil.com", a
+    // protocol-relative URL. replaceState happens to throw SecurityError on a
+    // cross-origin argument so this was never exploitable — but the guard was
+    // the browser's, not ours, and the next caller of this pattern might not
+    // be replaceState. Validate before building the URL.
+    const legacyHash = safeRouteToken(window.location.hash.replace(/^#/, '').trim());
     if (legacyHash && (window.location.pathname === '/' || window.location.pathname === '')) {
         try { history.replaceState(null, '', '/' + legacyHash); }
         catch (e) { /* ignore */ }
@@ -5302,7 +5690,7 @@ async function renderChainStatePage() {
     }
 
     const pallets = (chainStateMeta.pallets || []).filter(p => p.storage && p.storage.length);
-    palletSel.innerHTML = pallets.map(p => `<option value="${p.queryKey}">${escapeHtml(p.name)}</option>`).join('');
+    palletSel.innerHTML = pallets.map(p => `<option value="${escapeHtml(p.queryKey)}">${escapeHtml(p.name)}</option>`).join('');
 
     function currentPallet() { return pallets.find(p => p.queryKey === palletSel.value); }
     function currentItem() {
@@ -5313,7 +5701,7 @@ async function renderChainStatePage() {
     function fillItems(preselect) {
         const p = currentPallet();
         if (!p) return;
-        itemSel.innerHTML = p.storage.map(s => `<option value="${s.item}">${escapeHtml(s.item)}</option>`).join('');
+        itemSel.innerHTML = p.storage.map(s => `<option value="${escapeHtml(s.item)}">${escapeHtml(s.item)}</option>`).join('');
         if (preselect && p.storage.some(s => s.item === preselect)) itemSel.value = preselect;
         fillKeys();
     }
@@ -5846,12 +6234,12 @@ async function renderRuntimePage() {
 
     const constPallets = (chainStateMeta && chainStateMeta.pallets || []).filter(p => p.constants && p.constants.length);
     $('rt-pallet').innerHTML = constPallets.length
-        ? constPallets.map(p => `<option value="${p.queryKey}">${stakingEscapeHtml(p.name)}</option>`).join('')
+        ? constPallets.map(p => `<option value="${stakingEscapeHtml(p.queryKey)}">${stakingEscapeHtml(p.name)}</option>`).join('')
         : '<option value="">(metadata unavailable)</option>';
 
     function fillConsts() {
         const p = constPallets.find(x => x.queryKey === $('rt-pallet').value);
-        $('rt-const').innerHTML = p ? p.constants.map(c => `<option value="${c}">${stakingEscapeHtml(c)}</option>`).join('') : '<option>—</option>';
+        $('rt-const').innerHTML = p ? p.constants.map(c => `<option value="${stakingEscapeHtml(c)}">${stakingEscapeHtml(c)}</option>`).join('') : '<option>—</option>';
     }
     fillConsts();
     $('rt-pallet').addEventListener('change', fillConsts);
@@ -5880,7 +6268,7 @@ async function renderRuntimePage() {
         }
     } catch (e) { /* leave empty; the picker shows "(unavailable)" */ }
     $('rpc-method').innerHTML = allowed.length
-        ? allowed.map(m => `<option value="${m}">${stakingEscapeHtml(m)}</option>`).join('')
+        ? allowed.map(m => `<option value="${stakingEscapeHtml(m)}">${stakingEscapeHtml(m)}</option>`).join('')
         : '<option value="">(unavailable)</option>';
 
     $('rpc-run').addEventListener('click', async () => {
@@ -6538,10 +6926,13 @@ async function fetchAccountDetails(address) {
                 {
                     key: 'status', label: 'Status', searchable: true,
                     sort: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
-                    filter: { type: 'select', options: ['success', 'failed'] },
-                    format: row => row.status === 'success'
-                        ? '<span class="badge" style="background: rgba(46, 204, 113, 0.2); color: #2ecc71;">Success</span>'
-                        : '<span class="badge" style="background: rgba(231, 76, 60, 0.2); color: #e74c3c;">Failed</span>'
+                    // F-064 review catch: this ternary rendered anything that
+                    // was not exactly 'success' as a confident "Failed" — so an
+                    // unread dispatch result would have accused a perfectly good
+                    // extrinsic of reverting. The inverse of the green-unknown
+                    // bug in the other two tables, and worse.
+                    filter: { type: 'select', options: ['success', 'failed', 'unknown'] },
+                    format: row => statusBadge(row.status, '', { soft: true })
                 }
             ]
         });
@@ -6875,15 +7266,22 @@ function renderValidatorScorecard(scorecard) {
         ? `${avgComm}%`
         : `${pad(scorecard.minCommission).toFixed(1)}% – ${pad(scorecard.maxCommission).toFixed(1)}%`;
     const activeRate = (pad(scorecard.activeEraRate) * 100).toFixed(0);
-    const slashColor = scorecard.slashCount > 0 ? 'var(--error)' : 'var(--success)';
-    const slashLabel = scorecard.slashCount === 0
-        ? 'Clean'
-        : `${scorecard.slashCount} event${scorecard.slashCount === 1 ? '' : 's'}`;
+    // Audit F-115: this card was labelled "Slash history" and coloured red on a
+    // non-zero value, but the number counts COMMISSION SPIKES — eras where the
+    // validator raised commission past 50%. Telling a nominator their validator
+    // was slashed when it merely raised its fee is a materially wrong signal on
+    // the page they use to decide where to stake. Renamed and re-worded; the
+    // colour is now a neutral warning rather than an error.
+    const spikes = scorecard.commissionSpikeCount ?? scorecard.slashCount ?? 0;
+    const spikeColor = spikes > 0 ? 'var(--warning, #f5a623)' : 'var(--success)';
+    const spikeLabel = spikes === 0
+        ? 'None'
+        : `${spikes} spike${spikes === 1 ? '' : 's'}`;
     return `
         <div style="margin-bottom: 25px;">
             <h3 style="font-size: 14px; margin-bottom: 12px; display:flex; align-items:center; gap:8px;">
                 <i class='bx bx-stats' style="color:var(--brand-primary);"></i> Scorecard
-                <span style="color:var(--text-muted);font-weight:400;font-size:0.78rem;">(last ${pad(scorecard.totalEras)} eras)</span>
+                <span style="color:var(--text-muted);font-weight:400;font-size:0.78rem;">(last ${pad(scorecard.totalEras)} eras, except where noted)</span>
             </h3>
             <div class="staking-summary-grid">
                 <div class="staking-summary-card">
@@ -6902,9 +7300,9 @@ function renderValidatorScorecard(scorecard) {
                     <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">${activeRate}% in active set</div>
                 </div>
                 <div class="staking-summary-card">
-                    <div class="label">Slash history</div>
-                    <div class="value" style="color:${slashColor};">${slashLabel}</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">commission-spike triggers</div>
+                    <div class="label">Commission spikes</div>
+                    <div class="value" style="color:${spikeColor};">${spikeLabel}</div>
+                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">all-time · eras raising commission above 50%</div>
                 </div>
                 <div class="staking-summary-card">
                     <div class="label">Current stake</div>
@@ -7409,6 +7807,18 @@ function stakingFormatPDEX(value) {
 }
 function stakingFormatNumber(value) {
     return Number(value || 0).toLocaleString('en-US');
+}
+
+// Audit F-081: for counts the SERVER may legitimately not know yet.
+//
+// stakingFormatNumber(null) renders "0", which is exactly the lie F-081 is
+// about — an explorer holding 12.8 million blocks reporting "0 blocks
+// indexed" during the first minutes after a deploy. It is not changed in place
+// because most of its callers pass genuine numbers where 0 is the right answer
+// for a missing value; only the counts that can be *unknown* use this.
+function formatCountOrUnknown(value) {
+    if (value == null) return '<span style="color:var(--text-muted);">—</span>';
+    return stakingFormatNumber(value);
 }
 // isValidPolkadexAddress is imported from ./lib/wallet-safety.js (audit
 // F-012 — rejects 0x hashes and out-of-range lengths). Kept out of this file
@@ -8369,14 +8779,12 @@ function buildWalletConnectPrompt() {
 function readSafeReturnTo() {
     try {
         const sp = new URLSearchParams(window.location.search || '');
-        const raw = sp.get('returnTo');
-        if (!raw) return null;
-        // Only allow path-only same-origin destinations. Reject anything
-        // that looks like a scheme (http:, javascript:) or a protocol-
-        // relative URL (//evil.example.com).
-        if (!raw.startsWith('/') || raw.startsWith('//')) return null;
-        if (/[\r\n]/.test(raw)) return null;
-        return raw;
+        // F-107: the old guard was startsWith('/') && !startsWith('//') plus a
+        // [\r\n] test. It missed TAB (which the URL parser strips just like
+        // CR/LF, so "/\t/evil.com" became "//evil.com" AFTER the check ran)
+        // and backslashes (a "\" in the authority position is a "/"). Resolve
+        // against the real origin with the real parser instead.
+        return safeReturnPath(sp.get('returnTo'), window.location.origin);
     } catch (_) { return null; }
 }
 // One-shot session flag that suppresses the auto-pick in tryAutoSelectFirstWallet
@@ -8386,7 +8794,37 @@ function readSafeReturnTo() {
 // doesn't outlive the browser tab.
 const SKIP_AUTO_PICK_KEY = 'pdex_skip_wallet_auto_pick';
 
+// Audit F-120: `POST /api/auth/logout` deletes the server-side session row,
+// and script.js never called it. Disconnecting cleared local state only, so the
+// Bearer token stayed valid on the server for the full AUTH_SESSION_TTL — a
+// token that had already been "logged out" as far as the user was concerned,
+// still sitting in localStorage-adjacent storage and still accepted.
+//
+// Best-effort by design: this is fire-and-forget and must never block or fail
+// the disconnect. A user clicking Disconnect on a flaky connection still gets
+// their local state cleared; the server row then expires on TTL as before, so
+// the failure mode is exactly today's behaviour rather than a stuck UI.
+function revokeDiscussSession() {
+    let token = null;
+    try {
+        const raw = localStorage.getItem(DISCUSS_TOKEN_KEY);
+        if (raw) token = (JSON.parse(raw) || {}).token || null;
+    } catch (e) { /* unreadable storage — nothing to revoke */ }
+    // Clear locally FIRST. If the network call is what cleared it, a failed
+    // call would leave the token behind, which is the bug we are fixing.
+    try { localStorage.removeItem(DISCUSS_TOKEN_KEY); } catch (e) {}
+    if (!token) return;
+    try {
+        fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token },
+            keepalive: true      // survives the page unloading mid-flight
+        }).catch(() => {});
+    } catch (e) { /* ignore */ }
+}
+
 function disconnectWallet() {
+    revokeDiscussSession();          // F-120
     setStoredWallet('');
     refreshConnectWalletButton();
     // Tell the next initWalletPage() to skip auto-pick — without this, the
@@ -8743,6 +9181,96 @@ function renderWalletLoading(root, address) {
     return () => clearInterval(timer);
 }
 
+// ─── Audit F-068: telling the user when the dashboard is not live ───────────
+// The wallet dashboard paints from a 30-minute localStorage snapshot so it
+// appears instantly. That is a real improvement and worth keeping — the bug was
+// that the snapshot looked exactly like live data, and that a failed refresh
+// left it on screen indefinitely with the Send and Stake buttons still armed.
+//
+// Two states, one banner:
+//   'cached' — a snapshot is showing while the live fetch is still running.
+//              Transient; cleared the moment real data lands.
+//   'error'  — the live fetch FAILED. Sticky, and paired with disabling the
+//              signing actions, because the numbers on screen may be arbitrarily
+//              far from the truth and the user cannot tell by looking.
+const WALLET_STALE_BANNER_ID = 'wallet-stale-banner';
+
+function describeAge(savedAt) {
+    const ts = Number(savedAt);
+    if (!Number.isFinite(ts) || ts <= 0) return 'an earlier visit';
+    const mins = Math.floor((Date.now() - ts) / 60000);
+    if (mins < 1) return 'less than a minute ago';
+    if (mins === 1) return '1 minute ago';
+    if (mins < 60) return `${mins} minutes ago`;
+    const hrs = Math.floor(mins / 60);
+    return hrs === 1 ? '1 hour ago' : `${hrs} hours ago`;
+}
+
+function showWalletStaleBanner(root, savedAt, mode, detail = '') {
+    if (!root) return;
+    clearWalletStaleBanner(root);
+    const el = document.createElement('div');
+    el.id = WALLET_STALE_BANNER_ID;
+    el.className = `wallet-stale-banner ${mode === 'error' ? 'is-error' : 'is-cached'}`;
+    el.setAttribute('role', mode === 'error' ? 'alert' : 'status');
+    const age = describeAge(savedAt);
+    el.innerHTML = mode === 'error'
+        ? `<i class='bx bx-error-circle'></i><span><strong>Showing a saved snapshot from ${stakingEscapeHtml(age)}.</strong> Live balances could not be loaded${detail ? ' (' + stakingEscapeHtml(detail) + ')' : ''}. Reload the page before acting on these numbers.</span>`
+        : `<i class='bx bx-time-five'></i><span>Showing a saved snapshot from ${stakingEscapeHtml(age)} while live balances load…</span>`;
+    root.prepend(el);
+}
+
+function clearWalletStaleBanner(root) {
+    const existing = (root || document).querySelector('#' + WALLET_STALE_BANNER_ID);
+    if (existing) existing.remove();
+}
+
+// Disable every signing action on the wallet dashboard and say why.
+//
+// Deliberately does NOT hide them: a missing button reads as "this explorer is
+// broken", while a disabled one with a tooltip reads as "not right now, and
+// here is the reason".
+// Why this is a persistent flag and not just a DOM edit:
+//
+// A review caught the first version being a no-op on the platform it mattered
+// most for. On a mobile in-app browser the extension often injects LATE, so the
+// dashboard first renders a read-only callout with no wallet-act-* buttons at
+// all. If /api/wallet fails in that window, disableWalletActions ran against
+// five getElementById calls that all returned null — silently doing nothing —
+// and then scheduleWalletSigningRechecks noticed the wallet appear at t=400ms
+// and rebuilt the action bar with fully ARMED buttons, sitting directly under a
+// banner reading "reload before sending or staking".
+//
+// So the failure is recorded in a variable, and every path that (re)builds the
+// bar re-applies it. Cleared only by a successful refresh.
+let walletActionsBlockedReason = null;
+
+const WALLET_ACTION_IDS = [
+    'wallet-act-send', 'wallet-act-stake', 'wallet-act-payout',
+    'wallet-act-unstake', 'wallet-act-identity'
+];
+
+function disableWalletActions(reason) {
+    walletActionsBlockedReason = reason;
+    applyWalletActionBlock();
+}
+
+function clearWalletActionBlock() {
+    walletActionsBlockedReason = null;
+}
+
+// Re-assert the block over whatever is currently in the DOM. Safe to call when
+// nothing is blocked (no-op) and when the buttons do not exist yet (no-op).
+function applyWalletActionBlock() {
+    if (!walletActionsBlockedReason) return;
+    WALLET_ACTION_IDS.forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.disabled = true;
+        btn.title = walletActionsBlockedReason;
+    });
+}
+
 async function fetchWalletDashboard(address) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
@@ -8758,6 +9286,10 @@ async function fetchWalletDashboard(address) {
         try {
             renderWalletDashboard(cached.wallet, cached.price || { history: [], configured: false }, cached.rewards || null);
             didPaintFromCache = true;
+            // Audit F-068: the cache paint was visually indistinguishable from
+            // live data. A user could look at a balance that was up to
+            // 30 minutes old and act on it. Say so, with the age.
+            showWalletStaleBanner(root, cached.savedAt, 'cached');
         } catch (_) { /* cache shape drift — fall back to loading skeleton */ }
     }
     const stopLoading = didPaintFromCache ? () => {} : renderWalletLoading(root, address);
@@ -8786,14 +9318,27 @@ async function fetchWalletDashboard(address) {
     walletPromise.then(result => {
         if (!result.ok || (result.data && result.data.error)) {
             stopLoading();
+            const msg = (result.data && result.data.error) || ('Request failed (' + result.status + ')');
             if (!didPaintFromCache) {
-                const msg = (result.data && result.data.error) || ('Request failed (' + result.status + ')');
                 root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(msg)}</div>`;
+            } else {
+                // Audit F-068: this branch used to do NOTHING when a cache
+                // paint had already happened. The user was left looking at a
+                // stale snapshot rendered as if it were live, with working
+                // Send and Stake buttons, while the request that would have
+                // corrected it had failed. Balances drive irreversible
+                // decisions, so an unrefreshable dashboard must say so and
+                // must stop offering to sign against numbers we cannot
+                // confirm.
+                showWalletStaleBanner(root, cached && cached.savedAt, 'error', msg);
+                disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
             }
             return;
         }
         latestWallet = result.data;
         stopLoading();
+        clearWalletStaleBanner(root);
+        clearWalletActionBlock();
         // Re-render with the live wallet payload and whichever of price/
         // rewards has already landed. Anything still in-flight will paint
         // into the rendered DOM via the targeted handlers below.
@@ -8801,8 +9346,14 @@ async function fetchWalletDashboard(address) {
         writeWalletCache(address, { wallet: latestWallet, price: latestPrice, rewards: latestRewards });
     }).catch(err => {
         stopLoading();
+        const msg = err && err.message ? err.message : String(err);
         if (!didPaintFromCache) {
-            root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(err.message || String(err))}</div>`;
+            root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(msg)}</div>`;
+        } else {
+            // Same reasoning as the !result.ok branch above (F-068) — a
+            // network-level failure is no more refreshable than a 500.
+            showWalletStaleBanner(root, cached && cached.savedAt, 'error', msg);
+            disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
         }
     });
 
@@ -9075,6 +9626,9 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     if (isOwnWallet) {
         bindWalletActionHandlers();
         bindViewOnlyCalloutHandlers();
+        // F-068: renderWalletDashboard is also called from the CACHE paint, so
+        // a still-blocked state must survive a re-render here too.
+        applyWalletActionBlock();
         // Mobile wallet WebViews sometimes inject `window.injectedWeb3` a
         // beat after the page settles. If we rendered the view-only callout
         // because nothing was injected at first paint, schedule a couple of
@@ -9176,6 +9730,9 @@ function scheduleWalletSigningRechecks(data) {
         if (needsBar) {
             slot.innerHTML = buildWalletActionBarMarkup(data);
             bindWalletActionHandlers();
+            // F-068: a late-injecting wallet must not hand back armed buttons
+            // when the balances behind them could not be refreshed.
+            applyWalletActionBlock();
         } else if (needsCallout) {
             slot.innerHTML = buildViewOnlyCallout();
             bindViewOnlyCalloutHandlers();
@@ -10257,10 +10814,189 @@ function validateSendRecipient() {
     if (hintEl) { hintEl.textContent = 'Address looks good.'; hintEl.style.color = 'var(--success, #2ecc71)'; }
 }
 
+// ─── Audit F-126: one accessibility layer for every .modal ──────────────────
+//
+// The finding: the wallet modals (Send, Stake, Payout, Unstake, Identity) close
+// on the X button and the backdrop only. Escape does nothing, focus is not
+// trapped, and nothing carries aria-modal — so a keyboard or screen-reader user
+// can Tab out of an open Send dialog into the page behind it and interact with
+// controls they cannot see, while the dialog is still capturing their attention.
+//
+// Escape WAS wired for two governance modals, individually, inside their own
+// open functions. Adding three more copies of that is how the inconsistency got
+// here in the first place, so this is one delegated handler over every element
+// with class .modal instead. It works for modals that do not exist yet, which
+// matters because several are rendered into the DOM on demand.
+//
+// Closing goes through each modal's own .modal-close-btn rather than setting
+// display:none directly. Those buttons already carry cleanup — clearing errors,
+// resetting fee state, unsubscribing from chain queries — and a "close" that
+// hides the element without running it would trade an accessibility bug for a
+// state-leak bug.
+
+// Elements that can hold focus, in DOM order, excluding anything disabled or
+// deliberately removed from the tab order.
+const FOCUSABLE_SELECTOR = [
+    'a[href]', 'button:not([disabled])', 'input:not([disabled])',
+    'select:not([disabled])', 'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+].join(',');
+
+// The visible modal nearest the top of the stack. Modals are shown with
+// display:flex here; anything else counts as hidden.
+function topmostOpenModal() {
+    const open = Array.from(document.querySelectorAll('.modal'))
+        .filter(m => {
+            const disp = m.style.display || window.getComputedStyle(m).display;
+            return disp && disp !== 'none';
+        });
+    if (open.length === 0) return null;
+    // Highest z-index wins; ties break toward the last in DOM order, which is
+    // what a browser paints on top.
+    return open.reduce((best, m) => {
+        const z = Number(window.getComputedStyle(m).zIndex) || 0;
+        const bz = Number(window.getComputedStyle(best).zIndex) || 0;
+        return z >= bz ? m : best;
+    }, open[0]);
+}
+
+function closeModalElement(modal) {
+    if (!modal) return;
+    // `data-modal-close` is the explicit opt-in for a close control that does
+    // not use the standard class or label. The onboarding tour's button is
+    // labelled "Skip tour" — a review caught that without this hook Escape fell
+    // through to the raw display:none below, which skips closeOnboardingTour()
+    // and therefore never writes TOUR_STORAGE_KEY: the tour would reopen on
+    // every single page load.
+    const btn = modal.querySelector('[data-modal-close], .modal-close-btn, [aria-label="Close"]');
+    if (btn) {
+        btn.click();          // runs the modal's real teardown
+        return;
+    }
+    modal.style.display = 'none';   // last resort for a modal with no close control
+}
+
+// Remember who had focus before a modal opened so it can be handed back —
+// otherwise focus falls to <body> on close and a keyboard user restarts their
+// tab journey from the top of the page.
+let modalFocusReturnEl = null;
+
+function wireModalAccessibility() {
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' && e.key !== 'Tab') return;
+        const modal = topmostOpenModal();
+        if (!modal) return;
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeModalElement(modal);
+            return;
+        }
+
+        // Tab: cycle within the modal.
+        const focusable = Array.from(modal.querySelectorAll(FOCUSABLE_SELECTOR))
+            .filter(el => el.offsetParent !== null || el === document.activeElement);
+        if (focusable.length === 0) {
+            // Nothing to focus inside — keep focus out of the page behind.
+            e.preventDefault();
+            return;
+        }
+        const first = focusable[0];
+        const last  = focusable[focusable.length - 1];
+        const active = document.activeElement;
+
+        if (!modal.contains(active)) {
+            e.preventDefault();
+            first.focus();
+            return;
+        }
+        if (e.shiftKey && active === first) {
+            e.preventDefault();
+            last.focus();
+        } else if (!e.shiftKey && active === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    });
+
+    // Capture the opener BEFORE any modal takes focus.
+    //
+    // A review caught the first version capturing document.activeElement inside
+    // the MutationObserver callback — a microtask that runs AFTER the open
+    // function has completed, and every open function focuses a field on the
+    // way in (openSendModal focuses the recipient input). So it captured an
+    // element inside the modal; on close, focusing it was a no-op against a
+    // display:none subtree and focus fell to <body> — exactly the outcome the
+    // code claimed to prevent.
+    //
+    // A capturing mousedown/keydown listener sees the activeElement while it is
+    // still the button the user is about to activate.
+    document.addEventListener('mousedown', () => {
+        if (!topmostOpenModal()) modalFocusReturnEl = document.activeElement;
+    }, true);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            if (!topmostOpenModal()) modalFocusReturnEl = document.activeElement;
+        }
+    }, true);
+
+    // Mark modals as dialogs for assistive tech, and restore focus on close, by
+    // watching the inline `display` each open/close path already sets. An
+    // observer is used rather than patching every open function because several
+    // modals are opened from more than one place.
+    //
+    // Only the static .modal elements in index.html are observed. The first
+    // version added a SECOND observer over document.body{childList, subtree} to
+    // catch dynamically-mounted modals — but `grep 'class="modal'` in script.js
+    // returns zero matches: every modal is static markup. That observer ran a
+    // querySelectorAll over the subtree of every node the SPA inserted (the home
+    // lists repaint every 12s, tables re-render up to 200 rows) for a payoff of
+    // exactly nothing. Removed. If a modal is ever built in JS, register it
+    // here explicitly — that is a cheaper contract than watching the whole DOM.
+    const observer = new MutationObserver((records) => {
+        for (const rec of records) {
+            const el = rec.target;
+            if (!el.classList || !el.classList.contains('modal')) continue;
+            const open = el.style.display && el.style.display !== 'none';
+            if (open) {
+                el.setAttribute('role', 'dialog');
+                el.setAttribute('aria-modal', 'true');
+            } else {
+                el.setAttribute('aria-modal', 'false');
+                if (modalFocusReturnEl && !topmostOpenModal()) {
+                    // Only restore if the element is still focusable — it may
+                    // have been re-rendered away while the modal was open.
+                    try {
+                        if (document.contains(modalFocusReturnEl)) modalFocusReturnEl.focus();
+                    } catch (_) {}
+                    modalFocusReturnEl = null;
+                }
+            }
+        }
+    });
+    document.querySelectorAll('.modal').forEach(m => {
+        observer.observe(m, { attributes: true, attributeFilter: ['style'] });
+    });
+}
+
 function openSendModal() {
     const data = currentWalletData;
     if (!data) return alert('Wallet data is not loaded yet.');
     if (!isSameAddress(getStoredWallet(), data.address)) return alert('Connect this wallet to send PDEX.');
+    // Audit F-063 review catch. Before that fix, routeTo() could not run until
+    // the WebSocket handshake completed, so globalApi was always present by the
+    // time any modal could open. Now the page routes first and the connection
+    // is adopted later, which makes this window reachable — and in it,
+    // getExistentialDepositPDEX() returns 0, so the "would this drop you below
+    // the ED and reap the account" guard (`if (ed > 0 && ...)`) silently does
+    // nothing, and "Max" computes against the static fee buffer rather than a
+    // real estimate. Signing is separately blocked further down, so this was
+    // never a funds-loss path — but offering a form whose safety checks are
+    // quietly disabled is not something to leave to a downstream guard.
+    if (!globalApi) {
+        return alert('Still connecting to the Polkadex node. Sending needs that connection for fee and '
+            + 'existential-deposit checks — please try again in a moment.');
+    }
     const modal = document.getElementById('send-modal');
     if (!modal) return;
     clearSendError();
@@ -10578,8 +11314,15 @@ function getDiscussSession() {
         if (!raw) return null;
         const s = JSON.parse(raw);
         if (!s || !s.token || !s.address) return null;
+        // Audit F-128: this compared with `!==`. The stored session address is
+        // whatever the server echoed back (prefix 88, "e…"), while
+        // getStoredWallet() holds whatever the extension handed us — commonly
+        // prefix 42 ("5…") or prefix 0 ("1…"). Same key, different string, so
+        // reconnecting the SAME wallet silently threw away a valid session and
+        // forced a fresh signature. isSameAddress compares the decoded public
+        // key, which is the thing that actually identifies the account.
         const connected = getStoredWallet();
-        if (connected && connected !== s.address) return null;
+        if (connected && !isSameAddress(connected, s.address)) return null;
         return s;
     } catch (e) { return null; }
 }
@@ -12923,10 +13666,11 @@ async function submitReferendumVote() {
             openReferendumVoteModal(pendingReferendumVote.refIndex, pendingReferendumVote.side);
         });
     });
-    // Escape closes.
-    document.addEventListener('keydown', e => {
-        if (e.key === 'Escape' && modal && modal.style.display === 'flex') closeReferendumVoteModal();
-    });
+    // Escape is handled centrally by wireModalAccessibility() (F-126), which
+    // clicks this modal's own close control — the same path as the X button.
+    // The per-modal keydown listener that used to live here was one of the two
+    // one-off copies whose EXISTENCE is what F-126 is about: five wallet modals
+    // had no Escape at all because the pattern was never generalised.
     // Event delegation for the per-row Aye/Nay buttons rendered into the
     // referenda table by mountDemocracyReferendaTable. We attach to the
     // document so it works regardless of when the table is (re)rendered.
@@ -12962,10 +13706,8 @@ async function submitReferendumVote() {
             if (href && href.startsWith('/')) closeGovernanceDetailModal({ restorePage: false });
         }
     });
-    // Escape to close.
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && modal && modal.style.display === 'flex') closeGovernanceDetailModal();
-    });
+    // Escape: see wireModalAccessibility() (F-126). Removed here for the same
+    // reason as the referendum modal's copy.
 
     // Event delegation for proposal-link clicks. Cells in makeTable / the
     // resolved-motions table render an inline <button class="gov-proposal-link"
@@ -13634,7 +14376,19 @@ async function labelDeleteMine(address, signer, btn) {
 async function labelReport(address, signer, btn) {
     const session = await ensureLabelSession();
     if (!session) return;
-    const reason = prompt('Briefly, why is this label inappropriate? (optional)') || '';
+    const reason = (prompt('Briefly, why is this label inappropriate? (optional)') || '').trim();
+    // Audit F-170: mirror the server's checkUserText rules so the user gets a
+    // specific message at the point of typing rather than a generic 400 after
+    // the round trip. The SERVER remains the authority — this is UX, not a
+    // security boundary, and deleting it must not change what gets stored.
+    if (reason.length > 200) {
+        alert('Please keep the reason to 200 characters or fewer.');
+        return;
+    }
+    if (/[\x00-\x1f\x7f<>]/.test(reason)) {
+        alert('The reason can\'t contain angle brackets or control characters.');
+        return;
+    }
     btn.disabled = true;
     try {
         const res = await fetch(`/api/labels/${encodeURIComponent(address)}/${encodeURIComponent(signer)}/report`, {
@@ -13790,8 +14544,10 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
             </div>
             <div style="padding:20px;">
                 <div class="staking-summary-grid">
-                    ${kpiCard('Indexed blocks',       stakingFormatNumber(snapshot.indexedBlocks), 'blocks in the local index')}
-                    ${kpiCard('Indexed transactions', stakingFormatNumber(snapshot.indexedTransactions), 'transfers in the local index')}
+                    ${kpiCard('Indexed blocks',       formatCountOrUnknown(snapshot.indexedBlocks),
+                        snapshot.countsReady === false ? 'counting…' : 'blocks in the local index')}
+                    ${kpiCard('Indexed transactions', formatCountOrUnknown(snapshot.indexedTransactions),
+                        snapshot.countsReady === false ? 'counting…' : 'transfers in the local index')}
                     ${kpiCard(
                         'Validators',
                         `${stakingFormatNumber(snapshot.validatorCount)} <span style="color:var(--text-muted);font-size:0.7rem;font-weight:400;">/ ${stakingFormatNumber(snapshot.totalValidators || snapshot.validatorCount)}</span>`,
@@ -13976,9 +14732,28 @@ function getWatchlist() {
         return (parsed && typeof parsed === 'object') ? parsed : {};
     } catch (_) { return {}; }
 }
+// F-125: the watchlist was unbounded (one entry per star, forever) and its
+// write failure was swallowed — so past the quota, starring appeared to work
+// and silently did nothing. Now it is capped and a failure is reported.
+const WATCHLIST_MAX_ENTRIES = 500;
+
 function setWatchlist(map) {
-    try { localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(map)); }
-    catch (_) { /* storage full / disabled — silently ignore */ }
+    let toStore = map;
+    const keys = Object.keys(map);
+    if (keys.length > WATCHLIST_MAX_ENTRIES) {
+        // Drop the OLDEST additions. Entries predating `addedAt` sort as 0 and
+        // go first, which is the right call — they are the least recent.
+        const kept = keys
+            .sort((a, b) => (Number(map[b].addedAt) || 0) - (Number(map[a].addedAt) || 0))
+            .slice(0, WATCHLIST_MAX_ENTRIES);
+        toStore = {};
+        kept.forEach(k => { toStore[k] = map[k]; });
+    }
+    const ok = safeSetItem(WATCHLIST_STORAGE_KEY, JSON.stringify(toStore), {
+        evict: () => evictExpiredWalletCaches(),
+        label: 'your watchlist'
+    });
+    return ok;
 }
 function watchlistKey(kind, id) { return `${kind}:${id}`; }
 function isWatched(kind, id) {
@@ -14222,11 +14997,12 @@ function renderTourSlide() {
         if (tourCurrentSlide < TOUR_SLIDES.length - 1) { tourCurrentSlide++; renderTourSlide(); }
         else closeOnboardingTour(true);
     });
-    // Click outside the panel to dismiss. Escape too.
+    // Click outside the panel to dismiss. Escape is handled centrally by
+    // wireModalAccessibility() (F-126), which clicks the [data-modal-close]
+    // button above — the same path as clicking it. This used to have its own
+    // keydown listener; it double-fired with the generic layer and was harmless
+    // only by registration order.
     if (modal) modal.addEventListener('click', e => { if (e.target === modal) closeOnboardingTour(true); });
-    document.addEventListener('keydown', e => {
-        if (modal && modal.style.display === 'flex' && e.key === 'Escape') closeOnboardingTour(true);
-    });
 
     // Auto-show on first visit, OR when ?tour=1 is in the URL (anyone can
     // re-trigger the tour by sharing such a link). Defer to after init() so

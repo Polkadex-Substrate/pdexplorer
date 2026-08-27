@@ -258,6 +258,29 @@ services:
 
 **Fix.** Either accept the risk (it's stable enough in practice) or migrate to `better-sqlite3` (a battle-tested npm package, pinned). The latter removes the experimental dependency entirely.
 
+**Status — accepted risk, 2026-08-26 (audit F-147).** The pin stays at
+`node:22.11-alpine` and the flag stays on every entrypoint. The reasoning, in
+full, is in the comment above `CMD` in `Dockerfile.backend`; in short:
+
+* On 22.11 the flag is **required**. `db.js` imports `node:sqlite` at the top
+  level, so dropping it does not degrade anything — the container crash-loops on
+  `ERR_UNKNOWN_BUILTIN_MODULE` and every `/api/*` route goes dark while nginx
+  keeps serving the SPA.
+* Later 22.x releases load `node:sqlite` unflagged but **still accept the flag**,
+  so the current `CMD` survives a minor bump instead of becoming a crash-loop.
+* There is no Node in reach where `node:sqlite` is non-experimental — 22.23 still
+  emits `ExperimentalWarning: SQLite is an experimental feature` — so the
+  "upgrade until it's stable" branch buys a re-test and nothing else.
+* `better-sqlite3` is a native addon and a full rewrite of `db.js`'s call sites;
+  the flag is not what makes that worth doing.
+* A **major** Node bump is out of scope on its own terms: `@polkadot/api` is
+  pinned to exactly `10.13.1` with a manually declared `CheckMetadataHash` signed
+  extension, and that pair is what makes wallet signing produce valid extrinsics.
+
+Every place the flag must appear is asserted by `test/infra-config.test.js`, so
+removing it from one entrypoint and not the others fails the suite rather than
+one deployment path.
+
 ### INFO I-1 — Auth flow looks correct
 
 `POST /api/auth/verify` constructs the expected signed message from a nonce stored at challenge time, with a TTL (`AUTH_CHALLENGE_TTL`). Signature is verified via `signatureVerify` from `@polkadot/util-crypto`. Sessions use 192-bit random tokens (`randomAsHex(24)`). The accepted-bytes branch (`u8aWrapBytes(message)`) safely handles wallet extensions that wrap the message — but always verifies against the *same* canonical message string.

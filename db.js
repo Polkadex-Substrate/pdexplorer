@@ -1,9 +1,22 @@
 // SQLite data layer for the Polkadex explorer.
-// Uses Node's built-in node:sqlite (run the backend with --experimental-sqlite).
+//
+// Uses Node's built-in node:sqlite. Audit F-147: the import below is a TOP-LEVEL
+// import, so on the pinned base image (node:22.11-alpine) the process cannot
+// start at all without --experimental-sqlite — it is not a feature flag that
+// degrades something, it is the difference between a running backend and a
+// container that crash-loops on ERR_UNKNOWN_BUILTIN_MODULE while nginx happily
+// keeps serving the SPA. The flag therefore has to be on every entrypoint that
+// loads this file: Dockerfile.backend's CMD, package.json's `start`/`server`,
+// and the ad-hoc `docker compose exec backend node --experimental-sqlite ...`
+// invocations in INSTALL.md and the tools/ scripts. Dropping it from any one of
+// them breaks that path only, which is why it reads as "works locally".
+// The decision to keep the 22.11 pin rather than chase an unflagged Node is
+// written out in full in Dockerfile.backend.
 // Replaces the previous whole-file JSON caches: every write is an indexed
 // INSERT/UPSERT and every read is an indexed query, so caches can hold full
 // historical data without the cost of rewriting/parsing a growing file.
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { rpcUnavailableLikePatterns } from './lib/rpc-errors.js';
 import { migrateHashKeyedIds, deleteForkRows as deleteForkRowsImpl } from './lib/id-migration.js';
 import fs from 'fs';
@@ -16,6 +29,33 @@ CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT,
   updated_at INTEGER
+);
+-- Audit F-075: cluster-wide rate-limit counters.
+--
+-- The in-process Maps that used to hold these multiplied every advertised
+-- limit by WORKERS (up to 8), because each worker enforced the full budget
+-- against its own share of the traffic. This table is the shared counter for
+-- the endpoints where the limit is a SECURITY control rather than a fairness
+-- knob — auth, email signup, label writes. Those are single-digit-per-second
+-- endpoints, so a row write per request costs nothing that matters.
+--
+-- The hits column is a JSON array of timestamps: the same sliding window the
+-- Maps held, just somewhere all workers can see it. Rows are pruned
+-- Rows are reclaimed by the periodic pruneRateLimits() sweep on the indexer
+-- worker; nothing prunes on read (an earlier comment here claimed otherwise
+-- and was simply wrong — consumeRateLimit only ever rewrites the row it
+-- touched, so without the sweep this table grows by one row per (bucket, IP)
+-- forever).
+--
+-- NOTE: no backticks anywhere in this block. SCHEMA is a JS template literal,
+-- and a backtick in a SQL comment terminates it — which turns the rest of the
+-- schema into JavaScript and fails at parse time, not at runtime.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  bucket     TEXT NOT NULL,
+  subject    TEXT NOT NULL,
+  hits       TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (bucket, subject)
 );
 CREATE TABLE IF NOT EXISTS validators (
   address TEXT PRIMARY KEY,
@@ -347,6 +387,169 @@ CREATE TRIGGER IF NOT EXISTS trg_tx_count_ad AFTER DELETE ON transactions
 BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'transactions'; END;
 `;
 
+// ---- Additive schema migrations, as DATA (audit F-139) ----------------------
+// These used to be a straight-line list of ensureColumn(...) calls inside
+// initDb. They are a table now for one reason: SCHEMA_FINGERPRINT below has to
+// cover them. A worker that skips the DDL step decides to do so by comparing
+// this fingerprint against the one the migrator recorded — so if you add a
+// column and the fingerprint does not move, every HTTP worker will happily
+// conclude "schema is current", skip the ALTER, and then 500 on every query
+// that touches the new column. Add columns HERE, never at the call site.
+// Append-only; never DROP a column here (data loss) — use a one-time migration.
+const ADDITIVE_MIGRATIONS = [
+    ['address_labels', 'vetoed_at', 'INTEGER DEFAULT NULL'],
+    // Multi-provider price feed: tag each price_history row with the upstream
+    // that produced it ('cmc' | 'ascendex' | ...).
+    ['price_history', 'source', 'TEXT DEFAULT NULL'],
+];
+
+// One-off statements that must run after SCHEMA + the ALTERs, in the same
+// "exactly one process does this" step. Existing price_history rows predate the
+// `source` column — backfill them as 'cmc' since CMC was the sole provider
+// until June 2026. The companion index lets getLatestPriceBySource find the
+// most-recent-per-source row in O(log n). Both are idempotent, and both are in
+// the fingerprint for the same reason the ALTERs are.
+const POST_SCHEMA_SQL = [
+    "UPDATE price_history SET source = 'cmc' WHERE source IS NULL",
+    'CREATE INDEX IF NOT EXISTS idx_price_source_ts ON price_history(source, timestamp DESC)',
+];
+
+// ---- F-139: one process applies the DDL, the rest wait for it ---------------
+// The cluster primary forks all WORKERS at once and every one of them used to
+// run PRAGMA journal_mode + db.exec(SCHEMA) + every ensureColumn against the
+// same file — N processes contending for the SQLite write lock at boot to do
+// idempotent work that only needs doing once.
+//
+// Two previous audit fixes in exactly this spot became incidents, and both are
+// the reason for the shape of the code below rather than something tidier:
+//   * F-088 — a CREATE INDEX added to SCHEMA held the write lock for minutes on
+//     the live transactions table, so no worker's db.exec(SCHEMA) returned and
+//     no worker ever reached app.listen. A slow boot here is a site-wide
+//     outage, not a slow boot.
+//   * F-138 — making ensureColumn throw killed boot on the benign concurrent
+//     ALTER race, where the loser's "duplicate column name" error actually
+//     means the column EXISTS.
+// The invariant that falls out of both: an HTTP worker must never fail to start
+// because of the schema step. It waits for the migrator, and if the migrator
+// never shows up it does the (idempotent) DDL itself — i.e. degrades to exactly
+// the behaviour that shipped before this change. There is no throw on this
+// path, deliberately.
+const SCHEMA_MARKER_KEY = 'schema:applied';
+
+// Computed, never hand-maintained. A hand-bumped version constant is one
+// forgotten edit away from HTTP workers skipping a migration that has not run.
+const SCHEMA_FINGERPRINT = createHash('sha256')
+    .update(SCHEMA).update('|')
+    .update(JSON.stringify(ADDITIVE_MIGRATIONS)).update('|')
+    .update(JSON.stringify(POST_SCHEMA_SQL))
+    .digest('hex').slice(0, 16);
+
+// How long a non-migrator worker waits for the migrator's marker before giving
+// up and applying the DDL itself, and how often it re-checks. The wait only
+// costs anything on the boot right after a schema change; on every other boot
+// the marker is already there from the previous run and the check is one
+// indexed kv read.
+const SCHEMA_WAIT_MS = Math.max(0, parseInt(process.env.SCHEMA_WAIT_MS || '', 10) || 20000);
+const SCHEMA_POLL_MS = 250;
+
+// Blocking sleep. initDb is synchronous and runs before app.listen, so there is
+// no event loop to starve and no request this worker could be serving instead —
+// it has nothing to do until the schema exists. Atomics.wait on a throwaway
+// SharedArrayBuffer is the only real sync sleep Node offers.
+function sleepSync(ms) {
+    if (!(ms > 0)) return;
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+    catch (_) { const end = Date.now() + ms; while (Date.now() < end) { /* last resort */ } }
+}
+
+// Before the migrator's first run the kv TABLE itself does not exist, so a
+// throw from this read means "not ready yet", never "the database is broken".
+function schemaIsCurrent() {
+    try {
+        const m = getKv(SCHEMA_MARKER_KEY);
+        return !!(m && m.fingerprint === SCHEMA_FINGERPRINT);
+    } catch (_) { return false; }
+}
+
+// Everything that mutates the schema, in one place so exactly one caller runs
+// it. journal_mode lives here and NOT with the per-connection PRAGMAs in initDb
+// because WAL is a property of the FILE, not of the connection: every later
+// reader inherits it, and setting it from N connections at once is a needless
+// way to collect SQLITE_BUSY at boot.
+function applyDdl() {
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec(SCHEMA);
+    for (const [table, column, definition] of ADDITIVE_MIGRATIONS) ensureColumn(table, column, definition);
+    for (const sql of POST_SCHEMA_SQL) {
+        try { db.exec(sql); }
+        catch (e) { console.warn(`[db] post-schema statement failed (${sql.slice(0, 40)}...):`, e.message); }
+    }
+}
+
+// Records what this process did, for the boot log and for tests — the whole
+// point of F-139 is unobservable from the outside otherwise.
+let lastSchemaAction = null;
+export function schemaInitInfo() {
+    return { fingerprint: SCHEMA_FINGERPRINT, action: lastSchemaAction };
+}
+
+function ensureSchema({ isMigrator, awaitMigrator, waitMs }) {
+    if (isMigrator) {
+        applyDdl();
+        // Written AFTER the DDL and BEFORE the slow indexer-only work below
+        // (hash-keyed id migration, counter seed), so waiting HTTP workers are
+        // released as soon as the schema is actually correct rather than after
+        // a multi-minute full-table migration they do not care about.
+        try { setKv(SCHEMA_MARKER_KEY, { fingerprint: SCHEMA_FINGERPRINT, at: Date.now(), pid: process.pid }); }
+        catch (e) { console.warn('[db] could not record the schema marker — other workers will re-apply the DDL:', e.message); }
+        return 'applied';
+    }
+    if (schemaIsCurrent()) return 'skipped';
+    // No migrator is coming (single-process mode, or INDEXER_ROLE=off with
+    // WORKERS<=1): waiting would just add SCHEMA_WAIT_MS to boot for nothing.
+    if (!awaitMigrator) { applyDdl(); return 'applied-solo'; }
+
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+        sleepSync(SCHEMA_POLL_MS);
+        if (schemaIsCurrent()) return 'waited';
+    }
+    // Do NOT throw. F-022 makes a failed initDb a process exit, so throwing
+    // here would take every HTTP worker down whenever the indexer is slow or
+    // crash-looping — turning a degraded indexer into a dead site. Re-applying
+    // idempotent DDL is what every worker did before F-139; that is the floor
+    // this falls back to, and it is a floor, not a failure.
+    console.warn(`[db] schema marker absent after ${waitMs}ms (indexer slow, crashed, or absent) — ` +
+        'applying the DDL in this worker instead. Set SCHEMA_WAIT_MS to tune the wait.');
+    try {
+        applyDdl();
+    } catch (e) {
+        // Same reasoning as ensureColumn's F-138 branch: the most likely cause
+        // of a throw HERE is that we lost a race we did not need to win — the
+        // migrator is holding the write lock finishing the very DDL we just
+        // tried to apply, and our 5s busy_timeout expired. If the schema is in
+        // fact present, that error described the outcome we wanted. Check
+        // before deciding, because the OTHER cause (a genuinely broken or
+        // unwritable database) must still be fatal: F-022 established that
+        // serving HTTP with no usable database is worse than being down.
+        const usable = schemaLooksUsable();
+        if (!usable) throw new Error(`schema init failed and the database is unusable: ${e.message}`);
+        console.warn('[db] fallback DDL errored but the schema is present — another worker won the race, continuing:', e.message);
+        return 'applied-fallback-raced';
+    }
+    return 'applied-fallback';
+}
+
+// Cheap "is there a schema at all" probe for the fallback path above. Not a
+// correctness check — the fingerprint is that — just enough to tell "someone
+// else already built this" apart from "this file is empty or broken".
+function schemaLooksUsable() {
+    try {
+        const stmt = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?");
+        return ['kv', 'blocks', 'transactions', 'events'].every(t => !!stmt.get(t));
+    } catch (_) { return false; }
+}
+
 // Idempotent ALTER TABLE ADD COLUMN — checks PRAGMA table_info first so it
 // only runs once per deployment. Used for additive schema changes where the
 // table is already populated in existing deployments. SQLite supports
@@ -385,15 +588,36 @@ function ensureColumn(table, column, definition) {
     }
 }
 
-export function initDb(dataDir, seedCounts = false) {
+// `seedCounts` has meant "this process is the indexer, i.e. the single writer"
+// since F-021. F-139 gives it a second job — the same process is the migrator —
+// rather than adding a parallel flag that could ever disagree with it. The name
+// stays so every existing call site and comment still reads true.
+//
+// opts.awaitMigrator — set false when this process is the ONLY process (single
+//   worker, or INDEXER_ROLE=off with WORKERS<=1). Nobody else is going to apply
+//   the DDL, so waiting for a migrator that does not exist would add
+//   SCHEMA_WAIT_MS to boot and change nothing. Defaults to "wait unless I am
+//   the migrator", which is the safe reading for an unqualified call.
+// opts.schemaWaitMs — test seam; production tunes SCHEMA_WAIT_MS in the env.
+export function initDb(dataDir, seedCounts = false, opts = {}) {
+    const isMigrator = !!seedCounts;
+    const awaitMigrator = opts.awaitMigrator === undefined ? !isMigrator : !!opts.awaitMigrator;
+    const waitMs = opts.schemaWaitMs === undefined ? SCHEMA_WAIT_MS : Math.max(0, opts.schemaWaitMs);
+
     fs.mkdirSync(dataDir, { recursive: true });
     db = new DatabaseSync(path.join(dataDir, 'explorer.db'));
 
-    // ---- Performance PRAGMAs ----
+    // ---- Per-CONNECTION performance PRAGMAs ----
+    // Everything below is scoped to THIS connection and has to be re-applied by
+    // every worker; none of it touches the file, so none of it contends for the
+    // write lock. journal_mode is the one exception and has moved into
+    // applyDdl() — see the F-139 block above.
     // SQLite's defaults target embedded use. For a multi-GB server-side
     // index that's read-heavy with a single writer, these knobs matter:
-    //   * journal_mode=WAL — unlimited concurrent readers alongside the
-    //     indexer's writes; the indexer is the only writer.
+    //   (journal_mode=WAL — unlimited concurrent readers alongside the
+    //     indexer's writes — is set in applyDdl() instead: it is a file-level
+    //     property that every later connection inherits, so it belongs with the
+    //     once-per-database work, not here. See F-139.)
     //   * busy_timeout — absorbs transient lock waits during checkpointing
     //     without surfacing SQLITE_BUSY to the API layer.
     //   * cache_size=-65536 — 64 MB page cache (negative units = KB). The
@@ -411,7 +635,6 @@ export function initDb(dataDir, seedCounts = false) {
     //     every ~1000 pages (~4 MB at the default page size) so the WAL
     //     doesn't grow unbounded between explicit checkpoints. The online
     //     `sqlite3 .backup` we run from cron is also a checkpoint trigger.
-    db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA busy_timeout = 5000');
     // Page cache + mmap window are env-tunable (see .env.example → "SQLite
     // storage tuning"). Both are PER connection/process, so total RAM scales
@@ -426,30 +649,27 @@ export function initDb(dataDir, seedCounts = false) {
     db.exec('PRAGMA temp_store = MEMORY');
     db.exec('PRAGMA wal_autocheckpoint = 1000');
 
-    db.exec(SCHEMA);
+    // ---- Schema + additive migrations (audit F-139) ----
+    // `CREATE TABLE IF NOT EXISTS` doesn't touch existing tables, so when we add
+    // a column to a table that's already in the wild we have to apply the change
+    // ourselves — that is what ADDITIVE_MIGRATIONS is for. Who runs it, and what
+    // everyone else does meanwhile, is the whole of F-139; see the block above.
+    lastSchemaAction = ensureSchema({ isMigrator, awaitMigrator, waitMs });
+    console.log(`[db] schema ${lastSchemaAction} (fingerprint ${SCHEMA_FINGERPRINT}` +
+        `${isMigrator ? ', migrator' : ''})`);
 
-    // ---- Additive schema migrations ----
-    // `CREATE TABLE IF NOT EXISTS` doesn't touch existing tables, so when we
-    // add a column to a table that's already in the wild we have to apply
-    // the change ourselves. Each call is a no-op when the column is already
-    // present. Keep this list append-only; never DROP a column here (data
-    // loss). For a destructive change use a one-time migration function.
-    ensureColumn('address_labels', 'vetoed_at', 'INTEGER DEFAULT NULL');
-    // Multi-provider price feed: tag each price_history row with the upstream
-    // that produced it ('cmc' | 'ascendex' | ...). Existing rows predate the
-    // column — backfill them as 'cmc' since CMC was the sole provider until
-    // June 2026. The companion index lets getLatestPriceBySource scan the
-    // most-recent-per-source row in O(log n).
-    ensureColumn('price_history', 'source', "TEXT DEFAULT NULL");
-    try {
-        db.exec("UPDATE price_history SET source = 'cmc' WHERE source IS NULL");
-        db.exec('CREATE INDEX IF NOT EXISTS idx_price_source_ts ON price_history(source, timestamp DESC)');
-    } catch (e) {
-        console.warn('price_history source backfill failed:', e.message);
+    // The JSON→SQLite import is a WRITE path, and it is now migrator-only for
+    // the same reason the DDL is (F-139, db.js:450-453 in the audit). It used to
+    // run in every worker: on a fresh install with the legacy *_cache.json files
+    // still present, N workers would each read the same files and INSERT the
+    // same rows concurrently, against the single-writer invariant WAL mode is
+    // configured around. The indexer worker always exists wherever indexing is
+    // wanted, so nothing is lost; a deliberately read-only instance
+    // (INDEXER_ROLE=off) correctly declines to write.
+    if (isMigrator) {
+        try { migrateFromJson(dataDir); }
+        catch (e) { console.warn('JSON -> SQLite migration skipped:', e.message); }
     }
-
-    try { migrateFromJson(dataDir); }
-    catch (e) { console.warn('JSON -> SQLite migration skipped:', e.message); }
 
     // ---- F-021: hash-keyed transaction / reward ids ----
     // Destructive-by-design (it deletes fork duplicates and fork-inconsistent
@@ -528,25 +748,77 @@ export function initDb(dataDir, seedCounts = false) {
             console.warn('[db] analytics index check skipped:', e.message);
         }
 
-        for (const t of ['events', 'transactions']) {
-            try {
-                const has = db.prepare('SELECT 1 FROM table_counts WHERE name = ?').get(t);
-                if (!has) {
-                    const c = db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get().c;
-                    db.prepare('INSERT OR IGNORE INTO table_counts(name, n) VALUES(?, ?)').run(t, c);
-                    console.log(`[db] seeded ${t} row counter = ${c}`);
-                }
-            } catch (e) {
-                console.warn(`[db] count seed for ${t} failed:`, e.message);
-            }
-        }
+        for (const t of ['events', 'transactions']) seedTableCounter(t);
     }
 
     // Gather index/table statistics so the query planner makes good choices
     // after the DB grows. Cheap to run, only meaningful on startup.
-    try { db.exec('PRAGMA optimize'); } catch (_) { /* ignore on first boot */ }
+    //
+    // Migrator-only (F-139): PRAGMA optimize can decide to run ANALYZE, which
+    // WRITES sqlite_stat1. The statistics live in the shared file, so one
+    // process computing them serves every reader; N workers doing it at boot
+    // buys nothing and puts N processes on the write lock at the worst moment.
+    if (isMigrator) {
+        try { db.exec('PRAGMA optimize'); } catch (_) { /* ignore on first boot */ }
+    }
 
     return db;
+}
+
+// ---- F-140: seed the O(1) row counters, and mean it ------------------------
+// This used to be one best-effort attempt whose failure was a console.warn. A
+// single loss — SQLITE_BUSY behind a checkpoint, a transient I/O error — left
+// table_counts permanently EMPTY for the life of that database, because nothing
+// ever tried again: the seed only runs at boot, and the next boot's `if (!has)`
+// check would have to win the same race. Every /api/transactions page then paid
+// a full COUNT(*) over millions of rows, synchronously, forever.
+//
+// Retry, then VERIFY the row is actually there — the INSERT succeeding is not
+// the same claim as the row existing, and the verification is what makes the
+// failure log below trustworthy. Deliberately does not throw: a missing counter
+// is a performance problem, and killing the indexer's boot over it (F-022 makes
+// an initDb throw a process exit) would trade a slow page for no indexing.
+// Exported so test/db-schema-init.test.js can drive the failure path directly:
+// the retry is invisible from initDb's outside, and "we retry" is precisely the
+// property F-140 asks for, so it has to be reachable to be assertable.
+export function seedTableCounter(name, attempts = 5) {
+    for (let i = 1; i <= attempts; i++) {
+        try {
+            if (db.prepare('SELECT 1 FROM table_counts WHERE name = ?').get(name)) return true;
+            const c = db.prepare(`SELECT COUNT(*) AS c FROM ${name}`).get().c;
+            db.prepare('INSERT OR IGNORE INTO table_counts(name, n) VALUES(?, ?)').run(name, c);
+            if (db.prepare('SELECT 1 FROM table_counts WHERE name = ?').get(name)) {
+                console.log(`[db] seeded ${name} row counter = ${c}`);
+                return true;
+            }
+        } catch (e) {
+            console.warn(`[db] count seed for ${name} failed (attempt ${i}/${attempts}):`, e.message);
+        }
+        if (i < attempts) sleepSync(250 * i);
+    }
+    console.error(`[db] table_counts row for '${name}' is STILL missing after ${attempts} attempts (audit F-140). ` +
+        'Row counts will be served from a cached full scan until the next restart seeds it.');
+    return false;
+}
+
+// The fallback used when table_counts has no row for a table. It must not be a
+// bare COUNT(*): node:sqlite is SYNCHRONOUS, so a full scan of a multi-million
+// row table blocks that worker's event loop — every other request it is serving
+// stalls with it — and the old code did exactly that on EVERY call, because
+// nothing about the miss was remembered. An HTTP worker cannot repair the miss
+// itself (only the indexer writes), so the honest thing is to pay for the scan
+// at most once per TTL and serve the remembered number in between. The number
+// goes slightly stale; the alternative was a self-inflicted stall per request.
+const COUNTER_FALLBACK_TTL_MS = 5 * 60 * 1000;
+const counterFallbackCache = new Map(); // table -> { value, at }
+function countRowsCached(name) {
+    const hit = counterFallbackCache.get(name);
+    if (hit && (Date.now() - hit.at) < COUNTER_FALLBACK_TTL_MS) return hit.value;
+    console.warn(`[db] table_counts has no '${name}' row — falling back to a full COUNT(*) ` +
+        `(cached for ${COUNTER_FALLBACK_TTL_MS / 1000}s; audit F-140).`);
+    const value = db.prepare(`SELECT COUNT(*) AS c FROM ${name}`).get().c;
+    counterFallbackCache.set(name, { value, at: Date.now() });
+    return value;
 }
 
 // Run a function inside a transaction so bulk writes commit in one fsync.
@@ -640,11 +912,10 @@ export function getTransactionsByAddress(address, limit, altAddress = null) {
     return db.prepare(`SELECT ${TX_COLS} FROM transactions WHERE from_addr = ? OR to_addr = ? ORDER BY block DESC LIMIT ?`).all(address, address, limit);
 }
 export function countTransactions() {
-    // O(1) via the trigger-maintained counter; falls back to a real scan only
-    // if the counter hasn't been seeded yet (e.g. an HTTP-only worker that
-    // started before the indexer seeded it).
+    // O(1) via the trigger-maintained counter. The miss path is a CACHED scan,
+    // not a bare COUNT(*) per call — see countRowsCached (audit F-140).
     const row = db.prepare("SELECT n FROM table_counts WHERE name = 'transactions'").get();
-    return row && row.n != null ? row.n : db.prepare('SELECT COUNT(*) AS c FROM transactions').get().c;
+    return row && row.n != null ? row.n : countRowsCached('transactions');
 }
 
 // --- blocks ---
@@ -850,10 +1121,11 @@ export function getEventsByAddress(address, limit) {
     return db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE signer_address = ? ORDER BY block DESC LIMIT ?`).all(address, limit).map(mapEventRow);
 }
 export function countEvents() {
-    // O(1) via the trigger-maintained counter (see table_counts); falls back to
-    // a full scan only if the counter hasn't been seeded yet.
+    // O(1) via the trigger-maintained counter (see table_counts). The miss path
+    // is a CACHED scan, not a bare COUNT(*) per call — see countRowsCached
+    // (audit F-140).
     const row = db.prepare("SELECT n FROM table_counts WHERE name = 'events'").get();
-    return row && row.n != null ? row.n : db.prepare('SELECT COUNT(*) AS c FROM events').get().c;
+    return row && row.n != null ? row.n : countRowsCached('events');
 }
 
 // --- validator history & triggers ---
@@ -870,6 +1142,31 @@ export function getValidatorHistory(address) {
 export function countValidatorHistoryEras(address) {
     return db.prepare('SELECT COUNT(*) AS c FROM validator_history WHERE address = ?').get(address).c;
 }
+// Audit F-115. This used to DELETE every trigger for the address and re-insert
+// from whatever the caller had just computed — and the caller computes from the
+// last 30 eras only, while `validator_history` is UPSERTed and keeps everything.
+// So a validator who spiked commission 40 eras ago had that permanently erased
+// on the next sync: the evidence was still in validator_history, and the table
+// meant to summarise it had quietly dropped it.
+//
+// Now it MERGES. Triggers are keyed (address, era) and derived deterministically
+// from history, so re-deriving the same era produces the same row and a merge is
+// idempotent — while an era outside the current window is simply left alone.
+//
+// The name is kept because callers pass a full recomputation, but the semantics
+// are "record these", not "these are now the only ones".
+export function mergeValidatorTriggers(address, triggers) {
+    if (!triggers || !triggers.length) return;
+    runTx(() => {
+        const stmt = db.prepare('INSERT OR REPLACE INTO validator_triggers(address,era,prev_commission,new_commission,timestamp) VALUES(?,?,?,?,?)');
+        for (const t of triggers) stmt.run(address, t.era, t.prevCommission ?? 0, t.newCommission ?? 0, t.timestamp ?? Date.now());
+    });
+}
+
+// Wipe-and-write. Retained ONLY for a caller that has genuinely recomputed from
+// the complete stored history and needs to drop triggers that no longer hold
+// (e.g. after a history correction). Using this with a windowed history is the
+// F-115 bug.
 export function replaceValidatorTriggers(address, triggers) {
     runTx(() => {
         db.prepare('DELETE FROM validator_triggers WHERE address = ?').run(address);
@@ -1071,7 +1368,12 @@ export function deleteSession(token) {
 // --- treasury proposals (full history, crawled from chain events) ---
 // Status ranks ensure a partial update never downgrades a resolved proposal
 // (e.g. a backfilled "proposed" event must not overwrite an "awarded" status).
-const TREASURY_STATUS_RANK = { proposed: 0, approved: 1, awarded: 2, rejected: 2 };
+// Audit F-052 adds `resolved`: "this left live chain storage, so it is no
+// longer open, but we have not yet seen the event that says how it ended."
+// It sits ABOVE approved (so the reconcile pass can close an approved-but-
+// vanished row) and BELOW the real outcomes (so the history crawler can still
+// upgrade it to awarded/rejected when it reaches that block).
+const TREASURY_STATUS_RANK = { proposed: 0, approved: 1, resolved: 2, awarded: 3, rejected: 3 };
 export function upsertTreasuryProposal(p) {
     if (p == null || p.id == null) return;
     const ex = db.prepare('SELECT proposer,proposer_name,beneficiary,beneficiary_name,value,bond,status,proposed_block,proposed_at,resolved_block,resolved_at FROM treasury_proposals WHERE id = ?').get(p.id);
@@ -1106,12 +1408,166 @@ export function getTreasuryProposals() {
         resolved_block AS resolvedBlock, resolved_at AS resolvedAt
         FROM treasury_proposals ORDER BY id DESC`).all();
 }
+// ─── Audit F-075: cluster-wide rate limiting ────────────────────────────────
+//
+// Read-modify-write under BEGIN IMMEDIATE so two workers racing the same key
+// cannot both see "under the limit" and both allow. Without the transaction
+// this table would still multiply the limit — just by less, and
+// nondeterministically, which is harder to reason about than the honest
+// per-process version it replaces.
+//
+// `decide` receives the stored timestamp list and returns
+// { allowed, kept, ... } — see lib/rate-limit.js checkWindow. Keeping the
+// arithmetic outside means the window logic stays testable without a database.
+export function consumeRateLimit(bucket, subject, decide) {
+    // A review caught two defects in the first version of this, both in the
+    // failure path — the path that only runs when things are already going
+    // wrong, and therefore the one least likely to be exercised before it
+    // matters.
+    //
+    // (1) `BEGIN IMMEDIATE` is itself the statement most likely to throw here:
+    //     it is what waits on the write lock, so a busy indexer past
+    //     busy_timeout fails RIGHT THERE, with no transaction open. The old
+    //     catch then ran a bare `ROLLBACK`, which throws "cannot rollback - no
+    //     transaction is active", escapes the catch, and never reaches the
+    //     fail-open return. authRateGate has no try/catch of its own, so
+    //     /api/auth/challenge and /api/auth/verify would have returned 500 —
+    //     the rate limiter causing the outage it exists to prevent, which is
+    //     exactly what the comment claimed it would not do.
+    //
+    // (2) The row was written even when the request was REFUSED. An attacker
+    //     already over the limit could therefore keep forcing write
+    //     transactions against a single-writer SQLite file at any rate they
+    //     chose, contending with the indexer. A limiter must get cheaper under
+    //     abuse, not more expensive.
+    let began = false;
+    try {
+        db.exec('BEGIN IMMEDIATE');
+        began = true;
+        const row = db.prepare('SELECT hits FROM rate_limits WHERE bucket = ? AND subject = ?')
+            .get(bucket, subject);
+        let hits = [];
+        if (row && row.hits) {
+            try { hits = JSON.parse(row.hits) || []; } catch (_) { hits = []; }
+        }
+        const result = decide(hits);
+
+        // Only write when the state actually changed — i.e. when the hit was
+        // allowed and recorded. A refusal leaves the stored window untouched.
+        if (result.allowed) {
+            db.prepare(`
+                INSERT INTO rate_limits (bucket, subject, hits, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(bucket, subject) DO UPDATE SET hits = excluded.hits, updated_at = excluded.updated_at
+            `).run(bucket, subject, JSON.stringify(result.kept), Date.now());
+        }
+        db.exec('COMMIT');
+        began = false;
+        return result;
+    } catch (e) {
+        // Roll back ONLY if we actually started a transaction.
+        if (began) {
+            try { db.exec('ROLLBACK'); } catch (_) { /* already unwound */ }
+        }
+        // FAIL OPEN. Reached now, which it was not before.
+        console.warn('[rate-limit] falling open for', bucket, e.message);
+        return { allowed: true, remaining: 0, retryAfterMs: 0, kept: [] };
+    }
+}
+
+// Drop buckets nobody has touched recently. Cheap, and only the indexer runs it.
+export function pruneRateLimits(olderThanMs = 24 * 60 * 60 * 1000) {
+    try {
+        return db.prepare('DELETE FROM rate_limits WHERE updated_at < ?')
+            .run(Date.now() - olderThanMs).changes;
+    } catch (_) { return 0; }
+}
+
 export function countTreasuryProposals() {
     return db.prepare('SELECT COUNT(*) AS c FROM treasury_proposals').get().c;
 }
 
+// ─── Audit F-052: close out rows that quietly left chain storage ────────────
+//
+// Treasury proposals and council motions are DELETED from chain storage when
+// they resolve. The live sync therefore sees only open items, and the history
+// crawler is what normally supplies the resolving event. If that event is ever
+// missed — a scan gap, an RPC failure during the block that resolved it, a
+// runtime that emitted a variant we do not decode — the row keeps the last
+// status anyone wrote, which is `proposed`. And because the status ranks refuse
+// to downgrade, nothing later can move it. The item then shows as OPEN on
+// /calendar, /treasury and /council permanently: a motion the council closed
+// two years ago, still listed as awaiting votes.
+//
+// The live sync knows the full open set every tick, so absence from it is
+// itself evidence. We record that evidence honestly as `resolved` — meaning
+// "definitely not open any more, outcome unknown" — rather than guessing
+// awarded/rejected. The history crawler can still upgrade it later.
+//
+// CALLER CONTRACT, and the reason this is a separate function rather than
+// inlined in the sync: only call this with a set you know is complete. An
+// empty array from a FAILED query would mark every open item resolved in one
+// tick, which is a far worse lie than the one being fixed. The callers pass
+// a trusted flag; see syncTreasury / syncCouncil.
+// `trusted` is REQUIRED, not advisory. The first version of this pair
+// documented the contract in prose and left the caller free to ignore it —
+// which the council caller then did, because its live-set build is wrapped in a
+// log-and-continue catch. A safety precondition that only exists in a comment
+// is not a precondition. Refuse to act without it.
+export function resolveMissingTreasuryProposals(liveIds, { trusted = false } = {}) {
+    if (!trusted) {
+        console.warn('resolveMissingTreasuryProposals called without trusted:true — refusing (F-052).');
+        return 0;
+    }
+    if (!Array.isArray(liveIds)) return 0;
+    const open = db.prepare(
+        "SELECT id FROM treasury_proposals WHERE status IN ('proposed','approved')"
+    ).all();
+    const live = new Set(liveIds.map(Number));
+    const gone = open.filter(r => !live.has(Number(r.id)));
+    if (gone.length === 0) return 0;
+    const upd = db.prepare(
+        "UPDATE treasury_proposals SET status = 'resolved', updated_at = ? WHERE id = ?"
+    );
+    const now = Date.now();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+        for (const r of gone) upd.run(now, r.id);
+        db.exec('COMMIT');
+    } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+    }
+    return gone.length;
+}
+
+export function resolveMissingCouncilMotions(liveHashes, { trusted = false } = {}) {
+    if (!trusted) {
+        console.warn('resolveMissingCouncilMotions called without trusted:true — refusing (F-052).');
+        return 0;
+    }
+    if (!Array.isArray(liveHashes)) return 0;
+    const open = db.prepare("SELECT hash FROM council_motions WHERE status = 'proposed'").all();
+    const live = new Set(liveHashes.map(String));
+    const gone = open.filter(r => !live.has(String(r.hash)));
+    if (gone.length === 0) return 0;
+    const upd = db.prepare(
+        "UPDATE council_motions SET status = 'resolved', updated_at = ? WHERE hash = ?"
+    );
+    const now = Date.now();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+        for (const r of gone) upd.run(now, r.hash);
+        db.exec('COMMIT');
+    } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+    }
+    return gone.length;
+}
+
 // --- council motions (full history, crawled from chain events) ---
-const MOTION_STATUS_RANK = { proposed: 0, closed: 1, approved: 2, disapproved: 2, executed: 3 };
+const MOTION_STATUS_RANK = { proposed: 0, resolved: 1, closed: 2, approved: 3, disapproved: 3, executed: 4 };   // F-052: see TREASURY_STATUS_RANK
 export function upsertCouncilMotion(m) {
     if (m == null || !m.hash) return;
     const ex = db.prepare('SELECT motion_index,proposer,proposer_name,section,method,threshold,status,ayes,nays,proposed_block,proposed_at,resolved_block,resolved_at FROM council_motions WHERE hash = ?').get(m.hash);

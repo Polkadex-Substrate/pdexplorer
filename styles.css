@@ -4096,3 +4096,52 @@ h1, h2, h3 { font-weight: 600; }
     .list-item { padding: 9px 12px; }
     .network-info-bar { padding: 12px 24px; }
 }
+
+/* Audit F-064 — the "live" marker on rows that arrived over the WebSocket and
+   have not yet been confirmed by the indexer. Deliberately quiet: it is a
+   provenance note, not a warning, and the home list refreshes past it within
+   about a minute. Sits next to the timestamp / amount in .item-meta. */
+.live-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-right: 6px;
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--brand-secondary);
+    border: 1px solid var(--brand-secondary);
+    opacity: 0.75;
+    vertical-align: middle;
+    cursor: help;
+}
+
+/* Audit F-068 — "this is not live data" banner on the wallet dashboard.
+   Two variants: .is-cached is informational and disappears within seconds;
+   .is-error is sticky and appears alongside disabled signing actions. */
+.wallet-stale-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+.wallet-stale-banner i {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    line-height: 1.3;
+}
+.wallet-stale-banner.is-cached {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+}
+.wallet-stale-banner.is-error {
+    background: rgba(230, 0, 122, 0.12);
+    border: 1px solid rgba(230, 0, 122, 0.45);
+    color: var(--text-primary);
+}

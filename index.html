@@ -25,6 +25,14 @@
     <meta name="theme-color" content="#E6007A" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#08080C" media="(prefers-color-scheme: dark)">
     <meta name="color-scheme" content="dark light">
+    <!-- Audit F-168: this site is INSTALLABLE, not offline-capable. There is
+         no service worker (and adding one to a wallet origin is a decision
+         with its own security weight — a stale cached bundle that can sign
+         transactions is a genuinely bad failure mode, which is why one has not
+         been added lightly). The manifest + these meta tags give a home-screen
+         icon and standalone chrome, which is what they actually claim; nothing
+         here promises offline use. Keeping them is honest, and the manifest's
+         own description says "in real time" rather than implying offline. -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Polkadex Explorer">
@@ -73,7 +81,11 @@
 
     <!-- Sitemap discovery for crawlers that read <link rel="sitemap">. -->
     <link rel="sitemap" type="application/xml" href="/sitemap.xml">
-    <link rel="alternate" type="application/rss+xml" title="Polkadex Explorer" href="https://explorer.polkadex.ee/">
+    <!-- Audit F-167: a rel="alternate" type="application/rss+xml" link used to
+         sit here pointing at "/" — the SPA's HTML shell, which is not a feed.
+         A reader that follows it gets an XML parse error, and the declaration
+         is a standing promise of a feed we do not publish. Removed rather than
+         faked: if a real feed is ever added, point this at that URL. -->
 
     <link href="/vendor/inter.css" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
@@ -92,7 +104,13 @@
 
     <!-- Structured data: WebSite + Organization + SiteNavigationElement. The
          SearchAction hooks into Google's sitelink search box. -->
-    <script type="application/ld+json">
+    <!-- Audit F-062: given an id so updateSeoMeta can disable it on non-home
+         routes. This @graph describes the SITE and its home page (WebSite,
+         Organization, SiteNavigationElement, the home WebPage). Leaving it live
+         on /block/123 told a crawler that the home page's description and
+         navigation belonged to that block's URL, competing with the route's own
+         structured data. -->
+    <script type="application/ld+json" id="home-jsonld">
     {
       "@context": "https://schema.org",
       "@graph": [
@@ -553,7 +571,7 @@
             <!-- Modals (Hidden by default) -->
             <div id="council-candidacy-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
                 <div class="glass" style="width: 100%; max-width: 500px; padding: 30px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-candidacy-modal" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;"><i class='bx bx-x'></i></button>
+                    <button id="close-candidacy-modal" data-modal-close aria-label="Close" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 20px; font-size: 1.3rem;">Submit Candidacy</h3>
                     <p style="color: var(--text-secondary); margin-bottom: 20px; font-size: 0.9rem;">Submit your candidacy for the Polkadex Council. This action requires a connected wallet extension.</p>
                     <div id="candidacy-modal-wallet-warning" style="color: var(--error); margin-bottom: 15px; font-size: 0.9rem; display: none;">Please connect your wallet first.</div>
@@ -730,7 +748,7 @@
 
             <div id="treasury-submit-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
                 <div class="glass" style="width: 100%; max-width: 500px; padding: 30px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-treasury-modal" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;"><i class='bx bx-x'></i></button>
+                    <button id="close-treasury-modal" data-modal-close aria-label="Close" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 12px; font-size: 1.3rem;">Submit Treasury Proposal</h3>
                     <p style="color: var(--text-secondary); margin-bottom: 20px; font-size: 0.9rem;">Request a spend from the on-chain Treasury. A bond is reserved from your account until the proposal is approved or rejected.</p>
                     <div id="treasury-modal-wallet-warning" style="color: var(--error); margin-bottom: 15px; font-size: 0.9rem; display: none;">Please connect your wallet first.</div>
@@ -966,7 +984,7 @@
                  5 slides walking through the explorer's distinctive features. -->
             <div id="onboarding-tour-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); z-index: 1100; align-items: center; justify-content: center; backdrop-filter: blur(6px); padding: 20px;">
                 <div class="glass" style="width: 100%; max-width: 620px; padding: 36px 30px 26px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-onboarding-tour-modal" style="position: absolute; top: 14px; right: 14px; background: none; border: none; color: var(--text-secondary); font-size: 22px; cursor: pointer;" aria-label="Skip tour"><i class='bx bx-x'></i></button>
+                    <button id="close-onboarding-tour-modal" data-modal-close style="position: absolute; top: 14px; right: 14px; background: none; border: none; color: var(--text-secondary); font-size: 22px; cursor: pointer;" aria-label="Skip tour"><i class='bx bx-x'></i></button>
                     <div id="onboarding-tour-content" style="min-height: 280px;"></div>
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-color);">
                         <div id="onboarding-tour-dots" style="display: flex; gap: 6px;"></div>

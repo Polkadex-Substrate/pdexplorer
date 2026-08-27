@@ -53,5 +53,33 @@ USER node
 # Expose backend API port
 EXPOSE 3001
 
-# Start the server (node:sqlite needs the --experimental-sqlite flag on Node 22)
+# Audit F-147 — why the flag is still here, and why the pin did not move.
+#
+# On node:22.11-alpine (the FROM above) `import { DatabaseSync } from
+# "node:sqlite"` throws ERR_UNKNOWN_BUILTIN_MODULE without --experimental-sqlite.
+# db.js imports it at module load, so dropping the flag is not a degraded mode:
+# the container dies at startup, every /api/* route goes dark, and nginx keeps
+# serving the SPA — the same shape of outage as the missing-lib/ incident above,
+# where the site looks alive with every backend figure blank.
+#
+# Later 22.x releases load node:sqlite unflagged, and they still ACCEPT the flag
+# (checked on 22.23: `node --experimental-sqlite -e 1` exits 0), so this CMD
+# survives a minor bump rather than turning it into a crash-loop.
+#
+# The audit's other option — "move to a Node where node:sqlite is not
+# experimental" — was rejected, not overlooked. There isn't one in reach: 22.23
+# still prints `ExperimentalWarning: SQLite is an experimental feature` on
+# import, so a minor bump buys nothing but a re-test, and a MAJOR bump is not a
+# config change here — @polkadot/api is pinned to
+# exactly 10.13.1 with a manually declared CheckMetadataHash signed extension
+# (see server.js), and that combination is what makes wallet signing produce
+# valid extrinsics. Re-qualifying it is a signing-correctness project, not a
+# Dockerfile edit. Keeping the pin and documenting it accurately is the option
+# that risks nothing.
+#
+# If you DO bump the base image, keep this comment truthful: the flag stays
+# harmless, but the "22.11 requires it" claim must be updated to match the tag.
+# test/infra-config.test.js asserts the flag is present in all three places it
+# has to agree (this CMD, package.json `start`, package.json `server`) and that
+# this comment still names the pinned version.
 CMD ["node", "--experimental-sqlite", "server.js"]
