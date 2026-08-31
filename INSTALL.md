@@ -18,20 +18,51 @@ re-run. For the full list of tunables see `.env.example`; for architecture see
 ## 1. One-shot install (recommended)
 
 `provision-ubuntu.sh` does everything: OS hardening (ufw, fail2ban,
-unattended-upgrades), Docker, clone + `.env` + TLS + `docker compose up`, and
-the nightly backup cron. It is phased and idempotent — re-running re-converges
-each phase.
+unattended-upgrades), Docker, clone + `.env` + TLS + `docker compose up`, the
+Cloudflare-only firewall, and the nightly backup cron. It is phased and
+idempotent — re-running re-converges each phase.
 
 ```bash
+# Stage the Cloudflare Origin CA cert FIRST if the zone is proxied (see §"Issue
+# a real origin TLS cert" below) — `all` installs it when it is present:
+#   /opt/pdexplorer/secrets/cloudflare-origin.pem
+#   /opt/pdexplorer/secrets/cloudflare-origin.key
 sudo DOMAIN=explorer.example.com LETSENCRYPT_EMAIL=you@example.com \
      bash provision-ubuntu.sh all
-# add the Cloudflare-origin firewall too:
-#   ... bash provision-ubuntu.sh all+cf
 ```
 
+**Audit F-192: `all` already includes Cloudflare — there is no second step.**
+This block used to say "add the Cloudflare-origin firewall too: `... all+cf`".
+Since audit F-098, `all` runs the Cloudflare firewall phase *and*
+`cf-origin-cert`; the older `all+cf` arm ran the firewall but **not** the origin
+certificate. So the "extra" step was a downgrade: it left the box serving the
+self-signed placeholder, and Cloudflare Full (Strict) answered 526 — for
+operators who had staged the Origin CA files correctly. `all+cf` is now an alias
+of `all`, kept only so old runbooks keep working. Prefer `all`.
+
 Run individual phases as needed: `harden` · `docker` · `app` · `backup` ·
-`cloudflare`. Example: re-deploy only the app after a code change:
-`sudo bash provision-ubuntu.sh app`.
+`cloudflare` · `cf-origin-cert`. Example: re-deploy only the app after a code
+change: `sudo bash provision-ubuntu.sh app`.
+
+> **Audit F-097 — `app` prepares, `deploy.sh` deploys.** The `app` phase used to
+> contain its own copy of the build-and-start sequence, and it began with
+> `git reset --hard origin/HEAD`. That combination made re-running `app` on a
+> box you had hot-patched destroy the patch with no warning and no way back,
+> and it meant a provision-built stack and a `deploy.sh`-built stack were
+> separately-maintained artefacts answering the same URL.
+>
+> `app` now clones only when there is no checkout, leaves an existing working
+> tree alone, and ends by calling `deploy.sh` — which is the repo's only
+> `docker compose up`. Re-running `app` is therefore safe on an edited box:
+> `deploy.sh`'s `git pull` will refuse to merge over your changes instead of
+> deleting them. To genuinely discard local edits, ask for it by name:
+>
+> ```bash
+> sudo PROVISION_DESTROY_LOCAL_EDITS=1 bash provision-ubuntu.sh app
+> ```
+>
+> For a routine redeploy of an already-provisioned box, `sudo bash deploy.sh`
+> remains the shorter path and now produces the identical result.
 
 ## 2. Configure `.env` for this box
 
@@ -47,11 +78,64 @@ Key values for a new SSD box:
 - `DATA_PATH` — host path bind-mounted to `/app/data`. Keep it on the SSD.
 - `POLKADEX_WS` — **point at an archive RPC** if you need full historical event
   backfill (a pruned node can't serve old-block metadata).
-- `SQLITE_CACHE_MB` / `SQLITE_MMAP_MB` — raise on a big box so the DB is served
-  from RAM. For ~16 GB RAM: `SQLITE_CACHE_MB=512`, `SQLITE_MMAP_MB=4096`.
-  (These are **per worker** — total ≈ value × `WORKERS`.)
+- `SQLITE_CACHE_MB` / `SQLITE_MMAP_MB` — see **SQLite RAM budget** below before
+  changing either. They are per worker and they add up.
 - `CMC_API_KEY` — optional price feed. **Do not commit a real key** (the
   template ships blank).
+
+### SQLite RAM budget
+
+Audit F-093. This section used to read "for ~16 GB RAM: `SQLITE_CACHE_MB=512`,
+`SQLITE_MMAP_MB=4096`", with a parenthetical that the values were per worker.
+Both statements were true and together they were a recipe for an OOM: the
+explorer runs `WORKERS` node processes, **each opens its own SQLite connection**,
+and each connection applies both PRAGMAs. On an 8-core box that recipe asks for
+`(512 + 4096) × 8 = 36 GB` on a 16 GB machine. Nothing fails at startup — the
+box degrades under load and the kernel eventually OOM-kills a worker, which
+looks like an unrelated crash-loop.
+
+Size from a single budget, not per knob:
+
+```
+total ≈ (SQLITE_CACHE_MB + SQLITE_MMAP_MB) × WORKERS
+```
+
+Give SQLite **at most half** of physical RAM; the rest is node heaps, the
+@polkadot/api metadata registries (hundreds of MB per worker on a big runtime),
+nginx, and the OS. So:
+
+```
+budget_mb        = RAM_MB / 2
+per_worker_mb    = budget_mb / WORKERS
+SQLITE_MMAP_MB   = per_worker_mb - SQLITE_CACHE_MB      # derive mmap, don't guess it
+```
+
+`WORKERS` defaults to `min(nproc, WORKERS_MAX)` and `WORKERS_MAX` defaults to
+**8** — so on any box with 8+ cores, assume 8 unless you have pinned `WORKERS`
+yourself. Pin it. A recipe that is safe at 4 workers is a 2× over-commit the
+day someone deploys the same `.env` onto a 16-core host.
+
+Worked example, 16 GB / 8 workers: budget 8192 MB → 1024 MB per worker →
+`SQLITE_CACHE_MB=256`, `SQLITE_MMAP_MB=768`.
+
+| RAM | WORKERS | `SQLITE_CACHE_MB` | `SQLITE_MMAP_MB` | total |
+|-----|---------|-------------------|------------------|-------|
+| 4 GB  | 2 | 128 | 384  | ~1.0 GB |
+| 8 GB  | 4 | 128 | 896  | ~4.0 GB |
+| 16 GB | 8 | 256 | 768  | ~8.0 GB |
+| 32 GB | 8 | 512 | 1536 | ~16 GB  |
+
+Two notes before you decide the table is too conservative:
+
+- **Raising `WORKERS` raises SQLite RAM too.** The budget is fixed by the box,
+  so more workers means *smaller* per-worker values, not the same ones repeated.
+  This is the trap the old recipe set.
+- `mmap_size` is a *file-backed* mapping, so the resident cost of the mmap half
+  is shared between workers and capped by the size of `explorer.db` — measured
+  RSS will usually come in under the formula. Budget with the formula anyway:
+  it is the number that stays correct when the DB outgrows RAM, which is the
+  only case where getting this wrong hurts. There is no benefit to setting
+  `SQLITE_MMAP_MB` far above the DB file size.
 
 ## 3. Seed the database
 
@@ -206,10 +290,56 @@ cd /opt/pdexplorer && sudo docker compose up -d
 
 ### Issue a real origin TLS cert (do this before cutover)
 
-`provision`/`init-letsencrypt.sh` leave a **self-signed placeholder** at
-`certbot/conf/live/<domain>/` so nginx can boot. Cloudflare on **Full (Strict)**
-rejects a self-signed origin cert with **error 526**, so replace it with a real
-one on the new box before pointing DNS at it:
+During provisioning, `init-letsencrypt.sh` writes a **self-signed placeholder**
+at `$CERTBOT_PATH/conf/live/<domain>/` on the host so nginx can boot — nothing
+else in the provision can run until it does. Cloudflare on **Full (Strict)**
+rejects a self-signed origin cert with **error 526**, so it must be replaced
+before you point DNS at the box.
+
+**Audit F-024 (round 2) — you can no longer finish a provision on the
+placeholder by accident.** Two guards, both of which you can trip deliberately
+and neither of which you can trip silently:
+
+- `provision-ubuntu.sh all` **aborts** if `DOMAIN` looks like a public hostname
+  and `secrets/cloudflare-origin.pem` is absent. Set
+  `ALLOW_SELF_SIGNED_ORIGIN=1` only for a grey-clouded origin (or no Cloudflare
+  at all), where a self-signed cert is genuinely the right answer.
+- `init-letsencrypt.sh` defaults to `ORIGIN_CERT_MODE=letsencrypt`: it runs a
+  real `certonly` and exits non-zero if the cert is still self-signed
+  afterwards. `ORIGIN_CERT_MODE=self-signed-bootstrap` is the placeholder-only
+  mode, and it is what `provision` calls to get nginx started.
+
+The previous round warned and continued. That is not enough here because the
+symptom is entirely on the far side of Cloudflare: the origin comes up clean,
+`curl -k https://localhost` returns the site, the provision summary is green,
+and only real visitors see 526.
+
+**Path note (audit F-189).** `$CERTBOT_PATH/conf` on the **host** is
+`/etc/letsencrypt` inside the **frontend container** — the host has no
+`/etc/letsencrypt` at all. In production that is
+`/opt/pdexplorer/certbot/conf/live/explorer.polkadex.ee/`. Commands run through
+`docker compose run/exec` use the container path; `ls`/`chmod` on the VPS use
+the host path. `CERTBOT_PATH` lives in `.env`, and compose, `provision` and
+`deploy.sh` all read it from there.
+
+**Recommended for a proxied (orange-cloud) zone — Cloudflare Origin CA.**
+15-year certificate, no ACME challenge, no renewal, and it works with the proxy
+on. Cloudflare dashboard → SSL/TLS → Origin Server → Create Certificate, then:
+
+```bash
+cd /opt/pdexplorer
+sudo install -d -m 700 secrets
+sudo tee secrets/cloudflare-origin.pem >/dev/null   # paste the certificate body
+sudo tee secrets/cloudflare-origin.key >/dev/null   # paste the private key
+sudo chmod 600 secrets/cloudflare-origin.*
+sudo bash provision-ubuntu.sh cf-origin-cert
+```
+
+`provision-ubuntu.sh all` performs this automatically when those two files are
+already in place, which is why they should be staged *before* the first run.
+
+**Alternative — Let's Encrypt.** Only if you need a publicly trusted cert (e.g.
+you also serve the origin directly):
 
 ```bash
 cd /opt/pdexplorer
@@ -223,18 +353,26 @@ sudo docker compose exec frontend nginx -s reload
 echo | openssl s_client -connect 127.0.0.1:443 -servername explorer.polkadex.ee 2>/dev/null | openssl x509 -noout -issuer
 ```
 
+Or run the same thing through the script, which does the placeholder dance,
+the `certonly`, and the self-signed check for you and fails loudly if the
+result is not a real certificate (audit F-024):
+
+```bash
+cd /opt/pdexplorer
+ORIGIN_CERT_MODE=letsencrypt bash ./init-letsencrypt.sh
+```
+
 **Important — Let's Encrypt HTTP-01 does NOT work through an orange-cloud
 (proxied) Cloudflare record by default** (audit F-027; README explains why —
 "Always Use HTTPS" redirects the challenge before it reaches the origin). The
 `certonly` above only succeeds if one of these is true:
 
-1. The DNS record is **grey-cloud** (DNS-only) during issuance, or
-2. You use **DNS-01** validation instead of the webroot method, or
-3. You skip Let's Encrypt entirely and install a **Cloudflare Origin
-   Certificate** (15-year, no renewal): put the cert + key in
-   `secrets/cloudflare-origin.pem` / `.key` and run
-   `sudo bash provision-ubuntu.sh cf-origin-cert`. This is the recommended
-   path for a permanently proxied zone.
+1. The DNS record is **grey-cloud** (DNS-only) during issuance — and stays that
+   way, or is toggled again, for every 60-day renewal, or
+2. You use **DNS-01** validation instead of the webroot method.
+
+Otherwise use the **Cloudflare Origin CA** path above; for a permanently
+proxied zone that is the recommended option, not a fallback.
 
 The compose `certbot` service auto-renews LE certs every 12h thereafter
 (option 1/2 only — Origin CA certs need no renewal).

@@ -22,6 +22,36 @@
 // EMAIL_MIN_INTERVAL_MS.
 // =============================================================================
 
+import { createHash } from 'node:crypto';
+
+// Audit F-090: never put a subscriber's mailbox in a log line.
+//
+// Two lines below did, and both fire on ordinary operation rather than on an
+// error: the rate-limit warning on every per-recipient cooldown, and the
+// "(disabled) would send" line on EVERY send while EMAIL_PROVIDER is
+// `disabled` — which is the DEFAULT. So a stock deployment writes the address
+// of everyone who signs up into journald, where it is retained, shipped to
+// whatever aggregates the logs, and readable by anyone with host access. The
+// subscriber consented to receive mail, not to be catalogued in an ops system.
+//
+// A truncated SHA-256 is enough for what the log is actually for: correlating
+// "this same recipient again" across lines. Being precise about what it is not
+// — an unsalted hash of a low-entropy value is a stable pseudonym, not
+// anonymisation. Anyone holding a candidate address can confirm a match. That
+// is an acceptable trade for a log line and would not be for stored data.
+//
+// EMAIL_LOG_PLAINTEXT=1 restores the old behaviour, because the disabled-
+// provider line is how a developer checks locally that mail would reach the
+// right address, and silently removing that would just push people to add
+// their own console.log.
+const EMAIL_LOG_PLAINTEXT  = process.env.EMAIL_LOG_PLAINTEXT === '1';
+function maskEmail(value) {
+    const v = String(value == null ? '' : value).trim().toLowerCase();
+    if (!v) return '(none)';
+    if (EMAIL_LOG_PLAINTEXT) return v;
+    return 'sha256:' + createHash('sha256').update(v).digest('hex').slice(0, 12);
+}
+
 const EMAIL_PROVIDER       = (process.env.EMAIL_PROVIDER || 'disabled').toLowerCase();
 const EMAIL_FROM           = process.env.EMAIL_FROM      || '';
 const EMAIL_FROM_NAME      = process.env.EMAIL_FROM_NAME || 'Polkadex Explorer';
@@ -50,7 +80,10 @@ function isRateLimited(toEmailLower) {
 // Common config check used by every provider before doing network work.
 function preflight(opts) {
     if (!opts || !opts.to) return { error: 'sendEmail: `to` is required' };
-    if (!isRfc5322Email(opts.to)) return { error: `sendEmail: \`${opts.to}\` is not a valid email address` };
+    // F-090: the address must not ride out in the message either — callers
+    // log err.message (server.js does), so this would reintroduce the leak
+    // through the error path after the log lines were fixed.
+    if (!isRfc5322Email(opts.to)) return { error: `sendEmail: ${maskEmail(opts.to)} is not a valid email address` };
     if (EMAIL_PROVIDER !== 'disabled' && !EMAIL_FROM) {
         return { error: 'EMAIL_FROM is required when EMAIL_PROVIDER is not "disabled"' };
     }
@@ -154,12 +187,12 @@ export async function sendEmail(opts) {
 
     const toLower = String(opts.to).trim().toLowerCase();
     if (isRateLimited(toLower)) {
-        console.warn(`[email] rate-limited send to ${toLower} (interval ${EMAIL_MIN_INTERVAL_MS}ms)`);
+        console.warn(`[email] rate-limited send to ${maskEmail(toLower)} (interval ${EMAIL_MIN_INTERVAL_MS}ms)`);
         return { rateLimited: true, providerId: null };
     }
 
     if (EMAIL_PROVIDER === 'disabled') {
-        console.log(`[email] (disabled) would send to=${opts.to} subject="${opts.subject}" tag=${opts.tag || '-'}`);
+        console.log(`[email] (disabled) would send to=${maskEmail(opts.to)} subject="${opts.subject}" tag=${opts.tag || '-'}`);
         return { disabled: true, providerId: null };
     }
 

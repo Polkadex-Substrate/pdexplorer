@@ -18,7 +18,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { rpcUnavailableLikePatterns } from './lib/rpc-errors.js';
-import { migrateHashKeyedIds, deleteForkRows as deleteForkRowsImpl } from './lib/id-migration.js';
+import { migrateHashKeyedIds, purgeLegacyExtrinsicKeyedTx, deleteForkRows as deleteForkRowsImpl } from './lib/id-migration.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -599,6 +599,13 @@ function ensureColumn(table, column, definition) {
 //   SCHEMA_WAIT_MS to boot and change nothing. Defaults to "wait unless I am
 //   the migrator", which is the safe reading for an unqualified call.
 // opts.schemaWaitMs — test seam; production tunes SCHEMA_WAIT_MS in the env.
+// Small positive-integer env reader with a default. Kept local to db.js so the
+// pragma block does not depend on server.js's copy.
+function readIntEnv(name, fallback) {
+    const n = parseInt(process.env[name] || '', 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 export function initDb(dataDir, seedCounts = false, opts = {}) {
     const isMigrator = !!seedCounts;
     const awaitMigrator = opts.awaitMigrator === undefined ? !isMigrator : !!opts.awaitMigrator;
@@ -612,8 +619,11 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
     // every worker; none of it touches the file, so none of it contends for the
     // write lock. journal_mode is the one exception and has moved into
     // applyDdl() — see the F-139 block above.
-    // SQLite's defaults target embedded use. For a multi-GB server-side
-    // index that's read-heavy with a single writer, these knobs matter:
+    // SQLite's defaults target embedded use. For a multi-GB server-side index
+    // that is read-heavy with ONE BULK WRITER (the indexer) plus several
+    // occasional ones (HTTP workers writing sessions, posts, votes,
+    // subscriptions and rate-limit counters — F-089 corrected the old
+    // "single writer" claim here, which was never true), these knobs matter:
     //   (journal_mode=WAL — unlimited concurrent readers alongside the
     //     indexer's writes — is set in applyDdl() instead: it is a file-level
     //     property that every later connection inherits, so it belongs with the
@@ -635,12 +645,40 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
     //     every ~1000 pages (~4 MB at the default page size) so the WAL
     //     doesn't grow unbounded between explicit checkpoints. The online
     //     `sqlite3 .backup` we run from cron is also a checkpoint trigger.
-    db.exec('PRAGMA busy_timeout = 5000');
+    // Audit F-089 (round 2). This was a flat 5s for every connection, and the
+    // surrounding comment claimed a "single writer" invariant that is not true:
+    // HTTP workers write too — auth sessions, discussion posts, label votes,
+    // email subscriptions, and since F-075 the rate-limit counters. So the
+    // shape is one BULK writer (the indexer, holding the lock for the duration
+    // of a backfill insert) plus several OCCASIONAL writers competing with it.
+    //
+    // 5s is tuned for the bulk writer's own checkpointing. For an HTTP worker
+    // it is a user-visible failure: a login or a vote arriving during an
+    // indexer runTx gets SQLITE_BUSY and a 500, for no reason except that it
+    // asked at the wrong moment. These writes are tiny and rare — waiting is
+    // exactly the right behaviour.
+    //
+    // The indexer keeps the short timeout on purpose: it is the one that should
+    // notice contention rather than queue behind it, and F-181 now retries its
+    // transient failures instead of exiting.
+    const busyMs = seedCounts
+        ? readIntEnv('SQLITE_BUSY_TIMEOUT_INDEXER_MS', 5000)
+        : readIntEnv('SQLITE_BUSY_TIMEOUT_HTTP_MS', 30000);
+    db.exec(`PRAGMA busy_timeout = ${busyMs}`);
     // Page cache + mmap window are env-tunable (see .env.example → "SQLite
-    // storage tuning"). Both are PER connection/process, so total RAM scales
-    // with the worker count. Conservative defaults keep a small VPS safe; raise
-    // SQLITE_CACHE_MB / SQLITE_MMAP_MB on a well-provisioned box to serve more
-    // of the DB from RAM instead of disk.
+    // storage tuning" and INSTALL.md → "SQLite RAM budget").
+    //
+    // Audit F-093: BOTH pragmas below are per connection, and every worker
+    // opens its own connection — so the sizing formula operators need is
+    //
+    //     total ≈ (SQLITE_CACHE_MB + SQLITE_MMAP_MB) × WORKERS
+    //
+    // not `cache × WORKERS`. The docs used to count only the cache and then
+    // recommended a 4 GB mmap, which is a 36 GB ask on an 8-worker box. This
+    // code cannot enforce a budget it cannot see (it does not know the host's
+    // RAM, and a hard cap here would silently ignore a deliberate operator
+    // setting), so the defaults stay conservative and the budget arithmetic
+    // lives with the knobs. If you change either default, change both docs.
     const cacheMb = Math.max(2, parseInt(process.env.SQLITE_CACHE_MB || '128', 10) || 128);
     const mmapMb = Math.max(0, parseInt(process.env.SQLITE_MMAP_MB || '1024', 10));
     db.exec(`PRAGMA cache_size = ${-(cacheMb * 1024)}`); // negative = KiB
@@ -689,17 +727,108 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
         try {
             const done = getKv('migration:hash-keyed-ids');
             if (!done || !done.completedAt) {
-                const r = migrateHashKeyedIds(db);
+                // F-182: chunked + resumable. The cursor lives in kv so an
+                // interrupted run (a restart, a deploy mid-migration) picks up
+                // where it stopped instead of re-walking from genesis. Each
+                // chunk is its own short transaction, so the write lock is
+                // never held for more than one slice — which is what makes it
+                // safe to keep this inline rather than demanding an operator
+                // step before the indexer may start.
+                const progress = {
+                    get: (k) => (getKv('migration:hash-keyed-ids:progress') || {})[k],
+                    set: (k, v) => setKv('migration:hash-keyed-ids:progress', {
+                        ...(getKv('migration:hash-keyed-ids:progress') || {}), [k]: v
+                    })
+                };
+                const r = migrateHashKeyedIds(db, {
+                    progress,
+                    // F-187: a fork delete leaves the height emptier than it
+                    // started — the orphan row is gone and the canonical one
+                    // was never fetched. Queue those heights so the chain_index
+                    // failure pass re-crawls them; without this the migration
+                    // silently converts fork rows into permanent holes below
+                    // the reorg sweep's first-run watermark.
+                    onForkDelete: (heights) => {
+                        for (const h of heights) {
+                            try {
+                                recordScanFailure('chain_index', h,
+                                    'fork-inconsistent rows removed by the hash-id migration; canonical data needs re-fetching (F-187)');
+                            } catch (_) { /* one height failing must not stop the migration */ }
+                        }
+                        console.log(`[migration] queued ${heights.length} height(s) for re-crawl after fork cleanup (F-187)`);
+                    }
+                });
                 setKv('migration:hash-keyed-ids', { ...r, completedAt: Date.now() });
                 console.log(`[migration] hash-keyed ids: ${r.txRewritten} tx rewritten, ${r.txDuplicatesDeleted} tx duplicates removed, ` +
                     `${r.rewardRewritten} rewards rewritten, ${r.rewardDuplicatesDeleted} reward duplicates removed; ` +
-                    `fork-inconsistent rows deleted: ${r.forkEventsDeleted} events, ${r.forkTxDeleted} tx, ${r.forkRewardsDeleted} rewards`);
+                    `fork-inconsistent rows deleted: ${r.forkEventsDeleted} events, ${r.forkTxDeleted} tx, ${r.forkRewardsDeleted} rewards ` +
+                    `(${r.chunks} chunk${r.chunks === 1 ? '' : 's'})`);
+                // The walk finished; drop the resume cursor so a future
+                // migration does not inherit a stale one.
+                setKv('migration:hash-keyed-ids:progress', {});
             }
         } catch (e) {
             // Do NOT swallow into a warning: new-format writers against an
             // unmigrated table create the duplicate state F-021 describes.
             // Fail the boot; F-022 established that dying loudly beats limping.
             throw new Error(`hash-keyed id migration failed: ${e.message}`);
+        }
+    }
+
+    // Audit F-049 (round 2): drop pre-v3, extrinsic-hash-keyed transaction rows.
+    //
+    // Its own kv flag, deliberately. The migration above is guarded by
+    // `migration:hash-keyed-ids`, which every existing database — production
+    // included — has already set, so a step added inside it would never run.
+    //
+    // After the purge the scanner version is cleared, which is the half that
+    // makes this safe rather than merely tidy: the delete removes real transfers
+    // that the event-derived writer has not necessarily re-indexed yet, and
+    // resetting the version makes syncFinancialTransactions treat the next tick
+    // as a first run and re-crawl. Without it the purge would trade a
+    // double-counted transfer for a missing one, which is the worse of the two.
+    if (seedCounts && !getKv('migration:purge-legacy-tx-rows')) {
+        try {
+            const rawCeiling = Number(process.env.TX_PURGE_MAX_FRACTION);
+            const p = purgeLegacyExtrinsicKeyedTx(db, {
+                maxFraction: Number.isFinite(rawCeiling) && rawCeiling > 0 && rawCeiling <= 1
+                    ? rawCeiling : 0.25
+            });
+            if (p.refused) {
+                // Not fatal, and not silent: leave the flag unset so a fixed
+                // database retries on the next boot.
+                console.warn(`[migration] legacy tx purge REFUSED (F-049): ${p.refused}`);
+            } else {
+                setKv('migration:purge-legacy-tx-rows', { ...p, completedAt: Date.now() });
+                if (p.deleted > 0) {
+                    // Reset the BACKFILL as well as the scanner version.
+                    //
+                    // Adversarial review: clearing scannerVersion alone only
+                    // re-crawls TX_INITIAL_SCAN_BLOCKS from head. On a database
+                    // where txBackfillComplete was already true, nothing
+                    // re-derives anything below that window — so any deleted
+                    // legacy row whose height has no event-derived twin (the
+                    // F-006 case, or a range the chain_index queue abandoned)
+                    // was simply gone. Trading a double-counted transfer for a
+                    // missing one is the worse half of the deal.
+                    const st = getSyncState('transactions') || {};
+                    setSyncState('transactions', {
+                        ...st,
+                        scannerVersion: null,
+                        backfillCursor: null,
+                        backfillComplete: false
+                    });
+                    console.log(`[migration] legacy tx purge (F-049): removed ${p.deleted} extrinsic-hash-keyed row(s) of ${p.total}; ` +
+                        'cleared scannerVersion so the derivation re-crawls them as event-keyed rows');
+                } else {
+                    console.log('[migration] legacy tx purge (F-049): nothing to remove');
+                }
+            }
+        } catch (e) {
+            // Non-fatal by design, unlike the migration above. A double-counted
+            // transfer is a wrong number on a page; refusing to boot over it
+            // would take the whole explorer down for a display bug.
+            console.warn(`[migration] legacy tx purge failed (F-049), will retry next boot: ${e.message}`);
         }
     }
 
@@ -853,7 +982,19 @@ export function replaceValidators(list, meta) {
 export function getValidators() {
     const validators = db.prepare('SELECT address, name, total_stake AS totalStake, commission, real_apy AS realApy, avg30day_apy AS avg30DayApy FROM validators ORDER BY position ASC').all();
     const s = getSyncState('validators');
-    return { validators, totalCount: s.totalCount ?? validators.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing', error: s.error };
+    // Audit F-084 (round 2): `error: s.error` used to be here.
+    //
+    // That is the INDEXER's raw exception text — whatever syncValidators caught
+    // while talking to the node — and this shape is served by /api/validators
+    // under cacheMedium. So an internal error message was going out on a 200
+    // and being held at the edge for 30 seconds. It is the same leak as the 500
+    // path, minus the status code that would make anyone look for it.
+    //
+    // The operator still gets it: syncData writes s.error into the sync-state
+    // KV row, which /api/diag/* (token-gated) and the logs expose. `status`
+    // already tells a public caller what they can act on — Synced, Repairing,
+    // Degraded, Error — without naming our infrastructure.
+    return { validators, totalCount: s.totalCount ?? validators.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing' };
 }
 
 // Per-era commission history for EVERY validator, for the list view.
@@ -991,13 +1132,16 @@ export function countBlocks() {
     return db.prepare('SELECT COUNT(*) AS c FROM blocks').get().c;
 }
 
-// Smallest and largest indexed block numbers (NULL on an empty table).
-// Used by the chain indexer to compute coverage and decide whether to
-// extend backwards (backfill) or forward (catch-up).
-export function getBlocksMinMax() {
-    const row = db.prepare('SELECT MIN(number) AS min, MAX(number) AS max, COUNT(*) AS count FROM blocks').get();
-    return row || { min: null, max: null, count: 0 };
-}
+// Audit F-141 — DELETED: `getBlocksMinMax()`. Its doc comment claimed the
+// chain indexer used it to decide backfill-vs-catch-up; it did not, and had
+// not for as long as syncChainIndex has existed. That indexer tracks its own
+// watermarks in sync-state (`oldestScannedBlock` / `latestScannedBlock`),
+// which is the whole point — a MIN/MAX over `blocks` describes rows that
+// happen to be present, not heights that have been SCANNED, so the two
+// disagree exactly when there are gaps, i.e. precisely when it matters.
+// The comment being confidently wrong is why this is deleted and not kept:
+// the next reader would have reached for it as the coverage source and
+// silently reported a hole-ridden range as complete.
 
 // Return ranges of missing block numbers WITHIN the indexed range. Uses
 // SQLite's LEAD() window function (available since 3.25) to find every
@@ -1084,8 +1228,55 @@ export function getDailyAnalytics(sinceTs) {
 // table has millions of rows. Pass `sinceBlock` to bound the scan to a recent
 // window (WHERE number >= sinceBlock uses the PK index): steady-state holes only
 // ever appear near the head, so that's all we need to scan most of the time.
-export function getBlockGaps(limit = 50, sinceBlock = null) {
-    const bounded = sinceBlock != null;
+// Audit F-047 (round 2). `untilBlock` is new, and it is what makes the "full"
+// scan bounded.
+//
+// The LEAD window walks `blocks` in primary-key order, so an UNBOUNDED call is
+// O(rows) — on a 12.8M-row table that is seconds of synchronous work, and
+// node:sqlite is synchronous, so it blocks the event loop for its whole
+// duration. Round 1 throttled it to hourly and capped the RESULT count, which
+// the round-2 audit correctly called out as not a fix: hourly still blocks, and
+// LIMIT bounds the rows returned, not the rows scanned.
+//
+// With both bounds the caller can sweep the whole history across many ticks in
+// windows, so no single call is O(table) in ANY worker configuration —
+// including WORKERS<=1, where the indexer is also the HTTP server and a
+// multi-second stall is user-visible as a gateway timeout.
+//
+// SEAM SNAPPING. Bounding the window reintroduces F-005's blind spot at every
+// window edge, which a test caught before this shipped. LEAD only sees a hole
+// BETWEEN two rows that are both inside the window, so a hole straddling a seam
+// is invisible to BOTH neighbours:
+//
+//   stored: … 4998 4999 | ✗✗✗ 5000-5009 ✗✗✗ | 5010 5011 …
+//   window [5001,7500]  → contains 5010, but 4999 is below it → no predecessor
+//   window [2501,5000]  → contains 4999, but 5010 is above it → no successor
+//
+// A seam is an arbitrary arithmetic boundary, so a hole landing on one would go
+// unrepaired forever while `knownGapBlocks` reported zero — silent, permanent,
+// and worse than the slow scan this replaced.
+//
+// The fix is to widen each raw window out to the nearest STORED row on each
+// side. A gap's predecessor is by definition the row immediately below its
+// start and its successor the row immediately above its end, so including one
+// row beyond each edge makes every straddling hole fully interior to the
+// window. Both lookups are O(log n) seeks on the `number` primary key, and the
+// widening only ever spans a hole — which contains no rows to scan.
+export function getBlockGaps(limit = 50, sinceBlock = null, untilBlock = null) {
+    // Snap OUTWARD to real rows before building the range predicate.
+    if (sinceBlock != null) {
+        const below = db.prepare('SELECT MAX(number) AS n FROM blocks WHERE number < ?').get(sinceBlock);
+        if (below && below.n != null) sinceBlock = below.n;
+    }
+    if (untilBlock != null) {
+        const above = db.prepare('SELECT MIN(number) AS n FROM blocks WHERE number > ?').get(untilBlock);
+        if (above && above.n != null) untilBlock = above.n;
+    }
+    const conds = [];
+    const args = [];
+    if (sinceBlock != null) { conds.push('number >= ?'); args.push(sinceBlock); }
+    if (untilBlock != null) { conds.push('number <= ?'); args.push(untilBlock); }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const stmt = db.prepare(`
         SELECT (number + 1) AS gapStart,
                (next_num - 1) AS gapEnd,
@@ -1093,13 +1284,13 @@ export function getBlockGaps(limit = 50, sinceBlock = null) {
         FROM (
             SELECT number, LEAD(number) OVER (ORDER BY number) AS next_num
             FROM blocks
-            ${bounded ? 'WHERE number >= ?' : ''}
+            ${where}
         )
         WHERE next_num IS NOT NULL AND next_num - number > 1
         ORDER BY number DESC
         LIMIT ?
     `);
-    return bounded ? stmt.all(sinceBlock, limit) : stmt.all(limit);
+    return stmt.all(...args, limit);
 }
 
 // Audit F-005: getBlockGaps() uses LEAD, so it can only see a hole BETWEEN two
@@ -1194,9 +1385,12 @@ export function upsertValidatorHistory(rows) {
 export function getValidatorHistory(address) {
     return db.prepare('SELECT era, commission, stake, apy FROM validator_history WHERE address = ? ORDER BY era DESC').all(address);
 }
-export function countValidatorHistoryEras(address) {
-    return db.prepare('SELECT COUNT(*) AS c FROM validator_history WHERE address = ?').get(address).c;
-}
+// Audit F-141 — DELETED: `countValidatorHistoryEras(address)`. No caller in
+// server.js, email.js, the .mjs tools or the tests. Anything that wanted the
+// era count already had the rows: every consumer calls getValidatorHistory()
+// and reads `.length`, so a second round-trip to COUNT(*) was strictly worse.
+// Kept deleted rather than "just an export" because a plausible-looking
+// counter invites exactly that redundant query in a request path.
 // Audit F-115. This used to DELETE every trigger for the address and re-insert
 // from whatever the caller had just computed — and the caller computes from the
 // last 30 eras only, while `validator_history` is UPSERTed and keeps everything.
@@ -1331,9 +1525,13 @@ export function getLatestPrice() {
 export function getLatestPriceBySource(source) {
     return db.prepare('SELECT timestamp, price, market_cap AS marketCap, volume_24h AS volume24h, pct_change_24h AS pctChange24h, source FROM price_history WHERE source = ? ORDER BY timestamp DESC LIMIT 1').get(source) || null;
 }
-export function countPricePoints() {
-    return db.prepare('SELECT COUNT(*) AS c FROM price_history').get().c;
-}
+// Audit F-141 — DELETED: `countPricePoints()`, the whole-table variant. The
+// live caller (server.js, price-provider health) uses countPricePointsBySource
+// below, and that distinction is the point: a single all-sources total cannot
+// answer "is CMC still writing?", so a green whole-table count would have read
+// as healthy while one provider had been silently dead for weeks. The names
+// differ by four characters; leaving the useless one exported next to the
+// useful one is a foot-gun, not a convenience.
 export function countPricePointsBySource(source) {
     return db.prepare('SELECT COUNT(*) AS c FROM price_history WHERE source = ?').get(source).c;
 }
@@ -1797,8 +1995,11 @@ export function getLabelsForAddress(address, viewer = null) {
 // "Visible" = not vetoed by owner AND (is_self OR (score >= 0 AND reports
 // below threshold)).
 //
-// Used for backwards-compat with the v1 caller `getSelfLabel` (which we
-// keep as an alias below) and for the bulk-decorate path.
+// This is the only per-address label reader; the bulk-decorate path
+// (getTopLabelsBulk was also removed under F-141) has no surviving twin, so
+// the visibility rule above exists in exactly one place. Keep it that way —
+// a second copy is how a vetoed or mass-reported label leaks back into a
+// list view after only the primary reader is patched.
 export function getTopLabel(address, reportHideThreshold = 3) {
     const rows = getLabelsForAddress(address, null);
     for (const r of rows) {
@@ -1809,70 +2010,26 @@ export function getTopLabel(address, reportHideThreshold = 3) {
     return null;
 }
 
-// Backwards-compat shim — v1 callers asked for the self-label specifically;
-// in v2 the top label may be a community one. Keep the old function name
-// returning the SAME shape v1 used so existing call sites don't break.
-export function getSelfLabel(address) {
-    const row = db.prepare(`
-        SELECT label, created_at AS createdAt, updated_at AS updatedAt, vetoed_at AS vetoedAt
-        FROM address_labels WHERE address = ? AND signer = ?
-        LIMIT 1
-    `).get(address, address);
-    if (!row || row.vetoedAt != null) return null;
-    return { label: row.label, createdAt: row.createdAt, updatedAt: row.updatedAt };
-}
-
-// Bulk decorate — used to fetch top labels for many addresses in one round
-// trip (top-holders list, transactions table, etc.). Returns a
-// Map<address, { label, signer, isSelf, score }>.
-export function getTopLabelsBulk(addresses, reportHideThreshold = 3) {
-    const result = new Map();
-    if (!Array.isArray(addresses) || !addresses.length) return result;
-    const unique = Array.from(new Set(addresses));
-    const CHUNK = 500;
-    for (let i = 0; i < unique.length; i += CHUNK) {
-        const slice = unique.slice(i, i + CHUNK);
-        const placeholders = slice.map(() => '?').join(',');
-        // Pull every visible row for the chunk in one query, then resolve
-        // top-per-address in JS — much cheaper than N round-trips.
-        const rows = db.prepare(`
-            SELECT
-                l.address, l.signer, l.label, l.created_at AS createdAt,
-                (l.signer = l.address) AS isSelf,
-                COALESCE((SELECT SUM(v.vote) FROM address_label_votes v
-                          WHERE v.label_address = l.address AND v.label_signer = l.signer), 0) AS score,
-                COALESCE((SELECT COUNT(*) FROM address_label_reports r
-                          WHERE r.label_address = l.address AND r.label_signer = l.signer), 0) AS reportCount
-            FROM address_labels l
-            WHERE l.address IN (${placeholders})
-              AND l.vetoed_at IS NULL
-        `).all(...slice);
-        // Group by address and pick the same priority rule as getTopLabel.
-        const byAddress = new Map();
-        for (const r of rows) {
-            const arr = byAddress.get(r.address) || [];
-            arr.push(r);
-            byAddress.set(r.address, arr);
-        }
-        for (const [addr, arr] of byAddress) {
-            arr.sort((a, b) => {
-                if (a.isSelf !== b.isSelf) return b.isSelf - a.isSelf;
-                if (a.score !== b.score) return b.score - a.score;
-                return (a.createdAt || 0) - (b.createdAt || 0);
-            });
-            const top = arr.find(r => r.isSelf || (Number(r.score) >= 0 && Number(r.reportCount) < reportHideThreshold));
-            if (top) result.set(addr, { label: top.label, signer: top.signer, isSelf: !!top.isSelf, score: Number(top.score) || 0 });
-        }
-    }
-    return result;
-}
-
-export function countAddressLabels() {
-    return db.prepare('SELECT COUNT(*) AS c FROM address_labels').get().c;
-}
-export function countLabelVotes() {
-    return db.prepare('SELECT COUNT(*) AS c FROM address_label_votes').get().c;
-}
+// Audit F-141 — DELETED: `getSelfLabel()`, `getTopLabelsBulk()`,
+// `countAddressLabels()`, `countLabelVotes()`. All four were exported and
+// never called from server.js, email.js, the .mjs tools or the tests.
+//
+// `getSelfLabel` advertised itself as a "backwards-compat shim for v1
+// callers". There were no v1 callers left, and it had drifted: it read
+// address_labels directly and honoured only `vetoed_at`, ignoring the vote
+// score and the report threshold that getTopLabel applies. A shim that
+// enforces a WEAKER visibility rule than the function it shadows is a
+// privacy regression waiting for its first caller — someone reaching for the
+// "simple" one would have published a label the community had already
+// downvoted or reported past the hide threshold.
+//
+// `getTopLabelsBulk` was a genuine performance helper, but it re-implemented
+// getTopLabel's priority rule in SQL + JS. Two copies of a visibility rule
+// is the F-164 shape of bug: patch one, ship the other. If a list view ever
+// needs bulk decoration again, restore it as a batching wrapper that reuses
+// getTopLabel's predicate, not as a second implementation of it.
+//
+// The two COUNT(*) helpers were never wired to a metric or a diag route.
 
 // ─── Scan-failure retry queue ──────────────────────────────────────────────
 // Per-indexer record of blocks that errored on first scan. The gap-fill
@@ -1907,15 +2064,23 @@ export function clearScanFailure(indexer, block) {
 // { retrying, permanent, total }); don't add a second one. Audit F-050 is
 // about USING those counts — see deriveIndexStatus in lib/index-status.js.
 
-// Reset the attempt counter on abandoned blocks so the retry queue picks them
-// up again. Used after fixing the bug that caused the failures (e.g. the
-// missing RPC guard that permanently dropped 3 governance blocks in June).
-export function requeueScanFailures(indexer, maxAttempts = 10) {
-    const info = db.prepare(
-        'UPDATE scan_failures SET attempts = 0 WHERE indexer = ? AND attempts >= ?'
-    ).run(indexer, maxAttempts);
-    return Number(info && info.changes) || 0;
-}
+// Audit F-141 — DELETED: `requeueScanFailures(indexer, maxAttempts)`, the
+// unconditional per-indexer requeue. Note the surviving neighbour below is
+// `requeueTransientScanFailures`, which IS live (server.js startup) — the two
+// names differ by one word and only one of them was ever called.
+//
+// The deleted one reset `attempts = 0` for EVERY abandoned row of an indexer
+// regardless of why it failed. Applied to a block that is genuinely
+// undecodable, that does not repair anything: the row cycles back through the
+// retry queue, burns maxAttempts of RPC and writer-lock time, and lands back
+// where it started — forever, every time an operator runs it. That is why the
+// live rescue path matches on the RPC-unavailable error patterns instead: it
+// requeues only failures whose attempts should never have counted, so it is
+// idempotent in the sense that matters (a second run finds nothing to do).
+//
+// If a blunt "requeue everything for indexer X" is ever needed for a one-off
+// repair, write it as a script under tools/ where its blast radius is
+// explicit, not as a permanent export that looks like the safe option.
 
 // Rescue blocks that were abandoned because the NODE was unavailable, not
 // because the block was bad. Those attempts should never have counted (see
@@ -1946,6 +2111,67 @@ export function getScanFailures(indexer, limit = 20, maxAttempts = 10) {
         ORDER BY last_at ASC
         LIMIT ?
     `).all(indexer, maxAttempts, limit);
+}
+
+// The lowest height with an outstanding failure row, or null if the queue is
+// empty. Audit F-004/F-009/F-010 (round 2): this is what the contiguous
+// watermark is derived from each tick, so the watermark self-heals — clearing
+// the row is the only bookkeeping a repair has to do.
+//
+// Deliberately counts PERMANENT failures (attempts >= cap) too. A block the RPC
+// cannot serve is still a hole; excluding it would let the watermark sail past
+// the one class of gap that is never going to fill itself, which is precisely
+// the dishonesty F-004 is about. `deriveIndexStatus` already distinguishes
+// "Repairing" from "Degraded" for the operator.
+//
+// O(log n): MIN over the `indexer` prefix of idx_scan_failures_replay.
+export function getLowestScanFailure(indexer) {
+    const row = db.prepare(
+        'SELECT MIN(block) AS lo FROM scan_failures WHERE indexer = ?'
+    ).get(indexer);
+    const lo = row && row.lo != null ? Number(row.lo) : NaN;
+    return Number.isFinite(lo) ? lo : null;
+}
+
+// Periodic amnesty for scan failures that have exhausted their retry budget.
+//
+// Adversarial review of the F-004 watermark split. getLowestScanFailure counts
+// PERMANENT rows (attempts >= cap) on purpose — a block the node cannot serve
+// is still a hole, and letting the watermark sail past it is the dishonesty
+// F-004 is about. But nothing in-process could ever clear such a row:
+// getScanFailures excludes them from the retry pass, requeueTransientScanFailures
+// only matches connection-level error text, and the F-046 amnesty resets an
+// in-memory Map rather than this table. The blunt requeueScanFailures was
+// deleted as dead code in the same batch.
+//
+// So one permanently-unreadable height froze latestScannedBlock at F-1 and the
+// status at Degraded FOR THE LIFE OF THE DATABASE — recoverable only by
+// hand-editing SQLite. Downstream: /api/staking-rewards-status advertising a
+// watermark millions of blocks below reality, analytics permanently flagged
+// incomplete, the SPA never showing Synced.
+//
+// "Count them but never retry them" is not a defensible pair. This is the
+// missing half: after `olderThanMs`, give exhausted rows their attempts back so
+// the normal retry pass picks them up again. Bounded by `limit` so an amnesty
+// cannot itself become a thundering re-scan, and oldest-first so a genuinely
+// dead height is retried at a slow, predictable cadence rather than starving
+// newer ones.
+//
+// A height that is truly unreadable simply fails again and returns to the
+// permanent pool — costing one RPC call per amnesty window, which is the price
+// of not silently freezing the index.
+export function requeueExhaustedScanFailures(maxAttempts = 10, olderThanMs = 6 * 3600_000, limit = 25) {
+    const cutoff = Date.now() - Math.max(0, olderThanMs);
+    const info = db.prepare(`
+        UPDATE scan_failures SET attempts = 0
+         WHERE rowid IN (
+            SELECT rowid FROM scan_failures
+             WHERE attempts >= ? AND last_at < ?
+             ORDER BY last_at ASC
+             LIMIT ?
+         )
+    `).run(maxAttempts, cutoff, limit);
+    return Number(info && info.changes) || 0;
 }
 
 // Counts split by "retrying" (under cap) vs "permanent" (at/over cap) so
@@ -2079,7 +2305,17 @@ function mapSubscriber(row) {
     };
 }
 
-export function getEmailSubscriberByEmail(email) {
+// Audit F-141 — intentionally NOT exported (nor is getEmailSubscriberById
+// below). Both are only ever called from inside this file, and both hand back
+// the FULL subscriber row: confirmation_token and unsubscribe_token included.
+// Those two columns are bearer credentials — anything holding them can confirm
+// or unsubscribe an address without proving control of the mailbox. Exporting
+// a whole-row reader keyed on an attacker-suppliable email invites a route
+// that spreads the tokens into a JSON response by accident. The functions stay
+// (they are load-bearing for subscribe/confirm/unsubscribe); only the module
+// surface shrinks. If a caller outside db.js genuinely needs subscriber data,
+// export a projection that omits the tokens rather than re-adding `export`.
+function getEmailSubscriberByEmail(email) {
     const lc = String(email || '').trim().toLowerCase();
     if (!lc) return null;
     return mapSubscriber(db.prepare('SELECT * FROM email_subscribers WHERE email_lc = ?').get(lc));
@@ -2114,7 +2350,9 @@ export function getEmailSubscriberByUnsubscribeToken(token) {
     if (!token) return null;
     return mapSubscriber(db.prepare('SELECT * FROM email_subscribers WHERE unsubscribe_token = ?').get(token));
 }
-export function getEmailSubscriberById(id) {
+// Audit F-141 — intentionally NOT exported; see getEmailSubscriberByEmail
+// above for the token-leak reasoning. Internal callers only.
+function getEmailSubscriberById(id) {
     if (id == null) return null;
     return mapSubscriber(db.prepare('SELECT * FROM email_subscribers WHERE id = ?').get(id));
 }

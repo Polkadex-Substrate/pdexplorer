@@ -10,11 +10,19 @@ import { pdexToPlanck, isPositiveNumberInput, isValidPolkadexAddress,
          buildTransferTx } from './lib/wallet-safety.js';
 // Audit F-017 — folding REST snapshots into the live arrays instead of
 // replacing them. See lib/merge-rows.js for the rules.
-import { mergeRows, blockRank, txRank } from './lib/merge-rows.js';
+import { mergeRows, blockRank, txRank, txIdentity } from './lib/merge-rows.js';
 // Audit F-107 — same-origin redirect validation. Deliberately NOT a regex:
 // see lib/safe-return.js for why every string-shaped check of a URL loses.
 import { safeReturnPath } from './lib/safe-return.js';
+import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
+import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
+// Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
+// server-rendered DEVELOPERS_HTML in server.js for hard loads and crawlers).
+// Both build their endpoint lists from this one table, so the two documents
+// can look different and still cannot say different things. See the header of
+// lib/api-reference.js.
+import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READY, rpcNotReadyExample } from './lib/api-reference.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -146,9 +154,31 @@ function timeAgo(timestamp) {
     return `${(seconds / (365.25 * 86400)).toFixed(1)} years ago`;
 }
 
-// Format PDEX balances (12 decimals)
+// Format PDEX balances (12 decimals).
+//
+// Audit F-067 (round 2). This used to be `Number(balance) / 10 ** 12`, and both
+// call sites pass a raw u128 straight off the chain — `balances.totalIssuance()`
+// and `staking.erasTotalStake`, both ~10¹⁹ planck, well past
+// Number.MAX_SAFE_INTEGER (9.007×10¹⁵).
+//
+// Being accurate about the impact, because the obvious claim is wrong: at
+// Polkadex's actual issuance this did NOT visibly misprint. Double precision at
+// 10¹⁹ is ~2200 planck, i.e. ~2×10⁻⁹ PDEX, and the card shows two decimals — the
+// error only reaches the last displayed digit above ~10¹⁴ PDEX, which the chain
+// will never have. So this is not a "the home page showed the wrong number" fix.
+//
+// What IS a live difference is the input shape. `Number()` returns NaN for a
+// comma-grouped string, and polkadot.js `toHuman()` produces exactly those
+// ("10,589,041,095,890,410,958,904"). Anything that reached this function with a
+// humanised value rendered "NaN PDEX"; formatLivePDEX strips separators before
+// parsing. That, plus removing a truncation that is only invisible by accident
+// of the current supply, is the reason to route through one BigInt path rather
+// than keep two conversions with different failure modes.
+//
+// Both are `function` declarations, so the call at line ~1055 resolves the
+// later declaration by hoisting. Do not convert either to a const arrow.
 function formatPDEX(balance) {
-    return (Number(balance) / 10 ** 12).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    return formatLivePDEX(balance).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 function formatNetworkNumber(value, maximumFractionDigits = 1) {
@@ -639,10 +669,8 @@ wireStaticShellControls();
 let blocks = [];
 let fullBlocks = [];
 let blocksFetched = false;
-let blockDisplayLimit = 50;
 let transactions = [];
 let txFetched = false;
-let txDisplayLimit = 50;
 let olderTxBeforeBlock = null;
 // F-078 / F-079 paging state: where to resume inside a partially-returned
 // height, and whether the server has told us there is nothing older.
@@ -652,7 +680,6 @@ let transactionCacheMeta = {};
 let isLoadingOlderTx = false;
 let fullEvents = [];
 let eventsFetched = false;
-let eventDisplayLimit = 50;
 let validatorsFetched = false;
 let globalApi = null;
 const RECENT_REFRESH_MS = 12000;
@@ -1015,7 +1042,14 @@ function paintHomeFromCache() {
     if (cached.totalIssuancePdex > 0) {
         lastKnownTotalIssuancePdex = cached.totalIssuancePdex;
         const el = document.querySelector('.stat-card:nth-child(2) .stat-value');
-        if (el) el.innerHTML = `${formatNetworkNumber(cached.totalIssuancePdex, 0)} <span class="unit">PDEX</span>`;
+        // Audit F-068 (round 2). The in-stake card below has carried a "Cached"
+        // badge since round 1; issuance was left without one, so the same stale
+        // value looked authoritative on one card and provisional on the other.
+        // It matters most exactly when it is least obvious: if the browser
+        // cannot reach the node's WebSocket (a corporate proxy, or the F-063
+        // case), fetchNetworkStats never overwrites this, and the badge is the
+        // only thing telling the visitor the figure is from last visit.
+        if (el) el.innerHTML = `${formatNetworkNumber(cached.totalIssuancePdex, 0)} <span class="unit">PDEX</span> <span class="badge small">Cached</span>`;
     }
     if (cached.inStakePdex > 0) {
         const el = document.querySelector('.stat-card:nth-child(3) .stat-value');
@@ -1046,11 +1080,16 @@ async function fetchNetworkStats(api) {
     try {
         // Total Issuance
         const totalIssuance = await api.query.balances.totalIssuance();
-        issuanceEl.innerHTML = `${formatPDEX(totalIssuance)} <span class="unit">PDEX</span>`;
+        // F-068: and the matching "Live" badge, so the two states are told
+        // apart by presence of a word rather than by the visitor guessing.
+        issuanceEl.innerHTML = `${formatPDEX(totalIssuance)} <span class="unit">PDEX</span> <span class="badge small">Live</span>`;
         // Stash the parsed whole-PDEX value for the market cap calculation.
         // formatPDEX returns a string; reuse the raw chain figure for math.
         let issuancePdex = 0;
-        try { issuancePdex = Number(totalIssuance.toString()) / 1e12; } catch (_) {}
+        // F-067: BigInt division, not Number()/1e12 — see formatPDEX. This is
+        // the value written to the home-page cache, so a truncated figure here
+        // would persist across reloads.
+        try { issuancePdex = formatLivePDEX(totalIssuance); } catch (_) {}
         if (issuancePdex > 0) {
             lastKnownTotalIssuancePdex = issuancePdex;
             writeHomeCache({ totalIssuancePdex: issuancePdex });
@@ -1068,7 +1107,8 @@ async function fetchNetworkStats(api) {
             const totalStake = await api.query.staking.erasTotalStake(activeEra);
             stakeEl.innerHTML = `${formatPDEX(totalStake)} <span class="unit">PDEX</span> <span class="badge small">Live</span>`;
             let stakePdex = 0;
-            try { stakePdex = Number(totalStake.toString()) / 1e12; } catch (_) {}
+            // F-067: as above — erasTotalStake is planck-scale.
+            try { stakePdex = formatLivePDEX(totalStake); } catch (_) {}
             if (stakePdex > 0) writeHomeCache({ inStakePdex: stakePdex });
         }
     } catch (err) {
@@ -1794,6 +1834,29 @@ function extrinsicOutcomes(events, extrinsicCount) {
 }
 
 
+// planck (u128 string) → an exact decimal PDEX STRING.
+//
+// Distinct from formatLivePDEX, and the difference matters. formatLivePDEX
+// returns a Number for DISPLAY, where losing the sub-planck tail is invisible.
+// This returns a STRING for pre-filling an input the user may submit unchanged
+// — so it has to round-trip: pdexToPlanck(planckToPdexString(x)) === x for
+// every u128, including values above 2^53 that no double can hold.
+//
+// Audit F-195. The council-vote picker pre-filled with Number(...)/1e12 and a
+// whale who clicked Sign without editing signed the rounded display rather than
+// their actual locked balance.
+function planckToPdexString(planck) {
+    const v = BigInt(String(planck).replace(/,/g, ''));
+    const neg = v < 0n;
+    const abs = neg ? -v : v;
+    const whole = abs / 1000000000000n;
+    const frac = abs % 1000000000000n;
+    if (frac === 0n) return `${neg ? '-' : ''}${whole}`;
+    // Pad to 12 places, then trim trailing zeros — "1.5", not "1.500000000000".
+    const fracStr = frac.toString().padStart(12, '0').replace(/0+$/, '');
+    return `${neg ? '-' : ''}${whole}.${fracStr}`;
+}
+
 // Audit F-067: was Number(balance)/1e12 — a codec u128 above 2^53 planck
 // (~9007 PDEX) truncates BEFORE the division, so a live whale transfer painted
 // a subtly wrong amount. BigInt keeps whole tokens exact; only the sub-planck
@@ -1902,7 +1965,6 @@ function renderTransactions() {
 }
 
 let currentValidators = [];
-let validatorDisplayLimit = 50;
 
 async function fetchValidators() {
     if (validatorsFetched) return;
@@ -2025,63 +2087,34 @@ function renderValidators() {
                     sort: (a, b) => (a.avg30DayApy || 0) - (b.avg30DayApy || 0),
                     format: row => `<span style="color: var(--success); font-weight: 500;">${Number(row.avg30DayApy).toFixed(2)}%</span>`
                 },
-                {
-                    key: 'realApy', label: 'Now vs Real',
-                    sort: (a, b) => (a.realApy || 0) - (b.realApy || 0),
-                    format: row => `${Number(row.realApy).toFixed(2)}% <span class="unit">/</span> <span style="color: var(--success);">${Number(row.avg30DayApy).toFixed(2)}%</span>`
-                }
+                // Audit F-044 (round 2): a "Now vs Real" column used to sit here,
+                // rendering `realApy` beside `avg30DayApy` as though they were a
+                // current figure and a measured 30-day one. syncValidators sets
+                // BOTH from the same expression — `23.09 * (1 - commission/100)`
+                // — so the column always printed the identical number twice with
+                // a slash between it, which reads as corroboration. Round 1
+                // renamed the column above and left this one, still saying
+                // "Real". Deleted rather than relabelled: there is no second
+                // quantity to show.
+                //
+                // The API keeps returning `realApy` for one more release so
+                // existing integrators are not broken by a field vanishing. A
+                // genuine realised APY needs per-era reward and stake totals the
+                // indexer does not store — `validator_history.apy` is itself the
+                // same commission formula, so averaging it would produce a
+                // 30-era COMMISSION average wearing an APY label, which is the
+                // same lie one layer down. Recorded as separate work.
             ]
         });
     } else {
         validatorsTableApi.setData(rows);
     }
 
-    const showMoreBtn = document.getElementById('show-more-btn');
-    if (showMoreBtn) showMoreBtn.style.display = 'none';
 }
 
-let currentSort = { field: null, asc: true };
-
-function sortValidators() {
-    if (!currentSort.field) return;
-    currentValidators.sort((a, b) => {
-        let valA = a[currentSort.field];
-        let valB = b[currentSort.field];
-
-        if (typeof valA === 'string') valA = valA.toLowerCase();
-        if (typeof valB === 'string') valB = valB.toLowerCase();
-
-        if (valA < valB) return currentSort.asc ? -1 : 1;
-        if (valA > valB) return currentSort.asc ? 1 : -1;
-        return 0;
-    });
-}
-
-document.querySelectorAll('.sortable').forEach(th => {
-    th.addEventListener('click', () => {
-        const field = th.getAttribute('data-sort');
-        if (currentSort.field === field) {
-            currentSort.asc = !currentSort.asc;
-        } else {
-            currentSort.field = field;
-            // Default descending for numbers (AP/Comm), ascending for strings (Identity)
-            currentSort.asc = field === 'name' ? true : false;
-        }
-
-        // update icons
-        document.querySelectorAll('.sortable i').forEach(i => i.className = 'bx bx-sort');
-        const icon = th.querySelector('i');
-        icon.className = currentSort.asc ? 'bx bx-sort-up' : 'bx bx-sort-down';
-
-        sortValidators();
-        renderValidators();
-    });
-});
 
 let holdersFetched = false;
 let currentHolders = [];
-let holderDisplayLimit = 50;
-let currentHolderSort = { field: 'rank', asc: true };
 
 async function fetchHolders() {
     if (holdersFetched) return;
@@ -2167,43 +2200,8 @@ function renderHolders() {
         holdersTableApi.setData(rows);
     }
 
-    const showMoreBtn = document.getElementById('show-more-holders-btn');
-    if (showMoreBtn) showMoreBtn.style.display = 'none';
 }
 
-function sortHolders() {
-    if (!currentHolderSort.field) return;
-    currentHolders.sort((a, b) => {
-        let valA = a[currentHolderSort.field];
-        let valB = b[currentHolderSort.field];
-
-        if (typeof valA === 'string') valA = valA.toLowerCase();
-        if (typeof valB === 'string') valB = valB.toLowerCase();
-
-        if (valA < valB) return currentHolderSort.asc ? -1 : 1;
-        if (valA > valB) return currentHolderSort.asc ? 1 : -1;
-        return 0;
-    });
-}
-
-document.querySelectorAll('.sortable-holder').forEach(th => {
-    th.addEventListener('click', () => {
-        const field = th.getAttribute('data-sort');
-        if (currentHolderSort.field === field) {
-            currentHolderSort.asc = !currentHolderSort.asc;
-        } else {
-            currentHolderSort.field = field;
-            currentHolderSort.asc = field === 'rank' || field === 'name';
-        }
-
-        document.querySelectorAll('.sortable-holder i').forEach(i => i.className = 'bx bx-sort');
-        const icon = th.querySelector('i');
-        icon.className = currentHolderSort.asc ? 'bx bx-sort-up' : 'bx bx-sort-down';
-
-        sortHolders();
-        renderHolders();
-    });
-});
 
 let currentTxSort = { field: null, asc: false };
 
@@ -2243,6 +2241,8 @@ async function fetchTransactions(force = false) {
             snapshot: financialTransactionRows(data.transactions),
             keyOf: tx => tx.hash,
             rankOf: txRank,
+            // F-186 — see the /transactions merge.
+            identityOf: txIdentity,
             cap: TX_ROW_CAP
         });
         transactionCacheMeta = {
@@ -2370,8 +2370,6 @@ function renderFullTransactions() {
     // makeTable's filter bar replaces the need for client-side "Show More" —
     // all loaded rows are shown unless the user filters them out. Hide the
     // legacy button so it doesn't sit there with nothing to do.
-    const showMoreTxBtn = document.getElementById('show-more-tx-btn');
-    if (showMoreTxBtn) showMoreTxBtn.style.display = 'none';
 }
 
 function updateOlderFinancialTxButton(show) {
@@ -2620,8 +2618,6 @@ function renderFullBlocks() {
 
     if (blockCountEl) blockCountEl.innerText = `${rows.length} Records`;
     // makeTable shows everything that's loaded — legacy Show More button is moot.
-    const showMoreBlocksBtn = document.getElementById('show-more-blocks-btn');
-    if (showMoreBlocksBtn) showMoreBlocksBtn.style.display = 'none';
 }
 
 async function refreshDashboardLists() {
@@ -2642,6 +2638,11 @@ async function refreshDashboardLists() {
                     snapshot: financialTransactionRows(txData.transactions),
                     keyOf: tx => tx.hash,
                     rankOf: txRank,
+                    // F-186: the live WS row keys by extrinsic hash and the
+                    // indexer row by event-<blockHash>-<idx>, so id equality
+                    // alone showed the same transfer twice (or dropped the
+                    // live one as reorged). Identity is what it DID.
+                    identityOf: txIdentity,
                     cap: TX_ROW_CAP
                 });
                 transactionCacheMeta = {
@@ -2797,74 +2798,26 @@ function renderFullEvents() {
     }
 
     if (eventCountEl) eventCountEl.innerText = `${rows.length} Records`;
-    const showMoreEventsBtn = document.getElementById('show-more-events-btn');
-    if (showMoreEventsBtn) showMoreEventsBtn.style.display = 'none';
 }
 
-document.querySelectorAll('.sortable-tx').forEach(th => {
-    th.addEventListener('click', () => {
-        const field = th.getAttribute('data-sort');
-        if (currentTxSort.field === field) {
-            currentTxSort.asc = !currentTxSort.asc;
-        } else {
-            currentTxSort.field = field;
-            currentTxSort.asc = false;
-        }
-
-        document.querySelectorAll('.sortable-tx i').forEach(i => i.className = 'bx bx-sort');
-        const icon = th.querySelector('i');
-        icon.className = currentTxSort.asc ? 'bx bx-sort-up' : 'bx bx-sort-down';
-
-        sortTransactions();
-        renderFullTransactions();
-    });
-});
 
 // --- Event Listeners ---
 
-const showMoreBtn = document.getElementById('show-more-btn');
-if (showMoreBtn) {
-    showMoreBtn.addEventListener('click', () => {
-        validatorDisplayLimit += 50;
-        renderValidators();
-    });
-}
-
-const showMoreHoldersBtn = document.getElementById('show-more-holders-btn');
-if (showMoreHoldersBtn) {
-    showMoreHoldersBtn.addEventListener('click', () => {
-        holderDisplayLimit += 50;
-        renderHolders();
-    });
-}
-
-const showMoreTxBtn = document.getElementById('show-more-tx-btn');
-if (showMoreTxBtn) {
-    showMoreTxBtn.addEventListener('click', () => {
-        txDisplayLimit += 50;
-        renderFullTransactions();
-    });
-}
-
+// Audit F-132 (round 2). Five "Show More" wirings used to live here, one per
+// list. The buttons themselves were removed from index.html when the lists
+// moved to the paginated `makeTable` component — `grep -c show-more index.html`
+// is 0 — so every one of these was `getElementById(...)` returning null,
+// followed by a listener that was never attached, incrementing a variable that
+// nothing read. Round 1 removed the markup and the phantom `dashboard` route
+// alias and left the JavaScript, which is why the finding stayed PARTIAL.
+//
+// Deleted together with the five `let *DisplayLimit = 50` declarations. That
+// pairing is not optional: under ESM strict mode, removing a declaration while
+// an increment survives turns dead code into a ReferenceError inside a live
+// click handler.
 const loadOlderFinancialTxBtn = document.getElementById('load-older-financial-tx-btn');
 if (loadOlderFinancialTxBtn) {
     loadOlderFinancialTxBtn.addEventListener('click', loadOlderFinancialTransactions);
-}
-
-const showMoreBlocksBtn = document.getElementById('show-more-blocks-btn');
-if (showMoreBlocksBtn) {
-    showMoreBlocksBtn.addEventListener('click', () => {
-        blockDisplayLimit += 50;
-        renderFullBlocks();
-    });
-}
-
-const showMoreEventsBtn = document.getElementById('show-more-events-btn');
-if (showMoreEventsBtn) {
-    showMoreEventsBtn.addEventListener('click', () => {
-        eventDisplayLimit += 50;
-        renderFullEvents();
-    });
 }
 
 // Search Logic
@@ -3398,12 +3351,28 @@ async function deepSearchNetwork(query) {
         const data = await parseJsonResponse(response);
         let html = '';
 
+        // Audit F-180 (round 2). Every one of these was interpolated RAW into
+        // innerHTML, and `data.data.name` is the account's ON-CHAIN IDENTITY —
+        // an arbitrary string any account can set for the price of the identity
+        // deposit. So anyone willing to pay it could put script into the deep
+        // search results of every visitor who looked them up, on the same
+        // origin that signs transactions.
+        //
+        // This is the same class as F-013, which was closed on the account
+        // Display cell — a DIFFERENT paint path for the same field. The round-1
+        // escaping test only grepped renderBlocks/renderTransactions, so it
+        // could not see this one; test/escaping.test.js now covers it too.
+        //
+        // Numbers go through the escaper as well. They are numbers today, but
+        // "it is a number so it cannot be markup" is exactly the assumption
+        // that made `name` raw in the first place.
+        const E = stakingEscapeHtml;
         if (data.type === 'block') {
             html += `<h3 style="margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Block Detail (Deep Search)</h3>`;
-            html += `<div style="padding: 10px 0;">Block <strong>${data.data.number}</strong> (${data.data.hash})<br>Author: ${data.data.authorAddress}<br>${data.data.extrinsicsCount} extrinsics, ${data.data.eventsCount} events</div>`;
+            html += `<div style="padding: 10px 0;">Block <strong>${E(data.data.number)}</strong> (${E(data.data.hash)})<br>Author: ${E(data.data.authorAddress)}<br>${E(data.data.extrinsicsCount)} extrinsics, ${E(data.data.eventsCount)} events</div>`;
         } else if (data.type === 'account') {
             html += `<h3 style="margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Account Detail (Deep Search)</h3>`;
-            html += `<div style="padding: 10px 0;">Address: <strong>${data.data.address}</strong><br>Identity: ${data.data.name}<br>Total Balance: ${data.data.balance.toFixed(4)} PDEX<br>Free: ${data.data.free.toFixed(4)} PDEX, Reserved: ${data.data.reserved.toFixed(4)} PDEX</div>`;
+            html += `<div style="padding: 10px 0;">Address: <strong>${E(data.data.address)}</strong><br>Identity: ${E(data.data.name)}<br>Total Balance: ${E(Number(data.data.balance).toFixed(4))} PDEX<br>Free: ${E(Number(data.data.free).toFixed(4))} PDEX, Reserved: ${E(Number(data.data.reserved).toFixed(4))} PDEX</div>`;
         }
 
         if (html) {
@@ -3665,6 +3634,20 @@ function wireCookiesResetButton() {
     btn.dataset.wired = '1';
     btn.addEventListener('click', () => {
         if (!confirm('Clear all explorer preferences? You will need to reconnect your wallet and re-confirm dismissed notices.')) return;
+        // Audit F-120 (round 2). Round 1 made disconnectWallet revoke the
+        // discussion session server-side; this button was missed, and it is the
+        // one a privacy-minded visitor reaches for. `pdex_discuss_session`
+        // starts with `pdex_`, so the loop below wipes the token locally and
+        // leaves the server row alive for its full 7-day TTL — the user is told
+        // everything is cleared while a valid session for their address is
+        // still accepted by the API.
+        //
+        // Ordering is load-bearing: revokeDiscussSession reads the bearer token
+        // out of localStorage, so it must run BEFORE the wipe. It is
+        // self-guarding (no token → returns, network error → swallowed) and
+        // uses keepalive, so it cannot throw into the reset path or be cut
+        // short by the reload below.
+        revokeDiscussSession();
         try {
             // Walk a snapshot of keys since removeItem mutates the live list.
             for (const store of [localStorage, sessionStorage]) {
@@ -3683,678 +3666,10 @@ function wireCookiesResetButton() {
 }
 
 // ─── Online help center ────────────────────────────────────────────────────
-// Content adapted from the PDF user guide, chunked into self-contained
-// articles. Each article is its own indexable URL at /help/<slug>. The
-// landing at /help shows the category grid. The data lives entirely here in
-// the bundle so it works offline once the SPA is loaded — no backend round-trip.
-const HELP_CATEGORIES = [
-    { id: 'start',     label: 'Getting started' },
-    { id: 'browse',    label: 'Browsing the chain' },
-    { id: 'wallet',    label: 'Wallet & sending' },
-    { id: 'staking',   label: 'Staking' },
-    { id: 'gov',       label: 'Governance' },
-    { id: 'tools',     label: 'Tools & extras' },
-    { id: 'reference', label: 'Reference' },
-];
-
-// Each topic: { slug, title, category, keywords, body }. Body is HTML.
-// Keywords are matched in the search (plus title + body fall-back). Keep
-// articles short — under ~250 words — so they read on a single screen.
-const HELP_TOPICS = [
-    {
-        slug: 'quick-start',
-        title: 'Quick start',
-        category: 'start',
-        keywords: 'getting started first time onboarding walkthrough new user',
-        body: `
-            <p class="lead">Fifteen minutes from zero to a connected wallet, a first transfer, and (optionally) your first nomination.</p>
-            <ol class="help-steps">
-                <li><b>Open the explorer</b> at <code>explorer.polkadex.ee</code>. Browse without logging in — no wallet needed for read-only use.</li>
-                <li><b>Install a wallet extension</b> — Polkadot.js, Talisman, SubWallet, or PolkaGate on desktop. On mobile, use Nova Wallet or SubWallet's in-app browser.</li>
-                <li><b>Create or import an account</b> inside the wallet. Write down the seed phrase on paper. Never paste it into the explorer.</li>
-                <li><b>Connect</b> by clicking <i>My Account</i>; the explorer detects your extension and lists each account.</li>
-                <li><b>Send a small test transfer</b> from the Wallet Dashboard's <i>Send PDEX</i> button. Verify the recipient first.</li>
-                <li><b>Optional: stake</b> — click <i>Stake more</i>, pick validators, and sign. Rewards start next era (~24 hours).</li>
-                <li><b>Optional: star what matters</b> — click the star icon next to any address, validator, or proposal to bookmark it locally.</li>
-            </ol>
-            <p>Once you're moving, treat the rest of the help center as a reference — skim what you need.</p>
-        `
-    },
-    {
-        slug: 'installing-a-wallet',
-        title: 'Installing a wallet',
-        category: 'start',
-        keywords: 'wallet extension polkadot.js talisman subwallet polkagate nova mobile install setup',
-        body: `
-            <p>To do anything that signs a transaction (send PDEX, stake, vote), you need a Substrate wallet. The explorer never sees your private key — it asks your wallet to sign on your behalf.</p>
-            <h3>Desktop</h3>
-            <ul>
-                <li><b>Polkadot.js</b> — the official reference extension. Simple and reliable.</li>
-                <li><b>Talisman</b> — feature-rich UI, supports multiple chains.</li>
-                <li><b>SubWallet</b> — broad chain support, mobile companion app.</li>
-                <li><b>PolkaGate</b> — focus on staking and governance UX.</li>
-            </ul>
-            <h3>Mobile</h3>
-            <p>Install <b>Nova Wallet</b> or the <b>SubWallet</b> mobile app, then open the explorer inside the wallet's built-in browser. The explorer detects mobile-wallet WebViews and behaves accordingly.</p>
-            <div class="help-callout">
-                <b>About seed phrases.</b> Anyone with your seed phrase has your funds. Write it on paper. Don't take a screenshot, don't paste it anywhere online, don't store it in a cloud note.
-            </div>
-        `
-    },
-    {
-        slug: 'connecting-wallet',
-        title: 'Connecting your wallet',
-        category: 'start',
-        keywords: 'connect wallet sign in extension permission account selection my account',
-        body: `
-            <p>Click <b>My Account</b> in the sidebar. The explorer detects every Substrate wallet extension and shows you a status banner ("Detected Polkadot.js" etc.). Click <b>Connect</b> and your extension pops up asking for permission to share its account list.</p>
-            <p>Once approved, each exposed account renders as a clickable button. Click the one you want to use — the explorer remembers your choice and routes to your <b>Wallet Dashboard</b>.</p>
-            <h3>Multiple accounts</h3>
-            <p>If your wallet exposes more than one account, the explorer prefers the last account you used. Use <b>Switch wallet</b> on the dashboard to return to the picker.</p>
-            <h3>View-only mode</h3>
-            <p>From the connect page, scroll to <i>"…or look up any address without connecting"</i>, paste a Polkadex address, and click View. The dashboard renders with all actionable buttons hidden — useful for inspecting other wallets.</p>
-        `
-    },
-    {
-        slug: 'home-dashboard',
-        title: 'Home dashboard',
-        category: 'browse',
-        keywords: 'home dashboard landing network info stats issuance market cap',
-        body: `
-            <p>The home page is the whole explorer in one screen. From top to bottom:</p>
-            <ul>
-                <li><b>Stats strip</b> — Market Cap, Total Issuance, In Stake, AVG APY.</li>
-                <li><b>Network Information</b> — current era, validators ratio, nominators ratio, max active stake.</li>
-                <li><b>Recent Blocks</b> — live feed of the latest blocks finalized on chain.</li>
-                <li><b>Recent Transactions</b> — live feed of recent signed financial transactions.</li>
-                <li><b>Lower Network Information grid</b> — average validator commission, min stake, total bonding/unbonding, last era rewards total.</li>
-            </ul>
-            <p>Click any block or transaction to drill into its detail page. Use the "View all" links to jump to the dedicated <i>Blocks</i> or <i>Transactions</i> pages.</p>
-        `
-    },
-    {
-        slug: 'blocks',
-        title: 'Blocks page',
-        category: 'browse',
-        keywords: 'blocks history list extrinsic author parent hash',
-        body: `
-            <p>The Blocks page lists every block our indexer has crawled, newest first. Each row shows block number, age, extrinsic count, hash, and parent hash.</p>
-            <p>Use the global search box at the top to filter across all columns, or click a column header to sort. Click any row to open the block detail page, which lists every extrinsic and event in that block.</p>
-            <p>Pagination shows 50 rows per page by default; "Show more" extends to 200 rows; numbered pagination handles anything beyond.</p>
-        `
-    },
-    {
-        slug: 'transactions',
-        title: 'Transactions page',
-        category: 'browse',
-        keywords: 'transactions transfers signed extrinsic fee status',
-        body: `
-            <p>The Transactions page is a feed of signed financial transactions (transfers and other balance-affecting calls). Columns: hash, signer, recipient, amount, fee, age, status.</p>
-            <p>The <b>Load Older 100 Financial Tx</b> button at the bottom of the list pulls older transactions from the indexer in batches once you scroll past the in-memory cache.</p>
-            <h3>Transaction detail recovery</h3>
-            <p>If you open a <code>/tx/&lt;block&gt;/&lt;hash&gt;</code> URL and the transaction isn't there — chain reorg, hand-edited URL, or an event ID misrouted as a tx hash — the explorer shows a recovery card with a context-aware action button: <i>View block</i> for event IDs, <i>Search recent blocks</i> for stale hashes, <i>Deep search</i> for everything else.</p>
-        `
-    },
-    {
-        slug: 'events',
-        title: 'Events page',
-        category: 'browse',
-        keywords: 'events log section method pallet runtime emit',
-        body: `
-            <p>The Events page shows the raw event log of the chain, excluding transactions (which have their own page). Events are emitted by runtime modules when something happens: <i>balances.Transfer</i> when PDEX moves, <i>staking.Reward</i> when an era pays out, <i>democracy.Proposed</i> when a referendum is filed.</p>
-            <p>Use the Section and Method dropdowns to narrow to a specific runtime module or event type. Pagination matches the blocks/transactions pattern.</p>
-        `
-    },
-    {
-        slug: 'validators',
-        title: 'Validators page',
-        category: 'browse',
-        keywords: 'validators list active stake commission risk apy scorecard slashes',
-        body: `
-            <p>The Validators page lists every validator currently authoring blocks. Columns: address, identity, total stake (own + nominated), commission, real APY (30-day), and Now vs Real.</p>
-            <h3>What to look for</h3>
-            <ul>
-                <li><b>HIGH RISK badge</b> — commission &gt; 50%. The validator keeps a majority of rewards. Avoid.</li>
-                <li><b>Est. APY (current commission)</b> — the chain's nominal maximum APY adjusted for the validator's current commission. A projection of what nominating this validator would yield if conditions hold — not a measured historical average.</li>
-                <li><b>Total stake</b> — too low risks dropping out of the active set; very high may dilute your share.</li>
-            </ul>
-            <p>Click a row to open the <b>Validator Detail</b> page, which adds a scorecard with estimated APY, commission band, active-era rate, slash count, and current stake. Star the validator (top-right) to add to your <b>Watchlist</b>.</p>
-        `
-    },
-    {
-        slug: 'holders',
-        title: 'Top PDEX holders',
-        category: 'browse',
-        keywords: 'holders top rich list balance share supply',
-        body: `
-            <p>The Holders page ranks addresses by total balance, with each holder's percentage of the total supply. Useful for tracking treasury, exchange, and large institutional accounts.</p>
-            <p>Identity is shown when set on chain; otherwise you see the short SS58 address. Click any row to open the address's full account details page.</p>
-        `
-    },
-    {
-        slug: 'accounts',
-        title: 'Account details',
-        category: 'browse',
-        keywords: 'account address balance identity transactions events label watchlist',
-        body: `
-            <p>Click any address anywhere in the explorer to land on its account-details page at <code>/account/&lt;address&gt;</code>. You see:</p>
-            <ul>
-                <li><b>Identity table</b> — balance breakdown (total, free, frozen), display name, roles, and a community-labels panel.</li>
-                <li><b>Transactions tab</b> — every signed financial transaction the address signed or received.</li>
-                <li><b>Events tab</b> — every event the address appeared in (staking rewards, governance votes, etc.).</li>
-                <li><b>Watchlist star</b> — toggles the address into your local watchlist.</li>
-            </ul>
-            <p>For your <i>own</i> wallet (richer dashboard with action buttons), use <i>My Account</i> from the sidebar — that lands you on <code>/wallet/&lt;address&gt;</code> instead.</p>
-        `
-    },
-    {
-        slug: 'search',
-        title: 'Search',
-        category: 'browse',
-        keywords: 'search find lookup block hash address validator identity deep network',
-        body: `
-            <p>The search box in the top bar accepts a block number, block hash, transaction hash, address, validator identity, or extrinsic hash.</p>
-            <p>The first pass runs locally against whatever the explorer has cached client-side — fast but limited. If that misses, click <b>Deep Search Network</b> at the bottom of the results to query the full server-side index and the chain RPC. On a hit, the explorer redirects to the right detail page.</p>
-        `
-    },
-    {
-        slug: 'sending-pdex',
-        title: 'Sending PDEX',
-        category: 'wallet',
-        keywords: 'send transfer pdex recipient amount fee keep alive existential deposit',
-        body: `
-            <p>From the Wallet Dashboard's action bar, click <b>Send PDEX</b>. The modal opens:</p>
-            <ol class="help-steps">
-                <li><b>Recipient</b> — paste a Polkadex address (starts with "e"). Verify carefully.</li>
-                <li><b>Amount</b> — in PDEX. The modal shows your transferable balance for reference.</li>
-                <li><b>Keep account alive</b> — leave this checked unless you're intentionally draining your own account. With it on, the explorer refuses to drop your balance below the existential deposit (a fraction of a PDEX).</li>
-                <li>Click <b>Send</b>. Your wallet extension pops up — review the call data and approve.</li>
-            </ol>
-            <p>On success, the modal closes and the dashboard refreshes within a couple of blocks.</p>
-            <div class="help-callout warn">
-                <b>Always test new addresses with a small amount.</b> Errors and typos in addresses are not reversible.
-            </div>
-            <h3>Common errors</h3>
-            <ul>
-                <li><b>"No wallet extension detected"</b> — install one, or open the explorer inside a mobile wallet's WebView.</li>
-                <li><b>"Recipient below existential deposit"</b> — to fund a brand-new account, send at least the existential deposit.</li>
-                <li><b>"Amount exceeds transferable balance"</b> — your free balance is below the requested amount after fees and locks.</li>
-            </ul>
-        `
-    },
-    {
-        slug: 'switching-wallets',
-        title: 'Switching wallets',
-        category: 'wallet',
-        keywords: 'switch wallet disconnect view only multiple accounts',
-        body: `
-            <p>The dashboard header has two key controls:</p>
-            <ul>
-                <li><b>Switch wallet</b> — returns to the connect picker so you can choose a different account from your extension.</li>
-                <li><b>Disconnect</b> (topbar icon) — forgets the active wallet entirely.</li>
-            </ul>
-            <p>Both are local operations; the chain doesn't know or care which wallet your browser has open.</p>
-            <p>If you want to peek at someone else's wallet without connecting, use the <i>"…look up any address"</i> input on the connect page. The dashboard renders in <b>view-only mode</b> — all action buttons hidden, but you see balances, validators, and recent activity.</p>
-        `
-    },
-    {
-        slug: 'identity',
-        title: 'On-chain identity',
-        category: 'wallet',
-        keywords: 'identity display name display email twitter web matrix riot set clear reset register deposit',
-        body: `
-            <p class="lead">Register a display name, email, twitter handle, website, or Matrix ID on chain so other Polkadex apps see this address as a named entity — not just a raw <code>e…</code> address.</p>
-            <h3>How to set it</h3>
-            <ol class="help-steps">
-                <li>Open your <b>Wallet Dashboard</b> and click <b>Set identity</b> (or <b>Update identity</b> if you already have one).</li>
-                <li>Fill in any fields you want public. <b>Display name</b> is the one that shows up everywhere in the explorer; the rest are optional.</li>
-                <li>Click <b>Save identity</b>. Your wallet pops up to sign.</li>
-                <li>Within a couple of blocks, your new identity appears on the home page, validators list, holders ranking, and account-details pages.</li>
-            </ol>
-            <h3>About the deposit</h3>
-            <p>The identity pallet locks a small refundable PDEX deposit while your identity exists. The exact amount is shown in the modal — it's a few PDEX, scaling slightly with how many fields you fill. When you clear the identity, the deposit returns to your free balance immediately.</p>
-            <h3>Field limits</h3>
-            <p>Each field is capped at <b>32 bytes</b> by the runtime. UTF-8 emoji and CJK characters use 3–4 bytes each, so plan accordingly. The form will truncate gracefully if you exceed.</p>
-            <h3>Resetting (clearing) your identity</h3>
-            <p>The same modal has a red <b>Reset (clear)</b> button when an identity already exists. Click it, confirm, and sign — your identity is removed and the deposit returns to your free balance. You can set a new one any time.</p>
-            <div class="help-callout">
-                <b>Identity is public.</b> Anything you put here is on chain forever — even after you clear it, indexers may keep the historical version. Don't include personal info you wouldn't want associated with your address permanently.
-            </div>
-            <h3>Verification / judgements</h3>
-            <p>Registrars on Polkadex can attest that an identity is genuine — this shows up as a green check in some wallets and explorers. Requesting a judgement is a separate flow not yet exposed in the explorer UI; for now use <a href="https://polkadot.js.org/apps" target="_blank" rel="noopener" class="item-link">Polkadot.js Apps</a> if you need a verified identity.</p>
-        `
-    },
-    {
-        slug: 'proxies-and-multisig',
-        title: 'Proxies & multisig',
-        category: 'wallet',
-        keywords: 'proxy multisig delegate signer threshold staking governance advanced',
-        body: `
-            <p>The Wallet Dashboard's <b>Advanced</b> section exposes two power-user features. Skip unless you specifically need them.</p>
-            <h3>Proxies</h3>
-            <p>A proxy is a delegated signer for your account, optionally restricted to a subset of calls. Examples:</p>
-            <ul>
-                <li><b>Staking proxy</b> — lets a hot wallet claim rewards without ever holding your stash key.</li>
-                <li><b>Governance proxy</b> — delegate voting to someone you trust.</li>
-            </ul>
-            <p>The Proxies card lists each delegate with type and delay. <b>Remove</b> revokes a proxy; <b>Add proxy</b> authorises a new one. The proxy type dropdown is sourced from the live runtime metadata.</p>
-            <div class="help-callout">
-                <b>What this explorer can and cannot sign.</b> It signs <code>proxy.addProxy</code> and <code>proxy.removeProxy</code> for <em>your own</em> account — managing who may act for you. It does <b>not</b> support acting <em>as</em> someone's proxy (<code>proxy.proxy</code>): if an account has delegated to you, submit that call from <a href="https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.polkadex.ee#/extrinsics" target="_blank" rel="noopener" class="item-link">polkadot.js Apps</a>.
-            </div>
-            <h3>Multisig</h3>
-            <p>A multisig is an address derived from a list of signers and a threshold (e.g. 2-of-3). Transactions need <b>at least threshold-of-N</b> approvals to execute. The address is deterministic — anyone with the same signer list and threshold can recompute it.</p>
-            <p>The calculator turns a textarea of signer addresses + threshold into the corresponding multisig address. The <b>Pending approvals</b> table shows multisig transactions still waiting for further signatures.</p>
-            <div class="help-callout">
-                <b>Multisig here is read-only.</b> The calculator and the pending-approvals table are views — the explorer cannot approve, execute or cancel a multisig call (<code>multisig.asMulti</code>, <code>approveAsMulti</code>, <code>cancelAsMulti</code>). Sign those from <a href="https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.polkadex.ee#/extrinsics" target="_blank" rel="noopener" class="item-link">polkadot.js Apps</a>. Use this page to compute the address and to watch what is pending.
-            </div>
-            <div class="help-callout">
-                <b>When to consider multisig.</b> Treasury accounts, DAOs, and high-value vaults benefit: no single key compromise loses funds. The trade-off is operational — every transaction needs several humans to coordinate signing.
-            </div>
-        `
-    },
-    {
-        slug: 'how-staking-works',
-        title: 'How staking works',
-        category: 'staking',
-        keywords: 'staking concept nominator validator era bond unbond pos nominated proof stake',
-        body: `
-            <p>Polkadex is a Nominated Proof-of-Stake chain. <b>Validators</b> author and verify blocks; <b>nominators</b> like you support validators with PDEX stake and earn a share of the rewards.</p>
-            <p>Your PDEX moves through five states:</p>
-            <ol class="help-steps">
-                <li><b>Free</b> — normal balance, spendable.</li>
-                <li><b>Bonded</b> — committed to staking. Not yet earning.</li>
-                <li><b>Nominating</b> — backing validators. Each era (~24h) you receive a share of their rewards, minus commission.</li>
-                <li><b>Unbonding</b> — you've requested some stake back. A 28-day cool-down begins.</li>
-                <li><b>Withdrawable</b> — cool-down complete; one more call returns it to free.</li>
-            </ol>
-            <div class="help-callout">
-                <b>You only earn while nominating.</b> Bonding by itself doesn't pay. You must also nominate at least one active validator. Validators outside the active set in a given era pay no rewards even if you nominate them.
-            </div>
-        `
-    },
-    {
-        slug: 'nominating',
-        title: 'Nominating a validator',
-        category: 'staking',
-        keywords: 'nominate stake bond validator pick commission slash apy',
-        body: `
-            <p>From the dashboard, click <b>Stake more</b>. The first time, the call is a combined <code>bond + nominate</code>; on later top-ups it's <code>bondExtra</code>. The explorer figures out which call shape your runtime accepts and handles it.</p>
-            <h3>Before you nominate</h3>
-            <p>Browse the Validators page. Look at:</p>
-            <ul>
-                <li><b>Commission</b> — the cut the validator keeps. Avoid &gt; 50% (HIGH RISK badge).</li>
-                <li><b>Total stake</b> — too low risks dropping out; very high dilutes your share. Aim near the active-set median.</li>
-                <li><b>Slash count</b> — non-zero means past penalties. One is usually accidental; many is a pattern.</li>
-                <li><b>Real APY</b> — our rolling 30-day actual yield, after commission.</li>
-            </ul>
-            <h3>The stake modal</h3>
-            <p>The modal pre-fills your current nominations. Use the search box to filter validators. You can nominate up to 16 at once — spread across several gives exposure even if one drops out. Type the amount and click <b>Stake</b>.</p>
-            <div class="help-callout">
-                <b>Rewards start next era.</b> A nomination made <i>during</i> era N takes effect from era N+1.
-            </div>
-        `
-    },
-    {
-        slug: 'claiming-rewards',
-        title: 'Claiming rewards',
-        category: 'staking',
-        keywords: 'claim payout rewards staking payoutstakers utility batch',
-        body: `
-            <p>Rewards are computed per era per validator and sit on chain as unclaimed entries until someone calls <code>staking.payoutStakers</code>. Any account can trigger a payout — not just you.</p>
-            <p>On the dashboard, the <b>Pay out rewards</b> button shows the unclaimed entry count in parentheses. Click it. The modal lists each unpaid <i>(era, validator, amount)</i> tuple. Click <b>Claim all</b> and the explorer packages up to 30 payout calls into a single <code>utility.batch</code> transaction — sign once, get every reward in one go.</p>
-            <div class="help-callout warn">
-                <b>Era retention window.</b> The chain prunes payable era history after ~84 eras. If you wait too long, the unclaimed reward becomes uncollectable. The explorer flags expiring eras with an orange badge.
-            </div>
-        `
-    },
-    {
-        slug: 'unstaking',
-        title: 'Unstaking & unbonding',
-        category: 'staking',
-        keywords: 'unstake unbond withdraw cool down 28 days unlock chill min nominator bond max',
-        body: `
-            <p>Click <b>Unstake</b> on the dashboard. Enter the PDEX amount you want to unbond. The modal shows the current unbonding period — typically 28 days — and your existing unlocking balance (if any).</p>
-            <p>After signing, the PDEX moves into the <b>unbonding</b> state. When the unbonding period elapses, one more call (<code>withdrawUnbonded</code>) returns it to your free balance. Open the <b>Unstake</b> modal on My Account — when matured funds are waiting, it shows a “Withdrawable now” row with a <b>Withdraw unbonded funds</b> button.</p>
-            <p>You can have multiple in-flight unbonding chunks at once, each with its own clock.</p>
-            <h3>Partial vs. full unbond</h3>
-            <p>The network enforces a <b>minimum bond</b> — usually 100 PDEX. A partial unbond that would leave you below that threshold is rejected by the runtime. The modal shows the current minimum so you can size your unbond accordingly.</p>
-            <p>Clicking <b>Max</b> performs a full unbond. The explorer batches a <code>chill</code> call before <code>unbond</code> in a single atomic transaction — this removes your stash from the nominator set first so the runtime accepts an active bond of zero. After a full unbond your nominations are cleared; if you later top up with <code>bond_extra</code>, you'll need to re-nominate before earning rewards again.</p>
-        `
-    },
-    {
-        slug: 'staking-rewards-page',
-        title: 'Staking Rewards page',
-        category: 'staking',
-        keywords: 'staking rewards history apr realized csv tax export chart era',
-        body: `
-            <p>The page at <code>/staking-rewards/&lt;address&gt;</code> is the deep view of any address's reward history. You don't need to be signed in to inspect your own rewards.</p>
-            <h3>On the page</h3>
-            <ul>
-                <li><b>Summary cards</b> — Claimed Rewards, Unpaid, Total, Claimed Payouts, Eras, and the <b>realized APR card</b>.</li>
-                <li><b>Realized APR</b> — headline 30-day APR, with 90-day and all-time in the subtitle plus the bonded PDEX used in the calculation.</li>
-                <li><b>Per-validator stacked-bar chart</b> of daily rewards.</li>
-                <li><b>Filter pills</b> — All / Claimed / Unpaid.</li>
-                <li><b>Reward table</b> — Era, Date, Amount, Status, Validator, Block. Sortable, paginated.</li>
-                <li><b>Download buttons</b> — CSV, JSON, Tax (year…).</li>
-            </ul>
-            <h3 id="tax">Tax CSV</h3>
-            <p>The <b>Tax (year)</b> button opens a year picker and produces a year-scoped CSV with a PDEX→USD spot price at era close on every row. Only claimed rewards are included; unclaimed eras are excluded as not-yet-realised income. A totals row sits at the bottom.</p>
-            <div class="help-callout warn">
-                <b>Not tax advice.</b> Your jurisdiction's treatment of staking rewards (income at receipt? at claim? at sale?) is yours to confirm with a qualified accountant.
-            </div>
-        `
-    },
-    {
-        slug: 'governance-overview',
-        title: 'How Polkadex is governed',
-        category: 'gov',
-        keywords: 'governance overview democracy council treasury referendum motion proposal',
-        body: `
-            <p>Polkadex is community-governed. PDEX holders propose changes, vote on referenda, and spend treasury funds. The explorer surfaces the entire lifecycle in three pages:</p>
-            <ul>
-                <li><b>Democracy</b> — public proposals and binding on-chain referenda.</li>
-                <li><b>Council</b> — elected body that can fast-track proposals and manage treasury approvals.</li>
-                <li><b>Treasury</b> — on-chain PDEX pot funded from fees + slashes; spent on community proposals.</li>
-            </ul>
-            <p>Off-chain debate lives at <i>Discussions</i>. Any proposal, motion, or referendum number is clickable in any table — it opens the <b>governance detail modal</b> with status, proposer, beneficiary, blocks, and call hash. Voting itself is not in the modal; use the per-row Aye/Nay buttons on the Democracy → Referenda table.</p>
-        `
-    },
-    {
-        slug: 'democracy-and-voting',
-        title: 'Democracy & voting',
-        category: 'gov',
-        keywords: 'democracy referendum vote aye nay conviction lock public proposal',
-        body: `
-            <p>A <b>referendum</b> is a binding on-chain vote. Once it passes (and a short enactment delay elapses), the proposed call is dispatched automatically.</p>
-            <h3>Voting</h3>
-            <p>On the Democracy → Referenda tab, ongoing referenda have <b>Aye</b> / <b>Nay</b> buttons inline. Click your direction; the vote modal opens.</p>
-            <ul>
-                <li><b>Side toggle</b> — switch Aye/Nay before submitting.</li>
-                <li><b>Lock amount</b> — how much PDEX you're locking behind the vote.</li>
-                <li><b>Conviction</b> — multiplier. <code>None</code> (0.1×, no lock) up to <code>Locked6x</code> (6×, locked 32 eras after the referendum closes). Default <code>Locked1x</code>.</li>
-            </ul>
-            <div class="help-callout">
-                <b>Conviction is a trade-off.</b> Higher conviction = more vote weight, but a longer lock on your PDEX. If you feel strongly and don't need the PDEX soon, scale conviction up.
-            </div>
-        `
-    },
-    {
-        slug: 'council-and-motions',
-        title: 'Council & motions',
-        category: 'gov',
-        keywords: 'council motion member candidacy vote elections fast-track',
-        body: `
-            <p>The <b>Council</b> is an elected body that can fast-track proposals, manage treasury approvals, and veto bad runtime upgrades. A <b>motion</b> is a council vote on a specific call.</p>
-            <p>Two tabs:</p>
-            <ul>
-                <li><b>Members</b> — seat and runner-up counts, candidate count, Term Progress dial.</li>
-                <li><b>Motions</b> — every council motion (active and historical) with threshold and tally. Click a motion # to see status, the call it dispatches, blocks, and on-chain proposal hash.</li>
-            </ul>
-            <p>The header has <b>Submit Candidacy</b> (run for a seat) and <b>Vote</b> (rank candidates in an ongoing election round) buttons.</p>
-            <h3>Filtering motions</h3>
-            <p>The Motions tab has a <b>status</b> pill row (Voting open, Threshold met, Rejected, Voting ended, Executed, Approved, Disapproved, Closed) and a <b>Call type</b> dropdown (e.g. <code>treasury.approveProposal</code>). Both filters apply to the open motions <i>and</i> the Resolved Motions table, and stay visible even when nothing is currently open — handy for finding, say, every treasury-approval motion the council has handled.</p>
-            <h3>Proposing a motion</h3>
-            <p>A <b>Propose motion</b> button is shown on the Motions tab to everyone — you don't need to connect first to see it. Tabling a motion does require a council seat: when you act, you're prompted to connect a wallet, and the submission is restricted to current council members. Use it to table a treasury <b>approve</b> or <b>reject</b> for a pending proposal: pick the call, enter the treasury proposal #, set the approval threshold (defaults to a simple majority of seats), and sign. The motion then appears under Motions for the council to vote on, and dispatches its call once it reaches threshold. This is how an "open" treasury proposal actually gets approved — there is no approve button on the proposal itself.</p>
-            <p>You can also start this straight from a proposal: on the <a href="/treasury" class="item-link">Treasury</a> page, every open proposal row has a <b>Propose motion</b> button, and opening a proposal's detail (click its <code>#</code>) shows <b>Propose approval motion</b> / <b>Propose rejection motion</b>. Either opens the same dialog pre-filled with that proposal's number.</p>
-        `
-    },
-    {
-        slug: 'treasury',
-        title: 'Treasury',
-        category: 'gov',
-        keywords: 'treasury proposal beneficiary bond approval awards',
-        body: `
-            <p>The Treasury is an on-chain pot of PDEX, funded from transaction fees and slashed stake. Anyone can submit a proposal asking for funds; the council and/or a referendum approve or reject.</p>
-            <p>Four tabs: <b>Overview, Open, Approved, History</b>. Each lists proposals by ID, proposer, beneficiary, requested PDEX, and status.</p>
-            <p>The header <b>Submit proposal</b> button opens a modal where you can post a new request. A deposit is required, and rejected proposals burn the deposit — so write carefully and discuss in <i>Discussions</i> first.</p>
-        `
-    },
-    {
-        slug: 'discussions',
-        title: 'Discussions',
-        category: 'gov',
-        keywords: 'discussions forum thread post sign in wallet signature',
-        body: `
-            <p>Off-chain commentary on governance items lives at <code>/discussions</code>. Each thread is associated with a governance proposal so people can debate the merits before voting.</p>
-            <h3>Reading</h3>
-            <p>No sign-in needed. Browse the thread list; click any thread for the per-thread view.</p>
-            <h3>Posting</h3>
-            <p>Click <b>Sign in with wallet</b>. The explorer asks your wallet to sign a short challenge — no transaction, just a signature. The resulting bearer token is stored locally and lasts <b>7 days</b>, then you'll be asked to sign again. Each post shows your address and a local-time timestamp.</p>
-        `
-    },
-    {
-        slug: 'analytics',
-        title: 'Network analytics',
-        category: 'tools',
-        keywords: 'analytics dashboard kpi charts treasury price daily transactions active addresses',
-        body: `
-            <p>The Analytics page at <code>/analytics</code> is the bird's-eye view of the chain — useful for monitoring health or spotting anomalies. Click the date-range pills (Last 7d / 30d / 90d / Year) to change the window.</p>
-            <h3>KPI strip</h3>
-            <ul>
-                <li><b>Indexed blocks</b> — how many blocks we have indexed vs. chain head.</li>
-                <li><b>Indexed transactions</b> — count of balances transfers held in the local transaction index.</li>
-                <li><b>Validators</b> — active / total registered (with current era).</li>
-                <li><b>Nominators</b> — active / total.</li>
-                <li><b>Total staked</b> — total bonded PDEX (with % of issuance).</li>
-                <li><b>Total issuance</b> — current supply.</li>
-            </ul>
-            <h3>Charts</h3>
-            <p>Six time-series charts: daily transactions, daily PDEX volume, daily active addresses, daily blocks produced, PDEX/USD, and cumulative treasury awards.</p>
-        `
-    },
-    {
-        slug: 'watchlist',
-        title: 'Watchlist',
-        category: 'tools',
-        keywords: 'watchlist star bookmark favourite address validator proposal referendum',
-        body: `
-            <p>The Watchlist is your private bookmark folder. Star anything that matters — an address, a validator, a referendum, a treasury proposal — and it shows up at <code>/watchlist</code>.</p>
-            <p>The data lives entirely in your browser (<code>pdex_watchlist_v1</code>); no server-side personal storage. There's no cross-device sync — by design.</p>
-            <h3>What you can star</h3>
-            <p>Addresses, validators, referenda, council motions, treasury proposals, public proposals, blocks. Anywhere a star icon appears, click to toggle.</p>
-            <p>On the Watchlist page, items are grouped by kind. Each shows its label, the date you starred it, and a star icon to unstar. A <b>Clear all</b> button at the top wipes the list.</p>
-        `
-    },
-    {
-        slug: 'community-labels',
-        title: 'Community labels',
-        category: 'tools',
-        keywords: 'labels community vote report veto signed identity address suggest',
-        body: `
-            <p>Community labels turn anonymous addresses into named entities through community consensus. Anyone with a wallet can suggest a label; everyone votes; the address owner has veto power. The highest-scored label is shown everywhere that address appears.</p>
-            <h3>Posting a label</h3>
-            <ol class="help-steps">
-                <li>Connect a wallet.</li>
-                <li>Go to the Account Details page of the address.</li>
-                <li>In the Labels panel, click <b>Sign in with wallet</b>. Your wallet signs a short challenge — no transaction, just a signature. The token persists for 7 days.</li>
-                <li>Type your label (max 64 chars) and click <b>Suggest</b> (or <b>Set label</b> if you own the address).</li>
-            </ol>
-            <h3>Voting, reporting, veto</h3>
-            <ul>
-                <li><b>Up/down chevrons</b> — vote any non-self label. The viewer's own vote is highlighted.</li>
-                <li><b>Report</b> — flag inappropriate labels. At ≥3 distinct reporters the label is auto-hidden.</li>
-                <li><b>Veto</b> — only the address owner. Hides a label they don't want associated with their account.</li>
-            </ul>
-            <div class="help-callout">
-                <b>Rate limit.</b> Each wallet can post at most one label-related write per 60 seconds, to prevent spam.
-            </div>
-        `
-    },
-    {
-        slug: 'privacy',
-        title: 'Privacy & data handling',
-        category: 'tools',
-        keywords: 'privacy gdpr data storage cookies localstorage rights tracking analytics',
-        body: `
-            <p>Short version: we don't track you, we don't set cookies, we don't run third-party analytics. The full <b>Privacy Policy</b> lives at <code>/privacy</code>; the localStorage inventory at <code>/cookies</code>.</p>
-            <h3>What we store about you</h3>
-            <ul>
-                <li><b>On-chain data</b> — already public. We index it, we don't own it.</li>
-                <li><b>Local storage</b> — a handful of <code>pdex_*</code> keys on your device only (wallet address, watchlist, label session, tour-seen flag, banner dismissal, APR period). Never sent to us.</li>
-                <li><b>Server logs</b> — standard web-server logs (IP, user-agent, URL, response, timestamp). 30-day retention.</li>
-            </ul>
-            <h3>What we do NOT do</h3>
-            <p>No Google Analytics, no Mixpanel, no Segment, no advertising scripts, no third-party JavaScript. Every script the explorer loads runs from <code>explorer.polkadex.ee</code>.</p>
-            <h3>Your rights</h3>
-            <p>Under GDPR, UK GDPR, and CCPA you can request access, correction, and deletion. Clear local storage any time via your browser settings or the <b>Reset all preferences</b> button on <code>/cookies</code>. To delete community labels, discussions, or vote rows you authored, message us with the wallet that signed them.</p>
-        `
-    },
-    {
-        slug: 'troubleshooting',
-        title: 'Troubleshooting & FAQ',
-        category: 'reference',
-        keywords: 'troubleshoot faq help error problem issue fix',
-        body: `
-            <h3>"Why is my balance different here from in my wallet extension?"</h3>
-            <p>They should match within a block. If they don't, the explorer is likely a few blocks behind chain head while the indexer backfills. Refresh after a minute or two.</p>
-            <h3>"I sent a transaction but I cannot find it."</h3>
-            <p>Wait two blocks (about 12 seconds). Or use the transaction hash in the global search bar — don't try to construct the URL by hand.</p>
-            <h3>"The Pay out button is disabled."</h3>
-            <p>You have no unclaimed reward entries — either you're not nominating, or someone else has already triggered the payout on your behalf.</p>
-            <h3>"Why is realized APR different from the chain's theoretical APR?"</h3>
-            <p>Theoretical APR is a target; realized is what you actually got after commission and active-era variability. Realized is usually a few percentage points lower.</p>
-            <h3>"I see a 503 'Connecting to Polkadex node…' message."</h3>
-            <p>Our backend lost its WebSocket connection to the chain RPC. It auto-reconnects within seconds. Click the Retry button. If it persists, try again later.</p>
-            <h3>"How do I delete a label I posted by mistake?"</h3>
-            <p>Open the address's account-details page. In the Labels panel, your own label has a <b>Remove mine</b> button. Sign in with the same wallet first if you posted from another device.</p>
-        `
-    },
-    {
-        slug: 'brand-kit',
-        title: 'Brand kit',
-        category: 'reference',
-        keywords: 'brand kit colours colors palette typography logo design tokens identity',
-        body: `
-            <p class="lead">A quick-reference cheatsheet for the explorer's visual identity — colours, typography, logo usage, iconography, spacing tokens, and voice rules.</p>
-            <p>The interactive version lives at <a href="/brand" class="item-link"><b>/brand</b></a>. Click any colour swatch on that page to copy its hex value. Tokens are read live from the CSS, so the page always reflects what the site is rendering.</p>
-            <p>A markdown reference for engineering and design pairing lives at <code>BRAND.md</code> in the repo root.</p>
-            <h3>Quick facts</h3>
-            <ul>
-                <li><b>Primary colour</b> is Polkadex pink <code>#E6007A</code> — reserved for the most important call to action on each screen.</li>
-                <li><b>Secondary colour</b> is accent green <code>#00E676</code> — for successful actions and positive metrics.</li>
-                <li><b>Typeface</b> is Inter (300/400/500/600/700), self-hosted from this origin (no Google Fonts request). Monospace stack is <code>Courier New, monospace</code> for addresses, hashes, and URLs.</li>
-                <li><b>Icons</b> come from Boxicons 2.1.4, used via the <code>bx-*</code> class system.</li>
-            </ul>
-            <div class="help-callout">
-                <b>Source of truth.</b> When the brand evolves, edit the <code>:root</code> block in <code>styles.css</code> and the <code>BRAND.md</code> file together — the <a href="/brand" class="item-link">/brand</a> page reads from CSS at render time so it stays in sync automatically.
-            </div>
-        `
-    },
-    {
-        slug: 'governance-calendar',
-        title: 'Governance calendar',
-        category: 'gov',
-        keywords: 'calendar governance referendum referenda motion treasury proposal schedule timeline',
-        body: `
-            <p class="lead">The Governance Calendar at <a href="/calendar" class="item-link"><b>/calendar</b></a> gives you a single view of every active and recent on-chain governance event: democracy referenda, council motions, and treasury proposals — with their tabled dates, voting end times, and current status.</p>
-            <h3>What you'll see</h3>
-            <ul>
-                <li><b>Active events</b> float to the top with a live "X days Y hours left" countdown until voting closes.</li>
-                <li><b>Recent activity</b> is sorted by most recently resolved.</li>
-                <li><b>Filter pills</b> let you narrow to just referenda, motions, or treasury proposals.</li>
-                <li><b>List vs Month view</b>: list view is sortable, paginated, and filterable by text. Month view is a 7-column grid with coloured dots per event — click a dot to open that proposal.</li>
-            </ul>
-            <h3>How end times are calculated</h3>
-            <p>For events with a known wall-clock end timestamp (treasury, motions), we display that directly. For referenda that end at a future block, we estimate using the current chain head and Polkadex's ~12-second block time. Estimates drift by a few minutes over a 7-day voting period — close enough to plan around.</p>
-            <h3>Related</h3>
-            <p>For per-pallet detail, see the <a href="/democracy" class="item-link"><b>Democracy</b></a>, <a href="/council" class="item-link"><b>Council</b></a>, and <a href="/treasury" class="item-link"><b>Treasury</b></a> pages. The calendar is a roll-up of those.</p>
-        `
-    },
-    {
-        slug: 'price-chart',
-        title: 'PDEX price chart',
-        category: 'tools',
-        keywords: 'price chart pdex history graph coinmarketcap cmc usd usdt 7 day 30 day 90 day all-time',
-        body: `
-            <p class="lead">A full-screen view of the PDEX/USD price, reached by clicking the price in the bottom-left corner of the sidebar.</p>
-            <h3>What you see</h3>
-            <p>The current PDEX price and 24-hour percent change sit at the top of the page, with a line chart showing the selected period below and high/low/volume/period-change stats underneath.</p>
-            <h3>Choosing a time period</h3>
-            <p>Pick from <strong>7D · 30D · 90D · 1Y · ALL</strong> with the pills above the chart. Your choice is remembered between visits via a small <code>pdex_price_period</code> entry in your browser's local storage (no cookies, never sent to our server — see <a href="/cookies" class="item-link">/cookies</a>).</p>
-            <h3>Where the data comes from</h3>
-            <p>Live price polls come from <strong>CoinGecko</strong>, which aggregates PDEX across its real markets — no API key required. (CoinMarketCap can be added as an extra source with a key.) Historical PDEX/USDT data going back to PDEX's first trading day in March 2022 is retained on disk, so the chart stays a single continuous series.</p>
-            <h3>Closing</h3>
-            <p>Click the <strong>×</strong> in the top-right of the chart page to return to wherever you were before opening it.</p>
-        `
-    },
-    {
-        slug: 'email-alerts',
-        title: 'Email alerts',
-        category: 'gov',
-        keywords: 'email alerts subscription notification referendum proposal closing reminder unsubscribe',
-        body: `
-            <p class="lead">Get a short email when on-chain events happen on Polkadex — new referenda, public proposals, 24-hour voting reminders, and more. Double opt-in, one-click unsubscribe.</p>
-            <h3>How to subscribe</h3>
-            <p>Open the subscribe form from any of three places:</p>
-            <ul>
-                <li>The <strong>Email alerts</strong> button on the homepage banner when a new referendum is announced.</li>
-                <li>The button at the top of the <a href="/calendar" class="item-link">Governance Calendar</a>.</li>
-                <li>The button at the top of the <a href="/democracy" class="item-link">Democracy</a> page.</li>
-            </ul>
-            <p>Enter your email, pick which events you want, and submit. We'll send a one-time confirmation link — click it once and you're set.</p>
-            <h3>What you can subscribe to</h3>
-            <p><strong>Governance:</strong> new referendum opens for voting · new public proposal tabled · 24-hour reminder before a referendum closes · referendum result (passed/failed) · treasury proposal activity · council motion activity.</p>
-            <p><strong>Network milestones:</strong> runtime upgrade · era boundary summary · chain stalled alert. These are off by default — most people only want the governance events.</p>
-            <h3>Unsubscribe and preferences</h3>
-            <p>Every alert email has two links in its footer. <strong>Manage preferences</strong> opens a page where you can tick and untick any of the nine alert types above and save — no login or wallet needed, because the link itself identifies you. <strong>Unsubscribe</strong> stops everything.</p>
-            <p>Both links are personal to you, so treat them like a password: anyone who has the URL can change your alert settings. Neither is indexed by search engines. If you lose them, the footer of any later alert email has a fresh copy.</p>
-            <p>Confirming a subscription and unsubscribing both ask you to click a button on the page rather than acting on the link itself — that is deliberate, so a corporate mail scanner following links in your inbox can't opt you in or out without you.</p>
-            <h3>Privacy and data handling</h3>
-            <p>Your email address is stored only to deliver the alerts you've selected. We don't sell it, hand it to other services, or use it for marketing. The <a href="/privacy" class="item-link">privacy policy</a> has the full details. We use a transactional email provider (Postmark) for delivery — they see the email content but only to send it.</p>
-        `
-    },
-    {
-        slug: 'governance-notifications',
-        title: 'New-event notifications',
-        category: 'gov',
-        keywords: 'notification banner toast new referendum proposal alert announcement',
-        body: `
-            <p class="lead">The explorer surfaces new democracy events so you don't have to manually check every visit. Notifications fire when a referendum is tabled or a new public proposal is submitted on-chain.</p>
-            <h3>Where you'll see them</h3>
-            <ul>
-                <li><b>Homepage banner</b>: a coloured row at the top of the dashboard with the event ID and a View button. Persists until you click the ✕ close button or visit the event's page.</li>
-                <li><b>Toast notification</b>: a brief popup in the bottom-right when the explorer's poller first detects a new event while you're browsing. Auto-dismisses after 6 seconds; click to open, ✕ to dismiss early.</li>
-            </ul>
-            <h3>How "new" is decided</h3>
-            <p>The explorer keeps the highest referendum and proposal index you've previously seen in your browser's local storage. When the on-chain index is higher, you get a banner. Closing the banner stops THIS index from popping up again; a later event still triggers a fresh banner.</p>
-            <p>Visiting the <a href="/calendar" class="item-link">Calendar</a> page also marks events as "seen" — useful if you've reviewed today's governance and want to start fresh.</p>
-            <h3>Privacy</h3>
-            <p>The poll runs every 60 seconds against <code>/api/governance/latest</code> and only reads public on-chain state. No tracking. The "last seen" indices live in your browser and are documented at <a href="/cookies" class="item-link">/cookies</a>.</p>
-        `
-    },
-    {
-        slug: 'glossary',
-        title: 'Glossary',
-        category: 'reference',
-        keywords: 'glossary terminology terms definitions',
-        body: `
-            <dl class="help-glossary">
-                <dt>era</dt><dd>A scheduling unit on Polkadex (~24 hours). Validator rewards are computed and paid per era.</dd>
-                <dt>validator</dt><dd>A node that authors and verifies blocks. Earns rewards proportional to (own + nominated) stake, minus commission.</dd>
-                <dt>nominator</dt><dd>A PDEX holder who delegates stake to validators.</dd>
-                <dt>bonded</dt><dd>PDEX set aside for staking; unspendable until withdrawn after the unbonding period.</dd>
-                <dt>slash</dt><dd>Penalty deducted from a misbehaving validator and its nominators.</dd>
-                <dt>referendum</dt><dd>A public on-chain vote that, when approved, dispatches a runtime call automatically.</dd>
-                <dt>conviction</dt><dd>Multiplier on your referendum vote. Higher conviction = more weight + longer lock.</dd>
-                <dt>motion</dt><dd>A council-collective proposal. Approved motions dispatch their underlying call on chain.</dd>
-                <dt>council</dt><dd>Elected body of PDEX holders that can fast-track proposals and manage treasury approvals.</dd>
-                <dt>treasury</dt><dd>On-chain PDEX pot funded from fees + slashes; spendable by community proposals.</dd>
-                <dt>commission</dt><dd>The fraction of rewards a validator keeps before distributing the rest to its nominators.</dd>
-                <dt>payout</dt><dd>On-chain claim that distributes era rewards. Anyone can trigger it.</dd>
-                <dt>extrinsic</dt><dd>A signed or unsigned transaction that mutates chain state.</dd>
-                <dt>event</dt><dd>A side-effect emitted by a pallet during block execution.</dd>
-                <dt>pallet</dt><dd>A self-contained runtime module — staking, democracy, treasury, etc.</dd>
-                <dt>SS58</dt><dd>Substrate's address encoding. Polkadex uses prefix 88; addresses start with "e".</dd>
-                <dt>proxy</dt><dd>Delegated signer for another account, optionally restricted to a subset of calls.</dd>
-                <dt>multisig</dt><dd>Deterministic address derived from signers + threshold. Calls need threshold-of-N approvals.</dd>
-                <dt>existential deposit</dt><dd>The minimum balance the chain insists an account hold to exist.</dd>
-                <dt>utility.batch</dt><dd>A call that bundles N other calls into one signed transaction.</dd>
-                <dt>unbonding period</dt><dd>Cool-down (28 days) between requesting unbonded PDEX and being able to withdraw it.</dd>
-                <dt>chain reorg</dt><dd>When the chain replaces a recent block with a different one. The explorer's recovery card handles small reorgs transparently.</dd>
-            </dl>
-        `
-    },
-];
+// Content lives in lib/help-topics.js (audit F-069) — it is pure data,
+// so it is the one part of this file that could be lifted out without
+// threading module state through parameters. Everything below still
+// renders it; only the array moved.
 
 // O(1) lookup
 const HELP_BY_SLUG = Object.fromEntries(HELP_TOPICS.map(t => [t.slug, t]));
@@ -6566,35 +5881,23 @@ function renderUtilitiesPage() {
 // Kept as static markup in this function (rather than fetched at runtime
 // from a docs API) so the content streams immediately, ships in the bundle,
 // and stays diffable in code review.
-function renderDevelopersPage() {
-    const root = document.getElementById('developers-page-content');
-    if (!root) return;
-    root.innerHTML = `
-        <div class="developers-hero">
-            <h1>Developers</h1>
-            <p class="developers-tagline">JSON API for the Polkadex Mainnet — used by this explorer and freely consumable by external apps, especially native mobile clients.</p>
-        </div>
-
-        <nav class="developers-toc" aria-label="API sections">
-            <a href="#overview">Start here</a>
-            <a href="#cors">CORS</a>
-            <a href="#caching">Caching</a>
-            <a href="#chain">Chain data</a>
-            <a href="#inspect">Chain inspection</a>
-            <a href="#schema">network-info schema</a>
-            <a href="#price">Price feed</a>
-            <a href="#governance">Governance</a>
-            <a href="#email">Email alerts</a>
-            <a href="#discussions">Discussions</a>
-            <a href="#auth">Authenticated</a>
-            <a href="#errors">Errors</a>
-            <a href="#addresses">Addresses</a>
-            <a href="#examples">Examples</a>
-        </nav>
-
-        <section class="developers-section" id="overview">
-            <h2>Start here — use the JSON API, not the HTML</h2>
-            <p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint.</p>
+// Audit F-060 (round 2): /developers was two different documents.
+//
+// Round 1 moved the ROUTE TABLE into lib/api-reference.js so this page and the
+// server-rendered one at /developers could no longer list different endpoints.
+// What stayed duplicated was everything around the routes, and it had drifted:
+// only this page had section ids and a table of contents (so a shared
+// `/developers#caching` link worked here and landed at the top of the page for
+// anything that fetched the server-rendered HTML), the two used different
+// section orders, and each maintained its own prose about cache tiers — both
+// wrong in the same dangerous direction, listing a per-account balance payload
+// as cacheable for 30 seconds.
+//
+// Now the OUTLINE — order, ids, headings, TOC — comes from DOC_OUTLINE, and
+// this object supplies only each section's body. Neither renderer can add a
+// section, reorder one, or retitle one on its own.
+const DEVELOPERS_SECTION_BODIES = {
+    overview: `            <p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint.</p>
             <p>Two things trip up automated clients, and how to handle them:</p>
             <div class="developers-table-wrap">
                 <table class="developers-table">
@@ -6605,12 +5908,9 @@ function renderDevelopersPage() {
                     </tbody>
                 </table>
             </div>
-            <p>A concise machine-readable index of the whole API — including the exact <code>/api/network-info</code> schema — lives at <a href="/llms.txt" class="item-link">/llms.txt</a>.</p>
-        </section>
+            <p>A concise machine-readable index of the whole API — including the exact <code>/api/network-info</code> schema — lives at <a href="/llms.txt" class="item-link">/llms.txt</a>.</p>`,
 
-        <section class="developers-section" id="cors">
-            <h2>CORS — who can call the API</h2>
-            <p>The CORS policy in <code>server.js</code> allows three caller categories:</p>
+    cors: `            <p>The CORS policy in <code>server.js</code> allows three caller categories:</p>
             <div class="developers-table-wrap">
                 <table class="developers-table">
                     <thead><tr><th>Caller</th><th>Why it works</th></tr></thead>
@@ -6621,68 +5921,23 @@ function renderDevelopersPage() {
                     </tbody>
                 </table>
             </div>
-            <p>A web app at a different origin will be blocked by the browser's CORS check until its origin is added to <code>ALLOWED_ORIGINS</code> (operator change, requires a backend restart). Native mobile apps need no configuration at all.</p>
-        </section>
+            <p>A web app at a different origin will be blocked by the browser's CORS check until its origin is added to <code>ALLOWED_ORIGINS</code> (operator change, requires a backend restart). Native mobile apps need no configuration at all.</p>`,
 
-        <section class="developers-section" id="caching">
-            <h2>Caching tiers</h2>
-            <p>Hot endpoints carry <code>Cache-Control</code> headers in three tiers — clients should respect these and not poll faster than <code>max-age</code>:</p>
-            <div class="developers-table-wrap">
-                <table class="developers-table">
-                    <thead><tr><th>Tier</th><th>Used by</th><th>Header</th></tr></thead>
-                    <tbody>
-                        <tr><td><strong>Short</strong></td><td>High-velocity feeds (<code>/api/blocks</code>, <code>/api/transactions</code>, <code>/api/events</code>)</td><td><code>public, max-age=5, s-maxage=10, stale-while-revalidate=30</code></td></tr>
-                        <tr><td><strong>Medium</strong></td><td>Wallet dashboard, validators, network info, <code>/api/price-latest</code></td><td><code>public, max-age=30, s-maxage=60, stale-while-revalidate=300</code></td></tr>
-                        <tr><td><strong>Long</strong></td><td>Historical (<code>/api/price-history</code>, <code>/api/staking-rewards/:addr</code>, holders, sitemap)</td><td><code>public, max-age=300, s-maxage=600, stale-while-revalidate=3600</code></td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
+    caching: renderCacheTiers({ tableClass: 'developers-table' }),
 
-        <section class="developers-section" id="chain">
-            <h2>Chain data (read-only, public)</h2>
-            <ul class="developers-endpoints">
-                <li><code>GET /api/blocks</code> — most recent blocks</li>
-                <li><code>GET /api/block/:number</code> — single-block detail with extrinsics + events</li>
-                <li><code>GET /api/events</code> — most recent on-chain events</li>
-                <li><code>GET /api/transactions</code> — most recent transactions</li>
-                <li><code>GET /api/transactions/older?before=&lt;n&gt;</code> — pagination further back</li>
-                <li><code>GET /api/extrinsic/:block/:txHash</code> — single-extrinsic detail</li>
-                <li><code>GET /api/validators</code> — full validator set with stake + commission</li>
-                <li><code>GET /api/validator/:address</code> — per-validator era history</li>
-                <li><code>GET /api/holders</code> — top-balance accounts</li>
-                <li><code>GET /api/account/:address</code> — account-level summary</li>
-                <li><code>GET /api/network-info</code> — home-page network metrics</li>
-                <li><code>GET /api/search/:query</code> — block / extrinsic / account lookup</li>
-                <li><code>GET /api/staking-rewards/:address</code> — per-address reward history</li>
-                <li><code>GET /api/staking-rewards-status</code> — backfill progress</li>
-                <li><code>GET /api/wallet/:address</code> — wallet dashboard payload (balances, staking incl. <strong>activeStakedPlanck</strong> — the u128 active-stake value as a string for precision-safe full-unbonds — unpaid rewards, recent activity)</li>
-            </ul>
-        </section>
+    chain: `            ${renderSection('chain', { listClass: 'developers-endpoints' })}`,
 
-        <section class="developers-section" id="inspect">
-            <h2>Chain inspection (read-only, polkadot.js-style)</h2>
-            <p>Generic access to runtime metadata, storage and constants at <strong>any block</strong> — the endpoints behind <a href="/chain-state" class="item-link">/chain-state</a>. Backed by an archive node, so historical queries work.</p>
-            <ul class="developers-endpoints">
-                <li><code>GET /api/rpc/metadata</code> — every pallet with its storage items (key arity + types), constants, calls, events, errors</li>
-                <li><code>GET /api/state/:pallet/:item</code> — read any storage item. <code>?args=</code> keys, <code>?at=</code> block number/hash, <code>?entries=1</code> to list a map (capped)</li>
-                <li><code>GET /api/consts/:pallet/:item</code> — runtime constants; <code>?at=</code> supported</li>
-                <li><code>GET /api/runtime</code> — runtime spec/impl version; <code>?at=</code> supported</li>
-                <li><code>GET /api/decode/:block</code> — every extrinsic decoded argument by argument (name, type, human, JSON, raw hex). Filters <code>?section=</code> <code>?method=</code> <code>?index=</code>; matching ignores case and underscores, so <code>submit_snapshot</code> and <code>submitSnapshot</code> both work</li>
-                <li><code>POST /api/rpc/call</code> — allowlisted read-only RPC methods</li>
-            </ul>
+    inspect: `            <p>Generic access to runtime metadata, storage and constants at <strong>any block</strong> — the endpoints behind <a href="/chain-state" class="item-link">/chain-state</a>. Backed by an archive node, so historical queries work.</p>
+            ${renderSection('inspect', { listClass: 'developers-endpoints' })}
             <p><strong>Read-only by construction.</strong> Only <code>api.query</code>, <code>api.consts</code> and allowlisted read RPCs are reachable — nothing here can submit an extrinsic.</p>
             <p><strong>Send storage keys as strings.</strong> A u64 key such as <code>9223372036854775808</code> (2⁶³) is past JavaScript's <code>MAX_SAFE_INTEGER</code>, so a client that parses it as a number silently queries <code>9223372036854776000</code> — a different key whose empty result looks like confirmation. Responses echo <code>args</code> back so you can verify nothing was coerced.</p>
             <p><strong>Check <code>hex</code>, not <code>human</code>.</strong> <code>toHuman()</code> abbreviates hashes (an all-zero H256 renders as <code>0x0000…0000</code>, indistinguishable from a mostly-zero one) and group-separates large integers. Every response therefore carries human, JSON and hex together, plus a <code>count</code> for Vec-valued results.</p>
             <p>Note that <code>ValueQuery</code> maps return a <em>default-constructed</em> value for an absent key, so <code>isEmpty</code> can be <code>false</code> for a key that was never set — judge emptiness from the decoded contents.</p>
             <pre><code>curl 'https://explorer.polkadex.ee/api/decode/12250870?method=submit_snapshot'
 curl 'https://explorer.polkadex.ee/api/state/ocex/validatorSetId?at=12250870'
-curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></pre>
-        </section>
+curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></pre>`,
 
-        <section class="developers-section" id="schema">
-            <h2>Schema — <code>GET /api/network-info</code></h2>
-            <p>The home-page network panel in one call. Top-level response:</p>
+    schema: `            <p>The home-page network panel in one call. Top-level response:</p>
             <pre><code>{
   "networkInfo": {
     "activeEra": number,              // current staking era index
@@ -6711,72 +5966,35 @@ curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&amp;at=1
     "isStale": boolean                // true if the head looks stuck
   }
 }</code></pre>
-            <p><strong>AVG APY</strong> is now returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias) so you don't have to recompute it. It's derived as <code>avgApy = 23.09 × (1 − avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>
-        </section>
+            <p><strong>AVG APY</strong> is now returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias) so you don't have to recompute it. It's derived as <code>avgApy = 23.09 × (1 − avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>`,
 
-        <section class="developers-section" id="price">
-            <h2>Price feed (multi-provider)</h2>
-            <ul class="developers-endpoints">
-                <li><code>GET /api/price-latest</code> — current price, last-sync, plus a <strong>bySource</strong> map with one entry per configured provider (<code>coingecko</code> live by default). Each entry: <code>{ label, configured, lastSync, status, error, latest, count }</code>.</li>
-                <li><code>GET /api/price-history?days=N</code> — daily series for the last N days (capped at 4000). Each row carries a <code>source</code> tag identifying which provider supplied it. Response also includes the same <code>bySource</code> rollup.</li>
-            </ul>
-            <p>Providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>coingecko</code>). CoinGecko is keyless (optional <code>COINGECKO_API_KEY</code> for higher limits); CoinMarketCap needs <code>CMC_API_KEY</code>.</p>
-        </section>
+    accounts: `            ${renderSection('accounts', { listClass: 'developers-endpoints' })}`,
 
-        <section class="developers-section" id="governance">
-            <h2>Governance</h2>
-            <ul class="developers-endpoints">
-                <li><code>GET /api/council</code> — council members, motions, runners-up</li>
-                <li><code>GET /api/treasury</code> — treasury balance, proposals (open + historical)</li>
-                <li><code>GET /api/democracy</code> — referenda + public proposals</li>
-                <li><code>GET /api/governance/latest</code> — most-recent OPEN referendum / proposal (drives the homepage banner; only ongoing events)</li>
-                <li><code>GET /api/governance/calendar</code> — unified timeline across referenda + motions + treasury</li>
-            </ul>
-        </section>
+    labels: `            ${renderSection('labels', { listClass: 'developers-endpoints' })}`,
 
-        <section class="developers-section" id="email">
-            <h2>Email alerts</h2>
-            <ul class="developers-endpoints">
-                <li><code>POST /api/email/subscribe</code> — double opt-in signup (rate-limited per IP)</li>
-                <li><code>GET /api/email/confirm?token=&lt;t&gt;</code> — renders a confirmation page with a button (read-only); <code>POST /api/email/confirm</code> with a <code>token</code> form field performs it</li>
-                <li><code>GET /api/email/unsubscribe?token=&lt;t&gt;</code> — renders an unsubscribe page with a button (read-only); <code>POST /api/email/unsubscribe</code> performs it, and is the RFC 8058 <code>List-Unsubscribe-Post</code> target</li>
-                <li><code>GET /api/email/preferences?token=&lt;t&gt;</code> — fetch current event preferences</li>
-                <li><code>POST /api/email/preferences</code> — update preferences (token in body). Both back the <code>/email/preferences?token=&lt;t&gt;</code> page linked from every alert email; that route is <code>noindex</code> because the token is the credential.</li>
-            </ul>
-        </section>
+    analytics: `            ${renderSection('analytics', { listClass: 'developers-endpoints' })}`,
 
-        <section class="developers-section" id="discussions">
-            <h2>Discussions</h2>
-            <ul class="developers-endpoints">
-                <li><code>GET /api/discussions</code> — discussion threads attached to governance items</li>
-                <li><code>GET /api/discussions/:id</code> — single thread with posts</li>
-            </ul>
-        </section>
+    price: `            ${renderSection('price', { listClass: 'developers-endpoints' })}
+            <p>CoinGecko is keyless (optional <code>COINGECKO_API_KEY</code> for higher limits); CoinMarketCap needs <code>CMC_API_KEY</code>.</p>`,
 
-        <section class="developers-section" id="auth">
-            <h2>Authenticated (wallet sign-in for discussion posts)</h2>
-            <p>Wallet-signed nonce login. Sessions are 192-bit random tokens with a TTL.</p>
-            <ul class="developers-endpoints">
-                <li><code>POST /api/auth/challenge</code> — request a sign-in nonce</li>
-                <li><code>POST /api/auth/verify</code> — submit <code>{ address, signature, nonce }</code>, receive a session token</li>
-                <li><code>POST /api/auth/logout</code></li>
-                <li><code>POST /api/discussions/:id/posts</code> — post to a discussion (rate-limited, requires session)</li>
-            </ul>
-        </section>
+    governance: `            ${renderSection('governance', { listClass: 'developers-endpoints' })}`,
 
-        <section class="developers-section" id="errors">
-            <h2>Error envelope</h2>
-            <p>Most failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. RPC-dependent endpoints surface <strong>503</strong> with <code>{ "error": "rpc not connected" }</code> during chain RPC outages — treat 503 as <em>"retry with backoff"</em>, not a permanent failure.</p>
-        </section>
+    email: `            ${renderSection('email', { listClass: 'developers-endpoints' })}`,
 
-        <section class="developers-section" id="addresses">
-            <h2>Address format</h2>
-            <p>All paths that take an <code>:address</code> expect Polkadex-format SS58 (prefix 88, addresses start with <code>e…</code>). The server normalizes via <code>toPolkadexAddress()</code> so wallet-native prefixes (42, 0) usually also resolve, but consistency is recommended.</p>
-        </section>
+    discussions: `            ${renderSection('discussions', { listClass: 'developers-endpoints' })}`,
 
-        <section class="developers-section" id="examples">
-            <h2>Quick examples</h2>
-            <p>Network info (home-page summary):</p>
+    auth: `            ${renderSection('auth', { listClass: 'developers-endpoints' })}`,
+
+    meta: `            ${renderSection('meta', { listClass: 'developers-endpoints' })}`,
+
+    errors: `            <p>Most failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. The <code>error</code> string is written for display — <strong>do not match on it</strong>; it is reworded freely between releases.</p>
+            <p>RPC-dependent endpoints surface <strong>503</strong> during chain RPC outages, carrying a stable <code>code</code> alongside the prose plus <code>Retry-After: 5</code> and <code>Cache-Control: no-store</code>:</p>
+            <pre><code>${stakingEscapeHtml(rpcNotReadyExample())}</code></pre>
+            <p>Branch on <code>code === "${RPC_NOT_READY.code}"</code> (or on the 503 status) and retry with backoff. <strong>Audit F-155:</strong> this section used to promise a short fixed <code>error</code> string that the server has never sent — clients matching it treated every outage as an unknown error. It is now rendered from the same constant the 503 handler uses.</p>`,
+
+    addresses: `            <p>All paths that take an <code>:address</code> expect Polkadex-format SS58 (prefix 88, addresses start with <code>e…</code>). The server normalizes via <code>toPolkadexAddress()</code> so wallet-native prefixes (42, 0) usually also resolve, but consistency is recommended.</p>`,
+
+    examples: `            <p>Network info (home-page summary):</p>
             <pre><code>curl https://explorer.polkadex.ee/api/network-info</code></pre>
             <p>Latest PDEX price:</p>
             <pre><code>curl https://explorer.polkadex.ee/api/price-latest</code></pre>
@@ -6784,14 +6002,24 @@ curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&amp;at=1
             <pre><code>curl 'https://explorer.polkadex.ee/api/price-history?days=30'</code></pre>
             <p>Wallet summary for a Polkadex address (replace with a real <code>e…</code> address):</p>
             <pre><code>curl https://explorer.polkadex.ee/api/wallet/esoEt6uZ9vs23yW8aqTACLf1tViGpSLZKnhPXt5Nq7vQwHGew</code></pre>
-            <p>Search (returns block / extrinsic / account hits):</p>
-            <pre><code>curl https://explorer.polkadex.ee/api/search/12000000</code></pre>
-        </section>
+            <p>Search — block number, block hash, or account. Audit F-086: this line used to promise extrinsic hits too; <code>/api/search</code> is a live-RPC probe that does not resolve extrinsic hashes. Use <code>/api/extrinsic-by-hash/:txHash</code> for those:</p>
+            <pre><code>curl https://explorer.polkadex.ee/api/search/12000000</code></pre>`,
 
-        <section class="developers-section" id="contact">
-            <h2>Found a bug or missing endpoint?</h2>
-            <p>Open an issue at <a href="https://github.com/Polkadex-Substrate" target="_blank" rel="noopener" class="item-link">github.com/Polkadex-Substrate</a>, or reach the team via the channels listed at <a href="https://polkadex.ee" target="_blank" rel="noopener" class="item-link">polkadex.ee</a>.</p>
-        </section>
+    contact: `            <p>Open an issue at <a href="https://github.com/Polkadex-Substrate" target="_blank" rel="noopener" class="item-link">github.com/Polkadex-Substrate</a>, or reach the team via the channels listed at <a href="https://polkadex.ee" target="_blank" rel="noopener" class="item-link">polkadex.ee</a>.</p>`
+};
+
+function renderDevelopersPage() {
+    const root = document.getElementById('developers-page-content');
+    if (!root) return;
+    root.innerHTML = `
+        <div class="developers-hero">
+            <h1>Developers</h1>
+            <p class="developers-tagline">JSON API for the Polkadex Mainnet — used by this explorer and freely consumable by external apps, especially native mobile clients.</p>
+        </div>
+
+        ${renderToc({ navClass: 'developers-toc' })}
+
+        ${renderOutline((entry) => DEVELOPERS_SECTION_BODIES[entry.id] || '', { sectionClass: 'developers-section' })}
     `;
 }
 
@@ -6957,7 +6185,17 @@ async function fetchAccountDetails(address) {
                     </tr>
                     <tr>
                         <td style="padding: 12px 20px; font-weight: 600;">balance reserved</td>
-                        <td style="padding: 12px 20px;">${Number(data.balanceReserved != null ? data.balanceReserved : data.balanceFrozen).toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
+                        <!-- F-136: the `?? data.balanceFrozen` fallback that used to be
+                             here is GONE, and removing it was required, not tidying.
+                             balanceFrozen used to be an alias of reserved; it now
+                             carries the real frozen amount, which is a different
+                             quantity, so the fallback would print locks under a
+                             "reserved" label — the exact confusion F-136 is about. -->
+                        <td style="padding: 12px 20px;">${Number(data.balanceReserved ?? 0).toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 12px 20px; font-weight: 600;">balance frozen</td>
+                        <td style="padding: 12px 20px;">${Number(data.balanceFrozen ?? 0).toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span> <span style="font-size: 11px; color: var(--text-secondary);">locks (vesting/staking) — overlaps free, not additional to it</span></td>
                     </tr>
                     <tr style="background: rgba(255,255,255,0.02);">
                         <td style="padding: 12px 20px; font-weight: 600;">balance free</td>
@@ -7892,10 +7130,11 @@ function wireEmailPreferencesForm(token) {
     });
 }
 
+// Audit F-133: the implementation moved to lib/html-escape.js, shared with
+// server.js. The name stays because 261 call sites use it, and renaming them
+// would be a large diff whose only effect is churn.
 function stakingEscapeHtml(value) {
-    return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[c]));
+    return sharedEscapeHtml(value);
 }
 
 // ─── Local-timezone date helpers ────────────────────────────────────────────
@@ -8827,12 +8066,23 @@ const MOBILE_WALLETS = [
 // Enumerate accounts from installed Substrate wallet extensions / mobile
 // in-app browsers. The retry loop helps mobile wallets that inject
 // `window.injectedWeb3` slightly after `DOMContentLoaded`.
-// Each account is returned with two address fields:
-//   `address`    — the Polkadex-prefixed form (starts with "e…") for display
-//                  and for everything the user/UI persists.
-//   (a former `rawAddress` field was removed — audit F-117: never read)
-//                  needed by the wallet's `signAndSend` so the injected
-//                  signer recognises the account.
+// Each account is returned with ONE address field:
+//
+//   `address` — the Polkadex-prefixed form (starts with "e…"), used for
+//               display, for anything the UI persists, and for signAndSend
+//               alike.
+//
+// Audit F-117: there used to be a second `rawAddress` field holding the
+// wallet's native-prefixed form, on the theory that an injected signer would
+// only recognise the account under the encoding it handed us. Nothing ever read
+// it. It was removed, and this comment was left half-rewritten — the two lines
+// that followed were the orphaned tail of the deleted bullet and read as though
+// `address` needed some other form. Extensions (polkadot-js, Talisman,
+// SubWallet, Nova) match accounts by PUBLIC KEY, so any SS58 encoding of a key
+// they hold is accepted; `isSameAddress` compares public-key bytes for the same
+// reason. If some future wallet ever did strict string matching, signing would
+// already be failing today — that would be a bug report, not a reason to
+// restore a field nothing reads.
 async function getInjectedAccounts({ retries = 6, retryDelayMs = 250 } = {}) {
     // Wait briefly for late injection on mobile wallet in-app browsers.
     for (let i = 0; i < retries; i++) {
@@ -10227,6 +9477,25 @@ async function submitStakeTx() {
 }
 
 // --- Pay out rewards modal ---
+//
+// Audit F-055 (round 2). One transaction claims at most PAYOUT_BATCH_MAX
+// (validator, era) pairs, to stay well under the per-block weight limit. Two
+// separate things follow from that cap and both were wrong:
+//
+//   * the batch must be NON-ATOMIC. Each payoutStakers(validator, era) pair is
+//     independent, and one that has already been claimed returns AlreadyClaimed
+//     — under utility.batchAll that single inner failure reverts every other
+//     payout in the same transaction, so the user pays a fee and claims
+//     nothing. batchTx prefers forceBatch (continues past inner failures), then
+//     batch (stops at the failure but keeps what already succeeded), and only
+//     falls back to batchAll when a runtime has neither. Polkadex has
+//     forceBatch.
+//   * the cap must be DISCLOSED BEFORE SIGNING. Round 1 added the "first N of
+//     M" line inside submitPayoutTx, which fires when the user clicks Sign —
+//     after they have decided. It belongs on the modal, next to the count they
+//     are reading.
+const PAYOUT_BATCH_MAX = 30;
+
 function openPayoutModal() {
     const data = currentWalletData;
     if (!data) return alert('Wallet data is not loaded yet.');
@@ -10247,6 +9516,14 @@ function openPayoutModal() {
             <div class="payout-amt">${stakingFormatPDEX(e.amount)} PDEX</div>
         </div>`).join('');
         if (submitBtn) submitBtn.disabled = false;
+        // F-055 close test: "the claim UI shows 'first 30 of N'". Shown here,
+        // on open, so the user sees it while reading the count — not after
+        // they have clicked Sign.
+        if (entries.length > PAYOUT_BATCH_MAX && errEl) {
+            errEl.style.display = 'block';
+            errEl.style.color = 'var(--text-secondary)';
+            errEl.textContent = `This claims the first ${PAYOUT_BATCH_MAX} of ${entries.length} entries — one transaction cannot safely carry more. Run Pay Out again afterwards for the rest.`;
+        }
     }
     document.getElementById('payout-modal').style.display = 'flex';
 }
@@ -10259,8 +9536,7 @@ async function submitPayoutTx() {
     if (!data) return fail('Wallet data is not loaded.');
     const entries = (data.rewards && data.rewards.unpaidEntries) || [];
     if (!entries.length) return fail('Nothing to claim right now.');
-    // Cap at 30 per tx to stay well under per-block weight limits; user can re-trigger.
-    const batch = entries.slice(0, 30);
+    const batch = entries.slice(0, PAYOUT_BATCH_MAX);
     const truncated = entries.length > batch.length;
     // F-055: say so BEFORE signing, where the decision is made — the tx label
     // alone only tells the user after the fact.
@@ -11763,6 +11039,24 @@ function indexerStatusBadge(rawStatus, errorMessage) {
         return `<span title="${stakingEscapeHtml(status)}" style="display:inline-flex;align-items:center;gap:6px;color:#f5a623;font-size:0.78rem;">
             <i class='bx bx-loader-alt bx-spin'></i> ${stakingEscapeHtml(status)}</span>`;
     }
+    // Audit F-050/F-004 (round 2). deriveIndexStatus can return 'Repairing' and
+    // 'Degraded', and this function knew about neither — so every honest
+    // "there is a hole and we are working on it" was rendered as a red
+    // "Indexer error … it will retry automatically", which is both wrong and
+    // the opposite of actionable for the Degraded case, where retries have
+    // stopped and somebody has to look. Adversarial review caught it: the whole
+    // point of the status rollout was invisible in the product.
+    //
+    // `detail` from the sync state is passed through as the tooltip, because
+    // "Repairing" without a number is the same false comfort "Synced" was.
+    if (status === 'Repairing') {
+        return `<span title="${stakingEscapeHtml(errorMessage || 'Known gaps are being re-fetched. Data below the gap is complete; the gap itself is not yet.')}" style="display:inline-flex;align-items:center;gap:6px;color:#f5a623;font-size:0.78rem;cursor:help;">
+            <i class='bx bx-wrench'></i> Repairing</span>`;
+    }
+    if (status === 'Degraded') {
+        return `<span title="${stakingEscapeHtml(errorMessage || 'Some blocks could not be indexed after repeated attempts — usually a pruned (non-archive) RPC node. This will not resolve on its own.')}" style="display:inline-flex;align-items:center;gap:6px;color:var(--error);font-size:0.78rem;cursor:help;">
+            <i class='bx bx-error'></i> Degraded</span>`;
+    }
     // 'Error' and any other unrecognised value — clearer wording + tooltip.
     return `<span title="${stakingEscapeHtml(errorMessage || 'Indexer encountered an error on the last tick. It will retry automatically.')}" style="display:inline-flex;align-items:center;gap:6px;color:var(--error);font-size:0.78rem;cursor:help;">
         <i class='bx bx-error-circle'></i> Indexer error</span>`;
@@ -12600,9 +11894,26 @@ function councilMotionClose(hash, index) {
     const stored = getStoredWallet();
     if (!(councilData.members || []).some(m => isSameAddress(m.address, stored)))
         return alert('Only council members can close motions. Your connected wallet does not hold a council seat.');
-    const idx = Number(index);
     const motion = (councilData.motions || []).find(m => m.hash === hash);
     if (!motion) return alert('Motion details are no longer available — refresh the page.');
+    // Audit F-118 (round 2): councilMotionVote above got the digit check in
+    // round 1 and this sibling did not, though `index` reaches both the same
+    // way — as a DOM attribute that is the literal "null" when the backend's
+    // council.voting() returned None. `Number("null")` is NaN and
+    // `Number(null)` is 0.
+    //
+    // Less dangerous than the vote case, and worth saying why rather than
+    // implying otherwise: collective.close() takes the proposal HASH as well as
+    // the index and rejects a pair that does not match, so a wrong index fails
+    // on chain instead of closing someone else's motion. What it actually costs
+    // is a burned fee and a confirm dialog reading "Close council motion #NaN".
+    // Checked here anyway — two adjacent functions validating the same argument
+    // differently is how the next person concludes the check is optional.
+    const rawIndex = String(index == null ? '' : index).trim();
+    const idx = /^\d+$/.test(rawIndex) ? Number(rawIndex) : NaN;
+    if (!Number.isInteger(idx) || idx < 0) {
+        return alert('This motion has no on-chain vote index available, so it cannot be closed safely.\n\nReload the page and try again.');
+    }
     if (!confirm(`Close council motion #${idx}?\n\nThis finalizes the vote and, if it passed, dispatches the proposed call.`)) return;
     const pallet = councilData.collectivePallet;
     const weightBound = { refTime: motion.weightRefTime || '10000000000', proofSize: motion.weightProofSize || '500000' };
@@ -12860,12 +12171,24 @@ async function openCouncilVoteModal() {
                     }
                 }
                 // Pre-fill the backing stake with what's currently locked so
-                // the user sees what they previously chose. Convert planck
-                // (u128 string) → whole PDEX via 1e12 divisor (PDEX = 12 decimals).
+                // the user sees what they previously chose.
+                //
+                // Audit F-195 (round 2): this was `Number(BigInt(existingStake)) / 1e12`
+                // — the exact IEEE divide F-043/F-067 removed everywhere else.
+                // Above 2^53 planck (~9007 PDEX) the double cannot represent the
+                // u128, so the field was pre-filled with a ROUNDED number. A
+                // whale re-submitting the prefilled value without editing it
+                // would sign a different balance than the pallet holds, and
+                // because F-011 removed the multiply-to-sign step the string in
+                // this box goes straight to pdexToPlanck.
+                //
+                // planckToPdexString does the same BigInt split as
+                // formatLivePDEX and round-trips exactly: pdexToPlanck(out)
+                // === existingStake for every u128.
                 if (existingStake !== '0' && stakeInputEl) {
                     try {
-                        const stakePdex = Number(BigInt(existingStake)) / 1e12;
-                        if (stakePdex > 0) stakeInputEl.value = String(stakePdex);
+                        const stakeStr = planckToPdexString(existingStake);
+                        if (stakeStr && stakeStr !== '0') stakeInputEl.value = stakeStr;
                     } catch (_) {}
                 }
             } catch (_e) { /* shape drift — silently skip pre-population */ }
@@ -13037,16 +12360,30 @@ function checkWalletForCouncil(modalType) {
 // dispatchError and says which one happened.
 async function submitCouncilCandidacy() {
     const btn = document.getElementById('submit-candidacy-tx-btn');
-    let candidateCount = 0;
-    try {
-        const response = await fetch('/api/council');
-        const data = await parseJsonResponse(response);
-        candidateCount = (data.candidates || []).length;
-    } catch (e) {
-        return alert('Could not read the current candidate count: ' + (e && e.message ? e.message : e));
-    }
     await submitSignedTx({
-        buildTx: (api) => api.tx[councilPalletName].submitCandidacy(candidateCount),
+        // Audit F-056 (round 2), second half. `candidateCount` used to be read
+        // from GET /api/council BEFORE this call, outside buildTx — the length
+        // of a list the backend had snapshotted, which is a cached view of the
+        // chain and not the chain.
+        //
+        // elections.submitCandidacy(candidateCount) is a WITNESS argument: the
+        // runtime compares it against the actual length of `Candidates` and
+        // rejects the extrinsic with InvalidWitnessData if they differ. So any
+        // candidacy submitted between the snapshot and the signature made this
+        // one fail — during a council election, which is exactly when other
+        // people are also submitting candidacies. The user pays a fee and is
+        // told their candidacy was rejected, with nothing to suggest that
+        // simply retrying would work.
+        //
+        // Reading it inside buildTx narrows the window to the gap between the
+        // storage read and the signature, which is the smallest it can be from
+        // a browser. It also reads the same pallet the call is dispatched to,
+        // rather than trusting the backend's name for it.
+        buildTx: async (api) => {
+            const candidates = await api.query[councilPalletName].candidates();
+            const count = Array.isArray(candidates) ? candidates.length : (candidates.length ?? 0);
+            return api.tx[councilPalletName].submitCandidacy(count);
+        },
         label: 'Council candidacy',
         button: btn,
         busyText: 'Signing...',
@@ -13147,7 +12484,13 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
 
     setBusy();
     try {
-        const tx = buildTx(globalApi);
+        // `await` even though most builders are synchronous: awaiting a
+        // non-promise is a no-op, and F-056 needs one builder to read chain
+        // state (elections.candidates) at signing time rather than trusting a
+        // value captured earlier. Without this, an async builder would hand
+        // signAndSend a Promise, which has no .signAndSend — a TypeError in
+        // the wallet flow, at the worst possible moment.
+        const tx = await buildTx(globalApi);
         // Sign with the extension's address (its native SS58 format) so the
         // injected signer recognizes the account.
         const unsub = await tx.signAndSend(account.address, { signer }, (result) => {

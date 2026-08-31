@@ -19,6 +19,17 @@ import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise } from './lib/commission-history.js';
+import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
+import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
+import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
+// Audit F-164 — the superOf → identityOf walk lives in ONE module that this
+// file and the debug probes both import. Two copies of it drifted apart across
+// a runtime upgrade once; see the header of lib/identity.js.
+import { getOnChainIdentity } from './lib/identity.js';
+// Audit F-154/F-155 — the /developers route list and the RPC-outage envelope
+// live in ONE module that both this file and script.js render from. See the
+// header of lib/api-reference.js for what four hand-maintained copies cost.
+import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READY, rpcNotReadyExample } from './lib/api-reference.js';
 import {
     selectDispatchable, selectNewlyResolved, isTerminalRefStatus, describeRefOutcome
 } from './lib/email-events.js';
@@ -387,6 +398,12 @@ const BLOCKS_MIN_BLOCK = readPositiveInteger(process.env.BLOCKS_MIN_BLOCK, 1);
 const CHAIN_GAP_SCAN_MS = readPositiveInteger(process.env.CHAIN_GAP_SCAN_MS, 5 * 60 * 1000);
 const CHAIN_FULL_GAP_SCAN_MS = readPositiveInteger(process.env.CHAIN_FULL_GAP_SCAN_MS, 60 * 60 * 1000);
 const CHAIN_GAP_SCAN_WINDOW = readPositiveInteger(process.env.CHAIN_GAP_SCAN_WINDOW, 5000);
+// F-047: how many block heights one "full" gap sweep covers. The sweep walks
+// the whole history across successive ticks in slices this size, so the
+// synchronous LEAD is O(window) rather than O(table). 500k heights is a few
+// hundred ms on the production index; the whole 12.8M-block history is covered
+// in ~26 sweeps, i.e. about a day at the hourly cadence.
+const CHAIN_FULL_SCAN_WINDOW = readPositiveInteger(process.env.CHAIN_FULL_SCAN_WINDOW, 500_000);
 // Per-tick parallelism for block fetches. Each Promise.all batch hits the RPC
 // node with this many concurrent block-hash + derived-block requests. Higher
 // = faster catch-up but more RPC load; lower = gentler but slower. 8 is a
@@ -565,10 +582,13 @@ function requireRpc(res) {
         // otherwise pin this empty-data error and serve it to every client long
         // after the RPC recovered. no-store defeats that regardless of TTL.
         res.set('Cache-Control', 'no-store');
-        res.status(503).json({
-            error: 'Live blockchain data is not available right now — the explorer is still connecting to the Polkadex node. Please refresh in a few seconds.',
-            code: 'RPC_NOT_READY'
-        });
+        // Audit F-155: the literal used to live here AND, differently, in four
+        // documents. It now lives in lib/api-reference.js, which is also what
+        // /developers renders — so the documented envelope is this envelope by
+        // construction, not by somebody remembering to update both. If you
+        // change the wording, change it there; `code` is the part clients are
+        // told to branch on and must stay stable.
+        res.status(503).json({ error: RPC_NOT_READY.error, code: RPC_NOT_READY.code });
         return false;
     }
     return true;
@@ -577,8 +597,14 @@ function requireRpc(res) {
 let isSyncing = false;
 let isSyncingHolders = false;
 let isSyncingTx = false;
-let isSyncingBlocks = false;
-let isSyncingEvents = false;
+// Audit F-141: `isSyncingBlocks` / `isSyncingEvents` are deliberately absent.
+// They were the re-entrancy latches for the standalone syncBlocks/syncEvents
+// crawlers, which syncChainIndex replaced. Leaving the latches behind after
+// deleting the crawlers is how a "harmless" dead variable becomes a live bug:
+// the next person wiring a blocks crawler finds a plausible-looking flag,
+// reuses it, and gets a latch that no error path ever clears. If you need a
+// second writer, declare its own flag next to its own function so the two
+// cannot drift apart.
 let isSyncingStakingRewards = false;
 let isSyncingPrice = false;
 let isSyncingCouncil = false;
@@ -1072,14 +1098,16 @@ async function computeNetworkInfo() {
     return networkInfoInFlight;
 }
 
-function formatIdentityName(rawStr) {
-    if (!rawStr) return "Unknown";
-    if (rawStr.startsWith('0x')) {
-        try { return Buffer.from(rawStr.slice(2), 'hex').toString('utf8'); } catch (e) { return rawStr; }
-    }
-    return rawStr;
-}
-
+// Audit F-164 — `formatIdentityName` and `getOnChainIdentity` were defined
+// here; they now come from lib/identity.js (imported at the top of this file)
+// so the debug probes can run the SAME walk instead of a copy of it. Do not
+// re-add local definitions: the sub-identity hop and the two identityOf
+// storage shapes are the parts that drift, and drift is the finding.
+//
+// What stays here is the part that is genuinely server-only — the cache and
+// the DISPLAY_NAME_OVERRIDES policy. A standalone probe must not inherit
+// either: an override would make the probe report a name the chain does not
+// have, which defeats the purpose of running it.
 async function getIdentity(api, address) {
     const cacheKey = address.toString();
     const hasOverride = DISPLAY_NAME_OVERRIDES.has(cacheKey);
@@ -1094,7 +1122,12 @@ async function getIdentity(api, address) {
         return DISPLAY_NAME_OVERRIDES.get(cacheKey) || "Unknown";
     }
 
-    const onChainName = await getOnChainIdentity(api, address);
+    // onError keeps the previous per-address warn. It is passed in rather than
+    // baked into the helper so the probes can stay silent (or louder) without
+    // changing what production logs.
+    const onChainName = await getOnChainIdentity(api, address, {
+        onError: (e, addr) => console.warn(`Identity lookup failed for ${String(addr)}:`, e.message)
+    });
     if (onChainName !== "Unknown") {
         identityCache.set(cacheKey, onChainName);
         return onChainName;
@@ -1103,39 +1136,6 @@ async function getIdentity(api, address) {
     const fallbackName = DISPLAY_NAME_OVERRIDES.get(cacheKey) || "Unknown";
     if (!hasOverride) identityCache.set(cacheKey, fallbackName);
     return fallbackName;
-}
-
-async function getOnChainIdentity(api, address) {
-    const cacheKey = address.toString();
-    let name = "Unknown";
-    // Defensive null-check: the watchdog briefly nulls globalApi between
-    // disconnect and reconnect, and identity lookups can be in flight from
-    // any of the HTTP handlers. Catching this here keeps the reconnect
-    // window silent in logs and returns "Unknown" without falsely caching it.
-    if (!api || !api.query || !api.query.identity) return name;
-    try {
-        const superOf = await api.query.identity.superOf(address);
-        if (superOf.isSome) {
-            const [parentAddress, data] = superOf.unwrap();
-            const parentIdentity = await api.query.identity.identityOf(parentAddress);
-            let parentName = "Unknown";
-            const pHuman = parentIdentity.toHuman();
-            if (pHuman && pHuman.info && pHuman.info.display && pHuman.info.display.Raw) parentName = formatIdentityName(pHuman.info.display.Raw);
-            else if (pHuman && Array.isArray(pHuman) && pHuman[0] && pHuman[0].info) parentName = formatIdentityName(pHuman[0].info.display.Raw);
-
-            const subDataHuman = data.toHuman();
-            const subName = subDataHuman ? formatIdentityName(subDataHuman.Raw) : "Unknown";
-            name = `${parentName} / ${subName}`;
-        } else {
-            const identity = await api.query.identity.identityOf(address);
-            const human = identity.toHuman();
-            if (human && human.info && human.info.display && human.info.display.Raw) name = formatIdentityName(human.info.display.Raw);
-            else if (human && Array.isArray(human) && human[0] && human[0].info) name = formatIdentityName(human[0].info.display.Raw);
-        }
-    } catch (e) {
-        console.warn(`Identity lookup failed for ${cacheKey}:`, e.message);
-    }
-    return name;
 }
 
 // Audit F-114: the fallback was Date.now() — so a block whose timestamp.set
@@ -1183,11 +1183,47 @@ function getExtrinsicAmountSummary(ex) {
 // it must produce the SAME id the event path would (see lib/tx-from-event.js
 // `eventTxId`) or the duplicate returns.
 
+// Audit F-114 (round 2). The catch used to `return Date.now()`.
+//
+// That is not a fallback, it is a fabrication: the caller stores the result as
+// the block's timestamp, so an RPC hiccup while indexing block 4,000,000 wrote
+// TODAY's wall-clock time onto a row from 2022. Nothing downstream can tell the
+// difference — the column is an INTEGER either way — and the damage is
+// permanent and silent:
+//
+//   * the analytics day-buckets (db.js, `WHERE timestamp >= ?`) put an
+//     ancient transfer in this week's totals;
+//   * a reward row carries a payout date that never happened, which is what a
+//     nominator reconciles against for tax;
+//   * a treasury/motion row sorts to the top of a "recent governance" list.
+//
+// The round-1 fix corrected the OTHER helper (getBlockTimestamp, which reads
+// the timestamp.set extrinsic and now returns null) and left this one — which
+// is the one all three indexers call.
+//
+// Returning null makes the failure visible instead of plausible. Every caller
+// now refuses to write the block and queues it for retry, so an unreadable
+// timestamp costs one re-fetch rather than a wrong row nobody will ever notice.
+// `timestamp` is nullable in both schemas, so a stored null would not throw —
+// but it would sort and bucket unpredictably, and "no row yet" is a state the
+// gap-fill pass already knows how to fix.
+// Audit F-006. When true (default), a block whose events could not be decoded
+// is queued for retry rather than stored as a zero-event success. Set
+// EVENTS_STRICT=0 on a PRUNED (non-archive) node, where historical event
+// metadata is genuinely unavailable and retrying can never succeed — otherwise
+// every old block accumulates a permanent failure and the index reports
+// Degraded forever. explorer.polkadex.ee runs an archive node, so strict.
+// How long an exhausted scan_failures row waits before its retry budget is
+// returned. Matches the F-046 in-memory gap amnesty so the two do not drift.
+const SCAN_AMNESTY_MS = readPositiveInteger(process.env.SCAN_AMNESTY_MS, 6 * 60 * 60 * 1000);
+
+const EVENTS_STRICT = String(process.env.EVENTS_STRICT ?? '1') !== '0';
+
 async function getBlockTimestampAt(blockHash) {
     try {
         return Number(await globalApi.query.timestamp.now.at(blockHash));
     } catch (err) {
-        return Date.now();
+        return null;
     }
 }
 
@@ -1346,7 +1382,31 @@ async function scanBlockForTransactions(blockNumber) {
             getEventsAtBlock(blockHash),
             getBlockTimestampAt(blockHash)
         ]);
-        if (!events) return { blockNumber, transactions: [], ok: true };
+        // Audit F-006 (round 2). `ok: true` here told the gap-fill pass "this
+        // height is done", so the failure row was cleared and the watermark
+        // advanced past a block whose events were never decoded. Any transfer
+        // in it is absent from the index forever, and nothing anywhere records
+        // that it might be. The chain indexer was fixed in round 1; the
+        // transaction and reward scanners kept the old behaviour.
+        //
+        // EVENTS_STRICT=0 remains the pruned-node escape hatch: on a node that
+        // has discarded historical state, un-decodable events are the expected
+        // steady state and queueing every one of them just fills the table.
+        if (!events) {
+            if (!EVENTS_STRICT) return { blockNumber, transactions: [], ok: true };
+            db.recordScanFailure('transactions', blockNumber,
+                'events could not be decoded at this height (F-006)');
+            return { blockNumber, transactions: [], ok: false };
+        }
+        // F-114: refuse to write rows stamped with a time we do not know.
+        // The error text deliberately avoids the words requeueTransientScanFailures
+        // matches on (rpc/websocket/disconnected/socket/econn…), or an amnesty
+        // pass would reset the attempt counter forever.
+        if (timestamp === null) {
+            db.recordScanFailure('transactions', blockNumber,
+                'block timestamp unavailable at this height (F-114)');
+            return { blockNumber, transactions: [], ok: false };
+        }
         const blockTransactions = [];
         events.forEach((record, eventIndex) => {
             const tx = buildFinancialTransactionFromEvent(record, eventIndex, blockNumber, blockHash, timestamp);
@@ -1713,13 +1773,40 @@ function devApiGate(req, res) {
 // attacker wants a map of post-Perfctl), worker pids, the SubQuery endpoint,
 // and the email provider's from-address + readiness (phishing prep). They
 // were reachable by anyone. Gate them behind a shared secret:
-//   - DIAG_TOKEN set   → require Authorization: Bearer <token> (or ?token=).
+//   - DIAG_TOKEN set   → require the token in a REQUEST HEADER, either
+//     `Authorization: Bearer <token>` or `X-Diag-Token: <token>`.
 //   - DIAG_TOKEN unset → loopback callers only (operator on the box via
 //     `curl 127.0.0.1:3001/...`; nginx-proxied traffic arrives with a
 //     non-loopback X-Forwarded-For and is refused).
 // Monitors that used to keyword-match these URLs should point at the public
 // /api/health below, which returns only { healthy } with no URLs, pids, or
 // email fields.
+//
+// ─── Audit F-193: why `?token=` is refused rather than merely discouraged ────
+//
+// This gate used to read `bearer || req.query.token`, and .env.example taught
+// the query form as the monitor recipe. A secret in a URL is not a secret in
+// one place — the same string is simultaneously written into:
+//
+//   * the operator's shell history and the monitoring vendor's stored config
+//     (UptimeRobot/BetterStack show the full URL in their UI and their alert
+//     emails, so the token leaves the operator's control the moment it is
+//     pasted in);
+//   * every intermediary's request line — Cloudflare's HTTP logs and analytics
+//     see the full path+query even though the origin nginx was fixed under
+//     F-091 to log `$uri` only. F-091 closed OUR log, not the edge's;
+//   * the Referer header of anything the response links to, and the browser
+//     history / autocomplete of whoever opened the URL to "just check".
+//
+// None of those are fixed by rotating the token, because the next monitor URL
+// leaks it exactly the same way. Headers are not logged by any of the above by
+// default, so the header form is the only one that keeps the secret to the two
+// endpoints of the connection.
+//
+// If this is reverted to accept `req.query.token`, nothing appears to break —
+// which is the whole problem. The gate still answers 200 for the operator, the
+// tests that only check "wrong token is refused" still pass, and the leak is
+// invisible until the token turns up somewhere it was never typed.
 const DIAG_TOKEN = (process.env.DIAG_TOKEN || '').trim();
 function diagGate(req, res) {
     res.set('Cache-Control', 'no-store');
@@ -1734,9 +1821,27 @@ function diagGate(req, res) {
     if (DIAG_TOKEN) {
         const auth = String(req.headers['authorization'] || '');
         const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-        const supplied = bearer || String(req.query.token || '');
-        if (supplied === DIAG_TOKEN) return true;
-        res.status(401).json({ error: 'diagnostics require a valid token' });
+        // X-Diag-Token is the alternative for monitors that cannot send an
+        // Authorization header without also enabling some auth scheme of their
+        // own. Both are headers; neither ends up in a log line or a Referer.
+        const header = String(req.headers['x-diag-token'] || '').trim();
+        const supplied = bearer || header;
+        if (supplied && supplied === DIAG_TOKEN) return true;
+        // F-193: a caller who put the token in the query string gets a distinct
+        // 403 telling them where to move it. Answering a generic 401 here would
+        // read as "wrong token" and send the operator off rotating a token that
+        // was never wrong — and the token would stay in the monitor URL while
+        // they looked. The token itself is never echoed back.
+        if (req.query && req.query.token !== undefined) {
+            res.status(403).json({
+                error: 'diagnostics no longer accept a ?token= query parameter — a URL-borne secret ' +
+                       'is recorded by Cloudflare, browser history and Referer headers. Send it as ' +
+                       '`Authorization: Bearer <token>` or `X-Diag-Token: <token>` instead. Header-less ' +
+                       'uptime monitors should point at the public /api/health.'
+            });
+            return false;
+        }
+        res.status(401).json({ error: 'diagnostics require a valid token in an Authorization: Bearer or X-Diag-Token header' });
         return false;
     }
     // No token configured: only trust a socket-level loopback connection that
@@ -1957,12 +2062,46 @@ async function resolveAtBlock(at) {
 // Historical state reads need an ARCHIVE node. A pruned node keeps only the
 // last ~256 blocks of state and fails with "State already discarded". Turn
 // that into an explanation rather than a raw RPC error.
+// Audit F-084 (round 2). This used to return `err.message` — verbatim, to the
+// client, on four public 500s.
+//
+// The pruning case is a genuinely useful thing to tell a caller, and that is
+// what kept the raw message here: the polkadot.js text ("state already
+// discarded at 0x…") is how a developer learns their query needs an archive
+// node. But the same return path also carried every OTHER error, and those
+// messages describe our infrastructure — a failed WS dial names the internal
+// endpoint host and port, a decode failure spills a hex byte dump with codec
+// internals. None of it helps the caller and all of it is free reconnaissance.
+//
+// So: recognise the one case worth explaining, describe it in OUR words, and
+// give everything else a fixed sentence. `code` is the part a client should
+// branch on, matching the RPC_NOT_READY convention.
+//
+// PRUNED_STATE is deliberately NOT a 500 at the call sites below — it is a
+// fact about the requested block, not a fault on our side. The caller can act
+// on it (ask for a recent block, or point at an archive node); a 500 tells
+// them to retry, which will never work.
+//
+// The archive-node guidance that used to live in this string now lives on
+// /developers, where it can be a paragraph rather than an error message.
 function archiveHint(err, at) {
     const msg = String(err && err.message || err);
     if (/state already discarded|unknown block|not available|pruned/i.test(msg) && at) {
-        return `${msg} — block ${at.block} is outside this node's pruning window. Historical state queries require an ARCHIVE node; point POLKADEX_WS at one.`;
+        return {
+            status: 409,
+            body: {
+                error: `Block ${at.block} is outside this node's pruning window. Historical state requires an archive node — see /developers for how to point a client at one.`,
+                code: 'PRUNED_STATE'
+            }
+        };
     }
-    return msg;
+    return {
+        status: 500,
+        body: {
+            error: 'Internal error while reading chain state. If this persists, please report it with the time and the URL.',
+            code: 'INTERNAL'
+        }
+    };
 }
 
 // Serialise a codec value into every representation a forensic user needs.
@@ -2117,7 +2256,9 @@ app.get('/api/state/:pallet/:item', async (req, res) => {
         });
     } catch (err) {
         res.set('Cache-Control', 'no-store');
-        res.status(500).json({ error: archiveHint(err, at) });
+        // F-084: archiveHint chooses the status too — a pruned block is 409
+        // (a fact about the request), not 500 (a fault on our side).
+        { const a = archiveHint(err, at); res.status(a.status).json(a.body); }
     }
 });
 
@@ -2142,7 +2283,9 @@ app.get('/api/consts/:pallet/:item', async (req, res) => {
         res.json({ pallet, item, at, ...serialiseCodec(consts[pallet][item]) });
     } catch (err) {
         res.set('Cache-Control', 'no-store');
-        res.status(500).json({ error: archiveHint(err, at) });
+        // F-084: archiveHint chooses the status too — a pruned block is 409
+        // (a fact about the request), not 500 (a fault on our side).
+        { const a = archiveHint(err, at); res.status(a.status).json(a.body); }
     }
 });
 
@@ -2169,7 +2312,9 @@ app.get('/api/runtime', async (req, res) => {
         });
     } catch (err) {
         res.set('Cache-Control', 'no-store');
-        res.status(500).json({ error: archiveHint(err, at) });
+        // F-084: archiveHint chooses the status too — a pruned block is 409
+        // (a fact about the request), not 500 (a fault on our side).
+        { const a = archiveHint(err, at); res.status(a.status).json(a.body); }
     }
 });
 
@@ -2179,6 +2324,11 @@ app.get('/api/runtime', async (req, res) => {
 // node's keystore/offchain storage (author_*, offchain_*, system_addReservedPeer,
 // ...) is absent by construction — an allowlist, never a denylist, so a new
 // upstream RPC method can't quietly become reachable.
+// F-077: hard ceiling on state_getKeysPaged's caller-supplied `count`. The
+// storage browser pages at 100; anything larger is either a mistake or an
+// attempt to make one request cost the node a full prefix walk.
+const RPC_MAX_PAGE = readPositiveInteger(process.env.RPC_MAX_PAGE, 100);
+
 const RPC_ALLOWLIST = new Set([
     'chain_getBlock', 'chain_getBlockHash', 'chain_getFinalizedHead', 'chain_getHeader',
     // Audit F-077: state_queryStorageAt was reachable here. It takes an
@@ -2213,6 +2363,44 @@ app.post('/api/rpc/call', async (req, res) => {
         }
         if (params.length > 8) return res.status(400).json({ error: 'Too many parameters (max 8).' });
 
+        // Audit F-077 (round 2). `state_queryStorageAt` was removed from the
+        // allowlist in round 1; `state_getKeysPaged` stayed, and it is the one
+        // where the CALLER picks how much work the node does.
+        //
+        //   state_getKeysPaged(prefix, count, startKey, at)
+        //
+        // `count` was unbounded, so a single request could ask an archive node
+        // to walk a whole storage prefix — and the node does that work
+        // synchronously on the connection every request in this process shares.
+        // The dev-API rate limit caps requests per minute, not the size of one.
+        //
+        // Clamping rather than rejecting: the /chain-state storage browser is a
+        // legitimate consumer and a 400 would break it. But a silent clamp is
+        // its own dishonesty — a client that asked for 5,000 keys and got 100
+        // would read the short page as "the prefix ended here" and stop. So the
+        // effective value is echoed back in `pageSize`, alongside the `params`
+        // the response already returns.
+        let clampedPageSize = null;
+        if (method === 'state_getKeysPaged') {
+            // Clamp INTO the range, don't snap to the ceiling. The first
+            // version treated `asked < 1` the same as `asked > MAX` and set
+            // both to MAX — so `count: 0`, which asks the node for nothing,
+            // became a request for the largest page allowed. A guard that
+            // increases the work for its most conservative input is worse than
+            // no guard.
+            const asked = Number(params[1]);
+            if (!Number.isFinite(asked)) {
+                params[1] = RPC_MAX_PAGE;
+                clampedPageSize = RPC_MAX_PAGE;
+            } else {
+                const bounded = Math.min(Math.max(Math.trunc(asked), 1), RPC_MAX_PAGE);
+                if (bounded !== asked) {
+                    params[1] = bounded;
+                    clampedPageSize = bounded;
+                }
+            }
+        }
+
         const [section, ...rest] = method.split('_');
         const fn = rest.join('_').replace(/_(.)/g, (_, c) => c.toUpperCase());
         const target = globalApi.rpc[section] && globalApi.rpc[section][fn];
@@ -2221,7 +2409,12 @@ app.post('/api/rpc/call', async (req, res) => {
         const value = await withRpcBudget(method, () =>
             withTimeout(target(...params), DEV_API_TIMEOUT_MS, method));
         res.set('Cache-Control', 'no-store');
-        res.json({ method, params, ...serialiseCodec(value) });
+        res.json({
+            method, params, ...serialiseCodec(value),
+            // F-077: non-null when the requested page size was clamped, so a
+            // short page is not mistaken for the end of the prefix.
+            ...(clampedPageSize !== null ? { pageSize: clampedPageSize, pageSizeClamped: true } : {})
+        });
     } catch (err) {
         res.set('Cache-Control', 'no-store');
         serverError(res, err, req.path);
@@ -2317,15 +2510,21 @@ app.get('/api/decode/:block', async (req, res) => {
             const call = ex.method;
             const section = call.section, method = call.method;
             if (wantSection && norm(section) !== wantSection) continue;
-            // The budget is spent on MATCHES, not on candidates. A review
-            // caught the first version decrementing before these filters, so a
-            // 200-extrinsic block with the target at index 150 returned [] —
-            // while the response note told the caller to use ?section=, which
-            // could not reach it. Now the cap bounds the RESPONSE, which is
-            // what F-072 is about, and the filters stay usable.
+            // Audit F-188 (round 2). The budget is spent on MATCHES, not on
+            // candidates — and the first fix only got that right for
+            // ?section=. The decrement sat BETWEEN the two filters, so
+            // ?method= still burned budget on every non-matching call: the
+            // documented `?method=submit_snapshot` on a busy block came back
+            // `truncated: true` with an EMPTY list, and the SPA rendered "none
+            // matched the filter" for a call that was right there.
+            //
+            // Both filters now run first. The cap bounds what we RETURN, which
+            // is what F-072 is actually about (a multi-megabyte cacheable
+            // body), not how many rows we look at — looking is cheap, the
+            // decode below is not.
+            if (wantMethod && norm(method) !== wantMethod) continue;
             if (decodeBudget <= 0) { decodeTruncated = true; break; }
             decodeBudget--;
-            if (wantMethod && norm(method) !== wantMethod) continue;
 
             // Pair each decoded value with its declared name and type from the
             // call metadata — positional args alone are near-useless for audit.
@@ -2363,6 +2562,13 @@ app.get('/api/decode/:block', async (req, res) => {
             // F-072: say so when the cap bit, so a client can page with
             // ?index= rather than silently believing it saw the whole block.
             truncated: decodeTruncated,
+            // F-188: when a filter truncates to nothing, "no results" is
+            // indistinguishable from "your filter is wrong". Listing what IS
+            // in the block costs one cheap pass over already-decoded metadata
+            // and turns a dead end into a next step.
+            present: (decodeTruncated && out.length === 0)
+                ? [...new Set(extrinsics.map(e => `${e.method.section}.${e.method.method}`))].slice(0, 100)
+                : undefined,
             limit: DECODE_MAX_EXTRINSICS,
             extrinsics: out
         };
@@ -2380,7 +2586,9 @@ app.get('/api/decode/:block', async (req, res) => {
         res.json(body);
     } catch (err) {
         res.set('Cache-Control', 'no-store');
-        res.status(500).json({ error: archiveHint(err, { block: req.params.block }) });
+        // F-084: archiveHint chooses the status too — a pruned block is 409
+        // (a fact about the request), not 500 (a fault on our side).
+        { const a = archiveHint(err, { block: req.params.block }); res.status(a.status).json(a.body); }
     }
 });
 
@@ -2672,6 +2880,106 @@ app.get('/robots.txt', (req, res) => {
 // In-app client-side navigation to /developers still renders via
 // renderDevelopersPage() in script.js; only direct hits / refreshes reach here.
 // Keep this in sync with renderDevelopersPage() (script.js) and public/llms.txt.
+
+// Audit F-060 (round 2). The section ORDER, ids and headings now come from
+// DOC_OUTLINE in lib/api-reference.js; this object supplies only the BODY of
+// each one. That split is what stops the two /developers documents drifting
+// apart again: a section here cannot exist without being in the outline, and
+// cannot be titled differently from the SPA's copy, because neither renderer
+// owns the title any more.
+//
+// Round 1 had already moved the route table into lib/. The residual the audit
+// found was everything around it — only the SPA had anchors and a table of
+// contents, so a shared `/developers#caching` link worked in the SPA and landed
+// at the top of the page for anyone who fetched the server-rendered document;
+// and the two put their sections in different orders, which made them read as
+// unrelated pages.
+//
+// A body may be '' — the outline still emits the heading and its anchor, so a
+// section with prose in only one renderer at least keeps a stable URL.
+const DEVELOPERS_BODIES = {
+    overview: `<p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint. (This developer page is the exception: it is server-rendered on purpose.)</p>`,
+
+    cors: `<table>
+<thead><tr><th>Behavior</th><th>What to do</th></tr></thead>
+<tbody>
+<tr><td>The site sits behind Cloudflare. Requests from cloud/datacenter IP ranges are sometimes challenged, so a call from a CI runner or hosted backend can come back empty where the same call from a laptop succeeds.</td><td>It is an edge policy, not an API restriction — a plain <code>curl</code> receives HTTP 200. Send a descriptive <code>User-Agent</code>, respect the <code>Cache-Control</code> headers, and ask the operator to allowlist your range if you call from a data centre.</td></tr>
+<tr><td>The API is open to non-browser clients at the origin. CORS is a browser-only mechanism, so a caller that sends no <code>Origin</code> header (native app, server, script, AI agent) is always allowed by the app.</td><td>Call the API directly from servers and native apps. Only browser callers from other web origins need to be added to <code>ALLOWED_ORIGINS</code>.</td></tr>
+</tbody>
+</table>`,
+
+    // F-083: the tier table is rendered from CACHE_TIERS, shared with the SPA.
+    // Both pages used to describe the tiers in prose they each maintained, and
+    // both had drifted the same dangerous way — listing /api/wallet/:address as
+    // a 30-second cacheable response when the handler sends no-store.
+    caching: renderCacheTiers(),
+
+    chain: renderSection('chain'),
+
+    inspect: `<p>Generic access to runtime metadata, storage and constants at <strong>any block</strong>, so on-chain claims can be verified independently. Backed by an archive node, so historical queries work.</p>
+${renderSection('inspect')}
+<p><strong>Read-only by construction</strong> — only <code>api.query</code>, <code>api.consts</code> and allowlisted read RPCs are reachable; nothing here can submit an extrinsic.</p>
+<p><strong>Send storage keys as strings.</strong> A u64 key like <code>9223372036854775808</code> (2&#8310;&#179;) exceeds JavaScript's <code>MAX_SAFE_INTEGER</code>; a client that parses it as a number queries <code>9223372036854776000</code> instead — a different key whose empty result reads like confirmation. Responses echo <code>args</code> back so you can check.</p>
+<p><strong>Verify against <code>hex</code>, not <code>human</code>.</strong> <code>toHuman()</code> abbreviates hashes (an all-zero H256 shows as <code>0x0000…0000</code>) and group-separates integers, so every response carries human, JSON and hex together, plus a <code>count</code> for Vec results.</p>
+<p>There is an interactive UI for this at <a href="${SITE_URL}/chain-state">/chain-state</a>, with shareable deep links (<code>?pallet=&amp;item=&amp;args=&amp;at=</code>).</p>
+<pre><code>curl '${SITE_URL}/api/decode/12250870?method=submit_snapshot'
+curl '${SITE_URL}/api/state/ocex/validatorSetId?at=12250870'
+curl '${SITE_URL}/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></pre>`,
+
+    accounts:    renderSection('accounts'),
+    labels:      renderSection('labels'),
+    analytics:   renderSection('analytics'),
+    price:       renderSection('price'),
+    governance:  renderSection('governance'),
+    email:       renderSection('email'),
+    discussions: renderSection('discussions'),
+    auth:        renderSection('auth'),
+    meta:        renderSection('meta'),
+
+    schema: `<pre><code>{
+  "networkInfo": {
+    "activeEra": number,              // current staking era index
+    "avgValidatorCommission": number, // mean active-validator commission, %
+    "avgApy": number,                 // headline AVG APY %, commission-adjusted
+    "avg_apy": number,                // snake_case alias of avgApy
+    "validators":  { "active": number, "total": number },
+    "nominators":  { "active": number, "total": number },
+    "maxActiveStake": number,         // largest active-validator total stake, PDEX
+    "minStake": number,               // minimum active stake, PDEX
+    "averageStake": number,           // mean active-validator stake, PDEX
+    "avgStakePerAccount": number,     // total bonded / staking accounts, PDEX
+    "totalIssuance": number,          // total PDEX issuance
+    "totalBonding": number,           // total PDEX bonded for staking
+    "totalBondingPercent": number,    // totalBonding / totalIssuance, %
+    "totalUnbonding": number,         // total PDEX currently unbonding
+    "totalStakeChange": number,       // net stake change vs previous era, PDEX
+    "lastEraRewardsTotal": number     // total rewards paid last era, PDEX
+  },
+  "lastSync": number,                 // epoch ms when networkInfo was computed
+  "status": "Synced" | "Stale" | "Initializing" | "Error",
+  "chainHead": {
+    "value": number,                  // best block number
+    "lastAdvanceAt": number,          // epoch ms the head last advanced
+    "staleSeconds": number,           // seconds since the head last advanced
+    "isStale": boolean                // true if the head looks stuck
+  }
+}</code></pre>
+<p><strong>AVG APY</strong> is returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias), derived as <code>avgApy = 23.09 &times; (1 &minus; avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>`,
+
+    errors: `<p>Failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. The <code>error</code> string is a human-readable sentence intended for display — <strong>do not match on it</strong>; it is reworded freely between releases.</p>
+<p>Endpoints that depend on the chain RPC return <strong>503</strong> during RPC outages, with a stable machine-readable <code>code</code> alongside the prose, plus <code>Retry-After: 5</code> and <code>Cache-Control: no-store</code> so an edge cache cannot pin it:</p>
+<pre><code>${rpcNotReadyExample().replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></pre>
+<p>Branch on <code>code === "${RPC_NOT_READY.code}"</code> (or simply on the 503 status) and retry with backoff — it is not permanent. <strong>Audit F-155:</strong> this page used to promise a short fixed <code>error</code> string that the server has never sent; clients matching that literal treated every RPC outage as an unknown error and did not back off. This block is now rendered from the same constant the 503 handler uses, so the two cannot disagree again.</p>`,
+
+    addresses: `<p>Paths that take an <code>:address</code> expect Polkadex SS58 (prefix 88, addresses start with <code>e&hellip;</code>); the server normalizes via <code>toPolkadexAddress()</code>, so prefix-42/0 forms usually resolve too.</p>`,
+
+    examples: `<pre><code>curl ${SITE_URL}/api/network-info
+curl ${SITE_URL}/api/price-latest
+curl '${SITE_URL}/api/price-history?days=30'</code></pre>`,
+
+    contact: `<p>Found a bug or a missing endpoint? Open an issue on GitHub or reach the team via <a href="https://polkadex.ee" rel="noopener">polkadex.ee</a>.</p>`
+};
+
 const DEVELOPERS_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2726,108 +3034,9 @@ footer a{margin-right:16px}
 <h1>Developers — Polkadex Mainnet Explorer API</h1>
 <p class="tag">Public read-only JSON API for the Polkadex Mainnet (a Polkadot-SDK / Substrate Layer-1). Used by this explorer and freely consumable by external apps, native mobile clients, servers, and AI assistants.</p>
 
-<h2>Start here — use the JSON API, not the HTML</h2>
-<p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint. (This developer page is the exception: it is server-rendered on purpose.)</p>
-<table>
-<thead><tr><th>Behavior</th><th>What to do</th></tr></thead>
-<tbody>
-<tr><td>The site sits behind Cloudflare. Requests from cloud/datacenter IP ranges are sometimes challenged, so a call from a CI runner or hosted backend can come back empty where the same call from a laptop succeeds.</td><td>It is an edge policy, not an API restriction — a plain <code>curl</code> receives HTTP 200. Send a descriptive <code>User-Agent</code>, respect the <code>Cache-Control</code> headers, and ask the operator to allowlist your range if you call from a data centre.</td></tr>
-<tr><td>The API is open to non-browser clients at the origin. CORS is a browser-only mechanism, so a caller that sends no <code>Origin</code> header (native app, server, script, AI agent) is always allowed by the app.</td><td>Call the API directly from servers and native apps. Only browser callers from other web origins need to be added to <code>ALLOWED_ORIGINS</code>.</td></tr>
-</tbody>
-</table>
+${renderToc()}
 
-<h2>Chain data (read-only, public)</h2>
-<ul class="endpoints">
-<li><code>GET /api/blocks</code> — most recent blocks</li>
-<li><code>GET /api/block/:number</code> — single block with extrinsics + events</li>
-<li><code>GET /api/events</code> — most recent on-chain events</li>
-<li><code>GET /api/transactions</code> — most recent transactions</li>
-<li><code>GET /api/transactions/older?before=&lt;n&gt;</code> — pagination further back</li>
-<li><code>GET /api/extrinsic/:block/:txHash</code> — single-extrinsic detail</li>
-<li><code>GET /api/validators</code> — full validator set with stake + commission</li>
-<li><code>GET /api/validator/:address</code> — per-validator era history</li>
-<li><code>GET /api/holders</code> — top-balance accounts</li>
-<li><code>GET /api/account/:address</code> — account-level summary</li>
-<li><code>GET /api/network-info</code> — network metrics (schema below)</li>
-<li><code>GET /api/search/:query</code> — block / extrinsic / account lookup</li>
-<li><code>GET /api/staking-rewards/:address</code> — per-address reward history</li>
-<li><code>GET /api/staking-rewards-status</code> — reward-backfill progress</li>
-<li><code>GET /api/wallet/:address</code> — wallet dashboard payload (balances, staking incl. <code>activeStakedPlanck</code> u128 string, unpaid rewards, recent activity)</li>
-</ul>
-
-<h2>Chain inspection (read-only, polkadot.js-style)</h2>
-<p>Generic access to runtime metadata, storage and constants at <strong>any block</strong>, so on-chain claims can be verified independently. Backed by an archive node, so historical queries work.</p>
-<ul class="endpoints">
-<li><code>GET /api/rpc/metadata</code> — every pallet with its storage items (key arity + types), constants, calls, events, errors</li>
-<li><code>GET /api/state/:pallet/:item</code> — read any storage item. <code>?args=</code> keys, <code>?at=</code> block number/hash, <code>?entries=1</code> to list a map (capped)</li>
-<li><code>GET /api/consts/:pallet/:item</code> — runtime constants; <code>?at=</code> supported</li>
-<li><code>GET /api/runtime</code> — runtime spec/impl version; <code>?at=</code> supported</li>
-<li><code>GET /api/decode/:block</code> — every extrinsic decoded argument by argument (name, type, human, JSON, raw hex). Filters <code>?section=</code> <code>?method=</code> <code>?index=</code>; matching ignores case and underscores</li>
-<li><code>POST /api/rpc/call</code> — allowlisted read-only RPC methods</li>
-</ul>
-<p><strong>Read-only by construction</strong> — only <code>api.query</code>, <code>api.consts</code> and allowlisted read RPCs are reachable; nothing here can submit an extrinsic.</p>
-<p><strong>Send storage keys as strings.</strong> A u64 key like <code>9223372036854775808</code> (2&#8310;&#179;) exceeds JavaScript's <code>MAX_SAFE_INTEGER</code>; a client that parses it as a number queries <code>9223372036854776000</code> instead — a different key whose empty result reads like confirmation. Responses echo <code>args</code> back so you can check.</p>
-<p><strong>Verify against <code>hex</code>, not <code>human</code>.</strong> <code>toHuman()</code> abbreviates hashes (an all-zero H256 shows as <code>0x0000…0000</code>) and group-separates integers, so every response carries human, JSON and hex together, plus a <code>count</code> for Vec results.</p>
-<p>There is an interactive UI for this at <a href="${SITE_URL}/chain-state">/chain-state</a>, with shareable deep links (<code>?pallet=&amp;item=&amp;args=&amp;at=</code>).</p>
-<pre><code>curl '${SITE_URL}/api/decode/12250870?method=submit_snapshot'
-curl '${SITE_URL}/api/state/ocex/validatorSetId?at=12250870'
-curl '${SITE_URL}/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></pre>
-
-<h2>Price feed, governance &amp; email</h2>
-<ul class="endpoints">
-<li><code>GET /api/price-latest</code> — current PDEX price, last-sync, and a <code>bySource</code> map (one entry per configured provider; <code>coingecko</code> live by default)</li>
-<li><code>GET /api/price-history?days=N</code> — daily price series (N capped at 4000); each row tagged with its <code>source</code></li>
-<li><code>GET /api/council</code> — council members, motions, runners-up</li>
-<li><code>GET /api/treasury</code> — treasury balance + proposals (open + historical)</li>
-<li><code>GET /api/democracy</code> — referenda + public proposals</li>
-<li><code>GET /api/governance/latest</code> — most-recent OPEN referendum / proposal</li>
-<li><code>GET /api/governance/calendar</code> — unified governance timeline</li>
-<li><code>GET /api/discussions</code>, <code>GET /api/discussions/:id</code> — governance discussion threads</li>
-<li><code>POST /api/email/subscribe</code>, <code>GET|POST /api/email/confirm</code>, <code>GET|POST /api/email/unsubscribe</code> (GET renders a button, POST performs the change — F-001/F-036), <code>GET|POST /api/email/preferences</code> (backing the <code>/email/preferences?token=&lt;t&gt;</code> page) — email alerts</li>
-</ul>
-<p>Price providers are pluggable via the <code>PRICE_PROVIDERS</code> env var (csv; default <code>coingecko</code>, a keyless public API).</p>
-
-<h2>Schema — GET /api/network-info</h2>
-<pre><code>{
-  "networkInfo": {
-    "activeEra": number,              // current staking era index
-    "avgValidatorCommission": number, // mean active-validator commission, %
-    "avgApy": number,                 // headline AVG APY %, commission-adjusted
-    "avg_apy": number,                // snake_case alias of avgApy
-    "validators":  { "active": number, "total": number },
-    "nominators":  { "active": number, "total": number },
-    "maxActiveStake": number,         // largest active-validator total stake, PDEX
-    "minStake": number,               // minimum active stake, PDEX
-    "averageStake": number,           // mean active-validator stake, PDEX
-    "avgStakePerAccount": number,     // total bonded / staking accounts, PDEX
-    "totalIssuance": number,          // total PDEX issuance
-    "totalBonding": number,           // total PDEX bonded for staking
-    "totalBondingPercent": number,    // totalBonding / totalIssuance, %
-    "totalUnbonding": number,         // total PDEX currently unbonding
-    "totalStakeChange": number,       // net stake change vs previous era, PDEX
-    "lastEraRewardsTotal": number     // total rewards paid last era, PDEX
-  },
-  "lastSync": number,                 // epoch ms when networkInfo was computed
-  "status": "Synced" | "Stale" | "Initializing" | "Error",
-  "chainHead": {
-    "value": number,                  // best block number
-    "lastAdvanceAt": number,          // epoch ms the head last advanced
-    "staleSeconds": number,           // seconds since the head last advanced
-    "isStale": boolean                // true if the head looks stuck
-  }
-}</code></pre>
-<p><strong>AVG APY</strong> is returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias), derived as <code>avgApy = 23.09 &times; (1 &minus; avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>
-
-<h2>Errors &amp; addresses</h2>
-<p>Failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. Endpoints that depend on the chain RPC return <strong>503</strong> with <code>{ "error": "rpc not connected" }</code> during RPC outages — treat 503 as "retry with backoff", not permanent. Paths that take an <code>:address</code> expect Polkadex SS58 (prefix 88, addresses start with <code>e&hellip;</code>); the server normalizes via <code>toPolkadexAddress()</code>, so prefix-42/0 forms usually resolve too.</p>
-
-<h2>Caching tiers</h2>
-<p>Hot endpoints carry <code>Cache-Control</code> in three tiers — don't poll faster than <code>max-age</code>: <strong>short</strong> (blocks/transactions/events: max-age=5), <strong>medium</strong> (wallet/validators/network-info/price-latest: max-age=30), <strong>long</strong> (price-history/staking-rewards/holders: max-age=300).</p>
-
-<h2>Quick examples</h2>
-<pre><code>curl ${SITE_URL}/api/network-info
-curl ${SITE_URL}/api/price-latest
-curl '${SITE_URL}/api/price-history?days=30'</code></pre>
+${renderOutline((entry) => DEVELOPERS_BODIES[entry.id] || '')}
 </main>
 
 <footer>
@@ -2835,7 +3044,6 @@ curl '${SITE_URL}/api/price-history?days=30'</code></pre>
 <a href="${SITE_URL}/llms.txt">llms.txt</a>
 <a href="${SITE_URL}/help">Help center</a>
 <a href="https://github.com/Polkadex-Substrate" rel="noopener">GitHub</a>
-<div style="margin-top:10px">Found a bug or a missing endpoint? Open an issue on GitHub or reach the team via <a href="https://polkadex.ee" rel="noopener">polkadex.ee</a>.</div>
 </footer>
 </div>
 </body>
@@ -2855,9 +3063,52 @@ app.get('/developers', (req, res) => {
 // Public liveness probe for uptime monitors: boolean only, by design.
 // Everything richer (endpoint URLs, pids, provider names) lives behind
 // diagGate on /api/diag/* — see audit F-038.
+// Audit F-184 (round 2). This returned HTTP 200 unconditionally with a single
+// `healthy` boolean in the body, which makes it useless as a monitor:
+//
+//   * a STATUS-CODE monitor (the default in UptimeRobot, Pingdom, k8s probes)
+//     stays green while healthy is false, because 200 is 200;
+//   * a KEYWORD monitor watching for "healthy" stays green while the node is
+//     syncing, under-peered, or the indexed head is hours stale, because the
+//     word is still there.
+//
+// So the one endpoint whose entire job is to go red could not go red. Comments
+// elsewhere also pointed uptime tools at /api/diag/rpc-health, which is gated
+// and answers 403 through nginx — a monitor pointed there alerts constantly
+// and gets muted, which is worse than no monitor.
+//
+// Now: the STATUS CODE carries the verdict (200 healthy, 503 not), and the body
+// says which component is unhappy so a human reading the alert knows where to
+// look. Deliberately no pid, no URLs, no version — this is public.
 app.get('/api/health', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.json({ healthy: !!(rpcConnected && globalApi) });
+
+    const chainState = db.getSyncState('chain_index') || {};
+    const headState = db.getKv('chain_head_state') || null;
+    const lastAdvanceAt = headState ? Number(headState.lastAdvanceAt) || 0 : 0;
+
+    const checks = {
+        // The chain WebSocket is up and the api handle is decorated.
+        rpc: !!(rpcConnected && globalApi),
+        // The database answered a query just now.
+        database: (() => {
+            try { db.getSyncState('chain_index'); return true; } catch (_) { return false; }
+        })(),
+        // The chain head is advancing. Unknown (never recorded) is NOT a
+        // failure — a worker that has not seen a head yet is starting, not sick.
+        chainAdvancing: lastAdvanceAt ? (Date.now() - lastAdvanceAt) <= CHAIN_HEAD_STALE_MS : true,
+        // The indexer is not sitting on a hole it has given up on. Repairing is
+        // fine; Repairing with every gap exhausted is not (F-046).
+        indexerProgressing: !(Number(chainState.gapsExhausted) > 0)
+    };
+
+    const healthy = Object.values(checks).every(Boolean);
+    res.status(healthy ? 200 : 503).json({
+        healthy,
+        checks,
+        // Which ones failed, so the alert body is actionable on its own.
+        failing: Object.keys(checks).filter(k => !checks[k])
+    });
 });
 
 app.get('/api/diag/rpc-cache', (req, res) => {
@@ -3483,8 +3734,20 @@ app.get('/api/extrinsic-by-hash/:txHash', async (req, res) => {
 
 app.get('/api/validator/:address', async (req, res) => {
     if (!requireRpc(res)) return;
+    // F-082: this took req.params.address.trim() raw into getIdentity and
+    // staking.bonded, so junk in the URL surfaced as a 500 from the catch
+    // below instead of a 400.
+    //
+    // Normalising is also a correctness win, not just a validation one. The
+    // writer stores whatever the chain returns — prefix 88 — while a user can
+    // paste the same key in prefix-42 or -0 form from another explorer.
+    // getValidatorHistory matches on `address = ?` exactly, so that paste
+    // previously returned an empty era history for a validator that has one,
+    // with nothing to indicate the address had simply been spelled differently.
+    const gated = gateAddressParams(req, res, 'address');
+    if (!gated) return;
     try {
-        const address = req.params.address.trim();
+        const address = gated.address;
 
         let identity = await getIdentity(globalApi, address);
         let controller = address;
@@ -3623,11 +3886,32 @@ app.get('/api/account/:address', async (req, res) => {
             evs = db.getEventsByAddress(address, 200);
         } catch (e) { }
 
-        // Audit F-136: `reserved` was published as `balanceFrozen`. Reserved
-        // and frozen are DIFFERENT Substrate concepts (reserves back deposits;
-        // freezes back locks like vesting/staking) and labelling one as the
-        // other misinforms anyone reconciling an account. `balanceFrozen`
-        // stays one release as a deprecated alias.
+        // Audit F-136 (round 2). `balanceFrozen` used to be the RESERVED value.
+        //
+        // Reserved and frozen are different Substrate concepts — reserves back
+        // deposits (identity, proxies, multisig) and are removed from `free`;
+        // freezes back locks (vesting, staking) and OVERLAP `free`. Round 1
+        // added the correctly-named `balanceReserved` and left `balanceFrozen`
+        // aliased to it "for one release", so the field is still on the wire
+        // and still wrong.
+        //
+        // Making it TRUE rather than deleting it: a client reading a field
+        // called "frozen" wants the frozen amount, and any that still reads it
+        // gets a right answer instead of a missing one. Deleting would have
+        // rendered NaN in every cached SPA bundle that still has the fallback.
+        //
+        // `frozen` is the modern single field; older runtimes split it into
+        // miscFrozen/feeFrozen and the effective lock is the LARGER of the two
+        // (they overlap rather than sum). Falls back to 0 rather than to
+        // `reserved`, because 0 is honest about not knowing and `reserved` is
+        // the exact confusion this finding is about.
+        const frozen = (() => {
+            const d = accountInfo.data;
+            if (d.frozen !== undefined) return formatPDEX(d.frozen);
+            const misc = d.miscFrozen !== undefined ? formatPDEX(d.miscFrozen) : 0;
+            const fee  = d.feeFrozen  !== undefined ? formatPDEX(d.feeFrozen)  : 0;
+            return Math.max(misc, fee);
+        })();
         // Audit F-085: this payload mixes two very different kinds of data and
         // used to hard-code `status: 'Synced'` over both.
         //
@@ -3647,7 +3931,7 @@ app.get('/api/account/:address', async (req, res) => {
         res.json({
             account: address, display: name,
             balanceTotal: free + reserved, balanceFree: free,
-            balanceReserved: reserved, balanceFrozen: reserved,
+            balanceReserved: reserved, balanceFrozen: frozen,
             roles: "User", rank: rank,
             transactions: txs, events: evs,
             // F-085: what each half of this response actually is.
@@ -3693,9 +3977,19 @@ app.get('/api/staking-rewards-status', (req, res) => {
         const s = db.getSyncState('staking_rewards');
         cacheMedium(res);
         res.json({
+            // F-009 (round 2): two watermarks, because they answer different
+            // questions. `latestScannedBlock` is now the VERIFIED top — nothing
+            // missing at or below it — so on its own it would understate how
+            // much history is actually queryable while a hole is being
+            // repaired. `headSeen` is how far the crawler has reached. A client
+            // showing coverage wants headSeen; one deciding whether a payout
+            // total is complete wants latestScannedBlock.
             latestScannedBlock: s.latestScannedBlock || 0,
+            headSeen: readHeadSeen(s),
             oldestScannedBlock: s.oldestScannedBlock || 0,
             backfillComplete: !!s.backfillComplete,
+            retryableFailures: Number(s.retryableFailures) || 0,
+            permanentFailures: Number(s.permanentFailures) || 0,
             addressesIndexed: db.countStakingRewardStashes(),
             totalRewardsIndexed: db.countStakingRewards(),
             lastSync: s.lastSync || 0,
@@ -3888,7 +4182,9 @@ function governanceHistoryMeta() {
         status: s.status || 'Initializing',
         backfillComplete: !!s.backfillComplete,
         oldestScannedBlock: Number(s.oldestScannedBlock) || 0,
+        // F-010 (round 2): verified vs reached. See /api/staking-rewards-status.
         latestScannedBlock: Number(s.latestScannedBlock) || 0,
+        headSeen: readHeadSeen(s),
         lastSync: s.lastSync || 0
     };
 }
@@ -4164,7 +4460,8 @@ app.get('/api/governance/calendar', async (req, res) => {
 const AUTH_SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
 const AUTH_CHALLENGE_TTL = 10 * 60 * 1000;
 const POST_COOLDOWN_MS = 8 * 1000;
-const lastPostAt = new Map();
+// F-075: the per-process Map that used to back POST_COOLDOWN_MS is gone —
+// the cooldown now lives in the shared rate_limits table (db.consumeRateLimit).
 
 function challengeMessage(address, nonce) {
     return `Sign in to the Polkadex Explorer discussion board.\n\nAddress: ${address}\nNonce: ${nonce}`;
@@ -4383,15 +4680,22 @@ function normalizePrefs(input, { walletAddress = null } = {}) {
 // emailSiteOrigin() is what every ALERT mail already used; confirmation mail
 // now shares it, so there is exactly one answer to "what is our origin".
 // `req` is kept in the signature for call-site compatibility and ignored.
+// F-185: callers that build SEO URLs, not tokenised ones. Kept as a separate
+// name so a future tokenised caller cannot reach the production fallback by
+// accident — it would have to ask for it explicitly.
 function siteOrigin(_req) {
-    return emailSiteOrigin();
+    return siteOriginForSeo();
 }
 
 // HTML-escape for token values that go into URLs and templates.
+// Audit F-133: forwards to lib/html-escape.js, the same module script.js uses.
+// This used to be an independent chain of five .replace() calls that had
+// already drifted from the client copy on the apostrophe entity (&#039; here,
+// &#39; there). Harmless in itself; the point is that two hand-maintained
+// escapers on an XSS boundary will eventually disagree about something that
+// is not harmless. The name stays for the existing call sites.
 function htmlEscape(s) {
-    return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    return sharedEscapeHtml(s);
 }
 
 // POST /api/email/subscribe
@@ -4407,6 +4711,19 @@ function htmlEscape(s) {
 //   5. Email the confirmation link.
 //   6. Respond JSON { status: 'pending'|'already-confirmed', email }.
 app.post('/api/email/subscribe', async (req, res) => {
+    // Audit F-185: refuse rather than mail a link that names someone else's
+    // host. Without SITE_URL this process would mint a token in its OWN
+    // database and send a confirmation URL pointing at the production origin,
+    // where that token does not exist — a real email, from us, with a link
+    // that can never work. A 503 the operator can see beats a support ticket
+    // from a user who confirmed nothing.
+    if (!canMintEmailUrls()) {
+        console.error('[email] refusing to subscribe: SITE_URL is not set, so any confirmation link would name the wrong host (F-185)');
+        res.set('Cache-Control', 'no-store');
+        return res.status(503).json({
+            error: 'Email signup is not configured on this deployment. Please try again later.'
+        });
+    }
     // F-019: was a second, spoofable copy of the leftmost-XFF expression.
     const ip = clientIp(req);
     if (!emailSignupRateOk(ip)) {
@@ -4985,7 +5302,7 @@ const MIN_LABEL_LENGTH = 1;
 const LABEL_POST_COOLDOWN_MS = 60 * 1000;   // 60 s between any two label writes per signer
 const REPORT_HIDE_THRESHOLD = 3;             // labels with this many reports auto-hide
 const MAX_REPORT_REASON_LENGTH = 200;        // matches the db.js column slice (F-170)
-const lastLabelWriteAt = new Map();          // signer -> timestamp; spam guard
+// F-075: likewise — the label cooldown moved to db.consumeRateLimit.
 
 // Public read — returns ALL visible labels for an address with vote
 // aggregates. When the caller is signed in, each row carries the caller's
@@ -5039,16 +5356,21 @@ app.post('/api/labels/:address', express.json({ limit: '4kb' }), (req, res) => {
         let address;
         try { address = normalizeAddress(raw); } catch (e) { return res.status(400).json({ error: 'Invalid Polkadex address.' }); }
 
-        // Spam guard — applies to suggestions on ANY address by the same
-        // signer. Cleared by the next legitimate post; not persisted to
-        // disk (memory-only per worker is fine — see also POST_COOLDOWN_MS
-        // for the discussion board).
-        const lastPost = lastLabelWriteAt.get(signer);
-        if (lastPost && Date.now() - lastPost < LABEL_POST_COOLDOWN_MS) {
-            const wait = Math.ceil((LABEL_POST_COOLDOWN_MS - (Date.now() - lastPost)) / 1000);
-            return res.status(429).json({ error: `Please wait ${wait}s before submitting another label.` });
-        }
-
+        // Spam guard — applies to suggestions on ANY address by the same signer.
+        //
+        // Audit F-075 (round 2). This was a per-process Map, with a comment
+        // saying "memory-only per worker is fine". It is not: the cluster runs
+        // WORKERS-1 HTTP processes and node:cluster round-robins connections,
+        // so a signer who simply retried landed on a different worker with an
+        // empty Map and the 60-second cooldown became 60/(WORKERS-1) seconds in
+        // practice. The advertised number and the enforced number were
+        // different, which is the part that matters — an operator reading the
+        // constant cannot tell what the limit actually is.
+        //
+        // db.consumeRateLimit is the shared SQLite counter already used for
+        // auth and email signup. Fails open on lock contention, which for a
+        // spam pacer is the right trade (the alternative is refusing a
+        // legitimate post because the indexer holds the write lock).
         // Rejects ASCII control chars and angle brackets — both for
         // log-injection hygiene and so the UI never has to escape user input it
         // received as "trusted". Shared with the report route (F-170) so the
@@ -5059,8 +5381,26 @@ app.post('/api/labels/:address', express.json({ limit: '4kb' }), (req, res) => {
         if (!checked.ok) return res.status(400).json({ error: checked.error });
         const label = checked.value;
 
+        // Consume the cooldown only once the input is known to be acceptable.
+        //
+        // Adversarial review caught this: moving the guard to a shared counter
+        // (F-075) also moved it ABOVE validation, and consumeRateLimit spends
+        // the slot on the attempt rather than on the write. The in-process Map
+        // it replaced recorded the timestamp AFTER a successful upsert, so a
+        // rejected label — too short, or containing an angle bracket — cost
+        // nothing. Under the first version of this change a typo burned the
+        // signer's full 60 seconds and the UI just said "wait 60s" with no
+        // explanation of what they had done wrong.
+        const labelGate = db.consumeRateLimit('label-write', signer, (hits) =>
+            checkWindow(hits, { windowMs: LABEL_POST_COOLDOWN_MS, limit: 1 })
+        );
+        if (!labelGate.allowed) {
+            const wait = Math.ceil(labelGate.retryAfterMs / 1000) || 1;
+            res.set('Retry-After', String(wait));
+            return res.status(429).json({ error: `Please wait ${wait}s before submitting another label.` });
+        }
+
         db.upsertAddressLabel({ address, signer, label });
-        lastLabelWriteAt.set(signer, Date.now());
         // Mirror the post-condition the GET endpoint returns so the client
         // can do an optimistic update without a re-fetch.
         res.json({ address, label, signer, isSelf: signer === address, ok: true });
@@ -5088,6 +5428,43 @@ app.delete('/api/labels/:address', (req, res) => {
     }
 });
 
+// Audit F-082 (round 2). The isValid → 400 → normalize → 400 pattern is
+// repeated across ~10 routes, and the three label sub-routes below skipped it
+// entirely: they called normalizeAddress() bare inside a try whose catch is
+// serverError, so a malformed address in the URL produced a 500.
+//
+// That is not cosmetic. A 500 says "we broke"; a 400 says "your request was
+// wrong". The wrong one sends the caller to retry, sends us an alert, and
+// buries a client bug in the error-rate graph. It also means a crawler walking
+// bad label URLs looks like an outage.
+//
+// The gate cannot move into lib/ — isValidAddress and normalizeAddress close
+// over the runtime-detected chain SS58 prefix — but it can stop being copied.
+// Returns null and answers the request on failure, so callers read:
+//
+//     const addrs = gateAddressParams(req, res, 'address', 'signer');
+//     if (!addrs) return;
+//
+// The 400 body deliberately reuses the exact literal the older routes send;
+// clients may already switch on it.
+function gateAddressParams(req, res, ...names) {
+    const out = {};
+    for (const name of names) {
+        const raw = String((req.params && req.params[name]) || '').trim();
+        if (!isValidAddress(raw)) {
+            res.status(400).json({ error: 'Invalid Polkadex address.' });
+            return null;
+        }
+        try {
+            out[name] = normalizeAddress(raw);
+        } catch (e) {
+            res.status(400).json({ error: 'Invalid Polkadex address.' });
+            return null;
+        }
+    }
+    return out;
+}
+
 // Vote on a label. Body: { vote: 1 | -1 | 0 }. 0 clears an existing vote.
 // Voting on one's own row is harmless but a no-op for display ranking
 // (self-labels skip the score check), so we don't reject it.
@@ -5095,8 +5472,11 @@ app.post('/api/labels/:address/:signer/vote', express.json({ limit: '1kb' }), (r
     try {
         const voter = getAuthAddress(req);
         if (!voter) return res.status(401).json({ error: 'Sign in with your wallet first.' });
-        const labelAddress = normalizeAddress((req.params.address || '').trim());
-        const labelSigner  = normalizeAddress((req.params.signer  || '').trim());
+        // F-082: 400 on a malformed address, not a 500 out of the catch below.
+        const addrs = gateAddressParams(req, res, 'address', 'signer');
+        if (!addrs) return;
+        const labelAddress = addrs.address;
+        const labelSigner  = addrs.signer;
         const raw = req.body && req.body.vote;
         const vote = (raw === 0 || raw === '0') ? 0 : (Number(raw) > 0 ? 1 : Number(raw) < 0 ? -1 : NaN);
         if (Number.isNaN(vote)) return res.status(400).json({ error: 'vote must be -1, 0, or 1.' });
@@ -5119,8 +5499,11 @@ app.post('/api/labels/:address/:signer/report', express.json({ limit: '1kb' }), 
     try {
         const reporter = getAuthAddress(req);
         if (!reporter) return res.status(401).json({ error: 'Sign in with your wallet first.' });
-        const labelAddress = normalizeAddress((req.params.address || '').trim());
-        const labelSigner  = normalizeAddress((req.params.signer  || '').trim());
+        // F-082: 400 on a malformed address, not a 500 out of the catch below.
+        const addrs = gateAddressParams(req, res, 'address', 'signer');
+        if (!addrs) return;
+        const labelAddress = addrs.address;
+        const labelSigner  = addrs.signer;
         if (reporter === labelSigner) {
             return res.status(400).json({ error: 'You can\'t report your own label.' });
         }
@@ -5148,8 +5531,11 @@ app.post('/api/labels/:address/:signer/veto', express.json({ limit: '1kb' }), (r
     try {
         const acting = getAuthAddress(req);
         if (!acting) return res.status(401).json({ error: 'Sign in with your wallet first.' });
-        const labelAddress = normalizeAddress((req.params.address || '').trim());
-        const labelSigner  = normalizeAddress((req.params.signer  || '').trim());
+        // F-082: 400 on a malformed address, not a 500 out of the catch below.
+        const addrs = gateAddressParams(req, res, 'address', 'signer');
+        if (!addrs) return;
+        const labelAddress = addrs.address;
+        const labelSigner  = addrs.signer;
         if (acting !== labelAddress) {
             return res.status(403).json({ error: 'Only the address owner can veto labels on their own address.' });
         }
@@ -5180,15 +5566,75 @@ app.get('/api/discussions', (req, res) => {
 // Cloudflare absorbs the bulk of traffic.
 app.get('/api/analytics/timeseries', (req, res) => {
     try {
-        const days = Math.min(Math.max(parseInt(req.query.days || '30', 10) || 30, 1), 365);
-        cacheMedium(res);
+        // Audit F-081 follow-up, and a bug the fix for it introduced.
+        //
+        // `days` used to be free (1..365) and the live-aggregate fallthrough was
+        // absorbed by cacheMedium. Making empty results no-store — correct on
+        // its own — turned that fallthrough into an unauthenticated event-loop
+        // DoS: only 7/30/90/365 are pre-warmed, so 358 other values each ran
+        // db.getDailyAnalytics(), a GROUP BY over `blocks` and `transactions`
+        // filtered on `timestamp`, synchronous in node:sqlite, with no edge
+        // cache left to shorten the loop.
+        //
+        // Being exact about the cost, because it differs by deployment:
+        // idx_tx_timestamp / idx_blocks_timestamp are created at boot ONLY when
+        // the table is under FRESH_INDEX_MAX_ROWS (200k) — see db.js and the
+        // F-088 note. A 12.8M-row production database is deliberately skipped,
+        // because building that index inline would hold the write lock for
+        // minutes; it gets the index only if an operator has run
+        // migrate-add-indexes.mjs (repo root). So on a dev box this was a slow query
+        // and on production it was an unindexed full scan of the largest table
+        // in the schema — the environment where it matters is the one without
+        // the index.
+        //
+        // The window is a UI control with four settings, so it is now a closed
+        // set. Anything else snaps to the nearest supported range instead of
+        // commissioning an unbounded scan on a stranger's behalf, and the
+        // response says which range it actually answered.
+        const askedDays = Math.min(Math.max(parseInt(req.query.days || '30', 10) || 30, 1), 365);
+        const days = ANALYTICS_TS_RANGES.reduce(
+            (best, r) => Math.abs(r - askedDays) < Math.abs(best - askedDays) ? r : best,
+            ANALYTICS_TS_RANGES[0]
+        );
         // Standard UI ranges are pre-warmed into KV by the indexer — serve those
         // instantly. Any non-standard window falls back to a live aggregate
         // (rare; the UI only ever asks for 7/30/90/365).
+        //
+        // Audit F-081 (round 2). The guard was `if (cached && cached.series)`,
+        // and `cacheMedium(res)` ran BEFORE it. An empty array is truthy, and
+        // refreshAnalyticsTimeseriesInBackground pre-warms every range on
+        // startup — including before the indexer has written a single row — so
+        // a fresh or still-backfilling deployment served `series: []` and then
+        // pinned that emptiness at the edge for the medium TTL. The chart drew
+        // a flat line labelled with real dates, which reads as "no activity on
+        // this chain" rather than "not indexed yet". The snapshot endpoint's
+        // countsReady gate was fixed in round 1; this one was missed.
+        //
+        // An empty series is now never cached, by anyone: not the browser, not
+        // Cloudflare. A populated one keeps the medium TTL it always had.
         const cached = db.getKv('analytics_ts_' + days);
-        if (cached && cached.series) return res.json(cached);
+        if (cached && Array.isArray(cached.series) && cached.series.length) {
+            cacheMedium(res);
+            return res.json(cached);
+        }
+        // Empty or missing: derive it once, but STILL let the edge hold it for a
+        // short while. The finding was that an empty series was served as
+        // though it were an answer and pinned for the medium TTL — not that it
+        // must never be cached at all. A short TTL keeps a genuinely empty
+        // window from re-running the aggregate per request while still
+        // self-correcting within seconds of the indexer producing rows.
+        //
+        // `indexIncomplete` is what actually fixes the finding: it tells the
+        // client the difference between "nothing happened in this window" and
+        // "we cannot answer yet", which the bare empty array could not.
+        cacheShort(res);
         const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
-        res.json({ days, since: sinceTs, series: db.getDailyAnalytics(sinceTs), computedAt: Date.now() });
+        res.json({
+            days, requestedDays: askedDays, since: sinceTs,
+            series: (cached && Array.isArray(cached.series)) ? cached.series : db.getDailyAnalytics(sinceTs),
+            computedAt: Date.now(),
+            indexIncomplete: (db.getSyncState('chain_index') || {}).status !== 'Synced'
+        });
     } catch (err) {
         console.error('API Error /api/analytics/timeseries:', err);
         serverError(res, err, req.path);
@@ -5287,11 +5733,16 @@ app.post('/api/discussions/:id/posts', async (req, res) => {
         if (!content) return res.status(400).json({ error: 'Post content is required.' });
         if (content.length > 4000) return res.status(400).json({ error: 'Post is too long (4000 character limit).' });
 
-        const now = Date.now();
-        if (now - (lastPostAt.get(address) || 0) < POST_COOLDOWN_MS) {
+        // F-075: shared SQLite counter, not a per-process Map. See the label
+        // route above for why — the same round-robin made this 8s cooldown
+        // 8/(WORKERS-1)s for anyone who retried.
+        const postGate = db.consumeRateLimit('discussion-post', address, (hits) =>
+            checkWindow(hits, { windowMs: POST_COOLDOWN_MS, limit: 1 })
+        );
+        if (!postGate.allowed) {
+            res.set('Retry-After', String(Math.ceil(postGate.retryAfterMs / 1000) || 1));
             return res.status(429).json({ error: 'You are posting too quickly — please wait a moment.' });
         }
-        lastPostAt.set(address, now);
 
         let authorName = 'Unknown';
         try { authorName = await getIdentity(globalApi, address); } catch (e) { }
@@ -5461,6 +5912,47 @@ app.get('/api/wallet/:address', async (req, res) => {
                 unpaidEntries: unclaimed.slice(0, 200)
             },
             recentTransactions: db.getTransactionsByAddress(address, 10, raw), // F-080
+            // ── F-085 (wallet route) ─────────────────────────────────────────
+            // Marked differently from the account route's block on purpose:
+            // test/server-infra.test.js locates that route by searching for its
+            // comment header, and a second copy of the same header anywhere in
+            // this file would silently move which route those assertions run
+            // against. (This paragraph does not quote the header for the same
+            // reason — a comment that names the string it is avoiding
+            // reintroduces the collision it is warning about.)
+            //
+            // Same finding, same fix: this payload interleaves values that are
+            // read live from the chain with values read out of our index, and
+            // presents them flat. `balance` is authoritative to the block.
+            // `rewards` and `recentTransactions` are only as complete as the
+            // staking and chain indexers have managed to get, and the tx list is
+            // additionally capped at 10 rows — so a wallet with a busy history
+            // and a wallet whose backfill has not reached its first transfer
+            // look identical. A user checking "did my transfer go through"
+            // cannot tell "no" from "not indexed yet".
+            provenance: {
+                balance: 'live-rpc', identity: 'live-rpc', staking: 'live-rpc', network: 'live-rpc',
+                rewards: 'index', recentTransactions: 'index', price: 'index'
+            },
+            index: {
+                rewards: {
+                    status: (db.getSyncState('staking_rewards') || {}).status || 'Unknown',
+                    latestScannedBlock: (db.getSyncState('staking_rewards') || {}).latestScannedBlock ?? null,
+                    oldestScannedBlock: (db.getSyncState('staking_rewards') || {}).oldestScannedBlock ?? null,
+                    backfillComplete: !!(db.getSyncState('staking_rewards') || {}).backfillComplete
+                },
+                transactions: {
+                    status: (db.getSyncState('chain_index') || {}).status || 'Unknown',
+                    oldestScannedBlock: (db.getSyncState('chain_index') || {}).oldestScannedBlock ?? null,
+                    backfillComplete: !!(db.getSyncState('chain_index') || {}).backfillComplete,
+                    // Always true: the list is sliced to 10 regardless of how
+                    // much history exists. Stated rather than computed, because
+                    // "10 rows returned" and "10 rows exist" are the same
+                    // observation from the client's side.
+                    truncated: true,
+                    rowLimit: 10
+                }
+            },
             network: {
                 currentEra: activeEraOpt && activeEraOpt.isSome ? activeEraOpt.unwrap().index.toNumber() : 0,
                 activeValidators: ni ? ni.validators.active : sessionValAddrs.length,
@@ -5874,6 +6366,14 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
         if (!relevant.length) return { treasury: [], motions: [], ok: true };
 
         const timestamp = await getBlockTimestampAt(blockHash);
+        // F-114: the audit named the transaction and reward sinks; this is a
+        // fourth. A motion or treasury proposal stamped with wall-clock time
+        // sorts to the top of the governance list as though it were current.
+        if (timestamp === null) {
+            db.recordScanFailure('governance', blockNumber,
+                'block timestamp unavailable at this height (F-114)');
+            return { treasury: [], motions: [], ok: false };
+        }
         const treasury = [];
         const motions = [];
 
@@ -6008,7 +6508,13 @@ async function syncGovernance() {
         const head = (await globalApi.rpc.chain.getHeader()).number.toNumber();
 
         let initialized = !!state.initialized;
-        let latestScannedBlock = Number(state.latestScannedBlock) || 0;
+        // Audit F-010 (round 2) — the same watermark split as chain_index and
+        // staking. Governance has no LEAD gap scan of its own, so before this
+        // the skip queue was the ONLY record that a height was missed, and a
+        // watermark that jumped past it made that record invisible to every
+        // consumer. A missed height here is a motion or treasury proposal whose
+        // resolving event never lands, so the page shows it open forever.
+        let headSeen = readHeadSeen(state);
         let oldestScannedBlock = Number(state.oldestScannedBlock) || 0;
         let backfillCursor = Number(state.backfillCursor) || 0;
         let backfillComplete = !!state.backfillComplete;
@@ -6017,35 +6523,43 @@ async function syncGovernance() {
         // (audit F-048/F-113 — see the note in syncChainIndex).
         if (!initialized) {
             initialized = true;
-            latestScannedBlock = head - 1;
+            headSeen = head - 1;
             oldestScannedBlock = head;
             backfillCursor = head - 1;
             backfillComplete = (head - 1) < GOV_MIN_BLOCK;
         }
 
         // FORWARD PASS — blocks produced since the previous crawl.
-        if (head > latestScannedBlock) {
+        if (head > headSeen) {
             const fwd = await scanGovernanceRange({
                 startBlock: head,
-                stopBlock: latestScannedBlock + 1,
+                stopBlock: headSeen + 1,
                 maxBlocks: GOV_FORWARD_MAX,
                 collectiveName
             });
             await applyGovernanceRecords(fwd.treasury, fwd.motions);
-            // Audit F-009: after downtime longer than GOV_FORWARD_MAX blocks,
-            // the cap means the oldest part of the gap is never fetched, yet
-            // the watermark below still jumps to head — so those blocks were
-            // silently skipped forever. Record them instead; the gap-fill pass
-            // reads scan_failures and will work through them.
-            const govLowestAttempted = Math.max(latestScannedBlock + 1, head - GOV_FORWARD_MAX + 1);
-            if (govLowestAttempted > latestScannedBlock + 1) {
-                const skipFrom = latestScannedBlock + 1;
+            // Audit F-010: after downtime longer than GOV_FORWARD_MAX blocks,
+            // the cap means the oldest part of the gap is never fetched. Round
+            // 1 recorded those heights but still jumped the watermark to head;
+            // now only `headSeen` jumps, and the skip queue holds the verified
+            // watermark back until the gap-fill pass clears it.
+            const govLowestAttempted = Math.max(headSeen + 1, head - GOV_FORWARD_MAX + 1);
+            if (govLowestAttempted > headSeen + 1) {
+                const skipFrom = headSeen + 1;
                 const skipTo = govLowestAttempted - 1;
                 console.warn(`[governance] forward cap skipped ${skipFrom}-${skipTo} (${skipTo - skipFrom + 1} blocks) — recording for repair`);
                 recordSkippedRange('governance', skipFrom, skipTo, 'forward cap: not attempted this tick');
             }
-            latestScannedBlock = head;
-            db.setSyncState('governance', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Backfilling' });
+            headSeen = head;
+            db.setSyncState('governance', {
+                initialized, headSeen, oldestScannedBlock, backfillCursor, backfillComplete,
+                latestScannedBlock: contiguousWatermark({
+                    headSeen,
+                    lowestOutstandingFailure: db.getLowestScanFailure('governance'),
+                    floor: oldestScannedBlock
+                }),
+                lastSync: Date.now(), status: 'Backfilling'
+            });
         }
 
         // BACKFILL PASS — one resumable chunk further down the chain.
@@ -6095,11 +6609,44 @@ async function syncGovernance() {
             console.log(`[governance] gap-fill: ${recovered} recovered, ${stillFailing} still failing (${stats.retrying} retrying / ${stats.permanent} permanent in queue)`);
         }
 
-        db.setSyncState('governance', {
-            initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete,
-            lastSync: Date.now(), status: backfillComplete ? 'Synced' : 'Backfilling'
+        // Audit F-010 (round 2). The status was `backfillComplete ? 'Synced' :
+        // 'Backfilling'` — it could not say 'Repairing' at all, so a governance
+        // skip queue with entries in it still reported 'Synced'. deriveIndexStatus
+        // is the same ranking the chain indexer uses; governance gets it too
+        // rather than a second, subtly different notion of "fine".
+        const govLowestFailure = db.getLowestScanFailure('governance');
+        const latestScannedBlock = contiguousWatermark({
+            headSeen, lowestOutstandingFailure: govLowestFailure, floor: oldestScannedBlock
         });
-        console.log(`Governance indexer: blocks ${oldestScannedBlock}-${latestScannedBlock}, ${db.countTreasuryProposals()} treasury proposals, ${db.countCouncilMotions()} motions, backfill ${backfillComplete ? 'complete' : 'in progress'}.`);
+        // Adversarial review: this was `headSeen - latestScannedBlock`, which is
+        // the size of the UNVERIFIED SPAN, not the number of missing blocks.
+        // describeIndexStatus renders it as "N blocks missing inside the
+        // indexed range", so ONE failed height 750k blocks back announced
+        // "750001 blocks missing" — the same class of untruth F-010 exists to
+        // remove, pointing the other way. The queue knows the real count.
+        const govFailCounts = db.countScanFailures('governance', SCAN_MAX_ATTEMPTS);
+        const govUnverified = govFailCounts.total;
+        const govStatus = deriveIndexStatus({
+            initialized,
+            backfillComplete,
+            knownGapBlocks: govUnverified,
+            retryableFailures: govFailCounts.retrying,
+            permanentFailures: govFailCounts.permanent
+        });
+        db.setSyncState('governance', {
+            initialized, headSeen, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete,
+            lastSync: Date.now(),
+            status: govStatus,
+            retryableFailures: govFailCounts.retrying,
+            permanentFailures: govFailCounts.permanent,
+            caughtUp: isCaughtUp({ headSeen, head, lowestOutstandingFailure: govLowestFailure }),
+            detail: describeIndexStatus({
+                knownGapBlocks: govUnverified,
+                retryableFailures: govFailCounts.retrying,
+                permanentFailures: govFailCounts.permanent
+            }) || undefined
+        });
+        console.log(`Governance indexer: reached ${oldestScannedBlock}-${headSeen} verified ${latestScannedBlock}, ${db.countTreasuryProposals()} treasury proposals, ${db.countCouncilMotions()} motions, status=${govStatus}, backfill ${backfillComplete ? 'complete' : 'in progress'}.`);
     } catch (err) {
         logSyncError('Governance sync', err);
         db.setSyncState('governance', { ...db.getSyncState('governance'), status: 'Error', error: err.message });
@@ -6257,7 +6804,26 @@ async function syncDemocracy() {
 // won't retry it (the user gets one chance per event), but the dispatch log
 // makes it easy to spot. Better than the alternative of double-sending.
 
+// F-185: the same gate for ALERT mail. Every alert carries a "Manage
+// preferences" link with the unsubscribe token in it, so an unconfigured
+// SITE_URL would send tokenised links to the wrong host at dispatch volume
+// rather than one at a time.
+function emailDispatchBlocked(context) {
+    if (canMintEmailUrls()) return false;
+    if (!emailOriginWarned) {
+        emailOriginWarned = true;
+        console.error(`[email] SITE_URL is not set — suppressing all outbound mail (${context}). Every link would name the wrong host (F-185).`);
+    }
+    return true;
+}
+let emailOriginWarned = false;
+
 async function dispatchToSubscribers({ eventKind, eventId, prefMatches, makeEmail }) {
+    // F-185: checked BEFORE reserveEmailDispatch. Reserving first would mark
+    // these events as dispatched, so once SITE_URL was configured the
+    // idempotency table would suppress the mail that should have gone out —
+    // silently converting a config mistake into permanently missed alerts.
+    if (emailDispatchBlocked(`${eventKind} ${eventId}`)) return;
     const subs = db.getConfirmedEmailSubscribers();
     if (subs.length === 0) return;
     let sentCount = 0;
@@ -6311,8 +6877,49 @@ async function dispatchToSubscribers({ eventKind, eventId, prefMatches, makeEmai
 // Build a versioned canonical site URL for use in email links. SITE_URL env
 // is the authority; if missing we use the public domain since these mails
 // are user-facing and need stable absolute URLs.
+// Audit F-185 (round 2), an over-correction of F-037.
+//
+// F-037 was right to stop building confirmation URLs from the request Host —
+// an attacker-supplied Host meant an attacker-controlled confirmation link.
+// The replacement defaults to the PRODUCTION origin when SITE_URL is unset,
+// which is wrong in a different direction: a developer or a staging box that
+// subscribes an address mints a token in its OWN SQLite and mails a link
+// pointing at explorer.polkadex.ee, where that token does not exist. The
+// recipient gets a real email with a dead link, and the confirmation they
+// think they completed never happened.
+//
+// So: no default. If SITE_URL is not configured, we refuse to mint tokenised
+// URLs rather than mint one that names someone else's host. The subscribe
+// route turns that into a 503 the operator can act on.
+//
+// Non-tokenised uses (sitemap, robots, canonical) keep the production default
+// via siteOriginForSeo() — a wrong canonical is an SEO nit, a wrong
+// confirmation link is a broken user journey and a support ticket.
+// SITE_URL is REQUIRED before this process may send mail. `canMintEmailUrls()`
+// is the gate; every mail path checks it before building anything. Returning a
+// sentinel object or throwing from here was the obvious shape and is wrong —
+// a dozen callers interpolate this into template literals, so a Symbol throws
+// "Cannot convert a Symbol value to a string" from ten different stack frames
+// and a null silently mints "null/email/preferences?token=…". One gate, checked
+// where the decision belongs, beats a booby-trapped getter.
 function emailSiteOrigin() {
     return (process.env.SITE_URL || 'https://explorer.polkadex.ee').replace(/\/+$/, '');
+}
+
+// May this process mint URLs that carry a token?
+//
+// Only when SITE_URL is explicitly configured. Unset means we do not know our
+// own public name, and the production default would name a host where the
+// token we just wrote does not exist.
+function canMintEmailUrls() {
+    return String(process.env.SITE_URL || '').trim() !== '';
+}
+
+// For sitemap / robots / canonical only — never for anything with a token in
+// it. A wrong canonical is an SEO nit; a wrong confirmation link is a dead
+// user journey and a support ticket.
+function siteOriginForSeo() {
+    return emailSiteOrigin();
 }
 
 // Common email layout — keeps brand consistent across event types.
@@ -7076,13 +7683,6 @@ function recordChainScanFailures(result, passName) {
     }
 }
 
-// Audit F-006. When true (default), a block whose events could not be decoded
-// is queued for retry rather than stored as a zero-event success. Set
-// EVENTS_STRICT=0 on a PRUNED (non-archive) node, where historical event
-// metadata is genuinely unavailable and retrying can never succeed — otherwise
-// every old block accumulates a permanent failure and the index reports
-// Degraded forever. explorer.polkadex.ee runs an archive node, so strict.
-const EVENTS_STRICT = String(process.env.EVENTS_STRICT ?? '1') !== '0';
 function recordSkippedRange(indexer, from, to, reason) {
     const lo = Math.min(from, to);
     const hi = Math.max(from, to);
@@ -7293,7 +7893,14 @@ async function syncChainIndex() {
         // didn't advance, so calling it on every tick is cheap.
         recordChainHead(head);
         let initialized = !!state.initialized;
-        let latestScannedBlock = Number(state.latestScannedBlock) || 0;
+        // Audit F-004 (round 2). `headSeen` is the top of the CLAIMED span —
+        // how far the forward pass has reached. `latestScannedBlock` is now
+        // DERIVED from the failure queue at the end of the tick and means "no
+        // known hole at or below here"; nothing assigns it directly any more.
+        // See lib/watermark.js for why one field could not answer both.
+        // readHeadSeen adopts the pre-upgrade `latestScannedBlock` so the first
+        // tick after deploy does not re-walk the chain from genesis.
+        let headSeen = readHeadSeen(state);
         let oldestScannedBlock = Number(state.oldestScannedBlock) || 0;
         let backfillCursor = Number(state.backfillCursor) || 0;
         let backfillComplete = !!state.backfillComplete;
@@ -7301,14 +7908,14 @@ async function syncChainIndex() {
         // First run: anchor watermarks just BELOW the current head; backfill
         // then walks everything under it toward genesis on later ticks.
         //
-        // Audit F-113: this used to set latestScannedBlock = head, which claims
-        // the head block is indexed without ever fetching it — block `head` was
+        // Audit F-113: this used to set the watermark = head, which claims the
+        // head block is indexed without ever fetching it — block `head` was
         // permanently absent on every fresh database (and only recoverable by a
         // later gap scan). Anchoring at head-1 means the forward pass below
-        // scans `head` on this very tick, because head > latestScannedBlock.
+        // scans `head` on this very tick, because head > headSeen.
         if (!initialized) {
             initialized = true;
-            latestScannedBlock = head - 1;
+            headSeen = head - 1;
             oldestScannedBlock = head;
             backfillCursor = head - 1;
             backfillComplete = (head - 1) < BLOCKS_MIN_BLOCK;
@@ -7319,11 +7926,11 @@ async function syncChainIndex() {
         let tickHadFailures = false;
 
         // 1) FORWARD PASS — index everything new since the last tick.
-        if (head > latestScannedBlock) {
-            if (head - latestScannedBlock > BLOCKS_FORWARD_MAX) {
-                console.warn(`[chain-index] forward gap ${head - latestScannedBlock} exceeds cap; scanning newest ${BLOCKS_FORWARD_MAX} this tick — remainder will be picked up by gap-fill.`);
+        if (head > headSeen) {
+            if (head - headSeen > BLOCKS_FORWARD_MAX) {
+                console.warn(`[chain-index] forward gap ${head - headSeen} exceeds cap; scanning newest ${BLOCKS_FORWARD_MAX} this tick — remainder will be picked up by gap-fill.`);
             }
-            const forward = await scanChainRange(latestScannedBlock + 1, head, BLOCKS_FORWARD_MAX);
+            const forward = await scanChainRange(headSeen + 1, head, BLOCKS_FORWARD_MAX);
             if (forward.blocks.length) db.insertBlocks(forward.blocks);
             if (forward.events.length) db.insertEvents(forward.events);
             // Event-driven governance refresh. The council snapshot otherwise
@@ -7341,23 +7948,21 @@ async function syncChainIndex() {
 
             // Audit F-004. scanChainRange() walks DOWNWARD from `head` and stops
             // after BLOCKS_FORWARD_MAX attempts, so when the explorer has been
-            // offline the oldest part of [latestScannedBlock+1, head] is never
-            // attempted this tick. The watermark used to jump to `head` anyway,
-            // which recorded those heights as scanned and left the only trace of
-            // them in a window scan that has to rediscover the hole later. That
-            // is how a 4-hour outage on 2026-08-22 produced a silent
-            // 1,213-block gap while the API reported "Synced".
+            // offline the oldest part of [headSeen+1, head] is never attempted
+            // this tick. Round 1 recorded those heights in scan_failures but
+            // still jumped the watermark to `head`, so the API kept reporting
+            // "Synced" over the hole — round 2 called that "recovery around the
+            // jump, not removal of the jump". That is how a 4-hour outage on
+            // 2026-08-22 produced a silent 1,213-block gap.
             //
-            // Now: remember exactly what was skipped, and remember the blocks
-            // that were attempted and failed, so the hole is a recorded fact
-            // rather than something to be inferred. The watermark still advances
-            // to head — moving it backwards would re-fetch blocks we already
-            // hold every tick — but the skipped range is written to
-            // scan_failures, which the gap-fill pass and the status reporter
-            // both read.
-            const lowestAttempted = Math.max(latestScannedBlock + 1, head - BLOCKS_FORWARD_MAX + 1);
-            if (lowestAttempted > latestScannedBlock + 1) {
-                const skipFrom = latestScannedBlock + 1;
+            // Now the jump belongs to `headSeen` ALONE, which only ever claims
+            // "we have reached this far", never "everything below is present".
+            // The trustworthy watermark is derived from the failure queue at
+            // the end of the tick, so it stops at the skip and advances again
+            // by itself once the repair pass clears the row.
+            const lowestAttempted = Math.max(headSeen + 1, head - BLOCKS_FORWARD_MAX + 1);
+            if (lowestAttempted > headSeen + 1) {
+                const skipFrom = headSeen + 1;
                 const skipTo = lowestAttempted - 1;
                 console.warn(`[chain-index] forward cap skipped ${skipFrom}-${skipTo} (${skipTo - skipFrom + 1} blocks) — recording for repair`);
                 recordSkippedRange('chain_index', skipFrom, skipTo, 'forward cap: not attempted this tick');
@@ -7367,9 +7972,31 @@ async function syncChainIndex() {
             // would make a transport casualty permanently unrescuable.
             recordChainScanFailures(forward, 'forward pass');
 
-            latestScannedBlock = head;
+            headSeen = head;
             if (oldestScannedBlock === 0) oldestScannedBlock = head;
-            db.setSyncState('chain_index', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Syncing' });
+            db.setSyncState('chain_index', {
+                // MERGE, not replace. setSyncState is setKv, which overwrites
+                // the whole row — so this mid-tick checkpoint used to drop
+                // knownGapBlocks, interiorGapBlocks, gapsExhausted,
+                // retryableFailures, permanentFailures and detail every tick.
+                // /api/blocks and /api/events read exactly those, so coverage
+                // reported all zeros for the window between the forward pass
+                // and the end of tick — every tick. Worse, a restart inside
+                // that window made the next tick's carry-forward read 0 and
+                // deriveIndexStatus could report Synced over an interior hole,
+                // which is the flapping the carry-forward exists to prevent.
+                ...state,
+                initialized, headSeen, oldestScannedBlock, backfillCursor, backfillComplete,
+                // Mid-tick checkpoint. Derived here too, so a crash between the
+                // forward pass and the end of the tick cannot leave a persisted
+                // watermark that claims more than the failure queue supports.
+                latestScannedBlock: contiguousWatermark({
+                    headSeen,
+                    lowestOutstandingFailure: db.getLowestScanFailure('chain_index'),
+                    floor: oldestScannedBlock
+                }),
+                lastSync: Date.now(), status: 'Syncing'
+            });
         }
 
         // 2) BACKFILL PASS — extend coverage one chunk toward genesis.
@@ -7407,17 +8034,91 @@ async function syncChainIndex() {
         }
 
         let gaps = [];
+        // Repair candidates are a SUPERSET of `gaps`: interior holes plus the
+        // edge holes F-183 added. Kept separate because `gaps` is also the
+        // array the interior block COUNT is reduced from, and merging the two
+        // double-counted every edge hole into knownGapBlocks.
+        let repairCandidates = [];
         if (doScan) {
-            const sinceBlock = fullScan ? null : Math.max(BLOCKS_MIN_BLOCK, head - CHAIN_GAP_SCAN_WINDOW);
+            // Audit F-047 (round 2): the "full" scan is now a rolling WINDOW,
+            // not an unbounded LEAD over the whole table.
+            //
+            // node:sqlite is synchronous. An O(rows) window function on 12.8M
+            // rows blocks the event loop for seconds — and in WORKERS<=1 the
+            // indexer IS the HTTP server, so that is a gateway timeout on every
+            // request unlucky enough to land during it. Round 1's throttle made
+            // it hourly and capped the result count; neither bounds the SCAN.
+            //
+            // Each full-scan tick now sweeps one FULL_SCAN_WINDOW slice and
+            // advances a persistent cursor, so the whole history is still
+            // covered — just across many ticks, none of them long. The cursor
+            // is in kv so a restart resumes rather than re-walking from head.
+            let sinceBlock, untilBlock = null;
+            if (!fullScan) {
+                sinceBlock = Math.max(BLOCKS_MIN_BLOCK, head - CHAIN_GAP_SCAN_WINDOW);
+            } else {
+                const saved = Number((db.getKv('chain_index:fullScanCursor') || {}).next);
+                let cursorTop = Number.isFinite(saved) && saved > BLOCKS_MIN_BLOCK ? saved : head;
+                if (cursorTop > head) cursorTop = head;
+                untilBlock = cursorTop;
+                sinceBlock = Math.max(BLOCKS_MIN_BLOCK, cursorTop - CHAIN_FULL_SCAN_WINDOW + 1);
+                // Next tick continues below this slice; wrap at the bottom so
+                // the sweep is continuous rather than one-shot.
+                const next = sinceBlock <= BLOCKS_MIN_BLOCK ? head : sinceBlock - 1;
+                db.setKv('chain_index:fullScanCursor', { next, at: Date.now() });
+                console.log(`[chain-index] full gap sweep ${sinceBlock}-${untilBlock} (window ${CHAIN_FULL_SCAN_WINDOW}, F-047)`);
+            }
             // Limit is for the COUNT, not the repair: this used to be 1, so
             // `knownGapBlocks` reported a single hole however many there were.
             // Repair takes ONE gap per tick — chosen by the F-046 rotation
             // below, not gaps[0]. (This comment used to say "gaps[0] (the
             // newest), which is the intended pacing" and sat directly above the
             // rotation that replaced it.)
-            gaps = db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT, sinceBlock);
+            gaps = db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT, sinceBlock, untilBlock);
+            repairCandidates = gaps;
             lastRecentGapScanAt = nowTs;
             if (fullScan) lastFullGapScanAt = nowTs;
+
+            // Audit F-183 (round 2): EDGE holes must be repairable, not just
+            // countable.
+            //
+            // getBlockGaps uses a LEAD window, which by construction can only
+            // see holes BETWEEN two stored rows — it is blind to a missing
+            // prefix (below the oldest stored block) or suffix (above the
+            // newest). F-005 added getEdgeGaps so those holes reach
+            // knownGapBlocks and the status honestly says "Repairing"… and
+            // then nothing ever scanned them. The operator saw a hole, the
+            // visitor saw a hole, and no pass anywhere was going to visit it.
+            //
+            // "Repairing" has to mean a crawler will get there. Edge holes now
+            // join the same candidate list the rotation picks from, so they
+            // compete for the repair budget on equal terms with interior ones.
+            // Against the CLAIMED span (headSeen). The derived watermark is not
+            // in scope yet — and must not be used here anyway: a suffix hole
+            // drags it below itself, which would hide the hole from the very
+            // query meant to find it.
+            const edgeForRepair = db.getEdgeGaps(oldestScannedBlock, headSeen);
+            if (edgeForRepair.length) {
+                for (const eg of edgeForRepair) {
+                    console.warn(`[chain-index] ${eg.kind} hole ${eg.gapStart}-${eg.gapEnd} (${eg.gapSize} blocks) — queued for repair (F-183)`);
+                }
+                // Edge holes first: a suffix hole sits at the HEAD, which is
+                // what a visitor loads on the home page, and a prefix hole
+                // means the claimed oldestScannedBlock is a lie about coverage.
+                // Adversarial review: this used to reassign `gaps`, and `gaps`
+                // is what line ~8240 reduces into `interiorGapBlocks` — which
+                // is then ADDED to the edge total again a line later. So every
+                // edge hole was counted twice in `knownGapBlocks`, and because
+                // the inflated `interiorGapBlocks` is persisted and carried
+                // forward on the ~24 of 25 ticks that skip the throttled scan,
+                // the doubling stuck. The comment below the reduce states the
+                // exact invariant this broke.
+                //
+                // Repair candidates and the interior COUNT are now separate
+                // values: the rotation still gets edge holes first, and the
+                // arithmetic still sees only interior ones.
+                repairCandidates = edgeForRepair.concat(gaps);
+            }
             // F-046: periodic amnesty. A hole that was unfillable six hours ago
             // may be fillable now — repointing RPC at an archive node is the
             // obvious case, and nothing in this process can observe that.
@@ -7433,7 +8134,7 @@ async function syncChainIndex() {
             // the RPC cannot serve absorbed the entire repair budget on every
             // tick, forever, and older holes were never reached. Alternate
             // newest/oldest and set aside gaps that have failed repeatedly.
-            const g = chooseGap(gaps, {
+            const g = chooseGap(repairCandidates, {
                 attempts: gapAttempts,
                 tick: gapRotationTick++,
                 maxAttempts: DEFAULT_MAX_GAP_ATTEMPTS
@@ -7444,7 +8145,7 @@ async function syncChainIndex() {
             // not imply making progress" — so the status stayed at "Repairing"
             // indefinitely with nothing to say repair was PAUSED. That is the
             // F-004 dishonesty this finding claims to close, one level up.
-            gapsExhausted = exhaustedGapCount(gaps, gapAttempts, DEFAULT_MAX_GAP_ATTEMPTS);
+            gapsExhausted = exhaustedGapCount(repairCandidates, gapAttempts, DEFAULT_MAX_GAP_ATTEMPTS);
             if (gaps.length && !g) {
                 console.warn(`[chain-index] all ${gaps.length} known gap(s) have failed ${DEFAULT_MAX_GAP_ATTEMPTS}× — pausing repair until the next retry round. Is the RPC an archive node?`);
             }
@@ -7539,11 +8240,27 @@ async function syncChainIndex() {
         // Cheap by construction: edge gaps are MIN/MAX on the PK, the failure
         // counts are an indexed aggregate, and `gaps` is already in hand from
         // the throttled scan above. No extra window scan.
-        const edgeGaps = db.getEdgeGaps(oldestScannedBlock, latestScannedBlock);
-        for (const eg of edgeGaps) {
-            console.warn(`[chain-index] ${eg.kind} hole ${eg.gapStart}-${eg.gapEnd} (${eg.gapSize} blocks) — invisible to the LEAD gap scan (F-005)`);
-        }
+        // Re-measured here for the status total (F-005). No warning: the
+        // repair pass above already logged and QUEUED these (F-183), and
+        // warning twice per tick about a hole that is being worked on trains
+        // the operator to filter the log.
+        // Compared against the CLAIMED span (headSeen), not the verified one.
+        // Using the derived watermark here would be circular: a suffix hole
+        // pulls the watermark down to just below itself, and comparing
+        // MAX(number) against that lowered value makes the hole disappear from
+        // the very measurement that is supposed to report it.
+        const edgeGaps = db.getEdgeGaps(oldestScannedBlock, headSeen);
         const failCounts = db.countScanFailures('chain_index', SCAN_MAX_ATTEMPTS);
+
+        // Audit F-004 (round 2): the watermark is DERIVED, once, from the state
+        // of the failure queue after this tick's repairs — never assigned from
+        // `head`. One outstanding hole at height F pins it to F-1 no matter how
+        // many blocks above F are stored, and clearing that row is all a repair
+        // has to do for it to advance again.
+        const lowestFailure = db.getLowestScanFailure('chain_index');
+        const latestScannedBlock = contiguousWatermark({
+            headSeen, lowestOutstandingFailure: lowestFailure, floor: oldestScannedBlock
+        });
 
         // Interior-gap total. Two traps here, both of which made the status
         // dishonest again in the exact scenario this code exists for:
@@ -7575,7 +8292,7 @@ async function syncChainIndex() {
             permanentFailures: failCounts.permanent
         });
         db.setSyncState('chain_index', {
-            initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete,
+            initialized, headSeen, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete,
             lastSync: Date.now(),
             status: chainStatus,
             // Surfaced by /api/blocks and /api/events so a hole is visible in
@@ -7598,7 +8315,12 @@ async function syncChainIndex() {
             }) || undefined
         });
         if (gaps.length || edgeGaps.length || !backfillComplete || failCounts.retrying || failCounts.permanent) {
-            console.log(`[chain-index] head=${head} indexed=${oldestScannedBlock}-${latestScannedBlock} (${db.countBlocks()} blocks), backfill=${backfillComplete ? 'complete' : 'in progress'}, status=${chainStatus}, missing=${knownGapBlocks}, retryable=${failCounts.retrying}, permanent=${failCounts.permanent}`);
+            // Both watermarks, because the gap between them IS the diagnosis:
+            // `reached` is how far the forward pass got, `verified` is how far
+            // we can honestly claim completeness. reached >> verified means a
+            // hole is pinning the watermark, and `missing`/`retryable` say
+            // which. One number could never show that.
+            console.log(`[chain-index] head=${head} reached=${oldestScannedBlock}-${headSeen} verified=${latestScannedBlock} (${db.countBlocks()} blocks), backfill=${backfillComplete ? 'complete' : 'in progress'}, status=${chainStatus}, missing=${knownGapBlocks}, retryable=${failCounts.retrying}, permanent=${failCounts.permanent}`);
         }
     } catch (err) {
         logSyncError('Chain index sync', err);
@@ -7609,37 +8331,26 @@ async function syncChainIndex() {
     }
 }
 
-async function syncBlocks() {
-    if (isSyncingBlocks || !isRpcReady()) return;
-    isSyncingBlocks = true;
-    try {
-        let currentHash = await globalApi.rpc.chain.getBlockHash();
-        let blocksSearched = 0;
-        const newBlocks = [];
-
-        while (blocksSearched < 50) {
-            try {
-                const derivedBlock = await globalApi.derive.chain.getBlock(currentHash);
-                if (!derivedBlock) break;
-                const blockNumber = derivedBlock.block.header.number.toNumber();
-                if (db.hasBlock(blockNumber)) break;
-                const timestamp = getBlockTimestamp(derivedBlock);
-                const authorAddr = derivedBlock.author ? derivedBlock.author.toString() : "System";
-                newBlocks.push({ number: blockNumber, hash: derivedBlock.block.header.hash.toHex(), authorAddress: authorAddr, authorName: await getIdentity(globalApi, authorAddr), extrinsicsCount: derivedBlock.block.extrinsics.length, eventsCount: derivedBlock.events ? derivedBlock.events.length : 0, timestamp: timestamp });
-                currentHash = derivedBlock.block.header.parentHash;
-            } catch (e) {
-                console.warn("Block crawler stopped early:", e.message);
-                break;
-            }
-            blocksSearched++;
-        }
-        db.insertBlocks(newBlocks);
-        db.setSyncState('blocks', { lastSync: Date.now(), status: 'Synced' });
-    } catch (err) {
-        logSyncError('Block sync', err);
-        db.setSyncState('blocks', { ...db.getSyncState('blocks'), status: 'Error', error: err.message });
-    } finally { isSyncingBlocks = false; }
-}
+// Audit F-141 — DELETED: `syncBlocks()` lived here and `syncEvents()` lived
+// just below syncTransactions. Both were tip-walking crawlers that stopped at
+// the first already-indexed block, and both were superseded by syncChainIndex
+// (one derive.chain.getBlock per block, yielding blocks AND events, with a
+// gap queue instead of a silent early break). Nothing has called either since
+// that replacement landed; they were reachable only by editing this file.
+//
+// They are deleted rather than left in place because they were not inert. Each
+// was the ONLY writer of the sync-state keys 'blocks' and 'events', and each
+// wrote `status: 'Synced'` unconditionally at the end of its 50-block walk. If
+// anyone re-armed them — a stray call in startIndexerLoops, a merge that
+// resurrected the old on-connect kick — they would race syncChainIndex for the
+// SQLite write lock, re-insert rows the combined indexer already owns, and
+// stamp a fossilised 'Synced' onto keys that /api/blocks and /api/events were
+// only just repointed away from (audit F-020). "Dead code that writes" is the
+// dangerous kind: the cost of keeping it is a second, worse indexer one call
+// site away from being live.
+//
+// If a standalone tip crawler is ever wanted again, write it against the gap
+// queue and give it its own sync-state key — do not restore this one.
 
 async function syncTransactions() {
     if (isSyncingTx || !isRpcReady() || inBackoff('transactions')) return;
@@ -7797,66 +8508,13 @@ async function syncTransactions() {
     } finally { isSyncingTx = false; }
 }
 
-async function syncEvents() {
-    if (isSyncingEvents || !isRpcReady()) return;
-    isSyncingEvents = true;
-    try {
-        let currentHash = await globalApi.rpc.chain.getBlockHash();
-        let blocksSearched = 0;
-        const newEvents = [];
-
-        while (blocksSearched < 50) {
-            try {
-                const signedBlock = await getBlockCached(currentHash);
-                // Block-bound metadata — events from this historical block
-                // need its own runtime to decode (see getEventsAtBlock).
-                const allEvents = await getEventsAtBlock(currentHash);
-                if (!allEvents) { blocksSearched++; currentHash = signedBlock.block.header.parentHash; continue; }
-                const blockNumber = signedBlock.block.header.number.toNumber();
-                const timestamp = getBlockTimestamp(signedBlock);
-                const blockHash = signedBlock.block.header.hash.toHex();
-
-                for (let eventIndex = 0; eventIndex < allEvents.length; eventIndex++) {
-                    const record = allEvents[eventIndex];
-                    const eventId = `${blockHash}-${eventIndex}`;
-
-                    const extrinsicIndex = record.phase.isApplyExtrinsic ? record.phase.asApplyExtrinsic.toNumber() : null;
-                    const extrinsic = extrinsicIndex !== null ? signedBlock.block.extrinsics[extrinsicIndex] : null;
-                    const signerAddress = extrinsic && extrinsic.isSigned ? extrinsic.signer.toString() : "System";
-                    const txHash = extrinsic ? extrinsic.hash.toHex() : "";
-                    const status = record.event.section === 'system' && record.event.method === 'ExtrinsicFailed' ? 'failed' : 'success';
-                    const signerName = signerAddress !== "System" ? await getIdentity(globalApi, signerAddress) : "System";
-
-                    newEvents.push({
-                        hash: eventId,
-                        txHash,
-                        blockHash,
-                        block: blockNumber,
-                        eventIndex,
-                        extrinsicIndex,
-                        section: record.event.section,
-                        method: record.event.method,
-                        data: record.event.data.toHuman(),
-                        signerAddress,
-                        signerName,
-                        timestamp,
-                        status
-                    });
-                    }
-                currentHash = signedBlock.block.header.parentHash;
-            } catch (e) {
-                console.warn("Event crawler stopped early:", e.message);
-                break;
-            }
-            blocksSearched++;
-        }
-        db.insertEvents(newEvents);
-        db.setSyncState('events', { lastSync: Date.now(), status: 'Synced' });
-    } catch (err) {
-        console.error("Event sync error:", err);
-        db.setSyncState('events', { ...db.getSyncState('events'), status: 'Error', error: err.message });
-    } finally { isSyncingEvents = false; }
-}
+// Audit F-141 — DELETED: `syncEvents()` lived here. See the tombstone above
+// syncTransactions for why the pair is gone rather than merely uncalled. The
+// specific hazard for this half: it decoded events with `record.event.data
+// .toHuman()` and wrote `status: 'success'` for anything that was not
+// system.ExtrinsicFailed, including the null/undecodable records that audit
+// F-006 taught scanEventsAtBlock to reject. Restoring it would quietly
+// reintroduce that mislabelling on top of the write-lock contention.
 
 // --- STAKING REWARDS INDEXER ---
 // Indexes claimed staking payouts by scanning blocks for staking.Rewarded
@@ -7965,10 +8623,22 @@ async function scanBlockForRewards(blockNumber) {
         // has pruned that block's state); we skip the block silently in that
         // case rather than letting the library spew its bytes-dump error.
         const events = await getEventsAtBlock(blockHash);
-        // No events decodable for this block — treat as a clean "no rewards"
-        // scan so the gap-fill phase doesn't keep retrying a permanently-
-        // un-decodable historical block.
-        if (!events) return { rewards: [], ok: true };
+        // Audit F-006 (round 2). This used to return ok:true — "a clean no-rewards
+        // scan so the gap-fill phase doesn't keep retrying a permanently
+        // un-decodable historical block". The reasoning is right for a pruned
+        // node and wrong everywhere else: on an archive node a null here is a
+        // transient decode failure, and calling it clean discards every payout
+        // in the block and advances the watermark past it. A nominator's total
+        // is quietly short and nothing records that a height was skipped.
+        //
+        // EVENTS_STRICT=0 keeps the original behaviour for genuinely pruned
+        // nodes, which is the case the old comment was actually describing.
+        if (!events) {
+            if (!EVENTS_STRICT) return { rewards: [], ok: true };
+            db.recordScanFailure('staking_rewards', blockNumber,
+                'events could not be decoded at this height (F-006)');
+            return { rewards: [], ok: false };
+        }
 
         const hits = [];
         events.forEach((record, eventIndex) => {
@@ -7983,6 +8653,14 @@ async function scanBlockForRewards(blockNumber) {
             getBlockCached(blockHash),
             getBlockTimestampAt(blockHash)
         ]);
+        // F-114: a reward row is what a nominator reconciles their earnings
+        // against. Stamping it with wall-clock time because the timestamp read
+        // failed puts a payout in the wrong tax year.
+        if (timestamp === null) {
+            db.recordScanFailure('staking_rewards', blockNumber,
+                'block timestamp unavailable at this height (F-114)');
+            return { rewards: [], ok: false };
+        }
         const blockHashHex = blockHash.toHex();
 
         // Per-extrinsic caches. A block with a 30-call batch produces dozens of
@@ -8277,7 +8955,14 @@ async function syncStakingRewards() {
         const head = latestHeader.number.toNumber();
 
         let initialized = !!state.initialized;
-        let latestScannedBlock = Number(state.latestScannedBlock) || 0;
+        // Audit F-009 (round 2) — same split as chain_index. `headSeen` is how
+        // far forward we have reached; `latestScannedBlock` is derived at the
+        // end of the tick and means "no known hole at or below here". Under
+        // staking the stakes are specific: a skipped height is a missing
+        // `Rewarded` event, so a watermark that jumps past it understates what
+        // a nominator earned and there is nothing on the page to suggest the
+        // number is incomplete.
+        let headSeen = readHeadSeen(state);
         let oldestScannedBlock = Number(state.oldestScannedBlock) || 0;
         let backfillCursor = Number(state.backfillCursor) || 0;
         let backfillComplete = !!state.backfillComplete;
@@ -8288,35 +8973,43 @@ async function syncStakingRewards() {
         // reward events in it permanently).
         if (!initialized) {
             initialized = true;
-            latestScannedBlock = head - 1;
+            headSeen = head - 1;
             oldestScannedBlock = head;
             backfillCursor = head - 1;
             backfillComplete = (head - 1) < STAKING_REWARDS_MIN_BLOCK;
         }
 
         // FORWARD PASS — index blocks produced since the previous crawl.
-        if (head > latestScannedBlock) {
-            if (head - latestScannedBlock > STAKING_REWARDS_FORWARD_MAX) {
-                console.warn(`Staking rewards: forward gap ${head - latestScannedBlock} exceeds cap; scanning most recent ${STAKING_REWARDS_FORWARD_MAX} blocks.`);
+        if (head > headSeen) {
+            if (head - headSeen > STAKING_REWARDS_FORWARD_MAX) {
+                console.warn(`Staking rewards: forward gap ${head - headSeen} exceeds cap; scanning most recent ${STAKING_REWARDS_FORWARD_MAX} blocks.`);
             }
             const forward = await scanStakingRewards({
                 startBlock: head,
-                stopBlock: latestScannedBlock + 1,
+                stopBlock: headSeen + 1,
                 maxBlocks: STAKING_REWARDS_FORWARD_MAX
             });
             db.insertStakingRewards(forward.rewards.map(toRewardRow));
-            // Audit F-010: the warning above told the log that blocks were
-            // being dropped and then dropped them anyway. Record the unattempted
-            // range so gap-fill can reclaim it — missing reward events here
-            // understate what a nominator earned.
-            const rewardLowestAttempted = Math.max(latestScannedBlock + 1, head - STAKING_REWARDS_FORWARD_MAX + 1);
-            if (rewardLowestAttempted > latestScannedBlock + 1) {
-                const skipFrom = latestScannedBlock + 1;
+            // Audit F-009: the warning above told the log that blocks were
+            // being dropped and then dropped them anyway. Round 1 recorded the
+            // unattempted range but still moved the watermark to head; now only
+            // `headSeen` moves, so the skip actually holds the claim back.
+            const rewardLowestAttempted = Math.max(headSeen + 1, head - STAKING_REWARDS_FORWARD_MAX + 1);
+            if (rewardLowestAttempted > headSeen + 1) {
+                const skipFrom = headSeen + 1;
                 const skipTo = rewardLowestAttempted - 1;
                 recordSkippedRange('staking_rewards', skipFrom, skipTo, 'forward cap: not attempted this tick');
             }
-            latestScannedBlock = head;
-            db.setSyncState('staking_rewards', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Syncing' });
+            headSeen = head;
+            db.setSyncState('staking_rewards', {
+                initialized, headSeen, oldestScannedBlock, backfillCursor, backfillComplete,
+                latestScannedBlock: contiguousWatermark({
+                    headSeen,
+                    lowestOutstandingFailure: db.getLowestScanFailure('staking_rewards'),
+                    floor: oldestScannedBlock
+                }),
+                lastSync: Date.now(), status: 'Syncing'
+            });
         }
 
         // BACKFILL PASS — walk one resumable chunk further down the chain.
@@ -8369,8 +9062,39 @@ async function syncStakingRewards() {
             console.log(`[staking_rewards] gap-fill: ${recovered} recovered, ${stillFailing} still failing (${stats.retrying} retrying / ${stats.permanent} permanent in queue)`);
         }
 
-        db.setSyncState('staking_rewards', { initialized, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete, lastSync: Date.now(), status: 'Synced' });
-        console.log(`Staking rewards indexer: blocks ${oldestScannedBlock}-${latestScannedBlock}, ${db.countStakingRewards()} payouts indexed, backfill ${backfillComplete ? 'complete' : 'in progress'}.`);
+        // Audit F-009 (round 2). This said `status: 'Synced'` unconditionally,
+        // directly below a gap-fill pass that had just logged blocks it could
+        // not recover — the audit's residual verbatim: "End-of-tick status can
+        // still be 'Synced' with a skip queue". A nominator reading "Synced"
+        // over a hole in their payout history is being told a wrong number is
+        // complete.
+        const rewardLowestFailure = db.getLowestScanFailure('staking_rewards');
+        const latestScannedBlock = contiguousWatermark({
+            headSeen, lowestOutstandingFailure: rewardLowestFailure, floor: oldestScannedBlock
+        });
+        const rewardFailCounts = db.countScanFailures('staking_rewards', SCAN_MAX_ATTEMPTS);
+        const rewardStatus = deriveIndexStatus({
+            initialized,
+            backfillComplete,
+            // As above: the COUNT of queued heights, not the span they sit in.
+            knownGapBlocks: rewardFailCounts.total,
+            retryableFailures: rewardFailCounts.retrying,
+            permanentFailures: rewardFailCounts.permanent
+        });
+        db.setSyncState('staking_rewards', {
+            initialized, headSeen, latestScannedBlock, oldestScannedBlock, backfillCursor, backfillComplete,
+            lastSync: Date.now(),
+            status: rewardStatus,
+            retryableFailures: rewardFailCounts.retrying,
+            permanentFailures: rewardFailCounts.permanent,
+            caughtUp: isCaughtUp({ headSeen, head, lowestOutstandingFailure: rewardLowestFailure }),
+            detail: describeIndexStatus({
+                knownGapBlocks: rewardFailCounts.total,
+                retryableFailures: rewardFailCounts.retrying,
+                permanentFailures: rewardFailCounts.permanent
+            }) || undefined
+        });
+        console.log(`Staking rewards indexer: reached ${oldestScannedBlock}-${headSeen} verified ${latestScannedBlock}, ${db.countStakingRewards()} payouts indexed, status=${rewardStatus}, backfill ${backfillComplete ? 'complete' : 'in progress'}.`);
     } catch (err) {
         console.error("Staking rewards sync error:", err);
         db.setSyncState('staking_rewards', { ...db.getSyncState('staking_rewards'), status: 'Error', error: err.message });
@@ -8639,7 +9363,15 @@ async function rpcWatchdog() {
     const outageMin = Math.round(outageMs / 60000);
 
     if (outageMs >= RPC_EXIT_AFTER_MS) {
-        console.error(`[RPC-WATCHDOG] disconnected for ${outageMin} min, exceeds RPC_EXIT_AFTER_MS — exiting so Docker restarts the container`);
+        // Audit F-144: this used to say "so Docker restarts the container"
+        // unconditionally. Under WORKERS>1 that is false — exiting a worker
+        // makes the cluster PRIMARY refork it and the container never restarts,
+        // so an operator following the log waits for a restart that is not
+        // coming, and greps `docker events` for nothing.
+        const restartPath = WORKERS > 1
+            ? 'the cluster primary will refork this worker'
+            : 'Docker will restart the container';
+        console.error(`[RPC-WATCHDOG] disconnected for ${outageMin} min, exceeds RPC_EXIT_AFTER_MS — exiting; ${restartPath}`);
         // Flush logs synchronously before exiting. process.exit doesn't wait
         // for stdout flush by default.
         process.stderr.write('', () => process.exit(1));
@@ -8664,11 +9396,14 @@ async function rpcWatchdog() {
 
 // ---- Per-worker init -------------------------------------------------------
 // Every worker (or the single process in non-clustered mode) opens its own
-// SQLite handle, opens its own RPC WebSocket, and binds an HTTP listener on
-// PORT. node:cluster shares the listening socket across workers, round-robin-
-// balancing inbound connections. Each worker's globalApi/rpcConnected pair is
-// process-local; the indexer worker is additionally the sole writer to SQLite
-// (single-writer invariant under WAL).
+// SQLite handle and its own RPC WebSocket. Only the HTTP workers bind a
+// listener on PORT — a clustered indexer worker does not (audit F-156); see
+// `serveHttp` below. node:cluster shares the listening socket across the
+// workers that do listen, round-robin-balancing inbound connections. Each
+// worker's globalApi/rpcConnected pair is process-local; the indexer worker is
+// the sole BULK writer to SQLite, though not the only one — HTTP workers write
+// sessions, posts, votes, subscriptions and rate-limit counters, which is what
+// F-089 corrected the busy_timeout for.
 // `clustered` tells initDb whether another process is going to apply the schema.
 // It is NOT the same question as `indexer`: a single-process run with
 // INDEXER_ROLE=off has no indexer AND no other worker, so it must do its own DDL
@@ -8691,8 +9426,29 @@ function runWorker({ indexer, clustered = false }) {
         // workers wait for its marker instead of racing it for the write lock.
         // If the wait times out they apply the DDL themselves rather than fail —
         // an HTTP worker must never refuse to start because the indexer is slow.
-        db.initDb(DATA_DIR, !!indexer, { awaitMigrator: !indexer && !!clustered });
+        // Audit F-181 (round 2): F-022's fail-fast was an OVER-CORRECTION.
+        //
+        // Dying on a bad path or a corrupt file is right. Dying on SQLITE_BUSY
+        // is not: the indexer takes the write lock for the hash-id migration,
+        // another worker's 5s busy_timeout expires, this catch calls exit(1),
+        // the primary reforks it with F-145's 30s backoff, and the replacement
+        // hits the same lock. Indexing stops until a quiet window happens to
+        // appear, while /api/blocks keeps serving yesterday's rows and every
+        // health signal reads fine.
+        //
+        // Retry the contended failures; keep exiting on the structural ones.
+        retryTransient(
+            () => db.initDb(DATA_DIR, !!indexer, { awaitMigrator: !indexer && !!clustered }),
+            {
+                attempts: 8, baseDelayMs: 750, maxDelayMs: 10_000,
+                onRetry: (err, attempt, delay) => console.warn(
+                    `[db] init hit a transient lock (attempt ${attempt}/8), retrying in ${delay}ms:`,
+                    err && err.message ? err.message : err)
+            }
+        );
     } catch (err) {
+        // Structural, or transient that outlasted every retry. Either way the
+        // supervisor gets a clean restart rather than a half-initialised worker.
         console.error('FATAL: database init failed at ' + DATA_DIR + ' — exiting so the supervisor restarts us:', err && err.message ? err.message : err);
         process.exit(1);
     }
@@ -8905,6 +9661,29 @@ function startIndexerLoops() {
     sweepRateLimits();
     setInterval(sweepRateLimits, 6 * 60 * 60 * 1000).unref();
 
+    // Amnesty for scan failures that have exhausted their retry budget.
+    //
+    // The F-004 watermark is derived from the lowest OUTSTANDING failure, and
+    // that deliberately includes permanent ones — a block the node cannot serve
+    // is still a hole. Adversarial review found the consequence: nothing could
+    // ever clear a permanent row, so one unreadable height froze the watermark
+    // and the status at Degraded for the life of the database.
+    //
+    // Same cadence and the same reasoning as the F-046 in-memory amnesty: an
+    // operator repointing RPC at an archive node makes yesterday's unreadable
+    // block readable, and no signal inside this process can observe that. Small
+    // batch, oldest first, so retrying the genuinely dead ones costs a handful
+    // of RPC calls every six hours rather than a re-scan.
+    const sweepExhaustedFailures = () => {
+        try {
+            const revived = db.requeueExhaustedScanFailures(SCAN_MAX_ATTEMPTS, SCAN_AMNESTY_MS);
+            if (revived) console.log(`[indexer] amnesty: ${revived} exhausted block(s) returned to the retry queue`);
+        } catch (err) {
+            console.warn('[indexer] scan-failure amnesty skipped:', err && err.message ? err.message : err);
+        }
+    };
+    setInterval(sweepExhaustedFailures, SCAN_AMNESTY_MS).unref();
+
     // Stagger initial kicks so the RPC node isn't slammed by every sync in the
     // same second of startup — that pile-up alone can spike load. The first
     // call still happens immediately so the home page has data quickly; the
@@ -9092,10 +9871,19 @@ process.on('uncaughtException', (err) => {
 // ---- Bootstrap: cluster primary vs worker ---------------------------------
 // Topology:
 //   Primary (this file, run as the container's entrypoint) forks N workers.
-//     - Worker 1 runs HTTP + indexer (INDEXER_ROLE=on).
+//     - Worker 1 runs the indexer ONLY (INDEXER_ROLE=on). When WORKERS > 1 it
+//       does not app.listen: `const serveHttp = !indexer || WORKERS <= 1`.
 //     - Workers 2..N run HTTP only.
-//   Cluster automatically round-robins inbound connections across workers,
-//   so all four cores get used for request serving. SQLite with WAL mode
+//   Cluster automatically round-robins inbound connections across the HTTP
+//   workers, so on a 4-core box THREE cores answer requests and the fourth is
+//   spent on chain sync — sizing against a req/s target must use N-1, not N.
+//   Audit F-156: this comment used to say worker 1 served HTTP too, which is
+//   what the code did before the indexer was taken off the listen socket. It
+//   was taken off deliberately: a backfill tick blocks its event loop for
+//   seconds at a time, and while it was also an HTTP worker the OS kept handing
+//   it a full share of requests, which then sat behind that stall. An operator
+//   capacity-planning from the old comment would have over-counted by a core
+//   and been puzzled by the latency spikes. SQLite with WAL mode
 //   tolerates multi-process readers natively, and the single-writer
 //   invariant is preserved because only the indexer worker mutates the DB.
 //

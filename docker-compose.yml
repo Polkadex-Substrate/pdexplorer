@@ -115,6 +115,23 @@ services:
       # :ro (audit F-040): nginx only READS certs. If the frontend container
       # is compromised it must not be able to overwrite TLS material; only
       # the certbot service holds a writable mount.
+      #
+      # Audit F-189 — read this as HOST:CONTAINER, they are different paths:
+      #
+      #   HOST       ${CERTBOT_PATH}/conf   (production: /opt/pdexplorer/certbot/conf)
+      #   CONTAINER  /etc/letsencrypt       (what nginx.conf names)
+      #
+      # The host has NO /etc/letsencrypt. Any instruction that tells an
+      # operator to inspect, chmod or copy a host-side /etc/letsencrypt/... is
+      # wrong and sends them to a directory that does not exist.
+      #
+      # CERTBOT_PATH is read from .env, and provision-ubuntu.sh and deploy.sh
+      # now read it back out of the SAME file rather than each hard-coding a
+      # path. Before that they disagreed and agreed only by coincidence on the
+      # default box: a custom CERTBOT_PATH had the scripts writing a valid
+      # certificate into one directory while this mount handed nginx another,
+      # empty one — nginx exits on the missing fullchain.pem and Cloudflare
+      # answers 521 while every provisioning check reports success.
       - ${CERTBOT_PATH:-./certbot}/conf:/etc/letsencrypt:ro
       - ${CERTBOT_PATH:-./certbot}/www:/var/www/certbot:ro
     depends_on:

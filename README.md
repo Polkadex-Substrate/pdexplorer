@@ -42,7 +42,51 @@ Live: **https://explorer.polkadex.ee/**
 - `WebSite` + `Organization` + `SoftwareApplication` JSON-LD on every page; route-scoped `HowTo` + `FAQPage` JSON-LD on `/wallet`
 - Clean URLs via the History API (no `#fragment` routing); nginx SPA fallback
 - Dynamic `/sitemap.xml` (re-generated every 5 minutes from the SQLite index, includes top validators / recent blocks / top holders) and `/robots.txt`
-- PWA manifest with home-screen shortcuts
+- PWA manifest with home-screen shortcuts (`/blocks`, `/validators`, `/staking-rewards`, `/wallet`)
+
+> **Audit F-061 — the manifest is JSON, so its reasoning has to live here.**
+> Round 1 of this finding was a literal duplicate: a `manifest.webmanifest` at
+> the repo root and another in `public/`, disagreeing about the theme colour,
+> with only one of them ever reaching a browser. The root copy was deleted —
+> but it was the copy whose colours were *right*, so the duplicate went away
+> and the wrong values were the ones that shipped. That is worth remembering:
+> de-duplicating by deletion silently picks a winner, and nothing checks that
+> you picked the correct one.
+>
+> What the surviving manifest is now required to be is **true**, because every
+> field in it is a promise the operating system keeps on our behalf long after
+> the tab is closed:
+>
+> - `theme_color` / `background_color` are `#E6007A` / `#08080C`, the same
+>   `--brand-primary` and `--bg-dark` that `styles.css`, `BRAND.md` and the
+>   `index.html` `theme-color` meta tags use. They previously read `#7c3aed`
+>   and `#0b0420`, an older purple palette, so an installed app opened to a
+>   splash screen in colours that appear nowhere on the site.
+> - Icon `sizes` describe the actual files. `logo.png` and `favicon.png` are
+>   both 259×256; the manifest declared the same two files as `32x32`,
+>   `192x192` and `512x512`. A browser that trusts `sizes` when picking an icon
+>   and then decodes something else gets a scaled, blurry result at exactly the
+>   size it was trying to avoid scaling. If real 192/512 assets are ever
+>   produced, add them as separate files rather than re-labelling these.
+> - `purpose: "maskable"` was dropped. Maskable art has to be drawn with a
+>   ~40% safe zone because the platform crops it to whatever mask it likes;
+>   ours is not, so the claim bought a cropped logo on Android instead of a
+>   letterboxed one.
+> - The `screenshots` entry was removed. It pointed at `logo.png` described as
+>   a 512×512 screenshot. It was neither a screenshot nor 512×512, and its only
+>   effect was to put the logo into the install dialog's screenshot carousel.
+>
+> `dist/manifest.webmanifest` is a Vite build artefact (gitignored) and is
+> whatever `public/` last contained; it is not a second source.
+>
+> One instance of the old purple palette outlived this sweep and is **not** in
+> the manifest: `index.html` still carries
+> `<link rel="mask-icon" href="logo.png" color="#7c3aed">`. Safari uses that
+> colour for a pinned-tab glyph, so it is low-traffic rather than harmless — it
+> is the one surface where a user still sees the pre-rebrand purple, and it is
+> exactly the kind of leftover that makes the next person assume the palette
+> migration was never finished. Changing it is a one-line `index.html` edit to
+> `#E6007A`.
 
 **Operations**
 
@@ -100,7 +144,9 @@ npm install
 # Terminal 1 — backend (Node 22 required for node:sqlite)
 node --experimental-sqlite server.js
 
-# Terminal 2 — frontend with HMR (Vite dev server on :3000, proxies /api to :3001)
+# Terminal 2 — frontend with HMR (Vite dev server on :3000; proxies /api,
+# /sitemap.xml, /robots.txt and /developers to :3001 — audit F-060, dev has to
+# reach the same server-rendered documents production serves)
 npm run dev
 ```
 
@@ -112,7 +158,41 @@ Open http://localhost:3000.
 sudo bash provision-ubuntu.sh
 ```
 
-That script hardens the OS (UFW, fail2ban, key-only SSH, persistent journals, watchdog, fstab `nofail`, hardened sysctl), installs Docker, clones the repo, issues a Let's Encrypt cert, and starts the stack. Idempotent — safe to re-run. See [Deployment](#deployment) below for the details and prerequisites.
+That script hardens the OS (UFW, fail2ban, key-only SSH, persistent journals, watchdog, fstab `nofail`, hardened sysctl), installs Docker, clones the repo, installs an origin TLS certificate, restricts 80/443 to Cloudflare's ranges, and starts the stack. Idempotent — safe to re-run. See [Deployment](#deployment) below for the details and prerequisites.
+
+> **Audit F-190 — this line used to say "issues a Let's Encrypt cert", and it
+> was not true.** On the default path (`DOMAIN` proxied by Cloudflare,
+> orange-cloud) the ACME HTTP-01 challenge cannot reach the origin, so nothing
+> is issued: `init-letsencrypt.sh` writes a **self-signed placeholder** whose
+> only job is letting nginx boot. An operator who believed the old sentence
+> pointed DNS at the new box, watched Cloudflare answer **526** (invalid origin
+> certificate) under Full (Strict), and had no reason to suspect the cert. The
+> supported ways to get a real origin certificate are, in the order you should
+> prefer them for a permanently proxied zone:
+>
+> 1. **Cloudflare Origin CA** — 15-year cert, no renewal, no challenge, works
+>    with the proxy on. Stage `secrets/cloudflare-origin.pem` + `.key` and run
+>    `sudo bash provision-ubuntu.sh cf-origin-cert`. `provision-ubuntu.sh all`
+>    runs this automatically when those files are present.
+>
+> **Audit F-024 (round 2):** `provision-ubuntu.sh all` now **fails** rather
+> than finishing on the placeholder, whenever `DOMAIN` looks like a public
+> hostname and no Origin CA material is staged. Warning and continuing was the
+> round-1 attempt and it did not hold: the failure is invisible from the origin
+> (nginx up, green summary, `curl -k https://localhost` fine) and only the
+> public internet sees the 526, so scrollback is the wrong place for it.
+> Override with `ALLOW_SELF_SIGNED_ORIGIN=1` **only** when the record is
+> grey-clouded or there is no Cloudflare in front of the box.
+> `init-letsencrypt.sh` likewise now runs a real `certonly` by default and
+> exits non-zero if the result is still self-signed; the placeholder-only
+> behaviour is `ORIGIN_CERT_MODE=self-signed-bootstrap`.
+> 2. **Let's Encrypt via DNS-01** (`certbot/dns-cloudflare` + a scoped API
+>    token) — a publicly trusted cert that renews unattended behind the proxy.
+> 3. **Let's Encrypt via HTTP-01 with the record temporarily grey-clouded** —
+>    works, but every renewal needs the same manual toggle.
+>
+> `INSTALL.md` carries the same three options; if these two lists ever disagree
+> again, the README is the one that has drifted.
 
 ---
 
@@ -125,7 +205,15 @@ The `provision-ubuntu.sh` script targets Ubuntu 22.04 / 24.04 LTS and does the O
 **Before running**, on the fresh VPS:
 
 1. Put your SSH public key in `/root/.ssh/authorized_keys`. The script disables password SSH; without a key already in place you'll lock yourself out.
-2. Point the DNS A record for your domain at the VPS's public IP. Let's Encrypt's HTTP-01 challenge needs this to issue the cert.
+2. Point the DNS A record for your domain at the VPS's public IP.
+   - If the zone is **proxied (orange-cloud)** — the production setup — stage a
+     Cloudflare Origin CA certificate at `secrets/cloudflare-origin.pem` and
+     `secrets/cloudflare-origin.key` *before* running the script, so the `all`
+     phase installs a certificate Cloudflare Full (Strict) accepts instead of
+     leaving the self-signed placeholder in place (audit F-190/F-024).
+   - Only if the record is **grey-cloud (DNS only)** does Let's Encrypt's
+     HTTP-01 challenge reach the origin. Through the proxy it does not: "Always
+     Use HTTPS" redirects `/.well-known/acme-challenge/…` before it arrives.
 3. Edit the constants at the top of `provision-ubuntu.sh` if your domain / repo URL / email differ from the defaults, or pass them in via env:
 
 ```bash
@@ -138,12 +226,22 @@ sudo DOMAIN=explorer.polkadex.ee \
 You can run just one phase at a time:
 
 ```bash
-sudo bash provision-ubuntu.sh harden       # OS hardening only
-sudo bash provision-ubuntu.sh docker       # Docker install only
-sudo bash provision-ubuntu.sh app          # Clone + build + deploy only
-sudo bash provision-ubuntu.sh cloudflare   # Restrict 80/443 to Cloudflare IPs
-sudo bash provision-ubuntu.sh all+cf       # All phases including cloudflare
+sudo bash provision-ubuntu.sh harden          # OS hardening only
+sudo bash provision-ubuntu.sh docker          # Docker install only
+sudo bash provision-ubuntu.sh app             # Clone + build + deploy only
+sudo bash provision-ubuntu.sh backup          # Nightly SQLite backup + cron
+sudo bash provision-ubuntu.sh cloudflare      # Restrict 80/443 to Cloudflare IPs
+sudo bash provision-ubuntu.sh cf-origin-cert  # Install a Cloudflare Origin CA cert
 ```
+
+**Audit F-192 — do not run `all+cf` "to add Cloudflare".** `all` (the default,
+what you get with no argument) already runs the Cloudflare firewall phase *and*
+the Origin CA install when `secrets/cloudflare-origin.pem` is staged. This
+README used to point at a separate `all+cf` arm, which was left over from before
+audit F-098 and never called `setup_cf_origin_cert` — so following that
+instruction *skipped* the origin certificate and left the box on a self-signed
+placeholder, i.e. a Cloudflare 526 caused by taking the extra step. `all+cf` is
+now an alias of `all`, kept only so existing runbooks don't break.
 
 After the first run, re-test SSH on the configured port (default 22) *before* closing your current session — the script disables root password login.
 
@@ -178,9 +276,16 @@ nginx is already configured (in `nginx.conf`) to trust Cloudflare's ranges as pr
 
 **Important — Let's Encrypt + Cloudflare proxy is incompatible by default.** The HTTP-01 challenge that `init-letsencrypt.sh` uses goes through Cloudflare (because the DNS is proxied), so Let's Encrypt's validation server never reaches your origin and renewal fails. Pick one of:
 
-1. **Temporarily grey-cloud during cert issuance/renewal** (simplest). Toggle the DNS record to "DNS only" in the CF dashboard, run certbot, toggle back. Annoying for automated renewal.
-2. **Use DNS-01 challenge with the Cloudflare API plugin** (recommended for production). Generate a scoped CF API token (`Zone:DNS:Edit` on the explorer zone), then issue certs with:
+1. **Install a Cloudflare Origin CA certificate** (recommended, and what production runs). Cloudflare dashboard → SSL/TLS → Origin Server → Create Certificate; 15-year lifetime, no renewal, no ACME challenge, valid only for Cloudflare→origin traffic — which is the only traffic the origin accepts once the `cloudflare` phase has locked 80/443 to CF ranges. Put the two files at `secrets/cloudflare-origin.pem` and `secrets/cloudflare-origin.key` (mode 600, root) and run:
    ```bash
+   sudo bash provision-ubuntu.sh cf-origin-cert
+   ```
+   `provision-ubuntu.sh all` runs this for you when those files exist; when they don't, it warns and leaves the self-signed placeholder, which Full (Strict) rejects with 526.
+2. **Use DNS-01 challenge with the Cloudflare API plugin** — a publicly trusted certificate that also renews unattended with the proxy on. Generate a scoped CF API token (`Zone:DNS:Edit` on the explorer zone), then issue certs with:
+   ```bash
+   # -v HOST_PATH:CONTAINER_PATH. $CERTBOT_PATH/conf on the host is
+   # /etc/letsencrypt inside the container — see "Where the certificates
+   # actually live" below.
    docker run --rm \
      -v /opt/pdexplorer/certbot/conf:/etc/letsencrypt \
      -v /opt/pdexplorer/certbot/www:/var/www/certbot \
@@ -191,8 +296,40 @@ nginx is already configured (in `nginx.conf`) to trust Cloudflare's ranges as pr
        -d explorer.polkadex.ee \
        -m vivek@polkadex.ee --agree-tos --non-interactive
    ```
-   Renewal then runs unattended with the proxy on.
-3. **Page Rule bypass for `/.well-known/acme-challenge/*`** — fragile, breaks if you change rules. Not recommended.
+3. **Temporarily grey-cloud during cert issuance/renewal.** Toggle the DNS record to "DNS only" in the CF dashboard, run certbot, toggle back. Works, but every 60-day renewal needs the same manual toggle, so it is a standing outage risk.
+
+(A Page Rule bypass for `/.well-known/acme-challenge/*` is sometimes suggested. It is fragile — it silently stops working when rules are reordered or the free rule quota is consumed elsewhere — and it is not used or supported here.)
+
+### Where the certificates actually live (audit F-189)
+
+The cert tree is a **bind mount**, so the same file has two paths and each one
+exists on only one side:
+
+| | Path |
+| --- | --- |
+| **Host** (the VPS; what `provision-ubuntu.sh`, `deploy.sh` and `backup` touch) | `$CERTBOT_PATH/conf/live/$DOMAIN/privkey.pem` — in production `/opt/pdexplorer/certbot/conf/live/explorer.polkadex.ee/privkey.pem` |
+| **Container** (what `nginx.conf` names) | `/etc/letsencrypt/live/explorer.polkadex.ee/privkey.pem` |
+
+`CERTBOT_PATH` is set in `.env`; `docker-compose.yml` interpolates it into the
+mount, and `provision-ubuntu.sh` and `deploy.sh` now read it back out of that
+same file rather than each hard-coding a path of their own.
+
+**There is no `/etc/letsencrypt` on the host.** `ls /etc/letsencrypt` on the VPS
+returns "No such file or directory", which reads exactly like a missing
+certificate and has cost real debugging time. Inspect the right side:
+
+```bash
+ls -l /opt/pdexplorer/certbot/conf/live/explorer.polkadex.ee/     # host
+docker compose exec frontend ls -l /etc/letsencrypt/live/         # container
+```
+
+The `live/<name>` segment in `nginx.conf` is a literal baked into the frontend
+image at build time, so it does not follow `$DOMAIN`. When a deployment's
+`DOMAIN` differs, `provision-ubuntu.sh` reads the name out of `nginx.conf` and
+links it at `live/$DOMAIN` inside the mounted tree, so the container still opens
+the certificate that was actually installed; the durable fix for a permanent
+domain change is to edit the two `ssl_certificate*` lines and rebuild the
+frontend image.
 
 **Refreshing the Cloudflare range list manually**, if you don't want to wait for the weekly timer:
 
@@ -208,7 +345,13 @@ sudo ufw status | grep Cloudflare
 git clone <repo-url> /opt/pdexplorer
 cd /opt/pdexplorer
 cp .env.example .env  # if present; otherwise create one — see Configuration
+
+# Audit F-024: this issues a REAL certificate (HTTP-01) and exits non-zero if
+# it ends up self-signed. Behind an orange-clouded Cloudflare record it will
+# fail by design — use `provision-ubuntu.sh cf-origin-cert` there instead, or
+# grey-cloud the record for the duration.
 ./init-letsencrypt.sh
+
 docker compose up -d --build
 ```
 
@@ -357,7 +500,7 @@ pdexplorer/
 ├── script.js              # Frontend: routing, rendering, wallet flows
 ├── styles.css             # Stylesheet
 ├── public/
-│   ├── manifest.webmanifest   # PWA manifest
+│   ├── manifest.webmanifest   # PWA manifest — the ONLY copy (audit F-061)
 │   └── og-image.png           # 1200x630 social card
 ├── nginx.conf             # Reverse proxy: TLS, headers, /api proxy, SPA fallback
 ├── Dockerfile.backend     # Node 22.11-alpine, runs as `node` (uid 1000)
@@ -373,27 +516,105 @@ pdexplorer/
     └── explorer.db        # SQLite index (WAL mode)
 ```
 
+### Known debt: `script.js` and `server.js` are large (audit F-069)
+
+Recorded rather than fixed, deliberately. `script.js` is ~14.6k lines with ~350
+top-level functions; `server.js` is ~9.5k. Both grew between audit rounds
+(`script.js` was 13.7k at round 1), and the **trend is the thing to watch** —
+the absolute number matters less than whether each pass leaves it larger.
+
+What makes them hard to split is not the length. It is the ~185 module-level
+mutable variables in `script.js` (`globalApi`, `councilData`, `latestWallet`,
+`pendingReferendumVote`, …) that the page modules share. Function names are
+verb-first (`render*`, `fetch*`, `submit*`), not domain-first, so the page
+modules are interleaved by line number rather than grouped; there is no
+`staking/` or `governance/` cluster to lift out by prefix. Extracting a
+*behaviour* module means threading that shared state through parameters, which
+is the expensive and regression-prone part — and doing it in the same pass as a
+batch of behavioural fixes makes every one of those fixes harder to review and
+harder to revert.
+
+So the rule this repo follows is the audit's own: **extract pure helpers behind
+tests; do not split the files.** That is what `lib/` is — 25 modules, each one
+either a pure function or pure data, each with a test file. `lib/help-topics.js`
+(the help centre's 36 articles, ~670 lines) is the largest such extraction and
+the model for the next one: it moved because it is data with no reference to
+module state, so the move was verifiable by deep-equality against the original
+array and could not change behaviour. It also gained tests that were impossible
+while it sat in a bundle with no export surface — slug uniqueness, category
+validity, and internal `/help/<slug>` links resolving.
+
+Remaining candidates of the same kind, if someone wants the next slice:
+`TOUR_SLIDES`, `MOBILE_WALLETS`, `DONATION_ADDRESSES`, `EMAIL_PREF_GROUPS`
+(~110 lines total). Left in place for now because four more import lines buy
+little; they are worth moving only alongside a test that needs them.
+
 ---
 
 ## API reference
 
 All endpoints under `/api/*` return JSON. Most are read-only and public; a small subset requires a wallet-signed session token (see "Authenticated" below). The full developer-facing version of this reference is also served at [`/developers`](https://explorer.polkadex.ee/developers).
 
-> **Four hand-maintained copies of this route list** (audit F-060 / F-154).
-> Nothing is generated from the Express registrations, so adding a route means
-> editing all four or the docs start lying:
+> **Where this route list lives** (audit F-060 / F-154). There used to be four
+> hand-maintained copies. Two of them — `DEVELOPERS_HTML` in `server.js` (what a
+> **hard load** of `/developers` serves) and `renderDevelopersPage()` in
+> `script.js` (what **in-app navigation** paints, a genuinely different
+> document) — went stale, and by the round-2 audit they were missing eight route
+> families that this file and `llms.txt` documented: community labels,
+> `/api/identity`, `/api/proxies`, `/api/proxy-types`, `/api/multisigs`,
+> `/api/analytics/*`, `/api/extrinsic-by-hash`, `/api/version` and
+> `/api/health`. An integrator reading the site's own Developers page could not
+> see them.
 >
-> 1. this section of `README.md`;
-> 2. `public/llms.txt` — the machine-readable copy for bots and AI clients;
-> 3. `DEVELOPERS_HTML`, a string constant in `server.js` — what a **hard load**
->    of `/developers` serves (nginx proxies that path to the backend);
-> 4. `renderDevelopersPage()` in `script.js` — what **in-app navigation** to
->    `/developers` paints, which is a *different document* from (3).
+> Both `/developers` renderers now build their endpoint lists from **one table**,
+> `lib/api-reference.js`. Adding a route means adding one entry there.
+> `test/api-reference.test.js` additionally asserts that every path in that
+> table appears in this file and in `public/llms.txt`, so the two prose copies
+> cannot silently fall behind either — but they are still prose, and their
+> surrounding caveats are written by hand.
 >
-> Two consequences worth knowing: `/developers` genuinely renders differently
-> depending on how you arrived at it, and the Vite dev proxy does not forward
-> `/developers`, so `npm run dev` only ever shows the SPA copy. To enumerate
-> the real route set, grep the source rather than trusting any of the four:
+> The Vite dev proxy **does** forward `/developers` to the backend
+> (`vite.config.js`), so a hard load under `npm run dev` now shows the same SSR
+> copy production serves. That sentence used to say the opposite, and it was
+> wrong in the most expensive direction: it told anyone verifying a change to
+> `DEVELOPERS_HTML` that they could not see it locally, so they didn't look.
+>
+> What is still true is the older, larger half of F-060: `/developers` renders
+> as **two different documents** depending on how you arrived. Their endpoint
+> lists agree — that is what `lib/api-reference.js` bought — but everything
+> around those lists does not. The exact inventory, because "they differ" is
+> what let this sit through a round:
+>
+> | | SSR (`DEVELOPERS_HTML`, hard load) | SPA (`renderDevelopersPage()`, in-app) |
+> |---|---|---|
+> | Section anchors | none — bare `<h2>`s, no `id` | `<section id="chain">…` on every section |
+> | Table of contents | none | 18 `href="#…"` links above the content |
+> | CORS | one row inside the "Start here" table | its own `<h2>` at `#cors` |
+> | Caching tiers | 15th, near the bottom | 3rd, above the endpoint lists |
+> | network-info schema | 13th, after Build provenance | 6th, right after Chain inspection |
+> | Errors / addresses | one combined "Errors &amp; addresses" `<h2>` | two sections, `#errors` and `#addresses` |
+> | Discussions vs Email | Discussions first | Email first |
+> | "Found a bug?" | a line in the footer | its own section |
+>
+> The anchors row is the one with a visible cost: `/developers#governance` is a
+> working deep link from inside the app and a no-op on a hard load or a crawl —
+> and a hard load is what a search engine, an LLM crawler and a shared link all
+> do, so the version with no deep links is the version the outside world gets.
+> The ordering rows cost less individually and more collectively: any future
+> edit has to be applied twice, in two different positions, in two files, which
+> is the mechanism that produced the stale tier table now sitting in **both**
+> copies (see *Scaling → Endpoints that must not be shared-cached*, gap 3).
+> Closing this means the two renderers emitting the same sections, in the same
+> order, with the same wrapper and TOC — a `server.js` + `script.js` change, not
+> a docs one. The durable form is to move the scaffolding into
+> `lib/api-reference.js` beside the route table, so that "one table, two
+> renderers" becomes "one document, two mount points".
+>
+> The table is curated rather than generated
+> from the Express router on purpose: the SPA copy has no access to the router,
+> and a generated list would publish operator-only routes (`/api/diag/*`, the
+> email token endpoints) the moment one was registered. To see the raw route set
+> the server actually has:
 >
 > ```bash
 > grep -nE "^app\.(get|post|put|delete)\('" server.js
@@ -417,17 +638,36 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 | Tier | Used by | Header |
 |---|---|---|
-| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/governance/latest` | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
+| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
 | **Medium** | `/api/validators`, `/api/network-info`, `/api/holders`, `/api/price-latest`, `/api/staking-rewards-status`, `/api/discussions`, `/api/analytics/*`, `/api/labels/:address` (anonymous only), `/api/consts/*` + `/api/runtime` at head | `public, max-age=30, s-maxage=60, stale-while-revalidate=120` |
 | **Long** | `/api/price-history`, `/api/treasury`, `/api/democracy`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and any inspection route pinned to a past block with `?at=` | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
 
-`/sitemap.xml` sets its own `public, max-age=300, s-maxage=300`. Anything not
-listed above sends **no** `Cache-Control` at all — including
-`/api/block/:id`, `/api/extrinsic/*`, `/api/validator/:address`,
-`/api/wallet/:address`, `/api/account/:address`, `/api/staking-rewards/:address`
-and `/api/transactions/older`. Treat "no header" as "don't share-cache this",
-and see the Cloudflare notes under *Scaling* — a "Cache Everything" rule will
-otherwise apply its own default TTL to them.
+`/sitemap.xml` sets its own `public, max-age=300, s-maxage=300`.
+
+The rest of the API splits into two groups, and audit F-083 is about not
+conflating them — the distinction is invisible in a browser and decisive at a
+CDN.
+
+**Sends `no-store` explicitly:** `/api/wallet/:address`,
+`/api/identity/:address`, `GET /api/labels/:address` *when the caller presents a
+session*, `POST /api/rpc/call`, all of `/api/email/*`, `/api/version` and
+`/api/health`. These are per-viewer or state-changing; an intermediary that
+stored one caller's copy would serve it to the next.
+
+**Sends no `Cache-Control` header at all:** `/api/block/:id`,
+`/api/extrinsic/:block/:txHash`, `/api/extrinsic-by-hash/:txHash`,
+`/api/validator/:address`, `/api/search/:query`, `/api/account/:address`,
+`/api/staking-rewards/:address`, `/api/transactions/older`,
+`/api/proxies/:address`, `/api/multisigs/:address`, `/api/discussions/:id`,
+every **other** `POST`/`DELETE` route (`POST /api/rpc/call` and the `/api/email/*`
+writes are the exceptions — they are in the `no-store` list above), and all of
+`/api/diag/*`. These are omissions, not
+decisions: their URL space is too large for a CDN to help, so nobody added a
+header. **"No header" is not "do not cache."** A Cloudflare "Cache Everything"
+rule applies its own default TTL to exactly these responses, so the enforcement
+point for this group is the edge configuration described under *Scaling*, not
+the origin. Treat the list as "must not be shared-cached" and configure the
+edge accordingly.
 
 ### Chain data (read-only, public)
 
@@ -550,10 +790,10 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 
 ### Authenticated (wallet sign-in for discussion posts)
 
-Wallet-signed nonce login. Sessions are 192-bit random tokens with a TTL.
+Wallet-signed nonce login. Sessions are 192-bit random tokens with a 7-day TTL (audit F-152 — this used to say just "a TTL" while the UI said ~24 hours and the server used 7 days).
 
 - `POST /api/auth/challenge` — request a sign-in nonce
-- `POST /api/auth/verify` — submit `{ address, signature, nonce }`, receive a session token
+- `POST /api/auth/verify` — submit `{ address, signature }`; the nonce is **not** sent (the server looks up the open challenge for that address). Returns `{ token, expiresIn }`, `expiresIn` in ms
 - `POST /api/auth/logout`
 - `POST /api/discussions/:id/posts` — post to a discussion (rate-limited, requires session)
 
@@ -564,10 +804,24 @@ Wallet-signed nonce login. Sessions are 192-bit random tokens with a TTL.
 
 ### Diagnostics (operator-facing)
 
-All `/api/diag/*` routes sit behind the same gate (audit F-038): a
-`Bearer $DIAG_TOKEN` header, or a loopback source address when `DIAG_TOKEN` is
-unset. They are not part of the public API contract and may change without
-notice.
+All `/api/diag/*` routes sit behind the same gate (audit F-038): the token in a
+**request header**, or a loopback source address when `DIAG_TOKEN` is unset.
+They are not part of the public API contract and may change without notice.
+
+```bash
+curl -H "Authorization: Bearer $DIAG_TOKEN" https://explorer.polkadex.ee/api/diag/rpc-health
+curl -H "X-Diag-Token: $DIAG_TOKEN"         https://explorer.polkadex.ee/api/diag/rpc-health
+```
+
+**Audit F-193: `?token=` is refused with 403.** The gate used to accept the
+token as a query parameter and `.env.example` taught that form, which meant the
+shared secret was simultaneously stored in Cloudflare's request logs, the
+uptime vendor's saved URL (and its alert emails), the operator's shell history,
+and the Referer of anything the page linked to. F-091 stopped *our* nginx
+logging query strings; it could do nothing about the edge, the vendor, or the
+browser. An uptime monitor that cannot send a header should watch the public
+`GET /api/health` instead — it needs no credential and returns `{ healthy }`
+with no URLs, pids, or email fields.
 
 - `GET /api/diag/email` — email transport status
 - `GET /api/diag/rpc-cache` — hit/miss stats for the block, block-hash and events-at caches
@@ -629,7 +883,9 @@ Staking rewards and on-chain governance have their own forward + backfill crawle
 
 The explorer is **non-custodial** — it never sees private keys or seed phrases.
 
-When the user clicks Connect Wallet, the explorer enumerates `window.injectedWeb3` (populated by browser extensions or mobile-wallet in-app browsers). Selecting an account stores its Polkadex-prefixed (SS58 88) form in `localStorage` for display + URL routing; the wallet's *native-prefixed* form (often SS58 42 or 0) is kept in memory for `signAndSend` because that's what the injected signer recognizes. `isSameAddress` compares by public-key bytes so the two forms reconcile.
+When the user clicks Connect Wallet, the explorer enumerates `window.injectedWeb3` (populated by browser extensions or mobile-wallet in-app browsers). Selecting an account stores its Polkadex-prefixed (SS58 88) form in `localStorage`, and that same form is used for display, URL routing and `signAndSend` alike. `isSameAddress` compares by public-key bytes, so any SS58 encoding of the same key reconciles.
+
+> This paragraph used to describe a second, *native-prefixed* address (SS58 42 or 0) "kept in memory for `signAndSend` because that's what the injected signer recognizes". That field existed and nothing ever read it — audit F-117 removed it. Injected extensions (polkadot-js, Talisman, SubWallet, Nova) match accounts by public key, so the prefix-88 form is accepted. If a wallet ever did require its own encoding, signing would be failing today rather than working.
 
 The signing helper (`submitSignedTx`):
 
@@ -689,7 +945,7 @@ Audit F-119.
 
 Two notable surfaces, both intentionally minimal:
 
-**Wallet authentication for the discussion board.** Server issues a one-time nonce, user signs `"Polkadex Explorer login: <address> | nonce <nonce>"` with their wallet, server validates with `signatureVerify` from `@polkadot/util-crypto`. Sessions are 192-bit random tokens with a TTL.
+**Wallet authentication for the discussion board.** Server issues a one-time nonce, user signs `"Polkadex Explorer login: <address> | nonce <nonce>"` with their wallet, server validates with `signatureVerify` from `@polkadot/util-crypto`. Sessions are 192-bit random tokens with a 7-day TTL.
 
 **No code execution paths.** No `eval`, no `child_process`, no file uploads, no path-from-input. Every SQL query is a prepared statement. Discussion content is HTML-escaped at render time.
 
@@ -758,19 +1014,43 @@ as request latency.
 
 | `WORKERS` value | Effect |
 | --- | --- |
-| unset | `min(cpus().length, 8)` — sensible default |
+| unset | `min(cpus().length, WORKERS_MAX)` — sensible default |
 | `1` | No clustering, single process (legacy behavior, useful for local dev) |
-| `N` | Fork exactly N workers, clamped to ≤16 |
+| `N` | Fork exactly N workers, clamped to ≤ `WORKERS_MAX` |
+| `WORKERS_MAX` | Default `8`. The ceiling the two rows above clamp against |
 
-For a 4-core VPS, the default forks 4 workers and uses all four cores. For an 8-core box, 8. For local development on a laptop, set `WORKERS=1` to disable clustering and get cleaner logs.
+For a 4-core VPS the default forks 4 workers — one indexer plus **three**
+serving HTTP; for an 8-core box, 8 workers and seven HTTP servers. All four (or
+eight) cores are busy, but only `N − 1` of them are answering requests: the
+indexer's core is spent on chain sync. That distinction is audit F-156, and it
+is the one that matters when you are sizing against a req/s target rather than
+against a core count. For local development on a laptop, set `WORKERS=1` to
+disable clustering and get cleaner logs — accepting that you are then testing a
+topology where indexer stalls show up as request latency.
+
+> **Audit F-191.** This table used to say "clamped to ≤16" while `server.js`
+> clamps with `Math.min(n, WORKERS_MAX)` and `WORKERS_MAX` defaults to **8**.
+> Setting `WORKERS=16` on a 16-core box therefore produced eight workers —
+> half what was asked for, with nothing in the logs saying so, because the
+> clamp is deliberately silent. Raise `WORKERS_MAX` explicitly if you want more
+> than eight; keeping the ceiling as a named knob rather than a number in prose
+> is what stops the docs and the code drifting apart again.
 
 **Cache-Control tiers.** Read-only `/api` endpoints set `Cache-Control` headers so Cloudflare absorbs the bulk of read traffic — the origin only sees about one request per endpoint per `s-maxage` window regardless of how many users are hitting the site. The three tiers map onto how fast the underlying data changes:
 
 | Tier | Headers | Endpoints |
 | --- | --- | --- |
-| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions` |
-| `cacheMedium` | `max-age=30, s-maxage=60, stale-while-revalidate=120` | `/api/network-info`, `/api/validators`, `/api/holders`, `/api/price-latest`, `/api/discussions`, `/api/staking-rewards-status` |
-| `cacheLong` | `max-age=300, s-maxage=600, stale-while-revalidate=3600` | `/api/council`, `/api/treasury`, `/api/democracy`, `/api/price-history` |
+| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/governance/latest`, `/api/state/*` |
+| `cacheMedium` | `max-age=30, s-maxage=60, stale-while-revalidate=120` | `/api/network-info`, `/api/validators`, `/api/holders`, `/api/price-latest`, `/api/discussions`, `/api/staking-rewards-status`, `/api/analytics/*`, `GET /api/labels/:address` (anonymous callers only) |
+| `cacheLong` | `max-age=300, s-maxage=600, stale-while-revalidate=3600` | `/api/treasury`, `/api/democracy`, `/api/price-history`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and inspection routes pinned to a past block with `?at=` |
+
+> **Audit F-083.** `/api/council` was listed here as `cacheLong` long after the
+> handler was moved to `cacheShort`. That direction of drift is the dangerous
+> one: the table is what an operator reads when writing a Cloudflare rule, so
+> the docs were inviting a 10-minute edge TTL onto a list of live council
+> motions where a fresh vote could hide for the whole window. The tier lists in
+> *API reference → Caching tiers* above and this table are the same facts
+> written twice; if you change a handler, change both.
 
 The `stale-while-revalidate` clause means users never block on a cache refresh — Cloudflare serves the stale copy instantly and asynchronously fetches a fresh one. Caches are only set on 200-success responses; errors are never cached so a transient 5xx can't get pinned at the edge.
 
@@ -780,18 +1060,68 @@ help:
 
 - `/api/account/:address`, `/api/wallet/:address`, `/api/staking-rewards/:address`
 - `/api/search/:query`, `/api/block/:id`, `/api/extrinsic/*`, `/api/validator/:address`
+- `/api/extrinsic-by-hash/:txHash` — **listed separately on purpose.** A rule written as `/api/extrinsic/*` does not match it: the path is `extrinsic-by-hash`, not a child of `extrinsic/`. It is also the single most expensive route we have (it scans up to 2000 blocks backwards from the head per call), so an edge rule that silently misses it is the one omission on this list that costs RPC budget as well as freshness
+- `/api/transactions/older`, `/api/proxies/:address`, `/api/multisigs/:address`, `/api/discussions/:id` — per-address or cursor-keyed, and all four send no `Cache-Control` at all
 - every `/api/labels/*` route — the GET's payload contains the *caller's own* `viewerVote`, so caching one user's response would show their vote to everyone
-- everything under `/api/auth/*`, `/api/email/*`, `/api/discussions/*/posts`
+- everything under `/api/auth/*`, `/api/email/*`, `/api/discussions/*/posts`, plus `POST /api/rpc/call`
 - `/api/version`, `/api/health`, `/api/identity/:address`, and all of `/api/diag/*`
 
-Audit F-083: this list previously omitted `/api/wallet/:address` and the label
-routes. Two of them are still weaker than the list implies —
-`GET /api/labels/:address` sets `cacheMedium` for anonymous callers and simply
-*omits* a header when a session is present, and `GET /api/wallet/:address` sets
-no header at all. "No `Cache-Control`" is not "don't cache": a CDN configured
-with "Cache Everything" applies its own default TTL. Both should send an explicit
-`no-store`; until they do, keep the Cloudflare rules in "Configuring Cloudflare"
-below as the actual enforcement point.
+Audit F-083 — **what this list is, and the two ways it lies.** It is the
+*policy*: endpoints that must never be served out of a shared cache. It is not a
+description of the response headers, and the gap between the two is the finding.
+
+The list originally omitted `/api/wallet/:address` and the label routes
+outright. Both are now in it, and `/api/wallet/:address` and
+`GET /api/identity/:address` send a real `no-store`; `GET /api/labels/:address`
+sends `no-store` whenever a session is present. Those three are enforced at the
+origin and need nothing from the edge.
+
+Round 2 found the same defect a size smaller, and it is worth naming because it
+is the shape this finding keeps coming back in. The list was checked against the
+*dangerous* routes and stopped there, so five more that send no header —
+`/api/extrinsic-by-hash/:txHash`, `/api/transactions/older`,
+`/api/proxies/:address`, `/api/multisigs/:address`, `/api/discussions/:id` — were
+still missing from it, and `POST /api/rpc/call` was missing too. An operator
+writing Cloudflare rules from this list would have left all six cacheable. The
+`extrinsic-by-hash` omission was the expensive one: it looks like it is already
+covered by the `/api/extrinsic/*` line above it, and it is not, because the two
+paths are siblings rather than parent and child. A glob that reads as complete
+and matches nothing is worse than a missing line, which is why it now has its own
+bullet saying so.
+
+Three gaps remain, and none of them is fixable in this file:
+
+1. **Anonymous `GET /api/labels/:address` still sends `cacheMedium`, with no
+   `Vary: Authorization`.** The response body differs by caller (`viewerVote`),
+   and the only thing distinguishing the two shapes is a request header the
+   cache is not told to key on. A shared cache is therefore permitted to store
+   the anonymous copy and hand it to a signed-in caller — or, if it ever caches
+   the authenticated one first, to hand one user's vote state to everybody. The
+   `no-store` branch protects the response it is on; `Vary` is what protects the
+   *other* branch from being substituted for it.
+2. **Most of the list sends no header at all** — see *API reference → Caching
+   tiers* for the exact membership. A CDN configured with "Cache Everything"
+   applies its own default TTL to a response with no `Cache-Control`, so silence
+   is not a refusal.
+3. **The three copies of the tier table that are not in this file still
+   disagree with the handlers.** `public/llms.txt` says everything outside the
+   three tiers "sends NO Cache-Control header", and names `/api/wallet/:address`,
+   `/api/version` and `/api/health` as examples — all three send a real
+   `no-store` now, so it understates the origin. The two `/developers`
+   renderers are wrong in the other, worse direction: both put the **wallet
+   dashboard** in the medium tier, and both put `/api/staking-rewards/:addr` and
+   `/api/holders` in the long tier, when the wallet route is `no-store`, the
+   per-address rewards route sends nothing, and holders is medium. `/developers`
+   is the page an integrator actually reads, and it is currently telling them
+   they may cache a per-account balance payload for 30 seconds. Fixing those
+   three means editing `public/llms.txt`, `DEVELOPERS_HTML` in `server.js` and
+   `renderDevelopersPage()` in `script.js` — or, better, moving the tier table
+   into `lib/api-reference.js` next to the route table, which is where the same
+   class of drift was already solved once (F-154).
+
+Until all three are closed, the Cloudflare rules in "Configuring
+Cloudflare" below are the actual enforcement point for this list, not the
+origin. Write them from this list, not from the headers.
 
 **Configuring Cloudflare to honor the headers.** Default Cloudflare settings already respect `s-maxage`. If you've enabled "Cache Everything" page rules, make sure they don't override the headers; the per-endpoint headers above are stricter than Cloudflare's auto-cache defaults for HTML and will give you better behavior. Confirm with `curl -sI https://explorer.polkadex.ee/api/network-info` — look for `cf-cache-status: HIT` on the second request.
 

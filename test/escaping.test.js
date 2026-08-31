@@ -20,6 +20,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { escapeHtml as sharedEscapeHtml, ESCAPED_CHARS } from '../lib/html-escape.js';
+import { readRepo } from './helpers/source.js';
 
 const src = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 
@@ -112,6 +114,45 @@ describe('F-121 — the home page escapes chain data like the full-list pages do
     });
 });
 
+describe('F-180 — the deep-search paint path (round 2)', () => {
+    // The round-2 audit caught this, and caught WHY the round-1 test missed it:
+    // the escaping tests grepped renderBlocks/renderTransactions only, so a
+    // third paint path for the same fields was invisible to them. `name` here
+    // is the on-chain IDENTITY — settable by anyone who pays the deposit — so
+    // this was a live XSS on the origin that signs transactions.
+    //
+    // The lesson is about the TEST, not just the code: an escaping test scoped
+    // to named functions verifies those functions, not the property. This block
+    // is scoped to the sink instead.
+    function deepSearchBlock() {
+        const at = src.indexOf("if (data.type === 'block')");
+        assert.notEqual(at, -1, 'the deep-search render block moved or was renamed');
+        return src.slice(at, src.indexOf('if (html) {', at));
+    }
+
+    test('every interpolation in the deep-search result is escaped', () => {
+        const raw = interpolations(deepSearchBlock())
+            .filter(e => !/^E\(|stakingEscapeHtml|escapeHtml/.test(e));
+        assert.deepEqual(raw, [],
+            `deep search interpolates unescaped chain data: ${raw.join(' | ')}`);
+    });
+
+    test('the on-chain identity specifically goes through the escaper', () => {
+        // Naming the field, because this is the one an attacker controls
+        // directly and cheaply.
+        assert.match(deepSearchBlock(), /Identity: \$\{E\(data\.data\.name\)\}/,
+            'the on-chain identity is raw in deep search again — that IS F-180');
+    });
+
+    test('NO innerHTML sink in this file interpolates data.data.* raw', () => {
+        // The generalised form. F-013 closed one path, F-180 was a second one
+        // for the same data. Catch the third.
+        const bad = [...src.matchAll(/\$\{(data\.data\.[A-Za-z_.]+)\}/g)].map(m => m[1]);
+        assert.deepEqual(bad, [],
+            `raw data.data.* interpolation(s) remain: ${bad.join(', ')}`);
+    });
+});
+
 describe('F-123 — option values are escaped, not just option labels', () => {
     test('no <option value="${...}"> interpolates without an escape helper', () => {
         const re = /<option value="\$\{([^}]*)\}"/g;
@@ -138,10 +179,13 @@ describe('F-123 — option values are escaped, not just option labels', () => {
 });
 
 describe('the escape helper itself is correct', () => {
-    // stakingEscapeHtml is pure; lift it out of the source and exercise it.
-    const fnSrc = functionBody('stakingEscapeHtml');
-    // eslint-disable-next-line no-new-func
-    const escape = new Function(`return function stakingEscapeHtml(value) ${fnSrc}`)();
+    // Audit F-133 (round 2): there is now ONE implementation, in
+    // lib/html-escape.js, and both stakingEscapeHtml (script.js) and htmlEscape
+    // (server.js) forward to it. So this exercises the real exported function
+    // rather than lifting a body out of the source with `new Function` — which
+    // is what it used to do, and which silently stopped working the moment the
+    // body referenced an import.
+    const escape = sharedEscapeHtml;
 
     test('neutralises every character that can break out of text or an attribute', () => {
         assert.equal(escape('<script>'), '&lt;script&gt;');
@@ -171,5 +215,31 @@ describe('the escape helper itself is correct', () => {
         // Two helpers with the same job is how one of them ends up weaker.
         assert.match(src, /(const|let|var)\s+escapeHtml\s*=\s*stakingEscapeHtml|function\s+escapeHtml\s*\([\s\S]{0,120}?stakingEscapeHtml/,
             'escapeHtml is no longer an alias of stakingEscapeHtml (F-133)');
+    });
+
+    test('F-133 — the SERVER escaper is the same function too', () => {
+        // The round-1 fix collapsed the two client helpers and left server.js
+        // with an independent chain of five .replace() calls. They had already
+        // drifted on the apostrophe entity (&#039; server-side, &#39; client-
+        // side). Harmless in itself — but two hand-maintained escapers on an
+        // XSS boundary will eventually disagree about something that is not.
+        const serverSrc = readRepo('server.js', import.meta.url);
+        const i = serverSrc.indexOf('function htmlEscape(');
+        assert.ok(i !== -1, 'htmlEscape moved — re-point this test');
+        const body = serverSrc.slice(i, serverSrc.indexOf('\n}', i));
+        assert.match(body, /sharedEscapeHtml\(/,
+            'server.js hand-rolls its own escaper again (F-133)');
+        assert.ok(!/replace\(\/&\/g/.test(body),
+            'the old five-replace chain is back');
+        assert.match(serverSrc, /import \{ escapeHtml as sharedEscapeHtml \} from '\.\/lib\/html-escape\.js'/);
+    });
+
+    test('F-133 — both wrappers encode the apostrophe identically', () => {
+        // The specific character the two copies disagreed on. Asserted through
+        // the shared module, which is what both now call.
+        assert.equal(escape("it's"), 'it&#39;s');
+        for (const c of ESCAPED_CHARS) {
+            assert.notEqual(escape(c), c, `${c} is no longer escaped at all`);
+        }
     });
 });

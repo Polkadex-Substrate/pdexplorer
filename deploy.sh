@@ -142,6 +142,39 @@ if [ -f .env.example ] && cmp -s .env .env.example; then
     exit 1
 fi
 
+# ---- Audit F-189: take the cert path from the file compose takes it from ----
+#
+# Everything below referenced ${CERTBOT_PATH:-./certbot}, but this script never
+# read .env — so CERTBOT_PATH was always unset here and the ./certbot fallback
+# always won. Compose, meanwhile, interpolates CERTBOT_PATH *from .env*. Two
+# readers, one variable, and they only agreed because ./certbot resolves to
+# /opt/pdexplorer/certbot after the `cd "$DEPLOY_DIR"` above — which is exactly
+# the value provision writes. Change CERTBOT_PATH in .env and this script starts
+# inspecting an empty directory: the "existing certificate found" check answers
+# no, it runs init-letsencrypt.sh, and that OVERWRITES the live Cloudflare
+# Origin cert with a self-signed placeholder. Full (Strict) then 526s.
+#
+# Parsed, not sourced. .env holds POSTMARK_TOKEN, CMC_API_KEY and DIAG_TOKEN;
+# `. ./.env` would execute whatever is in it and export the lot into every
+# child process this script spawns.
+env_value() {
+    # env_value <KEY> — last non-commented assignment, quotes and spaces stripped.
+    [ -f .env ] || return 0
+    sed -n "s/^[[:space:]]*$1=//p" .env | tail -1 | sed 's/^["'\'']//;s/["'\'']$//' | tr -d ' '
+}
+CERTBOT_PATH="${CERTBOT_PATH:-$(env_value CERTBOT_PATH)}"
+CERTBOT_PATH="${CERTBOT_PATH:-./certbot}"
+DOMAIN="${DOMAIN:-$(env_value DOMAIN)}"
+# HOST path vs CONTAINER path — they are not the same string and confusing them
+# has burned real debugging time. compose bind-mounts $CERTBOT_PATH/conf onto
+# /etc/letsencrypt inside the frontend container; the host has no
+# /etc/letsencrypt at all. Print both so the operator never has to guess which
+# one an error message meant.
+echo "--> Cert tree: $CERTBOT_PATH/conf (host)  ->  /etc/letsencrypt (frontend container)"
+if [ -n "$DOMAIN" ]; then
+    echo "    key: $CERTBOT_PATH/conf/live/$DOMAIN/privkey.pem (host) = /etc/letsencrypt/live/$DOMAIN/privkey.pem (container)"
+fi
+
 # 5. Build and deploy Docker containers
 echo "--> Initializing Let's Encrypt certificates..."
 # ---- TLS certificates ------------------------------------------------------
@@ -164,7 +197,7 @@ echo "--> Initializing Let's Encrypt certificates..."
 # mode 100644, so chmod flipped it to 100755, which git counts as a local
 # modification and which aborted the NEXT `git pull` — running the deploy made
 # the next deploy impossible.
-CERT_GLOB="${CERTBOT_PATH:-./certbot}/conf/live/*/fullchain.pem"
+CERT_GLOB="$CERTBOT_PATH/conf/live/*/fullchain.pem"
 if [ "${RUN_LETSENCRYPT:-0}" != "1" ] && compgen -G "$CERT_GLOB" >/dev/null 2>&1; then
     echo "--> Existing certificate found — skipping init-letsencrypt.sh."
     echo "    (Cloudflare Origin cert setup. Use RUN_LETSENCRYPT=1 to force Let's Encrypt bootstrap.)"
@@ -172,7 +205,7 @@ if [ "${RUN_LETSENCRYPT:-0}" != "1" ] && compgen -G "$CERT_GLOB" >/dev/null 2>&1
     # init-letsencrypt.sh writes a SELF-SIGNED placeholder, and this skip used
     # to treat that placeholder as done — under Full (Strict) that is a 526.
     # Warn loudly (don't abort: Flexible-mode setups do run on placeholders).
-    for pem in ${CERTBOT_PATH:-./certbot}/conf/live/*/fullchain.pem; do
+    for pem in "$CERTBOT_PATH"/conf/live/*/fullchain.pem; do
         issuer="$(openssl x509 -in "$pem" -noout -issuer 2>/dev/null || true)"
         case "$issuer" in
             *"Let's Encrypt"*|*"CloudFlare Origin"*|*"Cloudflare Origin"*) ;;
@@ -184,6 +217,19 @@ if [ "${RUN_LETSENCRYPT:-0}" != "1" ] && compgen -G "$CERT_GLOB" >/dev/null 2>&1
 fi
 if [ "${RUN_LETSENCRYPT:-0}" = "1" ] || ! compgen -G "$CERT_GLOB" >/dev/null 2>&1; then
     echo "--> No certificate found (or bootstrap forced); bootstrapping..."
+    # Audit F-024 (round 2): init-letsencrypt.sh now defaults to issuing a REAL
+    # certificate and exits non-zero if the result is still self-signed. With
+    # `set -e` above that aborts the deploy — which is the intended behaviour
+    # and not a regression: reaching this branch means the box has NO usable
+    # origin certificate at all, so continuing would deploy a site Cloudflare
+    # answers 526 (or 521) for. Failing here at least says so.
+    #
+    # This branch does not run on the production host: it has a Cloudflare
+    # Origin CA cert (valid to 2041) installed by provision-ubuntu.sh
+    # cf-origin-cert, so the skip branch above is what executes there.
+    #
+    # For a grey-clouded / non-Cloudflare origin where a placeholder is
+    # genuinely wanted, set ORIGIN_CERT_MODE=self-signed-bootstrap.
     bash ./init-letsencrypt.sh
 fi
 
@@ -193,11 +239,14 @@ fi
 # rootless worker cannot read — nginx would exit at boot and Cloudflare would
 # 521. Grant group 101 read-only traversal+read, idempotently. Private key
 # stays unreadable to "other".
-CERT_CONF_DIR="${CERTBOT_PATH:-./certbot}/conf"
+# Audit F-179: this used to be the ONLY place that did it, which meant a fresh
+# `provision-ubuntu.sh` produced a site that could not start, and any later
+# certbot renewal or origin-cert reinstall silently undid it again. One helper,
+# called from every path that writes key material.
+CERT_CONF_DIR="$CERTBOT_PATH/conf"
 if [ -d "$CERT_CONF_DIR" ]; then
     echo "--> Ensuring cert tree is readable by the unprivileged nginx uid (101)..."
-    chgrp -R 101 "$CERT_CONF_DIR" 2>/dev/null || sudo chgrp -R 101 "$CERT_CONF_DIR"
-    chmod -R g+rX,o-rwx "$CERT_CONF_DIR" 2>/dev/null || sudo chmod -R g+rX,o-rwx "$CERT_CONF_DIR"
+    bash "$(dirname "$0")/tools/fix-cert-perms.sh" "$CERT_CONF_DIR"
 fi
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi

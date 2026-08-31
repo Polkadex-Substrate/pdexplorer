@@ -9,9 +9,8 @@
 // indexer it could only be checked by watching a live chain for an hour.
 
 import { test, describe } from 'node:test';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
 import assert from 'node:assert/strict';
+import { readRepo } from './helpers/source.js';
 import {
     chooseGap, gapKey, recordAttempt, shouldRetire, exhaustedGapCount,
     DEFAULT_MAX_GAP_ATTEMPTS
@@ -171,13 +170,67 @@ describe('F-046 — the indexer actually uses this', () => {
     test('syncChainIndex chooses via chooseGap, not gaps[0]', async () => {
         const { readFileSync } = await import('node:fs');
         const src = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-        assert.match(src, /const g = chooseGap\(gaps, \{/,
+        // `repairCandidates`, not `gaps`: adversarial review found that
+        // merging the edge holes into `gaps` double-counted them into
+        // knownGapBlocks, because that same array is reduced for the interior
+        // total. The rotation reads the superset; the arithmetic reads `gaps`.
+        assert.match(src, /const g = chooseGap\(repairCandidates, \{/,
             'the gap-fill pass takes gaps[0] again — that IS F-046');
         assert.ok(!/const g = gaps\[0\];/.test(src));
         assert.match(src, /recordAttempt\(gapAttempts, g, fill\.blocks\.length\)/,
             'outcomes are not fed back, so nothing is ever set aside');
         assert.match(src, /shouldRetire\(gapAttemptsResetAt/,
             'without the amnesty an exhausted gap is exhausted forever');
+    });
+
+    test('F-183: edge holes are QUEUED for repair, not just counted', () => {
+        // getBlockGaps uses a LEAD window and is structurally blind to a
+        // missing prefix or suffix. F-005 added getEdgeGaps so those holes
+        // reached the status total — and then nothing ever scanned them. The
+        // operator saw "Repairing" over a hole no pass was going to visit.
+        const src = readRepo('server.js', import.meta.url);
+        const repair = src.slice(
+            src.indexOf('gaps = db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT'),
+            src.indexOf('const g = chooseGap(repairCandidates')
+        );
+        assert.ok(repair.length > 0, 'the gap-fill pass moved');
+        // Bound is `headSeen`, the CLAIMED span top — changed by F-004 (round
+        // 2), which split the old single watermark in two. It must not be the
+        // derived `latestScannedBlock`: that one is pulled down to just below
+        // any outstanding hole, so comparing MAX(number) against it would make
+        // a suffix hole invisible to the query whose job is to find it.
+        assert.match(repair, /db\.getEdgeGaps\(oldestScannedBlock, headSeen\)/,
+            'edge holes are not consulted by the repair pass');
+        assert.match(repair, /repairCandidates = edgeForRepair\.concat\(gaps\)/,
+            'edge holes are computed but never merged into the repair candidates');
+        // Adversarial review: the merge must NOT reassign `gaps`. That array is
+        // also what the interior block count is reduced from, and the edge
+        // total is added to it separately — so merging in place counted every
+        // edge hole twice in knownGapBlocks, persisted the inflated value, and
+        // carried it forward across the 24-of-25 ticks that skip the scan.
+        assert.ok(!/\bgaps = edgeForRepair\.concat\(gaps\)/.test(repair),
+            'the edge merge reassigns `gaps`, double-counting every edge hole into knownGapBlocks');
+    });
+
+    test('F-183: edge gaps carry the shape chooseGap needs', () => {
+        // getEdgeGaps returns {kind, gapStart, gapEnd, gapSize}. If the shape
+        // drifted from what the rotation and gapKey expect, the merge above
+        // would silently produce candidates that are filtered out as malformed.
+        const edge = { kind: 'suffix', gapStart: 900, gapEnd: 950, gapSize: 51 };
+        assert.deepEqual(chooseGap([edge], { tick: 0 }), edge,
+            'an edge gap is rejected as malformed by chooseGap');
+        assert.equal(gapKey(edge), '900');
+        const attempts = new Map();
+        recordAttempt(attempts, edge, 0);
+        assert.equal(attempts.get('900'), 1, 'edge gaps must participate in the failure budget too');
+    });
+
+    test('F-183: the status pass no longer double-warns about queued holes', () => {
+        const src = readRepo('server.js', import.meta.url);
+        // One warn (in the repair pass), not two per tick.
+        const warns = (src.match(/hole \$\{eg\.gapStart\}-\$\{eg\.gapEnd\}/g) || []).length;
+        assert.equal(warns, 1,
+            'the same edge hole is warned about twice per tick, which trains operators to filter the log');
     });
 
     test('the exhausted count is published in the index status', () => {
@@ -187,9 +240,11 @@ describe('F-046 — the indexer actually uses this', () => {
         // status sits at "Repairing" forever with nothing to distinguish
         // "working through holes" from "given up on them" — which is the F-004
         // dishonesty F-046 claims to close, one level up.
-        const { readFileSync } = require('node:fs');
-        const src = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-        assert.match(src, /gapsExhausted = exhaustedGapCount\(gaps, gapAttempts/,
+        const src = readRepo('server.js', import.meta.url);
+        // Over `repairCandidates` (interior + edge), not `gaps` — the count
+        // of holes we have given up on must include the edge ones the same
+        // rotation is trying to fill.
+        assert.match(src, /gapsExhausted = exhaustedGapCount\(repairCandidates, gapAttempts/,
             'exhaustedGapCount is imported but never called');
         assert.match(src, /^\s+gapsExhausted,$/m,
             'the count is computed but never persisted to the sync state');

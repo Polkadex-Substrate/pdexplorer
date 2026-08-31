@@ -10,8 +10,16 @@
 # Usage:
 #   # Add your SSH public key to authorized_keys MANUALLY first
 #   # (the script disables SSH password auth and root login).
-#   sudo bash provision-ubuntu.sh                # all phases except cloudflare
-#   sudo bash provision-ubuntu.sh all+cf         # all phases including cloudflare
+#   sudo bash provision-ubuntu.sh                # everything, Cloudflare included
+#   sudo bash provision-ubuntu.sh all            # same thing, spelled out
+#
+# Audit F-192: `all` INCLUDES the Cloudflare firewall phase and the Cloudflare
+# Origin CA install. It has since F-098; these two lines used to say it did not
+# and pointed at `all+cf` as the way to add Cloudflare. That was worse than
+# redundant — the `all+cf` arm never called setup_cf_origin_cert, so following
+# the old instruction downgraded a correct run into one that leaves a
+# self-signed origin cert and a Cloudflare 526. `all+cf` is now an alias of
+# `all`, kept only so old runbooks and shell history keep working.
 #
 #   # Or just one phase at a time:
 #   sudo bash provision-ubuntu.sh harden         # OS hardening only
@@ -58,7 +66,12 @@
 set -euo pipefail
 
 # ---- Configuration ---------------------------------------------------------
-DOMAIN="${DOMAIN:-explorer.polkadex.ee}"
+# DOMAIN/CERTBOT_PATH defaults are applied further down, AFTER the deployment's
+# own .env has been consulted (audit F-189). Capture what the caller passed
+# first — once `${DOMAIN:-default}` has run there is no way to tell an explicit
+# value from the fallback, and the two need different precedence against .env.
+_DOMAIN_ARG="${DOMAIN:-}"
+_CERTBOT_PATH_ARG="${CERTBOT_PATH:-}"
 LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-business@polkadex.ee}"
 # Audit F-030: canonical remote, not the personal fork — a fresh VPS clones
 # and later hard-resets to whatever this URL serves.
@@ -66,6 +79,59 @@ REPO_URL="${REPO_URL:-https://github.com/Polkadex-Substrate/pdexplorer.git}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
 SSH_PORT="${SSH_PORT:-22}"
 ALLOW_PASSWORD_SSH="${ALLOW_PASSWORD_SSH:-no}"
+
+# ---- Audit F-189: ONE cert path, read from the same file compose reads ------
+#
+# There were three writers of "where the certificates live" and they agreed only
+# by coincidence:
+#
+#   1. docker-compose.yml interpolates ${CERTBOT_PATH:-./certbot} from .env and
+#      bind-mounts $CERTBOT_PATH/conf onto /etc/letsencrypt inside the frontend
+#      container;
+#   2. this script hard-coded $DEPLOY_DIR/certbot everywhere, ignoring .env;
+#   3. deploy.sh referenced ${CERTBOT_PATH:-./certbot} but never sourced .env,
+#      so it always took the ./certbot branch.
+#
+# On the default box all three resolve to /opt/pdexplorer/certbot, so nothing
+# ever looked wrong. Set CERTBOT_PATH to anything else and the failure is the
+# nastiest shape there is: this script writes a perfectly valid certificate,
+# reports success, and nginx mounts a DIFFERENT, empty directory — it cannot
+# open fullchain.pem, exits, and Cloudflare serves 521 while every check you
+# run says "cert already present".
+#
+# Precedence is deliberate: an explicit CERTBOT_PATH in the environment wins,
+# then whatever the deployment's own .env says (that is the file compose reads,
+# so it is the authority), then the default. Read with a grep rather than by
+# sourcing .env — that file holds credentials and must never be executed.
+env_value() {
+    # env_value <file> <KEY> — prints the value or nothing. Strips surrounding
+    # quotes and whitespace; ignores commented-out lines.
+    [ -f "$1" ] || return 0
+    sed -n "s/^[[:space:]]*$2=//p" "$1" | tail -1 | sed 's/^["'\'']//;s/["'\'']$//' | tr -d ' '
+}
+CERTBOT_PATH="$_CERTBOT_PATH_ARG"
+[ -n "$CERTBOT_PATH" ] || CERTBOT_PATH="$(env_value "$DEPLOY_DIR/.env" CERTBOT_PATH)"
+[ -n "$CERTBOT_PATH" ] || CERTBOT_PATH="$DEPLOY_DIR/certbot"
+# Same treatment for DOMAIN: a box provisioned once with DOMAIN=x and re-run
+# without it would otherwise fall back to the compiled-in default and install
+# the next certificate under a live/ name that neither nginx nor the previous
+# run uses — a working site turned into a 521 by a no-argument re-run.
+DOMAIN="$_DOMAIN_ARG"
+[ -n "$DOMAIN" ] || DOMAIN="$(env_value "$DEPLOY_DIR/.env" DOMAIN)"
+[ -n "$DOMAIN" ] || DOMAIN="explorer.polkadex.ee"
+
+# The container-side path is FIXED and is not the host path. docker-compose.yml
+# mounts $CERTBOT_PATH/conf (host) onto /etc/letsencrypt (container, read-only
+# for nginx), so:
+#
+#     host       $CERTBOT_PATH/conf/live/$DOMAIN/privkey.pem
+#     container  /etc/letsencrypt/live/$DOMAIN/privkey.pem
+#
+# There is NO /etc/letsencrypt on the host. Every operator instruction below
+# names one or the other explicitly, because "check /etc/letsencrypt" sends
+# somebody `ls`ing a directory that does not exist on the box they are on.
+CERT_LIVE_HOST="$CERTBOT_PATH/conf/live/$DOMAIN"
+CERT_LIVE_CONTAINER="/etc/letsencrypt/live/$DOMAIN"
 
 # Audit F-097: pin the Compose project name to the SAME default deploy.sh uses.
 # Compose otherwise derives it from the basename of the directory it is invoked
@@ -85,6 +151,60 @@ die()  { printf '\033[1;31m  ✗\033[0m %s\n' "$*" >&2; exit 1; }
 
 require_root() {
     [ "$(id -u)" -eq 0 ] || die "Run as root or via sudo."
+}
+
+# ---- Audit F-189: reconcile the live/ name with what nginx actually opens ----
+#
+# nginx.conf carries a LITERAL certificate path — `ssl_certificate
+# /etc/letsencrypt/live/explorer.polkadex.ee/fullchain.pem` — and it is baked
+# into the frontend image at build time (Dockerfile.frontend COPYs it into
+# conf.d/). So it does not follow $DOMAIN, and a deployment with any other
+# DOMAIN installs its certificate into live/<its-domain>/ where nginx never
+# looks. The container then fails to start and the site is a Cloudflare 521,
+# with the provision log cheerfully reporting a certificate was installed.
+#
+# Templating nginx.conf would be the tidy fix, but it changes how the running
+# production frontend gets its config, and a mistake there is an outage on a
+# live mainnet explorer. Instead: read the name out of nginx.conf (so this can
+# never drift from the file it is about) and, when it differs from $DOMAIN,
+# point it at the real directory with a symlink inside the same mounted tree.
+# Additive by construction — on the default box the names match and nothing is
+# created.
+_nginx_cert_name() {
+    # Prints the live/<name> segment nginx.conf opens, or nothing if the
+    # directive is missing//unrecognised.
+    local conf="$DEPLOY_DIR/nginx.conf"
+    [ -f "$conf" ] || conf="$(dirname "$0")/nginx.conf"
+    [ -f "$conf" ] || return 0
+    sed -n 's#^[[:space:]]*ssl_certificate[[:space:]]\+/etc/letsencrypt/live/\([^/]\+\)/.*#\1#p' "$conf" | head -1
+}
+
+_align_nginx_cert_name() {
+    local want; want="$(_nginx_cert_name)"
+    [ -n "$want" ] || { warn "No ssl_certificate live/<name> found in nginx.conf — cannot verify the cert path matches."; return 0; }
+    [ "$want" != "$DOMAIN" ] || return 0
+    local live_dir="$CERTBOT_PATH/conf/live"
+    [ -d "$live_dir/$DOMAIN" ] || { warn "nginx opens live/$want but $live_dir/$DOMAIN does not exist yet — skipping alias."; return 0; }
+    # If live/$want is a REAL directory (a box that previously ran under the
+    # default name and still holds that certificate), do not touch it. `ln -sfn`
+    # against a real directory does not replace it — it silently creates the
+    # link INSIDE it — and even if it did replace it, deleting a directory
+    # holding a private key on a live host is not something a provisioning
+    # script should decide by itself. Say what is wrong and let the operator
+    # choose which certificate wins.
+    if [ -d "$live_dir/$want" ] && [ ! -L "$live_dir/$want" ]; then
+        warn "nginx.conf opens live/$want, which is a REAL directory holding its own certificate,"
+        warn "but this deployment's DOMAIN is $DOMAIN. Refusing to guess which one should win."
+        warn "Either point DOMAIN at $want, or move $live_dir/$want aside and re-run this phase."
+        return 0
+    fi
+    warn "nginx.conf opens live/$want but this deployment's DOMAIN is $DOMAIN."
+    warn "Linking $live_dir/$want -> $DOMAIN so the container reads the cert that was actually installed."
+    warn "The durable fix is to edit the ssl_certificate/ssl_certificate_key lines in nginx.conf and rebuild the frontend image."
+    # Relative target: the link is resolved INSIDE the container, where the
+    # parent is /etc/letsencrypt/live, not $live_dir. An absolute host path
+    # would dangle there.
+    ln -sfn "$DOMAIN" "$live_dir/$want"
 }
 
 require_ubuntu() {
@@ -345,18 +465,26 @@ EOF
 
 # ---- Phase 3: App deploy ---------------------------------------------------
 #
-# Audit F-097 — deploy_app() and deploy.sh are NOT interchangeable. They overlap
-# heavily and used to disagree silently; the differences that remain are
-# deliberate, and this is the record of which script to reach for:
+# Audit F-097 — deploy_app() PREPARES; deploy.sh DEPLOYS. They are no longer two
+# implementations of the same thing.
 #
-#   deploy_app()  = FIRST deploy on a bare box. It may create things.
-#   deploy.sh     = EVERY deploy after that. It refuses to guess.
+# The finding was that these two scripts disagreed on git policy, .env policy,
+# TLS bootstrap, the Compose project name and the GIT_SHA stamp — five ways for
+# a box to end up in a state that depended on which script last ran on it.
+# Round 1 aligned the project name and the SHA stamp and wrote the remaining
+# differences down. Writing a divergence down does not stop it diverging
+# further, so round 2 removed the overlap instead:
+#
+#   deploy_app()  = the things that must exist before a build is POSSIBLE on a
+#                   bare box. It may create; it no longer destroys.
+#   deploy.sh     = the build, the start and the verification. Every time,
+#                   including the first. It refuses to guess.
 #
 # | Concern        | deploy_app() (here)                  | deploy.sh                       |
 # |----------------|--------------------------------------|---------------------------------|
-# | git            | `fetch --all` + `reset --hard`       | `git pull origin main`          |
-# |                | (DESTROYS local edits — that is the  | (fails loudly on a conflict, so |
-# |                |  point on a fresh box)               |  a hand-patched box is safe)    |
+# | git            | clones when absent; otherwise leaves | `git pull origin main` (fails   |
+# |                | the tree alone. `reset --hard` only  | loudly on a conflict, so a      |
+# |                | under PROVISION_DESTROY_LOCAL_EDITS  | hand-patched box is safe)       |
 # | .env           | WRITES one from the template if      | REFUSES to start without a real |
 # |                | absent; preserves an existing file   | .env, and refuses one that is   |
 # |                |                                      | byte-identical to .env.example  |
@@ -365,16 +493,20 @@ EOF
 # |                | nginx can start at all               | over a Cloudflare Origin cert   |
 # |                |                                      | is what caused the 521/526      |
 # | Compose project| pinned via COMPOSE_PROJECT_NAME      | pinned via `-p "$COMPOSE_..."`  |
-# |                | export at the top of this file       | — same default, `pdexplorer`    |
-# | GIT_SHA        | stamped (see the build step below)   | stamped, incl. `-dirty` suffix  |
+# |                | export at the top of this file,      | — same default, `pdexplorer`    |
+# |                | passed through to deploy.sh          |                                 |
+# | build + start  | NONE — delegates to deploy.sh        | the only `docker compose up` in |
+# |                |                                      | the repo; stamps GIT_SHA        |
 #
-# Not yet unified: this function still runs its own `docker compose up -d
-# --build` instead of delegating the build/verify half to deploy.sh. Doing that
-# properly means reconciling deploy.sh's `git pull` with the hard reset above
-# and its .env refusal with the .env this function just wrote, so it is a tested
-# change rather than a comment. Until then: after the first provision, deploy
-# with deploy.sh — do NOT re-run `provision-ubuntu.sh app` on a box whose
-# working tree you have edited, because the hard reset will discard it.
+# Consequences worth knowing before you run either one:
+#   * `provision-ubuntu.sh app` is now SAFE to re-run on a box you have edited.
+#     It will not discard your changes; deploy.sh's `git pull` will refuse to
+#     merge over them, which is the loud failure you want.
+#   * To deliberately throw local edits away, say so:
+#         PROVISION_DESTROY_LOCAL_EDITS=1 ./provision-ubuntu.sh app
+#   * For a routine redeploy of an already-provisioned box, deploy.sh alone is
+#     still the shorter path. `provision-ubuntu.sh app` now ends by calling it,
+#     so the two produce the same artefact rather than merely similar ones.
 deploy_app() {
     log "Phase 3/3: Explorer deploy"
 
@@ -389,14 +521,41 @@ deploy_app() {
         warn "Certbot HTTP-01 will fail until DNS points here. Continuing anyway."
     fi
 
-    log "Cloning fresh repo from $REPO_URL to $DEPLOY_DIR"
+    log "Ensuring a checkout of $REPO_URL at $DEPLOY_DIR"
     if [ -d "$DEPLOY_DIR/.git" ]; then
-        ok "$DEPLOY_DIR already exists — pulling latest"
-        git -C "$DEPLOY_DIR" fetch --all --prune
-        git -C "$DEPLOY_DIR" reset --hard origin/HEAD
+        # Audit F-097 (round 2): this used to be an unconditional
+        # `fetch --all --prune` + `reset --hard origin/HEAD`, and that is the
+        # single most destructive line either deploy script contained.
+        #
+        # The justification was "deploy_app() is the FIRST deploy on a bare
+        # box, so there is nothing to destroy" — but this branch is, by
+        # definition, the branch where the box is NOT bare. `provision-ubuntu.sh
+        # app` is exactly what an operator reaches for when the stack is unhappy
+        # and they want to "redeploy properly", frequently right after hot-
+        # patching a file on the box to diagnose the problem. The hard reset
+        # discarded that patch silently, before it printed anything about it,
+        # and there is no reflog entry for a working-tree change that was never
+        # committed. It is unrecoverable, and it looked like a routine re-run.
+        #
+        # Updating is now delegated to deploy.sh (see the end of this function),
+        # which does `git pull origin main` and FAILS on a conflict instead of
+        # resolving it by deletion. Losing local edits is still available, but
+        # it now has to be asked for by name, and the name says what it does.
+        if [ "${PROVISION_DESTROY_LOCAL_EDITS:-0}" = "1" ]; then
+            warn "PROVISION_DESTROY_LOCAL_EDITS=1 — discarding all local changes in $DEPLOY_DIR"
+            git -C "$DEPLOY_DIR" fetch --all --prune
+            git -C "$DEPLOY_DIR" reset --hard origin/HEAD
+        else
+            ok "$DEPLOY_DIR is already a checkout — leaving the working tree alone"
+            ok "  (deploy.sh will 'git pull origin main' below; set"
+            ok "   PROVISION_DESTROY_LOCAL_EDITS=1 to hard-reset instead)"
+        fi
     else
         install -d -m 0755 "$(dirname "$DEPLOY_DIR")"
-        git clone --depth 1 "$REPO_URL" "$DEPLOY_DIR"
+        # NOT --depth 1: deploy.sh runs `git pull origin main` immediately
+        # afterwards and a shallow clone makes that a special case for no gain
+        # on a repo this size.
+        git clone "$REPO_URL" "$DEPLOY_DIR"
     fi
     cd "$DEPLOY_DIR"
 
@@ -410,8 +569,11 @@ deploy_app() {
     chmod 0750 "$DEPLOY_DIR/data"
     chown 1000:1000 "$DEPLOY_DIR/data" 2>/dev/null \
         || chown '+1000:+1000' "$DEPLOY_DIR/data"
-    install -d -m 0755 "$DEPLOY_DIR/certbot/conf"
-    install -d -m 0755 "$DEPLOY_DIR/certbot/www"
+    # F-189: $CERTBOT_PATH, not a second hard-coded $DEPLOY_DIR/certbot. These
+    # are the HOST directories compose bind-mounts onto the container's
+    # /etc/letsencrypt and /var/www/certbot.
+    install -d -m 0755 "$CERTBOT_PATH/conf"
+    install -d -m 0755 "$CERTBOT_PATH/www"
 
     log "Writing .env (override DOMAIN / LETSENCRYPT_EMAIL via env or edit later)"
     if [ ! -f .env ]; then
@@ -432,7 +594,15 @@ DATA_PATH=$DEPLOY_DIR/data
 # is the RELATIVE ./certbot, which resolves against whatever directory compose
 # is invoked from — run a deploy from a second checkout and nginx mounts an
 # empty cert dir, fails on fullchain.pem, and Cloudflare returns 521.
-CERTBOT_PATH=$DEPLOY_DIR/certbot
+#
+# Audit F-189: this is the HOST side of a bind mount. Inside the frontend
+# container the same tree is /etc/letsencrypt (read-only), which is the path
+# nginx.conf names. There is no /etc/letsencrypt on the host:
+#     host      $CERTBOT_PATH/conf/live/$DOMAIN/privkey.pem
+#     container /etc/letsencrypt/live/$DOMAIN/privkey.pem
+# provision-ubuntu.sh and deploy.sh now both READ this value back out of this
+# file, so changing it here moves every writer at once.
+CERTBOT_PATH=$CERTBOT_PATH
 
 # ---- Diagnostics (audit F-038). Bearer token for /api/diag/*; leave empty
 # to restrict diagnostics to loopback (operator on the box) only.
@@ -465,68 +635,114 @@ EOF
     fi
 
     log "Preparing TLS helper files (options-ssl-nginx.conf, ssl-dhparams.pem)"
-    # nginx.conf `include`s these from /etc/letsencrypt/. If they're missing
-    # nginx fails to start with "open() options-ssl-nginx.conf failed". They
-    # are normally created by certbot the first time it runs — bootstrap them
-    # here so nginx can come up before certbot has any cert at all.
-    install -d certbot/conf
-    if [ ! -s certbot/conf/options-ssl-nginx.conf ]; then
+    # nginx.conf `include`s these from the CONTAINER's /etc/letsencrypt/. If
+    # they're missing nginx fails to start with "open() options-ssl-nginx.conf
+    # failed". They are normally created by certbot the first time it runs —
+    # bootstrap them here so nginx can come up before certbot has any cert.
+    #
+    # F-189: written to $CERTBOT_PATH/conf on the HOST. These used to be
+    # relative (`certbot/conf`, i.e. $DEPLOY_DIR/certbot/conf after the cd
+    # above), which is a *different directory* from the one compose mounts as
+    # soon as CERTBOT_PATH is not the default — files landed somewhere nginx
+    # never reads and the container refused to start.
+    install -d "$CERTBOT_PATH/conf"
+    if [ ! -s "$CERTBOT_PATH/conf/options-ssl-nginx.conf" ]; then
         curl -fsSL https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf \
-            -o certbot/conf/options-ssl-nginx.conf \
+            -o "$CERTBOT_PATH/conf/options-ssl-nginx.conf" \
             || warn "Could not download options-ssl-nginx.conf; nginx may not start"
     fi
-    if [ ! -s certbot/conf/ssl-dhparams.pem ]; then
+    if [ ! -s "$CERTBOT_PATH/conf/ssl-dhparams.pem" ]; then
         curl -fsSL https://raw.githubusercontent.com/certbot/certbot/master/certbot/certbot/ssl-dhparams.pem \
-            -o certbot/conf/ssl-dhparams.pem \
+            -o "$CERTBOT_PATH/conf/ssl-dhparams.pem" \
             || warn "Could not download ssl-dhparams.pem; nginx may not start"
     fi
 
     log "Issuing Let's Encrypt cert for $DOMAIN (HTTP-01 challenge)"
-    if [ ! -f "certbot/conf/live/$DOMAIN/fullchain.pem" ]; then
+    log "  host path:      $CERT_LIVE_HOST"
+    log "  container path: $CERT_LIVE_CONTAINER  (the one nginx.conf names)"
+    if [ ! -f "$CERT_LIVE_HOST/fullchain.pem" ]; then
+        # Audit F-024: EXPLICIT bootstrap mode. nginx cannot start without a
+        # certificate file and nothing else in this phase can run until nginx
+        # is up, so a placeholder here is a genuine prerequisite — but it is
+        # only ever a prerequisite. init-letsencrypt.sh's default mode now
+        # issues a real certificate and exits non-zero if it cannot; asking for
+        # that here would abort every provision of an orange-clouded host
+        # (HTTP-01 cannot reach a proxied origin), which is why the mode is
+        # named rather than defaulted. The corresponding obligation is at the
+        # end of run_all: the provision as a whole must not FINISH on this.
         if [ -x ./init-letsencrypt.sh ]; then
-            ./init-letsencrypt.sh
-            ok "Cert bootstrapped via init-letsencrypt.sh"
+            ORIGIN_CERT_MODE=self-signed-bootstrap ./init-letsencrypt.sh
+            ok "Placeholder cert bootstrapped via init-letsencrypt.sh (NOT an origin cert)"
         else
             warn "init-letsencrypt.sh missing — issuing a self-signed placeholder so nginx can start."
-            install -d "certbot/conf/live/$DOMAIN"
+            install -d "$CERT_LIVE_HOST"
             openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
-                -keyout "certbot/conf/live/$DOMAIN/privkey.pem" \
-                -out "certbot/conf/live/$DOMAIN/fullchain.pem" \
+                -keyout "$CERT_LIVE_HOST/privkey.pem" \
+                -out "$CERT_LIVE_HOST/fullchain.pem" \
                 -subj "/CN=$DOMAIN" >/dev/null 2>&1
+            # F-179: openssl writes the key 0600 root. Without this the
+            # self-signed BOOTSTRAP — whose entire purpose is letting nginx
+            # start so certbot can reach it over HTTP-01 — produces an nginx
+            # that cannot start.
+            # F-189: absolute $CERTBOT_PATH, not the relative "certbot/conf" —
+            # see the block at the top of the file. Same helper, same F-179
+            # semantics; only the tree it is pointed at changed, to the one
+            # compose actually mounts.
+            _fix_cert_perms "$CERTBOT_PATH/conf"
             warn "Replace with a real cert via certbot once the stack is up:"
             warn "  docker compose run --rm certbot certonly --webroot -w /var/www/certbot -d $DOMAIN -m $LETSENCRYPT_EMAIL --agree-tos --non-interactive"
             warn "  docker compose exec frontend nginx -s reload"
         fi
     else
-        ok "Cert already present at certbot/conf/live/$DOMAIN/"
+        ok "Cert already present at $CERT_LIVE_HOST/ (host) = $CERT_LIVE_CONTAINER/ (container)"
     fi
+    # F-189: last thing before the stack comes up — make sure the directory
+    # nginx.conf opens is the directory the certificate was written to.
+    _align_nginx_cert_name
 
-    log "Building + starting the explorer stack"
-    # Audit F-097: stamp build provenance, exactly like deploy.sh does. Without
-    # these the images bake GIT_SHA=unknown, so `curl /api/version` and
-    # `curl /version.json` answer "unknown" on any box that was brought up by
-    # provision rather than by deploy.sh — and the single most useful question
-    # during an incident ("is my fix actually deployed?") becomes unanswerable.
-    GIT_SHA="$(git -C "$DEPLOY_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
-    if [ -n "$(git -C "$DEPLOY_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-        GIT_SHA="${GIT_SHA}-dirty"
-        warn "Tracked files differ from HEAD; tagging build as $GIT_SHA"
-    fi
-    BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    export GIT_SHA BUILD_TIME
-    log "Building $GIT_SHA at $BUILD_TIME (compose project: $COMPOSE_PROJECT_NAME)"
-    docker compose down --remove-orphans || true
-    docker compose pull --ignore-pull-failures || true
-    docker compose up -d --build
-    ok "Stack started"
-
-    log "Health check"
-    sleep 5
-    if curl -fsS --max-time 10 "http://127.0.0.1/api/network-info" >/dev/null 2>&1; then
-        ok "Backend reachable through nginx"
-    else
-        warn "Backend not yet responding through nginx — check 'docker compose logs backend frontend'"
-    fi
+    # ─── Audit F-097 (round 2): ONE compose invocation path ──────────────────
+    #
+    # This block used to be a second, parallel implementation of everything
+    # deploy.sh does after the checkout exists: stamp GIT_SHA/BUILD_TIME,
+    # `compose down`, `compose pull`, `compose up -d --build`, health-check.
+    # Round 1 fixed the two places where the copies had *diverged* (the Compose
+    # project name and the missing GIT_SHA stamp) but left the copies.
+    #
+    # Copies do not stay converged. Every future change to how the stack is
+    # built — a new build arg, a `--pull` policy, an extra verification step,
+    # a healthcheck timeout — has to be made in two files by someone who knows
+    # the other one exists, and the round-1 divergences are proof of what
+    # happens when they do not. The cost of the drift is not abstract: a
+    # provision-built box and a deploy.sh-built box were different artefacts
+    # answering the same URL, so "is my fix deployed?" had two answers
+    # depending on which script last touched the host.
+    #
+    # So the split is now by RESPONSIBILITY rather than by duplication:
+    #
+    #   deploy_app()  owns everything that must exist BEFORE a build is
+    #                 possible on a bare box — the checkout, the data
+    #                 directory, .env, the TLS helper files, and a certificate
+    #                 nginx can start with.
+    #   deploy.sh     owns the build and everything after it, on the first
+    #                 deploy and on every subsequent one. There is exactly one
+    #                 `docker compose up` in this repo and it lives there.
+    #
+    # deploy.sh's own preconditions are satisfied by the time we get here: it
+    # requires a real .env that is not byte-identical to .env.example (written
+    # above), it pins the same COMPOSE_PROJECT_NAME (exported at the top of this
+    # file, and it defaults to the same `pdexplorer`), and it skips cert
+    # bootstrap when a certificate already exists — which one does, because the
+    # step above just made sure of it. If any of that stops being true, deploy.sh
+    # exits non-zero and `set -e` fails the provision here, loudly, instead of
+    # bringing up a stack that differs from the one a later deploy would build.
+    log "Handing the build + verify half to deploy.sh (single compose path)"
+    [ -f "$DEPLOY_DIR/deploy.sh" ] || die "deploy.sh missing from $DEPLOY_DIR — cannot deploy."
+    # DEPLOY_DIR/REPO_URL are passed explicitly so deploy.sh operates on the
+    # tree we just prepared even if its own defaults ever change.
+    DEPLOY_DIR="$DEPLOY_DIR" REPO_URL="$REPO_URL" \
+        COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
+        bash "$DEPLOY_DIR/deploy.sh" \
+        || die "deploy.sh failed — the stack was NOT started. Fix the error above and re-run 'provision-ubuntu.sh app'."
 
     log "Cleaning up dangling images"
     docker image prune -f >/dev/null || true
@@ -627,6 +843,24 @@ splice_managed_block() {
     else
         # Append before COMMIT if a *filter section exists, else just append.
         printf '\n%s\n' "$(cat "$payload")" >> "$target"
+    fi
+}
+
+# Audit F-179. Delegates to tools/fix-cert-perms.sh so provision, deploy and the
+# certbot deploy-hook cannot drift apart. Defined as a shim rather than inlined
+# because four separate paths write key material and only one of them used to
+# fix the ownership afterwards — which is the finding.
+_fix_cert_perms() {
+    local dir="${1:-certbot/conf}"
+    local helper="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/tools/fix-cert-perms.sh"
+    if [ -x "$helper" ] || [ -f "$helper" ]; then
+        bash "$helper" "$dir" || warn "cert permissions could not be set — nginx (uid 101) may fail to start"
+    else
+        # Helper missing (partial checkout): do the minimum inline rather than
+        # skip it, because skipping means a dead site.
+        chgrp -R 101 "$dir" 2>/dev/null || true
+        find "$dir" -type f -name '*.pem' -exec chmod 0640 {} + 2>/dev/null || true
+        find "$dir" -type d -exec chmod 0750 {} + 2>/dev/null || true
     fi
 }
 
@@ -945,7 +1179,14 @@ setup_cf_origin_cert() {
     local secrets_dir="$DEPLOY_DIR/secrets"
     local src_cert="$secrets_dir/cloudflare-origin.pem"
     local src_key="$secrets_dir/cloudflare-origin.key"
-    local dst_dir="$DEPLOY_DIR/certbot/conf/live/$DOMAIN"
+    # Audit F-189: $CERTBOT_PATH (which honours .env), not a second hard-coded
+    # $DEPLOY_DIR/certbot. This function was the third disagreeing writer: it
+    # always installed under $DEPLOY_DIR/certbot while compose mounted whatever
+    # .env said. With a custom CERTBOT_PATH it wrote a valid Origin cert into a
+    # directory nothing mounts, printed "Certificate + key installed", and left
+    # the site on the old (or missing) cert — Cloudflare 521/526 with a
+    # provision log full of green ticks.
+    local dst_dir="$CERT_LIVE_HOST"
     local dst_cert="$dst_dir/fullchain.pem"
     local dst_key="$dst_dir/privkey.pem"
 
@@ -990,14 +1231,24 @@ setup_cf_origin_cert() {
 
     # ---- Install into the path nginx already expects ----
     # The frontend container's nginx.conf hard-codes the LE-style paths
-    # /etc/letsencrypt/live/$DOMAIN/{fullchain,privkey}.pem. The compose
-    # mount maps $DEPLOY_DIR/certbot/conf -> /etc/letsencrypt, so writing to
-    # $dst_cert/$dst_key on the host shows up at the LE paths in the container.
-    log "Installing certificate at $dst_cert"
+    # /etc/letsencrypt/live/<name>/{fullchain,privkey}.pem. The compose mount
+    # maps $CERTBOT_PATH/conf (HOST) -> /etc/letsencrypt (CONTAINER), so writing
+    # to $dst_cert/$dst_key on the host shows up at the LE paths in the
+    # container. Do not go looking for /etc/letsencrypt on the host — it does
+    # not exist there; that path is only meaningful inside the container.
+    log "Installing certificate:"
+    log "  host:      $dst_cert"
+    log "  container: $CERT_LIVE_CONTAINER/fullchain.pem"
     install -d -m 0755 "$dst_dir"
     install -m 0644 "$src_cert" "$dst_cert"
-    install -m 0600 "$src_key"  "$dst_key"
+    # Audit F-179: this was `install -m 0600`, which left the key readable by
+    # root ONLY — and the frontend nginx runs as uid/gid 101. It also silently
+    # undid deploy.sh's chgrp on every re-provision. 0640 plus group 101 below.
+    install -m 0640 "$src_key"  "$dst_key"
+    _fix_cert_perms "$(dirname "$(dirname "$dst_dir")")"
     ok "Certificate + key installed for $DOMAIN"
+    # F-189: and make sure that is the name nginx.conf actually opens.
+    _align_nginx_cert_name
 
     # ---- Generate support files nginx.conf references ----
     # The frontend nginx config does:
@@ -1005,8 +1256,13 @@ setup_cf_origin_cert() {
     #     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     # These are normally provided by certbot. If we never ran certbot,
     # generate sane equivalents so nginx starts.
-    local options_file="$DEPLOY_DIR/certbot/conf/options-ssl-nginx.conf"
-    local dhparams_file="$DEPLOY_DIR/certbot/conf/ssl-dhparams.pem"
+    # F-189: same tree as the cert above — $CERTBOT_PATH, which is what compose
+    # mounts. nginx `include`s these by their CONTAINER paths
+    # (/etc/letsencrypt/options-ssl-nginx.conf and ssl-dhparams.pem); generating
+    # them into a directory that is not mounted leaves nginx failing at boot on
+    # "open() ... failed", which looks nothing like a certificate problem.
+    local options_file="$CERTBOT_PATH/conf/options-ssl-nginx.conf"
+    local dhparams_file="$CERTBOT_PATH/conf/ssl-dhparams.pem"
 
     # Validate CONTENT, not just existence. `[ -s ]` only tests "non-empty",
     # and the failure we actually hit was a 14-byte file containing the literal
@@ -1221,6 +1477,127 @@ Next steps:
 EOF
 }
 
+# ---- The default, Cloudflare-inclusive run ---------------------------------
+#
+# Audit F-098 + F-024: `all` includes the Cloudflare firewall phase (80/443
+# restricted to CF ranges instead of Anywhere) and — when the operator has
+# staged secrets/cloudflare-origin.pem — the Origin CA cert install, so the
+# default path no longer ends on a self-signed placeholder that Full (Strict)
+# rejects with 526. Skipping the origin cert when secrets are absent is
+# deliberate: the phase would die() mid-provision otherwise, and the summary
+# tells the operator what remains.
+#
+# ─── Audit F-192: why `all+cf` is now the same function, not a variant ───────
+#
+# `all+cf` predates F-098, when `all` stopped at the app and you added the
+# firewall afterwards. After F-098 the two arms inverted meaning: `all` gained
+# BOTH the Cloudflare firewall and the Origin CA install, while `all+cf` was
+# still the old harden+docker+app+backup+cloudflare list — with no
+# setup_cf_origin_cert in it. The docs still said "run all+cf to include
+# Cloudflare", so an operator following them ran the arm that SKIPS the origin
+# certificate, staged secrets and all, and landed on the self-signed
+# placeholder — a 526 caused by doing the extra step.
+#
+# Making it an alias rather than deleting it keeps old runbooks, shell history
+# and copy-pasted commands working instead of failing on "Usage:". If you ever
+# split them again, the thing to preserve is that no arm of this case statement
+# is a SUBSET of another — that asymmetry is the whole bug.
+# ─── Audit F-024 (round 2): is $DOMAIN a real, public hostname? ─────────────
+#
+# The hard fail below must not trigger on a laptop, a CI box or a staging VM
+# named `explorer.local`, because a self-signed origin is entirely correct
+# there — nothing is fronting it in Full (Strict). It MUST trigger on
+# explorer.polkadex.ee, where finishing on a placeholder is a 526.
+#
+# Deliberately a name test, not a DNS lookup. Resolution is the wrong oracle:
+# provision runs on hosts with split-horizon DNS, on hosts before the record
+# exists, and (during disaster recovery) on hosts whose network is not fully
+# up — and every one of those would answer "not public" and silently disarm
+# the guard at exactly the moment it is most needed. A name that looks public
+# is treated as public; the escape hatch is explicit.
+_domain_is_public() {
+    local d="${1:-}"
+    [ -n "$d" ] || return 1
+    case "$d" in
+        localhost|*.localhost|*.local|*.internal|*.test|*.invalid|*.example) return 1 ;;
+        example.com|example.net|example.org|*.example.com|*.example.net|*.example.org) return 1 ;;
+        # No dot at all — a single-label host name, not something a public CA
+        # or Cloudflare will ever serve.
+        *.*) ;;
+        *) return 1 ;;
+    esac
+    # A bare IPv4 literal is not a hostname Cloudflare proxies.
+    case "$d" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+            case "$d" in *[!0-9.]*) ;; *) return 1 ;; esac ;;
+    esac
+    return 0
+}
+
+run_all() {
+    harden_system
+    install_docker
+    deploy_app
+    setup_backups
+    if [ -r "$DEPLOY_DIR/secrets/cloudflare-origin.pem" ]; then
+        setup_cf_origin_cert
+    elif _domain_is_public "$DOMAIN" && [ "${ALLOW_SELF_SIGNED_ORIGIN:-0}" != "1" ]; then
+        # ─── Audit F-024: this used to be two warn lines ─────────────────────
+        #
+        # Round 1 made `all` call setup_cf_origin_cert when the secrets happened
+        # to be staged, and warn otherwise. Warning-and-continuing is what kept
+        # the finding open, because the failure it warns about is invisible from
+        # the origin: nginx starts, the provision summary is green, `curl -k
+        # https://localhost` works, and the site is 526 for the entire internet.
+        # The operator has no reason to re-read scrollback.
+        #
+        # So: refuse to finish. This is the disaster-recovery case the finding
+        # is really about — a fresh host for a public domain, provisioned in a
+        # hurry, with nobody double-checking the issuer afterwards.
+        #
+        # `secrets/cloudflare-origin.pem` is not in git by design (it is a
+        # private key's partner), so "the operator staged it" is never the
+        # default and must never be assumed.
+        #
+        # ALLOW_SELF_SIGNED_ORIGIN=1 is the deliberate opt-out, and it is
+        # legitimate for exactly one shape of deployment: a GREY-clouded origin
+        # (Cloudflare proxy off, or no Cloudflare at all) where you will issue
+        # via DNS-01/HTTP-01 yourself afterwards. On an orange-clouded host it
+        # converts a loud stop into the silent 526 this guard exists to prevent.
+        die "$(cat <<EOF
+Refusing to finish: $DOMAIN has no origin certificate.
+
+  $DEPLOY_DIR/secrets/cloudflare-origin.pem is missing, so the only thing at
+  $CERT_LIVE_HOST/fullchain.pem is the self-signed BOOTSTRAP placeholder that
+  lets nginx start. Cloudflare Full (Strict) validates the origin chain and
+  answers 526 to every visitor for a self-signed cert — the origin looks
+  perfectly healthy while the site is down.
+
+  Finish with ONE of:
+
+    1. Cloudflare Origin CA (what production runs):
+         Cloudflare -> SSL/TLS -> Origin Server -> Create Certificate
+         sudo install -d -m 700 $DEPLOY_DIR/secrets
+         sudo tee $DEPLOY_DIR/secrets/cloudflare-origin.pem >/dev/null   # cert body
+         sudo tee $DEPLOY_DIR/secrets/cloudflare-origin.key >/dev/null   # private key
+         sudo chmod 600 $DEPLOY_DIR/secrets/cloudflare-origin.*
+         sudo bash $0 cf-origin-cert
+
+    2. Let's Encrypt, with the DNS record GREY-clouded for the duration:
+         ORIGIN_CERT_MODE=letsencrypt bash $DEPLOY_DIR/init-letsencrypt.sh
+
+    3. You genuinely want a self-signed origin (grey cloud / no Cloudflare):
+         sudo ALLOW_SELF_SIGNED_ORIGIN=1 bash $0 all
+EOF
+)"
+    else
+        warn "No $DEPLOY_DIR/secrets/cloudflare-origin.pem — origin cert is the self-signed placeholder."
+        warn "That is only safe with the Cloudflare proxy OFF (grey cloud) or no Cloudflare at all."
+        warn "Under Full (Strict) this is a 526. Fix with: sudo bash $0 cf-origin-cert"
+    fi
+    setup_cloudflare_only
+}
+
 # ---- Entry point -----------------------------------------------------------
 main() {
     require_root
@@ -1239,16 +1616,8 @@ main() {
         # placeholder that Full (Strict) rejects with 526. Skipping the origin
         # cert when secrets are absent is deliberate: the phase would die()
         # mid-provision otherwise; the summary tells the operator what remains.
-        all)            harden_system; install_docker; deploy_app; setup_backups
-                        if [ -r "$DEPLOY_DIR/secrets/cloudflare-origin.pem" ]; then
-                            setup_cf_origin_cert
-                        else
-                            warn "No $DEPLOY_DIR/secrets/cloudflare-origin.pem — origin cert is still the self-signed placeholder."
-                            warn "Cloudflare Full (Strict) will 526 until you run: sudo bash $0 cf-origin-cert"
-                        fi
-                        setup_cloudflare_only ;;
-        all+cf)         harden_system; install_docker; deploy_app; setup_backups; setup_cloudflare_only ;;
-        *)              die "Usage: $0 [harden|docker|app|backup|cloudflare|cf-origin-cert|all|all+cf]" ;;
+        all|all+cf)     run_all ;;
+        *)              die "Usage: $0 [harden|docker|app|backup|cloudflare|cf-origin-cert|all]  ('all+cf' is a deprecated alias of 'all')" ;;
     esac
     summary
 }

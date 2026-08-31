@@ -1,4 +1,41 @@
 #!/bin/bash
+#
+# ---- Audit F-024: this script now ISSUES a certificate ----------------------
+#
+# It was called init-letsencrypt.sh and it never ran `certonly`. All it did was
+# `openssl req -x509` — a 365-day SELF-SIGNED file — and then print "Certificate
+# Generated!". Round 1 left it that way and added warnings elsewhere; the
+# auditors correctly refused to close on a warning.
+#
+# Why a self-signed origin cert is not a cosmetic problem here: this deployment
+# sits behind Cloudflare in **Full (Strict)** mode, which validates the origin's
+# certificate chain. A self-signed cert fails that validation and Cloudflare
+# returns **526** to every visitor. The site is down, the origin logs look
+# healthy (nginx started, it has a cert), and nothing in the provision output
+# said "this is not a real certificate" loudly enough to notice. That is the
+# disaster-recovery shape of this bug: a fresh provision of a lost host ends
+# with a green-looking run and a dead site.
+#
+# The distinction this script now makes explicit:
+#
+#   ORIGIN_CERT_MODE=letsencrypt           (DEFAULT)
+#       Bootstrap a placeholder only long enough for nginx to start, run a real
+#       `certonly --webroot`, then VERIFY the result is not self-signed and
+#       exit non-zero if it is. Never ends on a placeholder.
+#
+#   ORIGIN_CERT_MODE=self-signed-bootstrap (explicit opt-in)
+#       Write the placeholder and stop. This is legitimate for exactly two
+#       situations — a GREY-CLOUDED (DNS-unproxied) host where you will issue
+#       via DNS-01 by hand afterwards, and the moments during provisioning
+#       where nginx must start before any issuance can happen at all. It is
+#       never a finished state for a public, orange-clouded host, so it must be
+#       asked for by name and it prints a banner saying so.
+#
+# Production runs a Cloudflare Origin CA certificate (15-year, installed by
+# `provision-ubuntu.sh cf-origin-cert`), not Let's Encrypt. That path does not
+# come through this script at all — which is precisely why this script must not
+# quietly overwrite it, and why the "existing data" guard below defaults to
+# KEEPING what is there.
 
 # Source variables from .env
 if [ -f .env ]; then
@@ -89,17 +126,136 @@ fi
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
 
-echo "### Creating Self-Signed certificate for $domains ..."
 path="/etc/letsencrypt/live/$domains"
-mkdir -p "$data_path/conf/live/$domains"
+host_live="$data_path/conf/live/$domains"
 
-sudo $DC run --rm --entrypoint "\
-  openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 365\
-    -keyout '$path/privkey.pem' \
-    -out '$path/fullchain.pem' \
-    -subj '/CN=$domains'" certbot
+# Audit F-024. A certificate is self-signed when its issuer equals its subject.
+# That is the only property that matters to Cloudflare Full (Strict), and it is
+# checkable locally without a network round-trip — unlike "is there a file at
+# fullchain.pem", which is what every path in this repo used to check and which
+# a placeholder satisfies perfectly. Unreadable/absent counts as self-signed:
+# the caller is asking "may I treat this as a real origin cert", and the safe
+# answer to "I cannot tell" is no.
+is_self_signed() {
+  local pem="$1" issuer subject
+  [ -s "$pem" ] || return 0
+  issuer="$(openssl x509 -in "$pem" -noout -issuer 2>/dev/null)" || return 0
+  subject="$(openssl x509 -in "$pem" -noout -subject 2>/dev/null)" || return 0
+  [ "${issuer#issuer=}" = "${subject#subject=}" ]
+}
+
+write_self_signed_placeholder() {
+  echo "### Writing a SELF-SIGNED BOOTSTRAP certificate for $domains ..."
+  mkdir -p "$host_live"
+  sudo $DC run --rm --entrypoint "\
+    openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 365\
+      -keyout '$path/privkey.pem' \
+      -out '$path/fullchain.pem' \
+      -subj '/CN=$domains'" certbot
+  echo
+}
+
+ORIGIN_CERT_MODE="${ORIGIN_CERT_MODE:-letsencrypt}"
+
+case "$ORIGIN_CERT_MODE" in
+  self-signed-bootstrap)
+    write_self_signed_placeholder
+    # Loud on purpose. The old script's closing line was "Self-Signed
+    # Certificate Generated!" followed by a note about browser warnings, which
+    # reads as success and describes the wrong failure — nobody browses the
+    # origin directly, Cloudflare does, and Cloudflare does not warn, it 526s.
+    echo "############################################################"
+    echo "## THIS IS NOT AN ORIGIN CERTIFICATE."
+    echo "## It exists so nginx can start. Cloudflare Full (Strict)"
+    echo "## will answer 526 to every visitor until it is replaced."
+    echo "##"
+    echo "## Finish with ONE of:"
+    echo "##   sudo bash provision-ubuntu.sh cf-origin-cert   (production path)"
+    echo "##   ORIGIN_CERT_MODE=letsencrypt bash $0           (ACME HTTP-01;"
+    echo "##       requires the DNS record to be GREY-clouded)"
+    echo "############################################################"
+    exit 0
+    ;;
+  letsencrypt) ;;
+  *)
+    echo "Error: ORIGIN_CERT_MODE='$ORIGIN_CERT_MODE' is not recognised." >&2
+    echo "       Use 'letsencrypt' (default) or 'self-signed-bootstrap'." >&2
+    exit 2
+    ;;
+esac
+
+# ---- letsencrypt mode ------------------------------------------------------
+
+if [ -z "$email" ]; then
+  echo "Error: LETSENCRYPT_EMAIL is not set in .env." >&2
+  echo "       Let's Encrypt needs it for expiry notices; without one an" >&2
+  echo "       unnoticed renewal failure becomes a hard outage at day 90." >&2
+  exit 1
+fi
+
+# nginx has to be serving :80 before HTTP-01 can succeed, and nginx will not
+# start without a certificate file — so the placeholder is a genuine
+# prerequisite here, not a fallback. The difference from the old behaviour is
+# that we do not STOP here.
+if is_self_signed "$host_live/fullchain.pem"; then
+  write_self_signed_placeholder
+  echo "### Starting frontend so the ACME challenge can be answered ..."
+  sudo $DC up -d frontend || true
+  # certbot refuses to take over a live/ directory it did not create (it
+  # expects symlinks into archive/). Removing the placeholder lineage is the
+  # documented prerequisite; it is only ever done when we just established the
+  # existing material is self-signed, so a real cert is never deleted here.
+  # Belt-and-braces on the path: an empty $data_path or $domains would make
+  # this an `rm -rf` of something much larger than a lineage directory.
+  if [ -n "$data_path" ] && [ -n "$domains" ] && [ -d "$host_live" ]; then
+    sudo rm -rf "$host_live"
+    placeholder_removed=1
+  fi
+fi
+
+echo "### Requesting a certificate for $domains from Let's Encrypt (HTTP-01) ..."
+staging_arg=""
+if [ "$staging" != "0" ]; then staging_arg="--staging"; fi
+
+domain_args=""
+for d in "${domains[@]}"; do domain_args="$domain_args -d $d"; done
+
+# shellcheck disable=SC2086
+if ! sudo $DC run --rm certbot certonly --webroot -w /var/www/certbot \
+      $staging_arg $domain_args \
+      --email "$email" --agree-tos --no-eff-email --non-interactive; then
+  # Put the placeholder back before bailing out. We deleted the lineage above
+  # so certbot would accept the directory; without this, a failed issuance
+  # leaves NO certificate at all and nginx cannot start — turning a "TLS is
+  # wrong" incident into a "nothing is listening" one (Cloudflare 521 instead
+  # of 526). The exit status below still reports failure; the box just stays
+  # reachable enough to fix from.
+  if [ "${placeholder_removed:-0}" = "1" ]; then
+    echo "### certonly failed — restoring the bootstrap placeholder so nginx can start." >&2
+    write_self_signed_placeholder
+  fi
+  echo >&2
+  echo "ERROR: certbot certonly failed for $domains." >&2
+  echo "       The most common cause here is the Cloudflare proxy: HTTP-01" >&2
+  echo "       validation cannot reach an ORANGE-clouded origin, because" >&2
+  echo "       'Always Use HTTPS' redirects the challenge before it arrives." >&2
+  echo "       Either grey-cloud the record for the duration, or use the" >&2
+  echo "       production path: sudo bash provision-ubuntu.sh cf-origin-cert" >&2
+  exit 1
+fi
+
+# Audit F-024 — the close condition. Do NOT relax this to a file-exists check:
+# "there is a fullchain.pem" was true for the entire life of the bug this
+# replaces. Exiting non-zero matters because provision/deploy treat a zero exit
+# as "TLS is done".
+if is_self_signed "$host_live/fullchain.pem"; then
+  echo >&2
+  echo "ERROR: $host_live/fullchain.pem is still self-signed after certonly." >&2
+  echo "       Refusing to report success: Cloudflare Full (Strict) would 526." >&2
+  exit 1
+fi
+
 echo
-
-echo "### Self-Signed Certificate Generated!"
-echo "Note: Your browser will display a security warning because this is a self-signed certificate."
+echo "### Certificate issued for $domains"
+openssl x509 -in "$host_live/fullchain.pem" -noout -issuer -enddate 2>/dev/null || true
 echo

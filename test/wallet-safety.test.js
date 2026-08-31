@@ -10,6 +10,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { encodeAddress } from '@polkadot/util-crypto';
 
 import {
@@ -211,3 +212,114 @@ describe('isPositiveNumberInput — form guard', () => {
         assert.equal(isPositiveNumberInput('NaN'), false);
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audit F-194 / F-195 (round 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('F-194 — the guard and the converter agree on what is an amount', () => {
+    // The finding: isPositiveNumberInput used parseFloat, which parses a
+    // PREFIX. parseFloat('1,5') is 1, so the guard said "valid" and then
+    // pdexToPlanck's BigInt('1,5') threw. Fail-closed — no wrong amount was
+    // ever signed — but the user got an exception instead of a message, and
+    // the obvious "strip the commas" follow-up would have been a funds bug.
+    const rejected = ['1,5', '1 000', '1e5', '1.2.3', 'abc', '0x10', '1,000.50', '½', '', '   ', '.', '-'];
+
+    for (const v of rejected) {
+        test(`the guard rejects ${JSON.stringify(v)}`, () => {
+            assert.equal(isPositiveNumberInput(v), false);
+        });
+        test(`pdexToPlanck refuses ${JSON.stringify(v)} explicitly`, () => {
+            // Explicitly, not via an opaque BigInt SyntaxError — reaching this
+            // means a NEW call site skipped the guard, and the message says so.
+            if (v.trim() === '') { assert.equal(pdexToPlanck(v), '0'); return; }
+            assert.throws(() => pdexToPlanck(v), /Not a plain decimal amount/);
+        });
+    }
+
+    test('a comma amount is refused BY THE GUARD, which is the close test', () => {
+        assert.equal(isPositiveNumberInput('1,5'), false,
+            'the guard must reject it so the UI can say why, rather than letting the converter throw');
+    });
+
+    test('commas are never silently stripped', () => {
+        // '1,5' is 1.5 in most of Europe and 15 with the separator deleted.
+        // There is no way to know which was meant, so refusing is the only
+        // safe answer. If this ever starts returning a value, it is a funds bug.
+        assert.throws(() => pdexToPlanck('1,5'));
+        assert.throws(() => pdexToPlanck('1,000'));
+    });
+
+    test('legitimate amounts still work, including whitespace and tiny values', () => {
+        assert.equal(pdexToPlanck('1.5'), '1500000000000');
+        assert.equal(pdexToPlanck('  2.25  '), '2250000000000');
+        assert.equal(pdexToPlanck('0.000000000001'), '1');
+        assert.equal(isPositiveNumberInput('  2.25  '), true);
+        assert.equal(isPositiveNumberInput('0.000000000001'), true);
+    });
+
+    test('zero and negatives are not positive amounts', () => {
+        assert.equal(isPositiveNumberInput('0'), false);
+        assert.equal(isPositiveNumberInput('-1'), false);
+        assert.equal(isPositiveNumberInput('0.0'), false);
+    });
+
+    test('both helpers share ONE grammar, so they cannot drift apart', () => {
+        const src = readFileSync(new URL('../lib/wallet-safety.js', import.meta.url), 'utf8');
+        const code = src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+        assert.equal((code.match(/AMOUNT_GRAMMAR\.test/g) || []).length, 2,
+            'the guard and the converter must test the same grammar');
+        assert.ok(!/parseFloat/.test(code),
+            'parseFloat is back in the amount path — it accepts prefixes like "1,5"');
+    });
+});
+
+describe('F-195 — the council-vote prefill round-trips exactly', () => {
+    // The picker pre-filled with Number(BigInt(locked)) / 1e12. Above 2^53
+    // planck (~9007 PDEX) a double cannot hold the u128, so a whale who
+    // re-submitted the prefilled value signed a DIFFERENT balance than the
+    // pallet holds — and F-011 removed the multiply-to-sign step, so the string
+    // in that box goes straight to pdexToPlanck.
+    const scriptSrc = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
+
+    // Lift the helper out of the bundle and exercise it for real.
+    const start = scriptSrc.indexOf('function planckToPdexString');
+    const body = scriptSrc.slice(start, scriptSrc.indexOf('\n}', start) + 2);
+    const planckToPdexString = new Function('return ' + body)();
+
+    const cases = ['0', '1', '1000000000000', '1500000000000',
+                   '9007199254740993',           // 2^53 + 1 — the audit's case
+                   '12345678901234567890',
+                   '999999999999999999999'];
+
+    for (const planck of cases) {
+        test(`${planck} planck survives the round trip`, () => {
+            const shown = planckToPdexString(planck);
+            assert.equal(pdexToPlanck(shown), planck,
+                `prefill showed ${shown}, which signs a different u128`);
+        });
+    }
+
+    test('2^53+1 specifically — where the old IEEE path lost a planck', () => {
+        const planck = '9007199254740993';
+        assert.equal(planckToPdexString(planck), '9007.199254740993');
+        // What the old code produced, for the record.
+        assert.equal(String(Number(BigInt(planck)) / 1e12), '9007.199254740992');
+    });
+
+    test('the output is a clean decimal, not padded with trailing zeros', () => {
+        assert.equal(planckToPdexString('1500000000000'), '1.5');
+        assert.equal(planckToPdexString('1000000000000'), '1');
+    });
+
+    test('the prefill path no longer divides by 1e12', () => {
+        const block = scriptSrc.slice(
+            scriptSrc.indexOf("if (existingStake !== '0' && stakeInputEl)"),
+            scriptSrc.indexOf("if (existingStake !== '0' && stakeInputEl)") + 700
+        );
+        assert.ok(block.length > 0, 'the council-vote prefill moved');
+        assert.ok(!/\/ 1e12/.test(block), 'the IEEE divide is back on the signing prefill path');
+        assert.match(block, /planckToPdexString\(existingStake\)/);
+    });
+});
+

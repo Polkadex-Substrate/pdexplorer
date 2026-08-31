@@ -214,10 +214,12 @@ is CoinGecko (keyless public API).
 
 ## Authenticated (wallet sign-in, for posting to discussions)
 
-Wallet-signed nonce login; sessions are 192-bit random tokens with a TTL.
+Wallet-signed nonce login; sessions are 192-bit random tokens with a 7-day TTL.
 
 - POST /api/auth/challenge — request a sign-in nonce
-- POST /api/auth/verify — submit { address, signature, nonce }, get a token
+- POST /api/auth/verify — submit { address, signature }; the nonce is NOT sent,
+  the server looks up the open challenge for that address. Returns
+  { token, expiresIn } where expiresIn is milliseconds (7 days).
 - POST /api/auth/logout
 - POST /api/discussions/:id/posts — post to a discussion (requires session)
 
@@ -283,7 +285,7 @@ backoff — it is not a permanent error. `RPC_NOT_READY` is currently the only
 ## Caching tiers (respect the Cache-Control headers)
 
 - Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events,
-  /api/council, /api/governance/latest):
+  /api/council, /api/governance/latest, /api/state/* at the current head):
   public, max-age=5, s-maxage=10, stale-while-revalidate=30
 - Medium — /api/validators, /api/network-info, /api/holders, /api/price-latest,
   /api/discussions, /api/staking-rewards-status, /api/analytics/*, and
@@ -297,13 +299,19 @@ backoff — it is not a permanent error. `RPC_NOT_READY` is currently the only
 
 /sitemap.xml sends its own public, max-age=300, s-maxage=300.
 
-Everything else sends NO Cache-Control header — treat that as "do not reuse
-this response". Notably /api/wallet/:address, /api/account/:address,
-/api/staking-rewards/:address, /api/search/:query, /api/block/:id,
-/api/extrinsic/*, /api/validator/:address, /api/transactions/older,
-/api/labels/* (a signed-in response contains the caller's own vote),
-/api/version, /api/health, and everything under /api/auth/*, /api/email/* and
-/api/diag/*.
+Some routes send an explicit no-store: /api/wallet/:address,
+/api/identity/:address, /api/version, /api/health, POST /api/rpc/call,
+everything under /api/email/*, and GET /api/labels/:address when the caller
+presents a session (that response contains the caller's own vote).
+
+Everything else sends NO Cache-Control header at all. That is an omission, not
+a permission — treat it as "do not reuse this response". Notably
+/api/account/:address, /api/staking-rewards/:address, /api/search/:query,
+/api/block/:id, /api/extrinsic/*, /api/extrinsic-by-hash/:txHash (NOT matched
+by /api/extrinsic/* — it is a separate route), /api/validator/:address,
+/api/transactions/older, /api/proxies/:address, /api/multisigs/:address,
+/api/discussions/:id, anonymous /api/labels/*, and everything under
+/api/auth/* and /api/diag/*.
 
 ## Addresses
 
