@@ -286,12 +286,16 @@ describe('F-081 — an empty analytics series is never cached', () => {
     test('a truthy-but-empty array no longer counts as a cache hit', () => {
         assert.ok(!/if \(cached && cached\.series\) return res\.json\(cached\);/.test(fn),
             '[] is truthy, so a pre-warmed empty series was served AND pinned at the edge — that IS F-081');
-        assert.match(fn, /Array\.isArray\(cached\.series\) && cached\.series\.length/);
+        // hasSeriesData, not Array.isArray: getDailyAnalytics returns an
+        // OBJECT of named series, so the array form was false for every
+        // response and the cache-hit branch was unreachable. See
+        // lib/series-shape.js — found on the deployed endpoint, not by a test.
+        assert.match(fn, /hasSeriesData\(cached\.series\)/);
     });
 
     test('cacheMedium only runs on a populated series', () => {
         const cacheAt = fn.indexOf('cacheMedium(res)');
-        const guardAt = fn.indexOf('cached.series.length');
+        const guardAt = fn.indexOf('hasSeriesData(cached.series)');
         assert.ok(guardAt !== -1 && guardAt < cacheAt,
             'the cache header is set before the emptiness check');
     });

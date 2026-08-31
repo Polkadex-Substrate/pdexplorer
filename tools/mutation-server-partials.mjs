@@ -10,7 +10,7 @@ const M = [
   ['server.js', 'code: \'PRUNED_STATE\'', 'code: \'INTERNAL\'', 'F-084 pruned case loses its distinct code'],
   ['server.js', "            error: `Block ${at.block} is outside this node's pruning window. Historical state requires an archive node — see /developers for how to point a client at one.`,", "            error: msg,", 'F-084 raw err.message back on the wire'],
   ['db.js', "return { validators, totalCount: s.totalCount ?? validators.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing' };", "return { validators, totalCount: s.totalCount ?? validators.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing', error: s.error };", 'F-084 indexer error back on a cached 200'],
-  ['server.js', 'if (cached && Array.isArray(cached.series) && cached.series.length) {', 'if (cached && cached.series) {', 'F-081 empty series cached at the edge again'],
+  ['server.js', 'if (cached && hasSeriesData(cached.series)) {', 'if (cached && cached.series) {', 'F-081 empty series cached at the edge again'],
   ['server.js', 'const asked = Number(params[1]);', 'const asked = Number(params[0]);', 'F-077 clamp reads the prefix instead of the count'],
   ['server.js', 'params[1] = RPC_MAX_PAGE;\n                clampedPageSize = RPC_MAX_PAGE;', 'clampedPageSize = RPC_MAX_PAGE;', 'F-077 clamp computed but not applied'],
   ['server.js', "db.consumeRateLimit('label-write', signer", "db.consumeRateLimit('label-write', String(Math.random())", 'F-075 label cooldown keyed on nothing'],

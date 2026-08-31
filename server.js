@@ -22,6 +22,7 @@ import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, 
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
+import { hasSeriesData } from './lib/series-shape.js';
 // Audit F-164 — the superOf → identityOf walk lives in ONE module that this
 // file and the debug probes both import. Two copies of it drifted apart across
 // a runtime upgrade once; see the header of lib/identity.js.
@@ -5613,7 +5614,7 @@ app.get('/api/analytics/timeseries', (req, res) => {
         // An empty series is now never cached, by anyone: not the browser, not
         // Cloudflare. A populated one keeps the medium TTL it always had.
         const cached = db.getKv('analytics_ts_' + days);
-        if (cached && Array.isArray(cached.series) && cached.series.length) {
+        if (cached && hasSeriesData(cached.series)) {
             cacheMedium(res);
             return res.json(cached);
         }
@@ -5631,7 +5632,7 @@ app.get('/api/analytics/timeseries', (req, res) => {
         const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
         res.json({
             days, requestedDays: askedDays, since: sinceTs,
-            series: (cached && Array.isArray(cached.series)) ? cached.series : db.getDailyAnalytics(sinceTs),
+            series: (cached && hasSeriesData(cached.series)) ? cached.series : db.getDailyAnalytics(sinceTs),
             computedAt: Date.now(),
             indexIncomplete: (db.getSyncState('chain_index') || {}).status !== 'Synced'
         });

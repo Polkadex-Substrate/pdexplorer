@@ -89,7 +89,15 @@ describe('analytics/timeseries cannot be used to stall a worker', () => {
     });
 
     test('a populated series still gets the medium TTL', () => {
-        assert.match(fn, /cached\.series\.length\) \{\s*\n\s*cacheMedium\(res\)/);
+        // Was `cached.series.length`, which assumed an array. getDailyAnalytics
+        // returns an OBJECT of named series, so that guard was false for every
+        // response ever produced — the cache-hit branch was unreachable and
+        // every request re-ran the aggregate. Found by reading `cache-control`
+        // on the deployed endpoint (max-age=5, the fallthrough, not max-age=30),
+        // not by any test. See lib/series-shape.js.
+        assert.match(fn, /hasSeriesData\(cached\.series\)\) \{\s*\n\s*cacheMedium\(res\)/);
+        assert.ok(!/Array\.isArray\(cached\.series\)/.test(fn),
+            'the array assumption is back — the pre-warm is never served');
     });
 });
 
