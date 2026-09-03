@@ -670,8 +670,12 @@ EOF
         # (HTTP-01 cannot reach a proxied origin), which is why the mode is
         # named rather than defaulted. The corresponding obligation is at the
         # end of run_all: the provision as a whole must not FINISH on this.
-        if [ -x ./init-letsencrypt.sh ]; then
-            ORIGIN_CERT_MODE=self-signed-bootstrap ./init-letsencrypt.sh
+        # F-197: was `[ -x ./init-letsencrypt.sh ]`. The file is tracked 100644,
+        # so that test is false in a fresh checkout and this branch never ran —
+        # provision silently fell through to the self-signed placeholder below.
+        # deploy.sh already invokes it as `bash ./init-letsencrypt.sh`; match it.
+        if [ -f ./init-letsencrypt.sh ]; then
+            ORIGIN_CERT_MODE=self-signed-bootstrap bash ./init-letsencrypt.sh
             ok "Placeholder cert bootstrapped via init-letsencrypt.sh (NOT an origin cert)"
         else
             warn "init-letsencrypt.sh missing — issuing a self-signed placeholder so nginx can start."

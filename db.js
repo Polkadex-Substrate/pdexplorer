@@ -787,6 +787,53 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
     // resetting the version makes syncFinancialTransactions treat the next tick
     // as a first run and re-crawl. Without it the purge would trade a
     // double-counted transfer for a missing one, which is the worse of the two.
+    // Bumped when the POST-PURGE bookkeeping changes in a way a database
+    // migrated by an older build needs replayed. v1 was implicit and wrote the
+    // wrong sync-state key names (F-196); v2 writes txBackfillCursor /
+    // txBackfillComplete, which syncTransactions actually reads.
+    const TX_PURGE_RESET_VERSION = 2;
+
+    // Audit F-196 catch-up.
+    //
+    // The purge is one-shot behind `migration:purge-legacy-tx-rows`. The build
+    // that shipped it reset `backfillCursor` / `backfillComplete` — names
+    // syncTransactions does not read — so on any host where it ALREADY ran and
+    // deleted rows, the re-derivation never happened AND the flag is now set,
+    // which means fixing the field names does nothing: the block below is
+    // skipped forever and the deleted heights stay missing.
+    //
+    // A fix that only helps hosts which have not yet upgraded is not a fix. So
+    // the flag carries a version, and a flag written without one is known to
+    // have come from the buggy build. If it also recorded a non-zero delete,
+    // the reset it should have done is performed now, once.
+    //
+    // Deliberately NOT re-running the purge: the rows are already gone, and
+    // re-running a destructive migration to repair the bookkeeping around it
+    // would be a much worse trade. Only the backfill reset is replayed.
+    if (seedCounts) {
+        try {
+            const prior = getKv('migration:purge-legacy-tx-rows');
+            if (prior && !prior.resetVersion && Number(prior.deleted) > 0) {
+                const st = getSyncState('transactions') || {};
+                setSyncState('transactions', {
+                    ...st,
+                    scannerVersion: null,
+                    txBackfillCursor: null,
+                    txBackfillComplete: false
+                });
+                setKv('migration:purge-legacy-tx-rows', { ...prior, resetVersion: TX_PURGE_RESET_VERSION, repairedAt: Date.now() });
+                console.log(`[migration] F-196 catch-up: a previous build purged ${prior.deleted} legacy tx row(s) ` +
+                    'but reset the wrong sync-state keys, so the re-derivation never ran. Backfill restarted now.');
+            } else if (prior && !prior.resetVersion) {
+                // Ran, deleted nothing — no history to re-derive. Just stamp it
+                // so this check stops firing.
+                setKv('migration:purge-legacy-tx-rows', { ...prior, resetVersion: TX_PURGE_RESET_VERSION });
+            }
+        } catch (e) {
+            console.warn('[migration] F-196 catch-up skipped:', e && e.message ? e.message : e);
+        }
+    }
+
     if (seedCounts && !getKv('migration:purge-legacy-tx-rows')) {
         try {
             const rawCeiling = Number(process.env.TX_PURGE_MAX_FRACTION);
@@ -799,24 +846,38 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
                 // database retries on the next boot.
                 console.warn(`[migration] legacy tx purge REFUSED (F-049): ${p.refused}`);
             } else {
-                setKv('migration:purge-legacy-tx-rows', { ...p, completedAt: Date.now() });
+                setKv('migration:purge-legacy-tx-rows', { ...p, resetVersion: TX_PURGE_RESET_VERSION, completedAt: Date.now() });
                 if (p.deleted > 0) {
                     // Reset the BACKFILL as well as the scanner version.
                     //
-                    // Adversarial review: clearing scannerVersion alone only
-                    // re-crawls TX_INITIAL_SCAN_BLOCKS from head. On a database
-                    // where txBackfillComplete was already true, nothing
-                    // re-derives anything below that window — so any deleted
-                    // legacy row whose height has no event-derived twin (the
-                    // F-006 case, or a range the chain_index queue abandoned)
-                    // was simply gone. Trading a double-counted transfer for a
-                    // missing one is the worse half of the deal.
+                    // Clearing scannerVersion alone only re-crawls
+                    // TX_INITIAL_SCAN_BLOCKS from head. On a database where the
+                    // backfill was already complete, nothing re-derives
+                    // anything below that window — so any deleted legacy row
+                    // whose height has no event-derived twin (the F-006 case,
+                    // or a range the chain_index queue abandoned) was simply
+                    // gone. Trading a double-counted transfer for a missing one
+                    // is the worse half of the deal.
+                    //
+                    // Audit F-196: the first version of this wrote
+                    // `backfillCursor` / `backfillComplete`. syncFinancialTransactions
+                    // reads `txBackfillCursor` / `txBackfillComplete` — the
+                    // `tx`-prefixed names, because this sync-state row also
+                    // carries the chain_index-style fields. So the reset wrote
+                    // two keys nobody reads and the backfill was never actually
+                    // restarted: the purge deleted rows and the re-derivation
+                    // that was supposed to replace them did not run. My test
+                    // asserted the same wrong names, so it passed.
+                    //
+                    // The names are asserted against the READER now — see
+                    // test/id-migration.test.js, which greps them out of
+                    // syncTransactions() rather than restating them.
                     const st = getSyncState('transactions') || {};
                     setSyncState('transactions', {
                         ...st,
                         scannerVersion: null,
-                        backfillCursor: null,
-                        backfillComplete: false
+                        txBackfillCursor: null,
+                        txBackfillComplete: false
                     });
                     console.log(`[migration] legacy tx purge (F-049): removed ${p.deleted} extrinsic-hash-keyed row(s) of ${p.total}; ` +
                         'cleared scannerVersion so the derivation re-crawls them as event-keyed rows');
@@ -2131,6 +2192,39 @@ export function getLowestScanFailure(indexer) {
     ).get(indexer);
     const lo = row && row.lo != null ? Number(row.lo) : NaN;
     return Number.isFinite(lo) ? lo : null;
+}
+
+// One-time rebuild of validator commission triggers (audit F-198).
+//
+// `mergeValidatorTriggers` is deliberately additive (F-115): a >50% crossing
+// older than the rolling history window has to survive, so triggers are merged
+// rather than replaced. The consequence, once F-198 established that some
+// stored triggers are FABRICATED — phantom "0% → 51%" crossings synthesised
+// from un-elected eras that erasValidatorPrefs answers with default prefs — is
+// that fixing the producer does nothing for rows already written. They never
+// age out, by design.
+//
+// So the filter fix needs a companion that clears the bad rows once. Rebuilding
+// (rather than deleting) is what keeps the F-115 property: every crossing the
+// CURRENT stored history actually supports is written back, so a genuine old
+// cross is preserved and only the invented ones disappear.
+//
+// `rebuild` is passed in by server.js — this module must not import the
+// trigger-derivation logic, which lives with the scanner.
+export function rebuildValidatorTriggers(rebuild) {
+    if (getKv('migration:rebuild-commission-triggers')) return { skipped: true, addresses: 0, triggers: 0 };
+    let addresses = 0, triggers = 0;
+    const rows = db.prepare('SELECT DISTINCT address FROM validator_history').all();
+    for (const { address } of rows) {
+        const history = getValidatorHistory(address);
+        if (!history || !history.length) continue;
+        const rebuilt = rebuild(history) || [];
+        replaceValidatorTriggers(address, rebuilt);
+        addresses++;
+        triggers += rebuilt.length;
+    }
+    setKv('migration:rebuild-commission-triggers', { addresses, triggers, completedAt: Date.now() });
+    return { skipped: false, addresses, triggers };
 }
 
 // Periodic amnesty for scan failures that have exhausted their retry budget.

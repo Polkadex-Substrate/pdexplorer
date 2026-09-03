@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 #
-# Post-deploy verification for build f4ea9037d598.  (v2)
+# Post-deploy verification.  (v3)
+#
+# Usage:  bash tools/verify-deploy.sh [expected-sha]
+#         expected-sha defaults to `git rev-parse --short=12 HEAD`.
+#
+# Audit F-200 fixed two things that made v2 dangerous rather than merely wrong:
+#
+#   1. FAILURES DID NOT PROPAGATE. The script runs `set -uo pipefail` without
+#      `-e`, and failure was signalled by `fail()` setting FAILED=1. Two of the
+#      embedded python3 blocks printed a red FAIL line and never touched FAILED
+#      — a subprocess cannot assign to its parent's shell variable, and one of
+#      them additionally `sys.exit(0)`'d. So the footer printed a green "All
+#      automated checks passed" over a real failure. An unattended probe that
+#      is green when the feature it checks is ABSENT is worse than no probe.
+#
+#      Every embedded block now exits NON-ZERO on failure and the shell checks
+#      that exit status, so propagation is structural rather than a convention
+#      each block has to remember.
+#
+#   2. THE SHA WAS BAKED INTO THE FILENAME. Pinned to f4ea9037d598, so on every
+#      later deploy it reported a permanent red SHA mismatch — and an operator
+#      who learns to ignore one red line will ignore the next one too.
 #
 # Run ON THE HOST (root@explorer1:/opt/pdexplorer). Uses 127.0.0.1 throughout so
 # Cloudflare is out of the path — the edge blocks non-browser /api/* requests.
@@ -24,6 +45,22 @@ fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; FAILED=1; }
 info() { printf '        %s\n' "$1"; }
 FAILED=0
 
+# Run an embedded python3 check. The block prints its own detail and exits
+# non-zero to signal failure; this converts that into FAILED=1.
+#
+# F-200: the blocks used to print a red FAIL themselves and return 0, which the
+# shell could not see. Nothing enforces that a python block calls fail() — but
+# an exit status is checked here, once, for all of them.
+pycheck() {
+    local label="$1"; shift
+    if python3 "$@"; then :; else fail "$label"; fi
+}
+
+EXPECTED_SHA="${1:-$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
+if [ "$EXPECTED_SHA" = "unknown" ]; then
+    fail "no expected SHA: pass one as \$1 or run inside the git checkout"
+fi
+
 find_db() {
     local p
     p=$(grep -E '^[[:space:]]*DATA_PATH=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')
@@ -41,8 +78,8 @@ echo "=== 1. Build identity ==="
 BE=$(curl -fsS --max-time 10 "$API/api/version" 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("gitSha","?"))' 2>/dev/null || echo unreachable)
 FE=$(curl -fsS --max-time 10 http://127.0.0.1/version.json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("gitSha","?"))' 2>/dev/null || echo unreachable)
 info "backend=$BE frontend=$FE   db=${DB:-<not found>}"
-[ "$BE" = "f4ea9037d598" ] && pass "backend is the expected build" || fail "backend reports $BE"
-[ "$FE" = "f4ea9037d598" ] && pass "frontend is the expected build" || fail "frontend reports $FE"
+[ "$BE" = "$EXPECTED_SHA" ] && pass "backend is $EXPECTED_SHA" || fail "backend reports $BE, expected $EXPECTED_SHA"
+[ "$FE" = "$EXPECTED_SHA" ] && pass "frontend is $EXPECTED_SHA" || fail "frontend reports $FE, expected $EXPECTED_SHA"
 
 echo
 echo "=== 2. Commission history (the feature this deploy is for) ==="
@@ -50,7 +87,7 @@ curl -fsS --max-time 60 "$API/api/validators" -o /tmp/vals.json 2>/dev/null
 if [ ! -s /tmp/vals.json ]; then
     fail "/api/validators returned nothing"
 else
-python3 - /tmp/vals.json <<'PY'
+pycheck "validator commission enrichment" - /tmp/vals.json <<'PY'
 import sys, json, collections
 d = json.load(open(sys.argv[1]))
 vs = d.get('validators') or []
@@ -60,7 +97,7 @@ print(f"        {len(vs)} validators; commissionHistoryEra={d.get('commissionHis
 have = [v for v in vs if isinstance(v.get('commissionHistory'), dict)]
 if not have:
     print(f"  {R}FAIL{N}  no validator carries commissionHistory — the enrichment is not running")
-    sys.exit(0)
+    sys.exit(1)   # F-200: must be non-zero, or the footer prints green over this
 print(f"  {G}PASS{N}  commissionHistory present on {len(have)}/{len(vs)} validators")
 
 vol = collections.Counter(v['commissionHistory'].get('volatility') for v in have)
@@ -70,6 +107,7 @@ print(f"        erasTracked: min={min(tracked)} max={max(tracked)}")
 
 if d.get('commissionHistoryEra') is None:
     print(f"  {R}FAIL{N}  commissionHistoryEra is null — recency checking is OFF (cold network_info)")
+    sys.exit(1)
 else:
     print(f"  {G}PASS{N}  activeEra resolved, so raisedRecently is live")
 
@@ -93,6 +131,7 @@ bad = [v for v in have
        and v['commissionHistory'].get('changes', 0) > 0]
 if bad:
     print(f"  {R}FAIL{N}  {len(bad)} validator(s) show min=0% with a change — unelected eras are leaking in")
+    sys.exit(1)
     for v in bad[:3]:
         print(f"          {(v.get('name') or v['address'])[:26]}  {v['commissionHistory'].get('note')}")
 else:
@@ -104,6 +143,7 @@ noisy = [v for v in have
          and v['commissionHistory'].get('note')]
 if noisy:
     print(f"  {R}FAIL{N}  {len(noisy)} 'unknown' validator(s) carry a note — that claims knowledge we lack")
+    sys.exit(1)
 else:
     print(f"  {G}PASS{N}  'unknown' histories stay quiet")
 PY
@@ -165,10 +205,12 @@ RT=$(printf '%s' "$L" | grep -c 'rt=' || true)
 echo
 echo "=== 7. Index coverage, including the new gapsExhausted (F-046) ==="
 curl -fsS --max-time 15 "$API/api/blocks" -o /tmp/blocks.json 2>/dev/null
-python3 - /tmp/blocks.json <<'PY'
+pycheck "index coverage fields" - /tmp/blocks.json <<'PY'
 import sys, json
 try: d = json.load(open(sys.argv[1]))
-except Exception as e: print(f"        could not read /api/blocks: {e}"); sys.exit(0)
+except Exception as e:
+    print(f"  \033[31mFAIL\033[0m  could not read /api/blocks: {e}")
+    sys.exit(1)   # F-200: an unreadable endpoint is a failure, not a skip
 c = d.get('coverage') or {}
 print(f"        status = {d.get('status')}")
 for k in ('knownGapBlocks','gapsExhausted','retryableFailures','permanentFailures'):
@@ -178,6 +220,7 @@ if c.get('gapsExhausted'):
     print("        NOTE  some gaps are no longer retried this round — is the RPC an archive node?")
 if 'gapsExhausted' not in c:
     print("  \033[31mFAIL\033[0m  gapsExhausted absent — the F-046 honesty signal did not ship")
+    sys.exit(1)
 PY
 
 echo
@@ -191,6 +234,8 @@ printf '%s' "$BL" | grep -iE 'schema (applied|skipped)|clamping|enrichment skipp
 echo
 if [ "$FAILED" -eq 0 ]; then printf '\033[32mAll automated checks passed.\033[0m\n'
 else printf '\033[31mSome checks failed — see FAIL lines above.\033[0m\n'; fi
+# F-200: exit status too. A wrapper or cron job cannot read the colour.
+[ "$FAILED" -eq 0 ] || exit 1
 cat <<'EOT'
 
 Only a browser can verify these three:

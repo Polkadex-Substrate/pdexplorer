@@ -430,6 +430,7 @@ describe('purgeLegacyExtrinsicKeyedTx (F-049)', () => {
 });
 
 describe('F-049 — the caller does the half that makes it safe', () => {
+    const serverSrc = require('node:fs').readFileSync(new URL('../server.js', import.meta.url), 'utf8');
     const dbSrc = require('node:fs').readFileSync(new URL('../db.js', import.meta.url), 'utf8');
 
     test('the purge has its OWN kv flag', () => {
@@ -449,21 +450,65 @@ describe('F-049 — the caller does the half that makes it safe', () => {
     });
 
     test('the re-crawl covers the range the purge deleted', () => {
-        // Adversarial review: clearing scannerVersion alone only re-crawls
-        // TX_INITIAL_SCAN_BLOCKS from head. On a DB where txBackfillComplete
-        // was already true, nothing re-derives anything below that window — so
-        // a deleted legacy row with no event-derived twin was simply gone.
-        const block = dbSrc.slice(dbSrc.indexOf('purgeLegacyExtrinsicKeyedTx(db'),
-                                  dbSrc.indexOf('purgeLegacyExtrinsicKeyedTx(db') + 2000);
-        assert.match(block, /backfillComplete: false/);
-        assert.match(block, /backfillCursor: null/);
+        // Clearing scannerVersion alone only re-crawls TX_INITIAL_SCAN_BLOCKS
+        // from head. On a DB where the backfill was already complete, nothing
+        // re-derives anything below that window — so a deleted legacy row with
+        // no event-derived twin was simply gone.
+        //
+        // Audit F-196: the names are derived from the READER, not restated
+        // here. The first version of this test asserted `backfillComplete` /
+        // `backfillCursor` — the same wrong names the code used — so it passed
+        // while the reset wrote two keys nobody reads and the backfill never
+        // restarted. A test that repeats the code's assumption cannot falsify
+        // it; ask the consumer instead.
+        // The reader is syncTransactions() — locate it by the sync-state key
+        // it opens, not by a remembered function name. (An earlier draft of
+        // this test guessed `syncFinancialTransactions`, which does not exist,
+        // and failed for a reason unrelated to the bug under test.)
+        const at = serverSrc.lastIndexOf("const state = db.getSyncState('transactions');");
+        assert.ok(at !== -1, 'the transactions scanner moved — re-point this test');
+        const reader = serverSrc.slice(at, at + 4000);
+        const cursorField = (reader.match(/state\.(\w*[Bb]ackfillCursor)/) || [])[1];
+        const completeField = (reader.match(/state\.(\w*[Bb]ackfillComplete)/) || [])[1];
+        assert.ok(cursorField && completeField,
+            'could not find the backfill fields syncFinancialTransactions reads');
+        assert.equal(cursorField, 'txBackfillCursor');
+        assert.equal(completeField, 'txBackfillComplete');
+
+        // Sliced to the end of the setSyncState call, not a byte count — a
+        // fixed window ended mid-comment once the explanation above it grew.
+        // (Fourth time a fixed-size slice has done this; prefer a real
+        // delimiter.)
+        const purgeAt = dbSrc.indexOf('purgeLegacyExtrinsicKeyedTx(db');
+        const setAt = dbSrc.indexOf("setSyncState('transactions', {", purgeAt);
+        assert.ok(setAt !== -1 && setAt > purgeAt, 'the purge no longer resets the sync state at all');
+        const block = dbSrc.slice(setAt, dbSrc.indexOf('});', setAt));
+        assert.ok(block.includes(`${cursorField}: null`),
+            `the purge resets a field the scanner does not read (writes something other than ${cursorField})`);
+        assert.ok(block.includes(`${completeField}: false`),
+            `the purge resets a field the scanner does not read (writes something other than ${completeField})`);
+    });
+
+    test('F-196 — the purge writes no un-read backfill keys', () => {
+        // The mirror of the above: writing the RIGHT keys is not enough if the
+        // wrong ones are still written alongside, because they sit in the row
+        // forever looking meaningful.
+        const purgeAt = dbSrc.indexOf('purgeLegacyExtrinsicKeyedTx(db');
+        const setAt = dbSrc.indexOf("setSyncState('transactions', {", purgeAt);
+        const block = dbSrc.slice(setAt, dbSrc.indexOf('});', setAt));
+        assert.ok(!/\n\s+backfillCursor: null/.test(block),
+            'the un-prefixed backfillCursor is still written — nothing reads it');
+        assert.ok(!/\n\s+backfillComplete: false/.test(block),
+            'the un-prefixed backfillComplete is still written — nothing reads it');
     });
 
     test('deleting rows forces a re-crawl', () => {
         // Without this the purge trades a double-counted transfer for a
         // MISSING one, which is worse: the deleted rows are real transfers the
         // event-derived writer has not necessarily re-indexed.
-        const block = dbSrc.slice(dbSrc.indexOf('purgeLegacyExtrinsicKeyedTx(db'), dbSrc.indexOf('purgeLegacyExtrinsicKeyedTx(db') + 2000);
+        const purgeAt = dbSrc.indexOf('purgeLegacyExtrinsicKeyedTx(db');
+        const setAt = dbSrc.indexOf("setSyncState('transactions', {", purgeAt);
+        const block = dbSrc.slice(setAt, dbSrc.indexOf('});', setAt));
         assert.match(block, /scannerVersion: null/);
     });
 

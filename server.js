@@ -18,7 +18,7 @@ import { checkUserText } from './lib/user-text.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
-import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise } from './lib/commission-history.js';
+import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
@@ -1537,6 +1537,35 @@ async function applyDisplayNameOverridesToHolders(holders) {
     }));
 }
 
+// How many eras back it is SAFE to read validator prefs.
+//
+// Audit F-199. This clamp existed inline in syncValidatorHistory, with a comment
+// spelling out the danger, and was not applied to loadValidatorHistory — the
+// detail-page fill, which also walks a range and also `INSERT OR REPLACE`s what
+// it finds. So the guard protected the background scan and left the on-demand
+// path holding the loaded gun.
+//
+// The trap is that raising VALIDATOR_HISTORY_ERAS is DOCUMENTED. An operator
+// who does it gets: the sync clamps (so stored history stays short), the detail
+// page sees a short history and "fills" it over the unclamped range, and every
+// era past HistoryDepth reads back as default prefs — 0% commission, 0 stake —
+// which INSERT OR REPLACE writes over anything true already stored. Opening
+// validator pages destroys commission history, and the destruction looks like
+// backfill.
+//
+// One function, both callers. Returns the configured window, capped to the
+// chain's HistoryDepth when that is knowable.
+function historyDepthCap() {
+    try {
+        const hd = Number(globalApi.consts?.staking?.historyDepth ?? 0);
+        if (Number.isFinite(hd) && hd > 0 && VALIDATOR_HISTORY_ERAS > hd) {
+            console.warn(`[validators] VALIDATOR_HISTORY_ERAS=${VALIDATOR_HISTORY_ERAS} exceeds the chain's historyDepth=${hd}; clamping. Eras beyond it are pruned and would read back as 0% commission.`);
+            return hd;
+        }
+    } catch (e) { /* consts unavailable — keep the configured value */ }
+    return VALIDATOR_HISTORY_ERAS;
+}
+
 async function syncValidatorHistory(activeEra, validators) {
     if (!globalApi || !globalApi.query.staking.erasValidatorPrefs) return;
 
@@ -1552,16 +1581,7 @@ async function syncValidatorHistory(activeEra, validators) {
     // overwrite anything true we had already stored there. That is a genuine
     // history rewrite, triggerable by one env var, and it would feed straight
     // into the commission-history feature as fabricated "raised from 0%" moves.
-    let depthCap = VALIDATOR_HISTORY_ERAS;
-    try {
-        const hd = Number(globalApi.consts?.staking?.historyDepth ?? 0);
-        if (Number.isFinite(hd) && hd > 0 && VALIDATOR_HISTORY_ERAS > hd) {
-            console.warn(`[validators] VALIDATOR_HISTORY_ERAS=${VALIDATOR_HISTORY_ERAS} exceeds the chain's historyDepth=${hd}; clamping. Eras beyond it are pruned and would read back as 0% commission.`);
-            depthCap = hd;
-        }
-    } catch (e) { /* consts unavailable — keep the configured value */ }
-
-    const firstEra = Math.max(activeEra - depthCap + 1, 0);
+    const firstEra = Math.max(activeEra - historyDepthCap() + 1, 0);
     const historyRows = [];
     const perAddress = {};
 
@@ -1599,9 +1619,18 @@ async function syncValidatorHistory(activeEra, validators) {
     }
 }
 
+// Crossings of the 50% mark, for the "raised past 50%" badge.
+//
+// Audit F-198: this walked the raw rows, so the phantom 0% eras that
+// erasValidatorPrefs returns for un-elected eras (see wasElectedInEra) read as
+// a real starting point. A validator elected for the first time already
+// charging 51% produced a fabricated "0% → 51%" crossing, which
+// mergeValidatorTriggers then kept forever — merging is deliberate (F-115) so a
+// cross older than the rolling window survives, which also means a bogus one
+// never ages out.
 function getCommissionTriggers(history) {
     const triggers = [];
-    const chronologicalHistory = [...history].sort((a, b) => a.era - b.era);
+    const chronologicalHistory = history.filter(wasElectedInEra).sort((a, b) => a.era - b.era);
     for (let i = 1; i < chronologicalHistory.length; i++) {
         const prev = chronologicalHistory[i - 1];
         const current = chronologicalHistory[i];
@@ -1651,7 +1680,11 @@ async function loadValidatorHistory(address) {
 
     const activeEraOption = await globalApi.query.staking.activeEra();
     const activeEra = activeEraOption.isSome ? activeEraOption.unwrap().index.toNumber() : 0;
-    const firstEra = Math.max(activeEra - VALIDATOR_HISTORY_ERAS + 1, 0);
+    // F-199: the SAME cap the background scan uses. This walked the raw
+    // configured window and upserted whatever it read, so a raised
+    // VALIDATOR_HISTORY_ERAS turned every detail-page view into a history
+    // rewrite over pruned eras.
+    const firstEra = Math.max(activeEra - historyDepthCap() + 1, 0);
     const history = [];
 
     for (let era = activeEra; era >= firstEra; era--) {
@@ -3782,12 +3815,23 @@ function computeValidatorScorecard(history, triggers) {
     // Only count eras where the validator was actually in the active set
     // (stake > 0). Idle eras would otherwise drag the APY average down to
     // zero and misrepresent the validator's actual performance.
-    const activeEntries = history.filter(h => Number(h.stake) > 0);
+    const activeEntries = history.filter(wasElectedInEra);
     const totalEras = history.length;
     const activeEras = activeEntries.length;
     const activeEraRate = totalEras ? activeEras / totalEras : 0;
 
-    const commissions = history.map(h => Number(h.commission) || 0);
+    // Audit F-198. These read `history` — UNFILTERED — while the APY average
+    // two lines down already used `activeEntries`, with a comment explaining
+    // exactly why idle eras must not count. The same reasoning applies to
+    // commission and was not applied.
+    //
+    // erasValidatorPrefs is a ValueQuery, so an era the validator was not
+    // elected in returns 0% with 0 stake. Averaging those in drags avgCommission
+    // toward zero and makes minCommission 0 for every validator that has ever
+    // been out of the set — so a validator who has charged 95% for their whole
+    // tenure shows "min 0%", and the detail page contradicts the list, which
+    // filters correctly. On the page where a nominator confirms the choice.
+    const commissions = activeEntries.map(h => Number(h.commission) || 0);
     const avgCommission = commissions.reduce((s, c) => s + c, 0) / Math.max(commissions.length, 1);
     const minCommission = commissions.length ? Math.min(...commissions) : 0;
     const maxCommission = commissions.length ? Math.max(...commissions) : 0;
@@ -5577,16 +5621,23 @@ app.get('/api/analytics/timeseries', (req, res) => {
         // filtered on `timestamp`, synchronous in node:sqlite, with no edge
         // cache left to shorten the loop.
         //
-        // Being exact about the cost, because it differs by deployment:
+        // Being exact about the cost, because it differs by deployment AND
+        // because the first version of this comment asserted something false.
+        //
         // idx_tx_timestamp / idx_blocks_timestamp are created at boot ONLY when
         // the table is under FRESH_INDEX_MAX_ROWS (200k) — see db.js and the
-        // F-088 note. A 12.8M-row production database is deliberately skipped,
-        // because building that index inline would hold the write lock for
-        // minutes; it gets the index only if an operator has run
-        // migrate-add-indexes.mjs (repo root). So on a dev box this was a slow query
-        // and on production it was an unindexed full scan of the largest table
-        // in the schema — the environment where it matters is the one without
-        // the index.
+        // F-088 note — because building them inline on a large table would hold
+        // the write lock for minutes. I wrote that production therefore lacks
+        // them and the aggregate is a full scan. Checked on the live database
+        // (2026-08-31): explorer.polkadex.ee HAS both, so an operator ran
+        // migrate-add-indexes.mjs (repo root) at some point, and the aggregate
+        // is index-assisted there.
+        //
+        // The bound still matters, for two reasons that do not depend on the
+        // index: a fresh or restored deployment starts without it until someone
+        // runs that script, and an indexed GROUP BY over 12.9M rows is still
+        // work an anonymous caller should not be able to commission 358 distinct
+        // times. Do not remove the snap on the strength of one host's schema.
         //
         // The window is a UI control with four settings, so it is now a closed
         // set. Anything else snaps to the nearest supported range instead of
@@ -9675,6 +9726,21 @@ function startIndexerLoops() {
     // block readable, and no signal inside this process can observe that. Small
     // batch, oldest first, so retrying the genuinely dead ones costs a handful
     // of RPC calls every six hours rather than a re-scan.
+    // F-198 one-time repair: rebuild commission triggers from the filtered
+    // history. mergeValidatorTriggers is additive on purpose (F-115), so
+    // fabricated "0% → 51%" crossings already stored would otherwise persist
+    // forever even though the code that produced them is fixed.
+    try {
+        const r = db.rebuildValidatorTriggers(getCommissionTriggers);
+        if (!r.skipped) {
+            console.log(`[migration] rebuilt commission triggers for ${r.addresses} validator(s), ${r.triggers} genuine crossing(s) kept (F-198)`);
+        }
+    } catch (err) {
+        // Non-fatal: a wrong badge is a display bug, not a reason to refuse to
+        // boot. The flag stays unset, so the next boot retries.
+        console.warn('[migration] commission-trigger rebuild skipped (F-198):', err && err.message ? err.message : err);
+    }
+
     const sweepExhaustedFailures = () => {
         try {
             const revived = db.requeueExhaustedScanFailures(SCAN_MAX_ATTEMPTS, SCAN_AMNESTY_MS);

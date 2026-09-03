@@ -385,7 +385,10 @@ describe('F-024 — the cert bootstrap issues a real certificate', () => {
     });
 
     test('provision asks for the bootstrap mode explicitly', () => {
-        assert.match(provCode, /ORIGIN_CERT_MODE=self-signed-bootstrap\s+\.\/init-letsencrypt\.sh/,
+        // `bash ./…` since F-197: the file is tracked 100644, so the previous
+        // `[ -x ./init-letsencrypt.sh ]` gate was false in a fresh checkout and
+        // this call never ran at all.
+        assert.match(provCode, /ORIGIN_CERT_MODE=self-signed-bootstrap\s+(bash\s+)?\.\/init-letsencrypt\.sh/,
             'provision calls init-letsencrypt.sh without naming the bootstrap mode — with the ' +
             'new default that attempts HTTP-01 during provisioning, which cannot work behind ' +
             'an orange-clouded record.');

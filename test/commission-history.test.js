@@ -396,14 +396,24 @@ describe('the wiring: the list and the picker both show it', () => {
         // so scanning beyond it reads 0% — and because upsertValidatorHistory
         // is INSERT OR REPLACE, that OVERWRITES true rows with zeros. A genuine
         // history rewrite, triggerable by one env var.
-        const fn = serverSrc.slice(
-            serverSrc.indexOf('async function syncValidatorHistory'),
-            serverSrc.indexOf('async function syncValidatorHistory') + 2200
-        );
-        assert.match(fn, /historyDepth/,
+        // Audit F-199: the clamp used to be inline here and was NOT applied to
+        // loadValidatorHistory — the detail-page fill, which also walks a range
+        // and also INSERT OR REPLACEs what it reads. So this test passed while
+        // the other walker held the loaded gun. It is one shared function now,
+        // and BOTH callers are asserted.
+        assert.match(serverSrc, /function historyDepthCap\(\)/,
+            'the clamp is inline again — it will protect one walker and not the other');
+        const capFn = serverSrc.slice(serverSrc.indexOf('function historyDepthCap()'),
+                                      serverSrc.indexOf('function historyDepthCap()') + 900);
+        assert.match(capFn, /historyDepth/,
             'VALIDATOR_HISTORY_ERAS is unclamped; setting it above HistoryDepth rewrites history as 0%');
-        assert.match(fn, /const firstEra = Math\.max\(activeEra - depthCap \+ 1, 0\)/,
-            'the clamp is computed but not used');
+        for (const walker of ['async function syncValidatorHistory', 'async function loadValidatorHistory']) {
+            const i = serverSrc.indexOf(walker);
+            assert.ok(i !== -1, `${walker} moved`);
+            assert.match(serverSrc.slice(i, i + 3000),
+                /const firstEra = Math\.max\(activeEra - historyDepthCap\(\) \+ 1, 0\)/,
+                `${walker} walks the unclamped window`);
+        }
     });
 
     test('the pending-raise signal is attached and rendered', () => {
