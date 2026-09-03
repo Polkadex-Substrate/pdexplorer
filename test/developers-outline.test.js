@@ -25,6 +25,9 @@ import {
     DOC_OUTLINE, renderToc, renderOutline, renderCacheTiers, tocLabel, CACHE_TIERS
 } from '../lib/api-reference.js';
 import { readRepo, stripComments } from './helpers/source.js';
+import { developersBodies } from '../lib/developers-bodies.js';
+
+const sharedBodiesSrc = readRepo('lib/developers-bodies.js', import.meta.url);
 
 const serverSrc = readRepo('server.js', import.meta.url);
 const scriptSrc = readRepo('script.js', import.meta.url);
@@ -117,30 +120,46 @@ describe('both renderers walk the outline', () => {
         assert.match(server, /renderOutline\(\(entry\) => DEVELOPERS_BODIES\[entry\.id\]/);
     });
 
-    test('both supply a body for every section in the outline', () => {
+    test('there is a body for every section in the outline', () => {
         // A missing key renders as an empty section: the heading and anchor are
-        // there, but the content silently vanishes. Catch it here rather than
-        // in production.
-        for (const [label, src, obj] of [
-            ['server.js', server, 'DEVELOPERS_BODIES'],
-            ['script.js', script, 'DEVELOPERS_SECTION_BODIES']
-        ]) {
-            const start = src.indexOf(`const ${obj} = {`);
-            assert.ok(start !== -1, `${label}: no ${obj}`);
-            const block = src.slice(start, src.indexOf('\n};', start));
-            for (const id of ids) {
-                assert.ok(new RegExp(`(^|\\n)\\s*${id}\\s*:`).test(block),
-                    `${label} has no body for the '${id}' section — it will render as a bare heading`);
-            }
+        // there, but the content silently vanishes.
+        //
+        // F-060 round 3: this used to check TWO hand-maintained maps. They had
+        // drifted in all eight sections they shared, and the server's was
+        // missing ten sections outright — which this test could not see,
+        // because it only asked whether each id had *a* key, never whether the
+        // two agreed. Now there is one map, so the question is simply whether
+        // it covers the outline, asserted against the BUILT object rather than
+        // the source text.
+        const bodies = developersBodies();
+        for (const id of ids) {
+            assert.ok(typeof bodies[id] === 'string' && bodies[id].trim() !== '',
+                `no body for the '${id}' section — it will render as a bare heading`);
+        }
+    });
+
+    test('both renderers build from that one map', () => {
+        // The property the old two-map version could not express.
+        assert.match(server, /developersBodies\(\{ siteUrl: SITE_URL \}\)/,
+            'server.js no longer builds from the shared bodies');
+        assert.match(script, /developersBodies\(\)/,
+            'script.js no longer builds from the shared bodies');
+        for (const [label, src] of [['server.js', server], ['script.js', script]]) {
+            assert.ok(!/const DEVELOPERS_(SECTION_)?BODIES = \{/.test(src),
+                `${label} has grown its own body map again — the two will drift`);
         }
     });
 
     test('the cache tiers are rendered from the shared table, not retyped', () => {
         // F-083. Both pages described the tiers in their own prose and both had
         // drifted from the handlers.
-        assert.match(script, /renderCacheTiers\(\{ tableClass: 'developers-table' \}\)/);
-        assert.match(server, /caching: renderCacheTiers\(\)/);
-        assert.ok(!/max-age=30<\/code>.*wallet/i.test(script), 'the SPA still hand-lists the medium tier');
+        // Now asserted on the shared module (F-060) rather than on each file.
+        const bodies = developersBodies();
+        assert.ok(bodies.caching && bodies.caching.includes('developers-table'),
+            'the caching section is no longer rendered from CACHE_TIERS');
+        assert.match(sharedBodiesSrc, /renderCacheTiers\(/);
+        assert.ok(!/max-age=30<\/code>.*wallet/i.test(bodies.caching || ''),
+            'the caching section hand-lists the medium tier again');
     });
 });
 

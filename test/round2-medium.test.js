@@ -110,10 +110,17 @@ describe('F-186 — one transfer, two id schemes, one row', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('F-184 — /api/health carries its verdict in the status code', () => {
-    const route = serverSrc.slice(
-        serverSrc.indexOf("app.get('/api/health'"),
-        serverSrc.indexOf("app.get('/api/diag/rpc-cache'")
-    );
+    // Bound the slice by the NEXT top-level route registration, not by the
+    // name of whichever route happens to sit after this one today. The first
+    // version ended at "app.get('/api/diag/rpc-cache'", so inserting any route
+    // between the two — /api/diag/schema, as it turned out — pulled that
+    // route's body into this slice and failed the public-safety assertions
+    // against code that is correctly gated. Third time this suite has been
+    // bitten by a slice that overruns its target; make the delimiter
+    // structural so the next insertion cannot repeat it.
+    const start = serverSrc.indexOf("app.get('/api/health'");
+    const next = serverSrc.slice(start + 1).search(/\napp\.(get|post|put|delete|use)\(/);
+    const route = next === -1 ? serverSrc.slice(start) : serverSrc.slice(start, start + 1 + next);
 
     test('it can return 503', () => {
         // It used to answer 200 unconditionally, so a status-code monitor —

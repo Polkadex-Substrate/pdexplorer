@@ -212,3 +212,218 @@ describe('F-041 — nested locations omit CSP deliberately', () => {
         assert.equal(n, 2, `expected 2 CSP definitions, found ${n}`);
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F-138 — a warn-and-continue must at least leave a readback
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('F-138 — missing analytics indexes are recorded, not just logged', () => {
+    const dbSrc = js('db.js');
+    const srv = js('server.js');
+
+    test('boot still continues when an index is missing', () => {
+        // Deliberate and kept: a missing index is SLOW, not WRONG. Refusing to
+        // boot takes the whole site down to fix one page. That is the opposite
+        // trade from ensureColumn, where a missing column makes queries throw.
+        assert.match(dbSrc, /migrate-add-indexes\.mjs/);
+        assert.ok(!/throw new Error\(`analytics index/.test(dbSrc),
+            'a missing analytics index now kills boot — that trade was rejected');
+    });
+
+    test('the state is written to KV so it can be read back', () => {
+        assert.match(dbSrc, /setKv\('schema:index_state', indexState\)/);
+    });
+
+    test('recording cannot itself kill boot', () => {
+        // A readback that can crash the thing it reports on is worse than none.
+        const at = dbSrc.indexOf("setKv('schema:index_state'");
+        assert.ok(at > 0);
+        assert.match(dbSrc.slice(at - 120, at + 200), /try \{[\s\S]*catch/);
+    });
+
+    test('the try is PER-INDEX, not around the whole loop', () => {
+        // It used to wrap the loop, so an exception checking `transactions`
+        // skipped the `blocks` index entirely — one failure silently halved
+        // the work and reported nothing about the half never attempted.
+        const start = dbSrc.indexOf('const indexState = {');
+        const body = dbSrc.slice(start, start + 2200);
+        const loopAt = body.indexOf('for (const [table, idx, col]');
+        const tryAt = body.indexOf('try {', loopAt);
+        assert.ok(loopAt > 0 && tryAt > loopAt,
+            'the try opens before the loop again — one failure skips the rest');
+    });
+
+    test('an unexpected error is a DIFFERENT state from the size skip', () => {
+        // "table too big, run the script" and "sqlite_master is unreadable"
+        // need different responses from a human; reporting both as a skipped
+        // check is what made the original warning useless.
+        for (const state of ['missing_too_large', 'error', 'present', 'created']) {
+            assert.ok(dbSrc.includes(`'${state}'`), `the ${state} state is gone`);
+        }
+    });
+
+    test('a degraded flag summarises it for a monitor', () => {
+        assert.match(dbSrc, /degraded = Object\.values\(indexState\.indexes\)/);
+    });
+
+    // Bound the route by the NEXT registration, not by a fixed 1200 chars.
+    // The first version used a fixed slice and a mutation that DELETED the
+    // diagGate line survived: the slice simply ran on into /api/diag/rpc-cache,
+    // which has its own diagGate, and matched that one instead. The test was
+    // asserting that SOME route nearby was gated. Caught by mutation testing,
+    // not by review — and it is the same overrunning-slice bug fixed in
+    // round2-medium.test.js in this very session, which is why the delimiter
+    // here is structural rather than a bigger number.
+    const schemaRoute = (() => {
+        const at = srv.indexOf("app.get('/api/diag/schema'");
+        if (at < 0) return '';
+        const rest = srv.slice(at + 1).search(/\napp\.(get|post|put|delete|use)\(/);
+        return rest === -1 ? srv.slice(at) : srv.slice(at, at + 1 + rest);
+    })();
+
+    test('the diag route exposes it and is GATED', () => {
+        assert.ok(schemaRoute, 'no /api/diag/schema route');
+        assert.match(schemaRoute, /if \(!diagGate\(req, res\)\) return;/,
+            'row counts and schema shape are operational internals — this must stay gated');
+        assert.match(schemaRoute, /db\.getKv\('schema:index_state'\)/);
+    });
+
+    test('"no record" is distinguished from "no indexes"', () => {
+        // A non-indexer worker has simply never run the check. Reporting that
+        // as absent indexes would send an operator chasing a phantom.
+        assert.match(schemaRoute, /recorded: false/);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F-082 — junk must not reach the chain
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('F-082 — search rejects unsearchable input before the RPC', () => {
+    const srv = js('server.js');
+    const start = srv.indexOf("app.get('/api/search/:query'");
+    const next = srv.slice(start + 1).search(/\napp\.(get|post|put|delete|use)\(/);
+    const route = srv.slice(start, start + 1 + next);
+
+    test('the gate runs BEFORE requireRpc', () => {
+        // This is the whole point. Junk used to fall through to
+        // system.account(q), which threw into an empty catch and became a 404 —
+        // after a live RPC round-trip. Any string at all bought the caller a
+        // node query, which is free amplification against the RPC the whole
+        // explorer depends on.
+        const gateAt = route.indexOf('if (!isNumber && !isHash && !isAddress)');
+        const rpcAt = route.indexOf('requireRpc(res)');
+        assert.ok(gateAt > 0, 'the shape gate is gone');
+        assert.ok(rpcAt > 0 && gateAt < rpcAt,
+            'junk still reaches the RPC before being rejected');
+    });
+
+    test('it answers 400, not 404', () => {
+        // 404 means "looked, found nothing" — untrue of input that was never
+        // searchable.
+        assert.match(route, /return res\.status\(400\)/);
+    });
+
+    test('the gate accepts exactly the three shapes the handler searches', () => {
+        // If the gate and the handler disagree, the gate rejects something the
+        // handler could have found. Tie them together.
+        assert.match(route, /const isNumber\s+= \/\^\\d\+\$\/\.test\(q\)/);
+        assert.match(route, /const isHash\s+= \/\^0x\[0-9a-fA-F\]\{64\}\$\/\.test\(q\)/);
+        assert.match(route, /const isAddress = q\.length > 0 && isValidAddress\(q\)/);
+    });
+
+    test('an over-long query is capped before isValidAddress runs', () => {
+        // Base58-decoding a megabyte of text is wasted work; the longest legal
+        // query here is 66 chars.
+        const capAt = route.indexOf('q.length > 128');
+        const validAt = route.indexOf('if (!isNumber');
+        assert.ok(capAt > 0 && capAt < validAt, 'the length cap is missing or too late');
+    });
+
+    test('the account branch returns the NORMALISED address', () => {
+        // It echoed `q`, so a prefix-42 search produced a card linking to the
+        // un-normalised spelling, which /api/account then normalises
+        // differently — two spellings of one account, and a tx list that
+        // looked empty.
+        assert.match(route, /address = normalizeAddress\(q\)/);
+        assert.ok(!/data: \{ address: q,/.test(route),
+            'the raw query is echoed back as the account address again');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F-081 — the no-store trade, rejected on purpose
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('F-081 — an empty timeseries stays cacheable', () => {
+    const srv = js('server.js');
+
+    test('the response still distinguishes empty from unanswerable', () => {
+        // This is what actually closed the finding: a bare empty array could
+        // not tell "nothing happened" from "not indexed yet". The flag can, and
+        // it travels INSIDE the cached body, so a cached copy is not a lie.
+        assert.match(srv, /indexIncomplete = \(db\.getSyncState\('chain_index'\) \|\| \{\}\)\.status !== 'Synced'/);
+    });
+
+    test('the reason for not using no-store is recorded', () => {
+        // Someone will propose no-store here again — it sounds obviously right.
+        // The counter-argument is that it reopens a path that already took this
+        // endpoint down, to buy 10 seconds on a correctly-labelled response.
+        //
+        // RAW source, not the comment-stripped `js()`: the thing being asserted
+        // IS a comment. Anchoring a comment assertion on stripped source is a
+        // mistake this suite has made more than once — indexOf returns -1 and
+        // the test passes or fails for the wrong reason.
+        assert.match(raw('server.js'), /Reopening a known-fatal path to shave 10 seconds/);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F-047 — the synchronous gap sweep, measured rather than argued about
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('F-047 — the gap sweep stays bounded and instrumented', () => {
+    const srv = js('server.js');
+
+    test('the full sweep is still a bounded slice, not an unbounded LEAD', () => {
+        // This is the fix that mattered: 2,272ms -> 85ms at the production row
+        // count. Removing the window puts the 2.3-second stall back.
+        assert.match(srv, /const CHAIN_FULL_SCAN_WINDOW = readPositiveInteger\(process\.env\.CHAIN_FULL_SCAN_WINDOW, 500_000\)/);
+        assert.match(srv, /sinceBlock = Math\.max\(BLOCKS_MIN_BLOCK, cursorTop - CHAIN_FULL_SCAN_WINDOW \+ 1\)/);
+    });
+
+    test('the sweep is timed and the duration is checked', () => {
+        // Without this, the sweep silently regressing to seconds looks
+        // identical to it running in 85ms.
+        assert.match(srv, /const gapScanT0 = process\.hrtime\.bigint\(\)/);
+        assert.match(srv, /gapScanMs > GAP_SCAN_SLOW_MS/);
+    });
+
+    test('the timer brackets ONLY the query', () => {
+        // A timer that also spans the repair work would report a duration that
+        // is not the stall being bounded, and the tripwire would fire for the
+        // wrong reason.
+        const t0 = srv.indexOf('const gapScanT0');
+        const call = srv.indexOf('db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT', t0);
+        const t1 = srv.indexOf('const gapScanMs', call);
+        assert.ok(t0 > 0 && call > t0 && t1 > call,
+            'the timing no longer brackets exactly the getBlockGaps call');
+    });
+
+    test('the threshold is configurable and documented', () => {
+        assert.match(srv, /GAP_SCAN_SLOW_MS = readPositiveInteger\(process\.env\.GAP_SCAN_SLOW_MS, 500\)/);
+        // F-191: every env var the product reads must be in .env.example.
+        assert.match(raw('.env.example'), /# GAP_SCAN_SLOW_MS=500/);
+    });
+
+    test('the measurement is recorded, not just the conclusion', () => {
+        // Three rounds have now re-litigated this from theory. The numbers, the
+        // row count they were taken at, and the method belong next to the code
+        // so round 4 can check them instead of re-deriving them.
+        const src = raw('server.js');
+        assert.match(src, /12,941,836/, 'the row count the benchmark used is not recorded');
+        assert.match(src, /2,272 ms/, 'the unbounded baseline is not recorded');
+        assert.match(src, /serveHttp = !indexer \|\| WORKERS <= 1/,
+            'the reason the stall hits no user request is not stated');
+    });
+});

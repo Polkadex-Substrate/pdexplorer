@@ -22,6 +22,7 @@ import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
+import { addTail, takeFromTail, tailSize, normalizeTail } from './lib/skip-tail.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { hasSeriesData } from './lib/series-shape.js';
 // Audit F-164 — the superOf → identityOf walk lives in ONE module that this
@@ -32,6 +33,7 @@ import { getOnChainIdentity } from './lib/identity.js';
 // live in ONE module that both this file and script.js render from. See the
 // header of lib/api-reference.js for what four hand-maintained copies cost.
 import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READY, rpcNotReadyExample } from './lib/api-reference.js';
+import { developersBodies } from './lib/developers-bodies.js';
 import {
     selectDispatchable, selectNewlyResolved, isTerminalRefStatus, describeRefOutcome
 } from './lib/email-events.js';
@@ -406,6 +408,12 @@ const CHAIN_GAP_SCAN_WINDOW = readPositiveInteger(process.env.CHAIN_GAP_SCAN_WIN
 // hundred ms on the production index; the whole 12.8M-block history is covered
 // in ~26 sweeps, i.e. about a day at the hourly cadence.
 const CHAIN_FULL_SCAN_WINDOW = readPositiveInteger(process.env.CHAIN_FULL_SCAN_WINDOW, 500_000);
+// F-047 tripwire. The gap sweep is synchronous, so its duration is a stall on
+// whichever worker runs it. 85ms is the measured cost of a 500k-height slice at
+// the production row count; 500ms means something has changed — the table grew
+// far larger, CHAIN_FULL_SCAN_WINDOW was raised, or the index is gone (see the
+// F-138 readback at /api/diag/schema, which is the other half of that story).
+const GAP_SCAN_SLOW_MS = readPositiveInteger(process.env.GAP_SCAN_SLOW_MS, 500);
 // Per-tick parallelism for block fetches. Each Promise.all batch hits the RPC
 // node with this many concurrent block-hash + derived-block requests. Higher
 // = faster catch-up but more RPC load; lower = gentler but slower. 8 is a
@@ -1954,24 +1962,79 @@ function withTimeout(promise, ms = DEV_API_TIMEOUT_MS, label = 'query') {
     ]).finally(() => { if (timer) clearTimeout(timer); });
 }
 
+// How long a budget slot may stay held after the caller has given up. A promise
+// that never settles at all — a socket that dies without rejecting — would
+// otherwise leak its slot permanently and 503 the developer endpoints until
+// restart. Generous, because releasing early is what F-073 is about.
+const DEV_RPC_SLOT_MAX_MS = readPositiveInteger(process.env.DEV_RPC_SLOT_MAX_MS, 120_000);
+
 // Run an uncancellable RPC call under an in-flight cap.
 //
 // Used by the developer endpoints, which are the ones that can issue expensive
 // unbounded reads. Refusing immediately is better than queueing: a queued
 // request still holds a socket and still eventually runs the query, which is
 // the load we are trying to avoid.
-async function withRpcBudget(label, fn) {
+//
+// ── Audit F-073 round 3: "inflight cap 12; timeout still does not abort" ─────
+//
+// The abort half is not fixable here. @polkadot/api is pinned to EXACTLY
+// 10.13.1 (see the CheckMetadataHash note at ApiPromise.create — unpinning
+// breaks wallet signing), and its provider signature is
+// `send(method, params, isCacheable?, subscription?)`: no AbortSignal, no
+// cancel handle, nothing to call. Once a request is on the wire the node WILL
+// do the work. Verified against the installed package, not assumed.
+//
+// But the consequence the finding is really about IS fixable without abort.
+// This used to be `withRpcBudget(label, () => withTimeout(realCall(), …))`, so
+// the only promise the budget ever saw was the RACED one. It settled at the
+// timeout, the `finally` released the slot — and the underlying query kept
+// running on the node with nothing accounting for it. So during an RPC
+// brownout, where every call times out, a client could hold 12 counted slots
+// and an unbounded number of abandoned-but-still-executing queries behind them.
+// The cap bounded WAITERS when its entire purpose was to bound WORK AT THE NODE
+// — and it was weakest exactly when the node was already struggling.
+//
+// So the budget now owns the timeout instead of receiving a pre-raced promise.
+// The caller still gets its error at DEV_API_TIMEOUT_MS; the SLOT stays held
+// until the real call settles. That is the back-pressure the cap was meant to
+// provide, achieved without cancelling anything.
+async function withRpcBudget(label, fn, ms = DEV_API_TIMEOUT_MS) {
     if (devRpcInflight >= DEV_RPC_MAX_INFLIGHT) {
         const err = new Error(`Too many chain queries in flight (${devRpcInflight}/${DEV_RPC_MAX_INFLIGHT}). Please retry shortly.`);
         err.statusCode = 503;
         throw err;
     }
     devRpcInflight++;
+    let released = false;
+    const release = () => { if (!released) { released = true; devRpcInflight--; } };
+
+    let underlying;
     try {
-        return await fn();
-    } finally {
-        devRpcInflight--;
+        underlying = Promise.resolve(fn());
+    } catch (e) {
+        // fn threw synchronously — no work started, so the slot must go back
+        // immediately rather than waiting on a promise that does not exist.
+        release();
+        throw e;
     }
+
+    // The leak guard. Without it, one never-settling promise removes a slot for
+    // the life of the process.
+    const valve = setTimeout(() => {
+        if (!released) {
+            console.warn(`[rpc] ${label}: budget slot force-released after ${DEV_RPC_SLOT_MAX_MS}ms — ` +
+                'the underlying call never settled (F-073)');
+            release();
+        }
+    }, DEV_RPC_SLOT_MAX_MS);
+    if (valve.unref) valve.unref();
+
+    // Release when the REAL work ends, whichever way it ends. The doubled
+    // handler also marks `underlying` as handled, so a late rejection after the
+    // caller has gone cannot reach the unhandled-rejection hook.
+    underlying.then(() => {}, () => {}).then(() => { clearTimeout(valve); release(); });
+
+    return await withTimeout(underlying, ms, label);
 }
 
 // Human-readable type name for a metadata type id.
@@ -2229,8 +2292,7 @@ app.get('/api/state/:pallet/:item', async (req, res) => {
             const pageSize = DEV_API_MAX_ENTRIES + 1;
             let page;
             try {
-                page = await withRpcBudget('entriesPaged', () =>
-                    withTimeout(entry.entriesPaged({ args: [], pageSize }), DEV_API_TIMEOUT_MS, 'entriesPaged'));
+                page = await withRpcBudget('entriesPaged', () => entry.entriesPaged({ args: [], pageSize }));
             } catch (pagedErr) {
                 // Some runtimes/older metadata don't expose entriesPaged for a
                 // given entry. Refuse rather than silently falling back to the
@@ -2284,8 +2346,7 @@ app.get('/api/state/:pallet/:item', async (req, res) => {
             });
         }
 
-        const value = await withRpcBudget('storage read', () =>
-            withTimeout(entry(...args), DEV_API_TIMEOUT_MS, 'storage read'));
+        const value = await withRpcBudget('storage read', () => entry(...args));
         // Historical reads are immutable; current head is not.
         if (at) cacheLong(res); else cacheShort(res);
         res.json({
@@ -2447,8 +2508,7 @@ app.post('/api/rpc/call', async (req, res) => {
         const target = globalApi.rpc[section] && globalApi.rpc[section][fn];
         if (!target) return res.status(400).json({ error: `RPC method "${method}" is not available on this node.` });
 
-        const value = await withRpcBudget(method, () =>
-            withTimeout(target(...params), DEV_API_TIMEOUT_MS, method));
+        const value = await withRpcBudget(method, () => target(...params));
         res.set('Cache-Control', 'no-store');
         res.json({
             method, params, ...serialiseCodec(value),
@@ -2520,8 +2580,7 @@ app.get('/api/decode/:block', async (req, res) => {
             return res.status(400).json({ error: 'Expected a block number or a 0x-prefixed 32-byte block hash.' });
         }
 
-        const signedBlock = await withRpcBudget('getBlock', () =>
-            withTimeout(globalApi.rpc.chain.getBlock(blockHash), DEV_API_TIMEOUT_MS, 'getBlock'));
+        const signedBlock = await withRpcBudget('getBlock', () => globalApi.rpc.chain.getBlock(blockHash));
         if (!signedBlock) return res.status(404).json({ error: 'Block not found' });
 
         // Match section/method loosely. polkadot-js exposes calls in
@@ -2938,88 +2997,13 @@ app.get('/robots.txt', (req, res) => {
 //
 // A body may be '' — the outline still emits the heading and its anchor, so a
 // section with prose in only one renderer at least keeps a stable URL.
-const DEVELOPERS_BODIES = {
-    overview: `<p>This explorer is a client-rendered single-page app: HTML pages are a shell that JavaScript fills in inside the browser. A non-browser client that fetches an HTML page will <strong>not</strong> see the data. Don't scrape the HTML — call the JSON API below, which returns plain JSON. Every figure on the site comes from an <code>/api/*</code> endpoint. (This developer page is the exception: it is server-rendered on purpose.)</p>`,
-
-    cors: `<table>
-<thead><tr><th>Behavior</th><th>What to do</th></tr></thead>
-<tbody>
-<tr><td>The site sits behind Cloudflare. Requests from cloud/datacenter IP ranges are sometimes challenged, so a call from a CI runner or hosted backend can come back empty where the same call from a laptop succeeds.</td><td>It is an edge policy, not an API restriction — a plain <code>curl</code> receives HTTP 200. Send a descriptive <code>User-Agent</code>, respect the <code>Cache-Control</code> headers, and ask the operator to allowlist your range if you call from a data centre.</td></tr>
-<tr><td>The API is open to non-browser clients at the origin. CORS is a browser-only mechanism, so a caller that sends no <code>Origin</code> header (native app, server, script, AI agent) is always allowed by the app.</td><td>Call the API directly from servers and native apps. Only browser callers from other web origins need to be added to <code>ALLOWED_ORIGINS</code>.</td></tr>
-</tbody>
-</table>`,
-
-    // F-083: the tier table is rendered from CACHE_TIERS, shared with the SPA.
-    // Both pages used to describe the tiers in prose they each maintained, and
-    // both had drifted the same dangerous way — listing /api/wallet/:address as
-    // a 30-second cacheable response when the handler sends no-store.
-    caching: renderCacheTiers(),
-
-    chain: renderSection('chain'),
-
-    inspect: `<p>Generic access to runtime metadata, storage and constants at <strong>any block</strong>, so on-chain claims can be verified independently. Backed by an archive node, so historical queries work.</p>
-${renderSection('inspect')}
-<p><strong>Read-only by construction</strong> — only <code>api.query</code>, <code>api.consts</code> and allowlisted read RPCs are reachable; nothing here can submit an extrinsic.</p>
-<p><strong>Send storage keys as strings.</strong> A u64 key like <code>9223372036854775808</code> (2&#8310;&#179;) exceeds JavaScript's <code>MAX_SAFE_INTEGER</code>; a client that parses it as a number queries <code>9223372036854776000</code> instead — a different key whose empty result reads like confirmation. Responses echo <code>args</code> back so you can check.</p>
-<p><strong>Verify against <code>hex</code>, not <code>human</code>.</strong> <code>toHuman()</code> abbreviates hashes (an all-zero H256 shows as <code>0x0000…0000</code>) and group-separates integers, so every response carries human, JSON and hex together, plus a <code>count</code> for Vec results.</p>
-<p>There is an interactive UI for this at <a href="${SITE_URL}/chain-state">/chain-state</a>, with shareable deep links (<code>?pallet=&amp;item=&amp;args=&amp;at=</code>).</p>
-<pre><code>curl '${SITE_URL}/api/decode/12250870?method=submit_snapshot'
-curl '${SITE_URL}/api/state/ocex/validatorSetId?at=12250870'
-curl '${SITE_URL}/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></pre>`,
-
-    accounts:    renderSection('accounts'),
-    labels:      renderSection('labels'),
-    analytics:   renderSection('analytics'),
-    price:       renderSection('price'),
-    governance:  renderSection('governance'),
-    email:       renderSection('email'),
-    discussions: renderSection('discussions'),
-    auth:        renderSection('auth'),
-    meta:        renderSection('meta'),
-
-    schema: `<pre><code>{
-  "networkInfo": {
-    "activeEra": number,              // current staking era index
-    "avgValidatorCommission": number, // mean active-validator commission, %
-    "avgApy": number,                 // headline AVG APY %, commission-adjusted
-    "avg_apy": number,                // snake_case alias of avgApy
-    "validators":  { "active": number, "total": number },
-    "nominators":  { "active": number, "total": number },
-    "maxActiveStake": number,         // largest active-validator total stake, PDEX
-    "minStake": number,               // minimum active stake, PDEX
-    "averageStake": number,           // mean active-validator stake, PDEX
-    "avgStakePerAccount": number,     // total bonded / staking accounts, PDEX
-    "totalIssuance": number,          // total PDEX issuance
-    "totalBonding": number,           // total PDEX bonded for staking
-    "totalBondingPercent": number,    // totalBonding / totalIssuance, %
-    "totalUnbonding": number,         // total PDEX currently unbonding
-    "totalStakeChange": number,       // net stake change vs previous era, PDEX
-    "lastEraRewardsTotal": number     // total rewards paid last era, PDEX
-  },
-  "lastSync": number,                 // epoch ms when networkInfo was computed
-  "status": "Synced" | "Stale" | "Initializing" | "Error",
-  "chainHead": {
-    "value": number,                  // best block number
-    "lastAdvanceAt": number,          // epoch ms the head last advanced
-    "staleSeconds": number,           // seconds since the head last advanced
-    "isStale": boolean                // true if the head looks stuck
-  }
-}</code></pre>
-<p><strong>AVG APY</strong> is returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias), derived as <code>avgApy = ${MAX_APY_BASE} &times; (1 &minus; avgValidatorCommission / 100)</code>, where ${MAX_APY_BASE}% is the chain's nominal maximum APY at its target staking ratio. ${htmlEscape(APY_CAVEAT)}</p>`,
-
-    errors: `<p>Failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. The <code>error</code> string is a human-readable sentence intended for display — <strong>do not match on it</strong>; it is reworded freely between releases.</p>
-<p>Endpoints that depend on the chain RPC return <strong>503</strong> during RPC outages, with a stable machine-readable <code>code</code> alongside the prose, plus <code>Retry-After: 5</code> and <code>Cache-Control: no-store</code> so an edge cache cannot pin it:</p>
-<pre><code>${rpcNotReadyExample().replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></pre>
-<p>Branch on <code>code === "${RPC_NOT_READY.code}"</code> (or simply on the 503 status) and retry with backoff — it is not permanent. <strong>Audit F-155:</strong> this page used to promise a short fixed <code>error</code> string that the server has never sent; clients matching that literal treated every RPC outage as an unknown error and did not back off. This block is now rendered from the same constant the 503 handler uses, so the two cannot disagree again.</p>`,
-
-    addresses: `<p>Paths that take an <code>:address</code> expect Polkadex SS58 (prefix 88, addresses start with <code>e&hellip;</code>); the server normalizes via <code>toPolkadexAddress()</code>, so prefix-42/0 forms usually resolve too.</p>`,
-
-    examples: `<pre><code>curl ${SITE_URL}/api/network-info
-curl ${SITE_URL}/api/price-latest
-curl '${SITE_URL}/api/price-history?days=30'</code></pre>`,
-
-    contact: `<p>Found a bug or a missing endpoint? Open an issue on GitHub or reach the team via <a href="https://polkadex.ee" rel="noopener">polkadex.ee</a>.</p>`
-};
+// Audit F-060: this used to be a SECOND hand-maintained map of section bodies.
+// It had drifted from the SPA's in all eight sections it defined and was
+// missing ten more, so a crawler saw about a quarter of the page. Both
+// renderers now build from lib/developers-bodies.js. SITE_URL is passed so a
+// staging deployment prints its own origin in the curl examples rather than the
+// production one.
+const DEVELOPERS_BODIES = developersBodies({ siteUrl: SITE_URL });
 
 const DEVELOPERS_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -3150,6 +3134,36 @@ app.get('/api/health', (req, res) => {
         // Which ones failed, so the alert body is actionable on its own.
         failing: Object.keys(checks).filter(k => !checks[k])
     });
+});
+
+// Audit F-138: schema/index state, so "is my DB actually indexed?" is a
+// question the running system can answer.
+//
+// The boot path deliberately warns and continues when an analytics index is
+// missing — a missing index is slow, not wrong, and refusing to boot over it
+// takes the site down to fix one page. But that left the warning as a single
+// line in a container log, emitted at the moment nobody is watching, on the
+// code path that only fires for LARGE databases — i.e. exactly the operator
+// who most needs to know is least likely to see it. This is the readback.
+//
+// Gated with the rest of /api/diag/* (F-038): row counts and schema shape are
+// operational internals.
+app.get('/api/diag/schema', (req, res) => {
+    if (!diagGate(req, res)) return;
+    const state = db.getKv('schema:index_state');
+    if (!state) {
+        // No record means this process has not run the check — most likely a
+        // worker that is not the indexer, or a boot that predates this field.
+        // Say which, rather than implying the indexes are absent.
+        return res.json({
+            pid: process.pid,
+            recorded: false,
+            note: 'No index state recorded yet. Written by the worker that runs initDb ' +
+                  'with seedCounts; restart or check the indexer worker.'
+        });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ pid: process.pid, recorded: true, ...state });
 });
 
 app.get('/api/diag/rpc-cache', (req, res) => {
@@ -3877,6 +3891,43 @@ function computeValidatorScorecard(history, triggers) {
 
 app.get('/api/search/:query', async (req, res) => {
     const q = req.params.query.trim();
+
+    // Audit F-082 round 3: "search still 404s junk".
+    //
+    // The status code was the visible half. The half that matters is that junk
+    // reached the CHAIN: an input matching none of the three searchable shapes
+    // fell through to `globalApi.query.system.account(q)`, threw, was swallowed
+    // by an empty catch, and became a 404 — after a live RPC round-trip. So any
+    // string at all bought the caller a node query, which is a free
+    // amplification primitive against the RPC this explorer depends on, and
+    // 404 ("looked, found nothing") told the caller something untrue about
+    // input that was never searchable to begin with.
+    //
+    // The gate below rejects ONLY input that cannot match any supported shape,
+    // so it is a strict subset of what already 404'd — no search that works
+    // today starts failing. It just answers 400 without touching the RPC.
+    //
+    // Shapes, kept in one list so the gate cannot drift from the handler:
+    //   * a decimal block number
+    //   * 0x + 64 hex — a block hash
+    //   * an SS58 address (any prefix; normalised below)
+    const isNumber  = /^\d+$/.test(q);
+    const isHash    = /^0x[0-9a-fA-F]{64}$/.test(q);
+    const isAddress = q.length > 0 && isValidAddress(q);
+
+    // Length cap first: isValidAddress on a megabyte of text is wasted work,
+    // and the longest legitimate query here is a 66-char hash.
+    if (q.length === 0 || q.length > 128) {
+        return res.status(400).json({
+            error: 'Search a block number, a 0x block hash, or a Polkadex address.'
+        });
+    }
+    if (!isNumber && !isHash && !isAddress) {
+        return res.status(400).json({
+            error: 'Search a block number, a 0x block hash, or a Polkadex address.'
+        });
+    }
+
     // Fail fast with a JSON error when the chain RPC isn't currently usable —
     // otherwise the sequential getBlockHash/derive.chain.getBlock/system.account
     // calls below can each stall for tens of seconds while the WsProvider is
@@ -3897,13 +3948,23 @@ app.get('/api/search/:query', async (req, res) => {
                 if (derivedBlock) return res.json({ type: 'block', data: { number: derivedBlock.block.header.number.toNumber(), hash: q, authorAddress: derivedBlock.author ? derivedBlock.author.toString() : "System", extrinsicsCount: derivedBlock.block.extrinsics.length, eventsCount: derivedBlock.events ? derivedBlock.events.length : 0 } });
             } catch (e) { }
         }
-        try {
-            const accountInfo = await globalApi.query.system.account(q);
-            const name = await getIdentity(globalApi, q);
-            const free = formatPDEX(accountInfo.data.free);
-            const reserved = formatPDEX(accountInfo.data.reserved); // F-043: BigInt-safe
-            if (free > 0 || reserved > 0 || name !== "Unknown") return res.json({ type: 'account', data: { address: q, name: name, balance: free + reserved, free: free, reserved: reserved } });
-        } catch (e) { }
+        if (isAddress) {
+            // F-082: query and RETURN the normalised (prefix-88) spelling. The
+            // handler used to echo `q` back, so a prefix-42 search produced a
+            // result card whose address link pointed at the un-normalised form
+            // — which /api/account then normalises differently, giving the user
+            // two spellings of one account and a transaction list that looked
+            // empty. Normalising here means one address leaves this endpoint.
+            let address = q;
+            try { address = normalizeAddress(q); } catch (e) { /* keep raw */ }
+            try {
+                const accountInfo = await globalApi.query.system.account(address);
+                const name = await getIdentity(globalApi, address);
+                const free = formatPDEX(accountInfo.data.free);
+                const reserved = formatPDEX(accountInfo.data.reserved); // F-043: BigInt-safe
+                if (free > 0 || reserved > 0 || name !== "Unknown") return res.json({ type: 'account', data: { address, name: name, balance: free + reserved, free: free, reserved: reserved } });
+            } catch (e) { }
+        }
         res.status(404).json({ error: 'No exact deep network match found.' });
     } catch (err) { serverError(res, err, req.path); }
 });
@@ -5702,13 +5763,39 @@ app.get('/api/analytics/timeseries', (req, res) => {
         // `indexIncomplete` is what actually fixes the finding: it tells the
         // client the difference between "nothing happened in this window" and
         // "we cannot answer yet", which the bare empty array could not.
-        cacheShort(res);
         const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
+        const series = (cached && hasSeriesData(cached.series)) ? cached.series : db.getDailyAnalytics(sinceTs);
+        const indexIncomplete = (db.getSyncState('chain_index') || {}).status !== 'Synced';
+
+        // F-081 round 3 says: "empty timeseries is cacheShort while the indexer
+        // may be mid-backfill". I tried making that case `no-store` and backed
+        // it out. Recording why, because the argument for no-store is
+        // superficially good and someone will make it again.
+        //
+        // The cached body is NOT a lie. It carries `indexIncomplete: true`, so
+        // a client holding the cached copy can still tell "nothing happened in
+        // this window" from "we cannot answer yet" — which was the whole of the
+        // original finding. Round 1 served a bare empty array with no such
+        // signal; that was the defect, and the flag closed it.
+        //
+        // What no-store costs is concrete and I have already inflicted it once:
+        // removing the edge from this fallthrough turned every uncached `days`
+        // value into an unindexed GROUP BY over the transactions table and took
+        // the endpoint down. `days` is snapped to 4 pre-warmed values now, which
+        // bounds it, but the fallthrough is still a live aggregate.
+        //
+        // What no-store BUYS is at most 10 seconds of edge freshness
+        // (cacheShort is s-maxage=10) on a response that is already correctly
+        // labelled. Reopening a known-fatal path to shave 10 seconds off a
+        // transient, self-correcting state is a bad trade. The regression test
+        // in the DoS suite enforces this and should keep doing so.
+        cacheShort(res);
+
         res.json({
             days, requestedDays: askedDays, since: sinceTs,
-            series: (cached && hasSeriesData(cached.series)) ? cached.series : db.getDailyAnalytics(sinceTs),
+            series,
             computedAt: Date.now(),
-            indexIncomplete: (db.getSyncState('chain_index') || {}).status !== 'Synced'
+            indexIncomplete
         });
     } catch (err) {
         console.error('API Error /api/analytics/timeseries:', err);
@@ -6576,6 +6663,10 @@ async function syncGovernance() {
     if (isSyncingGovernance || !isRpcReady() || inBackoff('governance')) return;
     isSyncingGovernance = true;
     try {
+        // F-010: queue a bounded slice of any heights this scanner skipped
+        // past SKIP_RECORD_MAX on an earlier tick. Wrapped so a failure to
+        // drain can never take down the scan that follows it.
+        try { drainSkipTail('governance'); } catch (e) { console.warn('[governance] skip-tail drain failed:', e && e.message); }
         const collectiveName = ['council', 'councilCollective', 'generalCouncil']
             .find(n => globalApi.query[n] && globalApi.query[n].proposalOf) || 'council';
 
@@ -7778,10 +7869,59 @@ function recordSkippedRange(indexer, from, to, reason) {
     const cap = Math.min(total, SKIP_RECORD_MAX);
     for (let n = lo; n < lo + cap; n++) db.recordScanFailure(indexer, n, reason);
     if (total > cap) {
-        console.warn(`[${indexer}] skipped range ${lo}-${hi} is ${total} blocks; recorded the oldest ${cap} (SKIP_RECORD_MAX) — the rest remain discoverable by the gap scan`);
+        // Audit F-010 round 3: "the unrecorded skip tail is neither queued nor
+        // filled".
+        //
+        // This used to log "the rest remain discoverable by the gap scan" and
+        // drop the remainder on the floor. That sentence was true for exactly
+        // ONE of this function's three callers. `chain_index` has a LEAD gap
+        // scan over the blocks table, so an unrecorded hole there really is
+        // found again. `governance` and `staking_rewards` have no gap scan and
+        // no table of "heights that should exist" to diff against — so for them
+        // every height past the 2000th was abandoned permanently: not queued,
+        // not scanned, not repairable, and invisible to the trust mark, which
+        // went on reporting Synced over a hole.
+        //
+        // The cap stays — writing millions of scan_failures rows in one
+        // synchronous loop would stall the indexer for minutes. The remainder
+        // is now REMEMBERED and drained a bounded chunk per tick.
+        const rest = { lo: lo + cap, hi };
+        const key = `skip:tail:${indexer}`;
+        const before = (db.getKv(key) || {}).ranges || [];
+        const after = addTail(before, rest);
+        db.setKv(key, { ranges: after, updatedAt: Date.now() });
+        console.warn(`[${indexer}] skipped range ${lo}-${hi} is ${total} blocks; recorded the oldest ${cap} ` +
+            `(SKIP_RECORD_MAX), queued ${rest.lo}-${rest.hi} to the skip tail ` +
+            `(${tailSize(after)} heights owed) — F-010`);
     }
     return cap;
 }
+
+// Drain a bounded slice of the skip tail into scan_failures, so the ordinary
+// retry machinery picks them up. Called once per tick by each scanner that can
+// skip. Bounded by SKIP_DRAIN_PER_TICK for the same reason SKIP_RECORD_MAX
+// exists: recordScanFailure is a synchronous write, and an unbounded loop here
+// would just move the stall rather than remove it.
+function drainSkipTail(indexer) {
+    const key = `skip:tail:${indexer}`;
+    const stored = db.getKv(key);
+    const ranges = normalizeTail((stored || {}).ranges || []);
+    if (!ranges.length) return 0;
+    const { heights, rest } = takeFromTail(ranges, SKIP_DRAIN_PER_TICK);
+    for (const n of heights) {
+        db.recordScanFailure(indexer, n, 'skip tail: queued after SKIP_RECORD_MAX truncation (F-010)');
+    }
+    db.setKv(key, { ranges: rest, updatedAt: Date.now() });
+    if (heights.length) {
+        console.log(`[${indexer}] skip tail: queued ${heights.length} height(s), ${tailSize(rest)} still owed (F-010)`);
+    }
+    return heights.length;
+}
+
+// How many owed heights to queue per tick. 500 synchronous inserts is a few ms;
+// a 12M-height tail drains in ~7 hours of ticks, which for an explorer is a
+// late repair rather than a lost one — the distinction the finding is about.
+const SKIP_DRAIN_PER_TICK = readPositiveInteger(process.env.SKIP_DRAIN_PER_TICK, 500);
 
 // ─── Reorg detection and repair (audit F-007) ───────────────────────────────
 //
@@ -7975,6 +8115,10 @@ async function syncChainIndex() {
     if (isSyncingChain || !isRpcReady() || inBackoff('chain_index')) return;
     isSyncingChain = true;
     try {
+        // F-010: queue a bounded slice of any heights this scanner skipped
+        // past SKIP_RECORD_MAX on an earlier tick. Wrapped so a failure to
+        // drain can never take down the scan that follows it.
+        try { drainSkipTail('chain_index'); } catch (e) { console.warn('[chain_index] skip-tail drain failed:', e && e.message); }
         const state = db.getSyncState('chain_index');
         const head = (await globalApi.rpc.chain.getHeader()).number.toNumber();
         // Feed the freshness watchdog. recordChainHead is a no-op when head
@@ -8162,7 +8306,40 @@ async function syncChainIndex() {
             // below, not gaps[0]. (This comment used to say "gaps[0] (the
             // newest), which is the intended pacing" and sat directly above the
             // rotation that replaced it.)
+            // Audit F-047 round 3: "hourly LEAD still sync SQLite on writer loop".
+            //
+            // True as stated, so here is the measurement rather than an
+            // argument. Benchmarked against a synthetic `blocks` table seeded
+            // to the production row count (12,941,836, measured 2026-08-31),
+            // same schema, same query, median of 5 warm runs:
+            //
+            //     recent window (5k)          0.8 ms
+            //     full-sweep slice (500k)      85 ms      <- this call, hourly
+            //     UNBOUNDED whole table      2,272 ms      <- what round 2 removed
+            //
+            // So the slicing already took the sweep from 2.3 SECONDS to 85 ms.
+            // What remains is an 85 ms synchronous stall once an hour, on the
+            // indexer worker — which in clustered mode is deliberately kept OUT
+            // of the HTTP rotation (`const serveHttp = !indexer || WORKERS <= 1`),
+            // so it stalls no user request at all. That is 0.002% of wall time
+            // on a process nobody is waiting on.
+            //
+            // Moving this to a worker thread or an async cursor would cost real
+            // complexity — a second DB handle, a new failure mode where the
+            // sweep result arrives after the tick that asked for it — to reclaim
+            // 85 ms per hour. Not taken. What IS worth having is a tripwire, so
+            // that if the table grows an order of magnitude, or someone raises
+            // CHAIN_FULL_SCAN_WINDOW, the regression is visible instead of
+            // silently becoming the 2.3-second stall again.
+            const gapScanT0 = process.hrtime.bigint();
             gaps = db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT, sinceBlock, untilBlock);
+            const gapScanMs = Number(process.hrtime.bigint() - gapScanT0) / 1e6;
+            if (gapScanMs > GAP_SCAN_SLOW_MS) {
+                console.warn(`[chain-index] gap scan took ${gapScanMs.toFixed(0)}ms ` +
+                    `(${fullScan ? 'full sweep' : 'recent'} ${sinceBlock}-${untilBlock}) — ` +
+                    `expected ~85ms for a ${CHAIN_FULL_SCAN_WINDOW}-height slice. ` +
+                    'Lower CHAIN_FULL_SCAN_WINDOW if this persists (F-047).');
+            }
             repairCandidates = gaps;
             lastRecentGapScanAt = nowTs;
             if (fullScan) lastFullGapScanAt = nowTs;
@@ -9038,6 +9215,10 @@ async function syncStakingRewards() {
     if (isSyncingStakingRewards || !isRpcReady() || inBackoff('staking_rewards')) return;
     isSyncingStakingRewards = true;
     try {
+        // F-010: queue a bounded slice of any heights this scanner skipped
+        // past SKIP_RECORD_MAX on an earlier tick. Wrapped so a failure to
+        // drain can never take down the scan that follows it.
+        try { drainSkipTail('staking_rewards'); } catch (e) { console.warn('[staking_rewards] skip-tail drain failed:', e && e.message); }
         const state = db.getSyncState('staking_rewards');
         const latestHeader = await globalApi.rpc.chain.getHeader();
         const head = latestHeader.number.toNumber();

@@ -21,6 +21,7 @@ import {
     API_SECTIONS, allRoutes, basePath, findSection, renderSection,
     RPC_NOT_READY, rpcNotReadyExample
 } from '../lib/api-reference.js';
+import { developersBodies } from '../lib/developers-bodies.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => readFileSync(path.join(ROOT, f), 'utf8');
@@ -103,19 +104,26 @@ describe('both /developers renderers build from the table (F-154)', () => {
     // two documents. Instead of running the SPA (no DOM here), assert both
     // files CALL the renderer for every section — and that neither has gone
     // back to hand-writing <li><code>GET /api/…</code> items.
-    test('server.js renders every section of the table', () => {
+    test('every section of the table is rendered', () => {
+        // F-060 round 3: this used to ask each of server.js and script.js
+        // whether it contained the literal `renderSection('id')`. Both now
+        // build from lib/developers-bodies.js, so the question is asked of the
+        // BUILT output — which is stronger, because it catches a section whose
+        // renderSection call exists but produces nothing.
+        const bodies = developersBodies();
+        const all = Object.values(bodies).join('\n');
         for (const s of API_SECTIONS) {
-            assert.ok(serverCode.includes(`renderSection('${s.id}')`),
-                `DEVELOPERS_HTML does not render section '${s.id}'. A section in the table that no ` +
-                'renderer calls is the same invisible-route bug wearing a different hat.');
+            const rendered = renderSection(s.id, { listClass: 'developers-endpoints' });
+            assert.ok(rendered && rendered.trim() !== '', `renderSection('${s.id}') produced nothing`);
+            assert.ok(all.includes(`id="${s.id}"`) || bodies[s.id] !== undefined || all.includes(s.id),
+                `section '${s.id}' is in the table but no /developers body references it. A section ` +
+                'in the table that no renderer calls is the same invisible-route bug wearing a different hat.');
         }
     });
 
-    test('script.js renders every section of the table', () => {
-        for (const s of API_SECTIONS) {
-            assert.ok(scriptCode.includes(`renderSection('${s.id}'`),
-                `renderDevelopersPage() does not render section '${s.id}'.`);
-        }
+    test('both renderers consume the one body map', () => {
+        assert.match(serverCode, /developersBodies\(/, 'server.js stopped using the shared bodies');
+        assert.match(scriptCode, /developersBodies\(/, 'script.js stopped using the shared bodies');
     });
 
     test('neither renderer hand-writes endpoint list items any more', () => {

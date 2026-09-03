@@ -378,14 +378,31 @@ describe('F-073 — a timed-out RPC cannot take down the shared WebSocket', () =
     });
 
     test('the in-flight budget exists and refuses rather than queues', () => {
-        const budget = serverSrc.slice(
-            serverSrc.indexOf('async function withRpcBudget'),
-            serverSrc.indexOf('async function withRpcBudget') + 900
-        );
+        // Bound structurally — a fixed +900 slice stopped covering the function
+        // once F-073 round 3 grew it, and would have started asserting against
+        // whatever followed.
+        const at = serverSrc.indexOf('async function withRpcBudget');
+        const after = serverSrc.slice(at + 1).search(/\n(async )?function /);
+        const budget = after === -1 ? serverSrc.slice(at) : serverSrc.slice(at, at + 1 + after);
         assert.match(budget, /devRpcInflight >= DEV_RPC_MAX_INFLIGHT/);
         assert.match(budget, /statusCode = 503/);
-        assert.match(budget, /finally \{\s*devRpcInflight--/,
-            'the counter must decrement even when the call throws, or it leaks to a permanent 503');
+
+        // The counter must decrement on EVERY exit path or it leaks to a
+        // permanent 503. This used to require a literal
+        // `finally { devRpcInflight-- }`. F-073 round 3 replaced that with an
+        // idempotent release() invoked when the UNDERLYING call settles rather
+        // than when the caller stops waiting — the whole point of that round,
+        // since releasing at the timeout meant the cap counted waiters instead
+        // of bounding work at the node. Assert the property, not the old shape.
+        assert.match(budget, /const release = \(\) => \{ if \(!released\) \{ released = true; devRpcInflight--; \} \}/,
+            'there is no single idempotent release — the counter can drift');
+        // every exit path: synchronous throw, settle, and the leak valve
+        assert.match(budget, /catch \(e\) \{[\s\S]{0,400}?release\(\);[\s\S]{0,80}?throw e;/,
+            'a synchronous throw from fn() leaks its slot');
+        assert.match(budget, /underlying\.then\([\s\S]{0,80}?release\(\);/,
+            'the slot is not released when the underlying call settles');
+        assert.match(budget, /if \(!released\) \{[\s\S]{0,300}?release\(\);/,
+            'there is no leak valve for a promise that never settles');
     });
 
     test('the expensive endpoints are actually behind it', () => {

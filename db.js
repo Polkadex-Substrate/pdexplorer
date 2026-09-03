@@ -915,27 +915,67 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
         // until an operator remembers migrate-add-indexes.mjs. On a large
         // existing DB this is skipped and the out-of-band script remains the
         // only safe route (see the warning above).
-        try {
-            const FRESH_INDEX_MAX_ROWS = 200000;
-            for (const [table, idx, col] of [
-                ['transactions', 'idx_tx_timestamp', 'timestamp'],
-                ['blocks', 'idx_blocks_timestamp', 'timestamp']
-            ]) {
+        // Audit F-138 round 3: "post-schema indexes still warn-and-continue".
+        //
+        // Warn-and-continue is the RIGHT behaviour here and is kept: a missing
+        // analytics index makes timestamp queries slow, it does not make them
+        // wrong, and refusing to boot over a performance problem takes the
+        // whole site down to fix something that only affects one page. That is
+        // the opposite trade from ensureColumn, where a missing COLUMN means
+        // queries throw, which is why that one throws.
+        //
+        // What was actually wrong is that the warning went nowhere. It is one
+        // line in a container log at boot, on a path that only fires when the
+        // DB is large — so the operator who needs to see it is the one least
+        // likely to be reading logs at that moment, and there was no way to ask
+        // the running system "are my indexes there?" short of opening sqlite3.
+        // The state is now RECORDED, and /api/diag/schema reports it.
+        //
+        // Two other defects fixed here:
+        //   * the try wrapped the whole LOOP, so an exception checking
+        //     transactions skipped the blocks index entirely — one failure
+        //     silently halved the work. Now per-index.
+        //   * a genuinely unexpected exception (corrupt sqlite_master, a typo
+        //     in the DDL) was reported identically to the expected "table too
+        //     big" skip. They need different responses from a human, so they
+        //     are now different states.
+        const FRESH_INDEX_MAX_ROWS = 200000;
+        const indexState = { checkedAt: Date.now(), indexes: {} };
+        for (const [table, idx, col] of [
+            ['transactions', 'idx_tx_timestamp', 'timestamp'],
+            ['blocks', 'idx_blocks_timestamp', 'timestamp']
+        ]) {
+            try {
                 const exists = db.prepare(
                     "SELECT 1 FROM sqlite_master WHERE type='index' AND name = ?").get(idx);
-                if (exists) continue;
+                if (exists) { indexState.indexes[idx] = { state: 'present', table }; continue; }
                 const n = db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c;
                 if (n <= FRESH_INDEX_MAX_ROWS) {
                     db.exec(`CREATE INDEX IF NOT EXISTS ${idx} ON ${table}(${col})`);
                     console.log(`[db] created ${idx} (${n} rows — fresh install, instant)`);
+                    indexState.indexes[idx] = { state: 'created', table, rows: n };
                 } else {
                     console.warn(`[db] ${idx} is MISSING and ${table} has ${n} rows — too large to build at boot. ` +
                         'Run `node --experimental-sqlite migrate-add-indexes.mjs` out-of-band; ' +
                         'timestamp range queries are full scans until you do.');
+                    indexState.indexes[idx] = {
+                        state: 'missing_too_large', table, rows: n,
+                        remedy: 'node --experimental-sqlite migrate-add-indexes.mjs'
+                    };
                 }
+            } catch (e) {
+                // Unexpected — NOT the size skip. Keep booting (same reasoning
+                // as above) but say so distinctly, and keep going to the next
+                // index rather than abandoning the rest.
+                console.warn(`[db] analytics index check FAILED for ${idx}:`, e.message);
+                indexState.indexes[idx] = { state: 'error', table, error: String(e && e.message || e) };
             }
-        } catch (e) {
-            console.warn('[db] analytics index check skipped:', e.message);
+        }
+        indexState.degraded = Object.values(indexState.indexes)
+            .some(v => v.state === 'missing_too_large' || v.state === 'error');
+        // Recording must not itself be able to kill boot.
+        try { setKv('schema:index_state', indexState); } catch (e) {
+            console.warn('[db] could not record schema index state:', e.message);
         }
 
         for (const t of ['events', 'transactions']) seedTableCounter(t);
