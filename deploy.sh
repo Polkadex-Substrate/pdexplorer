@@ -233,6 +233,21 @@ if [ "${RUN_LETSENCRYPT:-0}" = "1" ] || ! compgen -G "$CERT_GLOB" >/dev/null 2>&
     bash ./init-letsencrypt.sh
 fi
 
+# ---- Cert directory name vs nginx.conf (audit F-189) ------------------------
+# nginx.conf names its certificate directory literally, and that literal is
+# baked into the frontend image. certbot and the origin-cert installer write to
+# live/$DOMAIN. On this host the two names coincide, which is precisely why the
+# mismatch stayed invisible for two rounds — it is inert here and fatal on the
+# first deployment with a different DOMAIN, where nginx cannot open its key,
+# exits, and Cloudflare answers 521 with nothing in the app logs.
+#
+# provision-ubuntu.sh already aligned them; deploy.sh did not. Same helper now.
+if [ -f ./tools/align-cert-name.sh ]; then
+    bash ./tools/align-cert-name.sh "$DOMAIN" "$CERTBOT_PATH" ./nginx.conf || true
+else
+    echo "--> WARNING: tools/align-cert-name.sh missing — cannot verify nginx's cert path matches DOMAIN." >&2
+fi
+
 # ---- Cert readability for unprivileged nginx (audit F-040) ------------------
 # The frontend container now runs nginx as uid/gid 101 (nginx-unprivileged).
 # Cert files written by certbot/openssl as root default to 600/700, which the

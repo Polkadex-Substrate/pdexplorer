@@ -6,6 +6,7 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat } from '@polkadot/util';
 import { isOpenGovStatus } from './lib/gov-status.js';
+import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
 import { deriveIndexStatus, describeIndexStatus } from './lib/index-status.js';
 import { isRpcUnavailableError } from './lib/rpc-errors.js';
 import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/reward-dedup.js';
@@ -1050,12 +1051,18 @@ async function computeNetworkInfo() {
     const totalStake = formatPDEX(totalStakeRaw);
     const previousTotalStake = formatPDEX(previousTotalStakeRaw);
     const avgCommissionPct = average(commissions);
-    // Headline "AVG APY": the chain's nominal max APY (23.09% — its target at
-    // the ~50% staking ratio, the same base used for per-validator APY above)
-    // discounted by the mean validator commission. Exposed server-side so API
-    // consumers get the number the home page shows without recomputing it.
-    const MAX_APY_BASE = 23.09;
-    const avgApy = MAX_APY_BASE * (1 - avgCommissionPct / 100);
+    // Headline "AVG APY": the chain's nominal max APY at its target staking
+    // ratio, discounted by the mean validator commission. Exposed server-side
+    // so API consumers get the number the home page shows without recomputing.
+    //
+    // F-044 round 3: MAX_APY_BASE used to be declared HERE, at brace depth 3 —
+    // so the three other server-side sites that needed it could not see it and
+    // each wrote `23.09` out by hand instead. Same shape as F-199. It now comes
+    // from lib/apy.js, which script.js imports too, so there is one definition
+    // for the whole product. estimatedApy() returns null for a commission that
+    // is not a usable percentage; the old inline expression returned NaN, or a
+    // negative APY for commission > 100, which renders as a real-looking number.
+    const avgApy = estimatedApy(avgCommissionPct);
     const networkInfo = {
         activeEra,
         avgValidatorCommission: avgCommissionPct,
@@ -1594,7 +1601,7 @@ async function syncValidatorHistory(activeEra, validators) {
                     getEraValidatorStake(globalApi, era, address)
                 ]);
                 const commission = getCommissionPercent(prefs);
-                const row = { era, address: addrStr, commission, stake: formatPDEX(totalStake), apy: 23.09 * (1 - (commission / 100)) };
+                const row = { era, address: addrStr, commission, stake: formatPDEX(totalStake), apy: estimatedApy(commission) };
                 historyRows.push(row);
                 (perAddress[addrStr] = perAddress[addrStr] || []).push(row);
             } catch (err) {
@@ -1698,7 +1705,7 @@ async function loadValidatorHistory(address) {
                 era,
                 commission,
                 stake: formatPDEX(totalStake),
-                apy: 23.09 * (1 - (commission / 100))
+                apy: estimatedApy(commission)
             });
         } catch (err) {
             console.warn(`Validator history skipped ${address} era ${era}:`, err.message);
@@ -2998,7 +3005,7 @@ curl '${SITE_URL}/api/state/ocex/authorities?args=6280&amp;at=12250870'</code></
     "isStale": boolean                // true if the head looks stuck
   }
 }</code></pre>
-<p><strong>AVG APY</strong> is returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias), derived as <code>avgApy = 23.09 &times; (1 &minus; avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>`,
+<p><strong>AVG APY</strong> is returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias), derived as <code>avgApy = ${MAX_APY_BASE} &times; (1 &minus; avgValidatorCommission / 100)</code>, where ${MAX_APY_BASE}% is the chain's nominal maximum APY at its target staking ratio. ${htmlEscape(APY_CAVEAT)}</p>`,
 
     errors: `<p>Failures return a 4xx/5xx status with <code>{ "error": "&lt;message&gt;" }</code>. The <code>error</code> string is a human-readable sentence intended for display — <strong>do not match on it</strong>; it is reworded freely between releases.</p>
 <p>Endpoints that depend on the chain RPC return <strong>503</strong> during RPC outages, with a stable machine-readable <code>code</code> alongside the prose, plus <code>Retry-After: 5</code> and <code>Cache-Control: no-store</code> so an edge cache cannot pin it:</p>
@@ -5365,13 +5372,29 @@ app.get('/api/labels/:address', (req, res) => {
         const viewer = getAuthAddress(req);                       // null if not signed in
         const labels = db.getLabelsForAddress(address, viewer);
         const top = db.getTopLabel(address, REPORT_HIDE_THRESHOLD);
-        // Endpoint must NOT be cached at the CDN when there's a viewer-
-        // specific viewerVote in the payload — Cloudflare would otherwise
-        // pin one user's vote state for everyone else.
-        // Audit F-083: a viewer-specific response is per-USER content; sending it
-    // with a shared cacheMedium header lets Cloudflare serve one visitor's
-    // view to the next. no-store when a viewer is present.
-    if (viewer) res.set('Cache-Control', 'no-store'); else cacheMedium(res);
+        // Audit F-083: a viewer-specific response is per-USER content; sending
+        // it with a shared cacheMedium header lets Cloudflare serve one
+        // visitor's viewerVote to the next. no-store when a viewer is present.
+        //
+        // Round 3: no-store alone is only half of it, and the missing half is
+        // the half that actually bites. The ANONYMOUS response still carries
+        // cacheMedium, so Cloudflare stores it under the URL. The next request
+        // for that URL is served from that copy — including a request that
+        // arrives WITH a Bearer token. The signed-in user's own response was
+        // never cached (no-store did its job); they are handed the cached
+        // anonymous one instead, with viewerVote absent, so the UI shows them
+        // as not having voted on a label they voted on. The vote POST then
+        // 409s and they cannot tell why.
+        //
+        // Vary tells the shared cache to key on the request header that
+        // changes the body. getAuthAddress reads exactly one thing —
+        // `Authorization: Bearer <token>` — so that is the header to name.
+        // It must be set on BOTH branches: on the anonymous branch it is what
+        // stops that entry matching a token-bearing request, and on the
+        // no-store branch it costs nothing and keeps the two in step if the
+        // caching ever changes.
+        res.set('Vary', 'Authorization');
+        if (viewer) res.set('Cache-Control', 'no-store'); else cacheMedium(res);
         res.json({
             address,
             labels,
@@ -7450,14 +7473,27 @@ async function syncData() {
                 globalApi.query.staking.validators(address)
             ]);
             const commissionPct = getCommissionPercent(prefs);
-            const currentApy = 23.09 * (1 - (commissionPct / 100));
-
-            // Audit F-044: `avg30DayApy` used to be THIS SAME current-prefs
-            // number wearing a "(30d)" label. It is the nominal max APY
-            // adjusted for today's commission — a projection, not a measured
-            // average — and the field name now says so. The old key is kept
-            // one release for SPA compatibility and mirrors the same value.
-            validatorData.push({ address: addrStr, name: name, totalStake: formatPDEX(totalStake), commission: commissionPct, realApy: currentApy, currentApy, avg30DayApy: currentApy });
+            // Audit F-044: this payload carried THREE keys — `realApy`,
+            // `currentApy`, `avg30DayApy` — all set from the same expression,
+            // so the API asserted three different things about one number.
+            // `avg30DayApy` was never an average and never covered 30 days;
+            // `realApy` was never real. The audit's instruction was blunt:
+            // "Do not call 23.09% 'real'."
+            //
+            // The honest key is now primary and the three old names are
+            // deprecated aliases mirroring it, listed once in lib/apy.js so
+            // dropping them later is a single edit rather than a grep. They are
+            // kept for a release because REMOVING a field from a public API
+            // fails silently at the integrator — their read returns undefined,
+            // their arithmetic returns NaN, and their cell renders empty with
+            // no error anywhere to explain it.
+            validatorData.push({
+                address: addrStr,
+                name: name,
+                totalStake: formatPDEX(totalStake),
+                commission: commissionPct,
+                ...apyFields(commissionPct)
+            });
         }
         await syncValidatorHistory(activeEra, validators);
         db.replaceValidators(validatorData, { totalCount: validators.length, lastSync: Date.now(), status: 'Synced' });
@@ -9733,7 +9769,8 @@ function startIndexerLoops() {
     try {
         const r = db.rebuildValidatorTriggers(getCommissionTriggers);
         if (!r.skipped) {
-            console.log(`[migration] rebuilt commission triggers for ${r.addresses} validator(s), ${r.triggers} genuine crossing(s) kept (F-198)`);
+            console.log(`[migration] rebuilt commission triggers for ${r.addresses} validator(s): ` +
+                `${r.before} stored -> ${r.triggers} genuine kept, ${r.removed} fabricated removed (F-198)`);
         }
     } catch (err) {
         // Non-fatal: a wrong badge is a display bug, not a reason to refuse to

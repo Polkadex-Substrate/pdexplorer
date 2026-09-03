@@ -17,6 +17,7 @@ import { safeReturnPath } from './lib/safe-return.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
+import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
 // server-rendered DEVELOPERS_HTML in server.js for hard loads and crawlers).
 // Both build their endpoint lists from this one table, so the two documents
@@ -1159,22 +1160,25 @@ function refreshUsdSubscripts() {
     });
 }
 
-// Home page AVG APY. The chain's nominal max APY (before per-validator
-// commission) is a constant produced by Polkadex's inflation curve at the
-// current ~50% staking ratio target — captured here as MAX_APY_BASE.
-// "Average" APY = MAX_APY_BASE × (1 − avgCommission/100). When commission
+// Home page AVG APY = MAX_APY_BASE × (1 − avgCommission/100). When commission
 // data hasn't loaded yet, the cell stays as the dash placeholder.
-const MAX_APY_BASE = 23.09;
+//
+// F-044 round 3: this file used to declare its OWN `const MAX_APY_BASE = 23.09`
+// while server.js declared a second one (function-local, so three more server
+// sites wrote the literal by hand). Five copies of a number that moves when the
+// chain retunes its inflation curve. Now imported from lib/apy.js, which both
+// sides share — the same one-definition treatment as lib/html-escape.js and
+// lib/watermark.js, and for the same reason: F-060, F-133 and F-198 are each in
+// this audit because two copies drifted apart.
 function updateAvgApyCell(avgCommissionPercent) {
     const cell = document.getElementById('home-avg-apy');
     if (!cell) return;
-    const c = Number(avgCommissionPercent);
-    if (!Number.isFinite(c) || c < 0 || c > 100) {
-        cell.textContent = '—';
-        return;
-    }
-    const apy = MAX_APY_BASE * (1 - c / 100);
-    cell.textContent = apy.toFixed(2) + '%';
+    // estimatedApy() carries the range guard: null for anything that is not a
+    // usable 0..100 commission. Inlining it here AND at the cache site below
+    // meant two copies of the same validation, which is how a commission of
+    // 105 would have printed a negative APY at one site and a dash at the other.
+    const apy = estimatedApy(avgCommissionPercent);
+    cell.textContent = apy == null ? '—' : apy.toFixed(2) + '%';
 }
 
 async function fetchNetworkInformation() {
@@ -1201,9 +1205,7 @@ async function fetchNetworkInformation() {
         updateAvgApyCell(info.avgValidatorCommission);
         // Snapshot to localStorage so the next page load can paint these
         // cells instantly (before the live fetch returns).
-        const apyForCache = (Number.isFinite(Number(info.avgValidatorCommission)) && info.avgValidatorCommission >= 0 && info.avgValidatorCommission <= 100)
-            ? MAX_APY_BASE * (1 - Number(info.avgValidatorCommission) / 100)
-            : null;
+        const apyForCache = estimatedApy(info.avgValidatorCommission);
         writeHomeCache({
             currentEra:           info.activeEra ?? null,
             validatorsActive:     info.validators && info.validators.active != null ? info.validators.active : null,
@@ -2084,8 +2086,18 @@ function renderValidators() {
                     // validator's CURRENT commission — a projection, not a
                     // realized 30-day average. Label what it is.
                     key: 'avg30DayApy', label: 'Est. APY (current commission)',
-                    sort: (a, b) => (a.avg30DayApy || 0) - (b.avg30DayApy || 0),
-                    format: row => `<span style="color: var(--success); font-weight: 500;">${Number(row.avg30DayApy).toFixed(2)}%</span>`
+                    sort: (a, b) => ((a[APY_FIELD] ?? a.avg30DayApy) || 0) - ((b[APY_FIELD] ?? b.avg30DayApy) || 0),
+                    // A null APY means the commission did not load. Render the
+                    // dash, not `Number(null).toFixed(2)` — which is "0.00%",
+                    // i.e. a validator that looks like it pays nothing. Same
+                    // class of mistake as estimatedApy(null) returning the full
+                    // 23.09%: coercing absent data into a plausible number.
+                    format: row => {
+                        const v = row[APY_FIELD] ?? row.avg30DayApy;
+                        return Number.isFinite(Number(v)) && v !== null && v !== ''
+                            ? `<span style="color: var(--success); font-weight: 500;">${Number(v).toFixed(2)}%</span>`
+                            : '<span style="color: var(--text-secondary);">—</span>';
+                    }
                 },
                 // Audit F-044 (round 2): a "Now vs Real" column used to sit here,
                 // rendering `realApy` beside `avg30DayApy` as though they were a
@@ -5966,7 +5978,7 @@ curl 'https://explorer.polkadex.ee/api/state/ocex/authorities?args=6280&amp;at=1
     "isStale": boolean                // true if the head looks stuck
   }
 }</code></pre>
-            <p><strong>AVG APY</strong> is now returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias) so you don't have to recompute it. It's derived as <code>avgApy = 23.09 × (1 − avgValidatorCommission / 100)</code>, where 23.09% is the chain's nominal maximum APY at its target staking ratio.</p>`,
+            <p><strong>AVG APY</strong> is now returned directly (<code>avgApy</code>, and the <code>avg_apy</code> alias) so you don't have to recompute it. It's derived as <code>avgApy = ${MAX_APY_BASE} × (1 − avgValidatorCommission / 100)</code>, where ${MAX_APY_BASE}% is the chain's nominal maximum APY at its target staking ratio.</p>`,
 
     accounts: `            ${renderSection('accounts', { listClass: 'developers-endpoints' })}`,
 
@@ -6591,9 +6603,29 @@ function renderTxNotFoundCard(block, hash, opts) {
 
 // Kept for backward compatibility — if a third-party link still drops a "#X"
 // fragment on the user, fall through to clean-URL routing.
+// Audit F-016 (round 3 residual). The click handler was taught that an
+// in-page anchor is not a route; this listener was not, so the SAME fragment
+// behaved differently depending on how you arrived at it:
+//
+//   clicking a TOC link          -> scrolls (correct, fixed in round 1)
+//   pasting the URL / Back / Fwd -> hashchange -> navigateTo('caching')
+//
+// and navigateTo on a fragment that is not a route opens a blank pane, while
+// `#price` and `#discussions` — which ARE route names — navigate away from
+// /developers entirely. A shared link into the docs was the broken case.
+//
+// Decided by the DOM, exactly as the click handler decides it: if an element
+// with that id exists, the author meant "scroll to it". Anything else keeps the
+// old routing behaviour, so legacy fragment links still work.
 window.addEventListener('hashchange', () => {
     const hash = window.location.hash.substring(1).trim();
-    if (hash) navigateTo(hash, { replace: true });
+    if (!hash) return;
+    const anchored = document.getElementById(hash);
+    if (anchored) {
+        anchored.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+    }
+    navigateTo(hash, { replace: true });
 });
 
 window.copyToClipboard = function (element, text) {

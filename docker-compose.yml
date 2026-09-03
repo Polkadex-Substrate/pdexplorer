@@ -190,11 +190,32 @@ services:
     # `$$` is compose's escape for a literal `$` — without the doubling compose
     # would interpolate these as its own variables and hand the shell an empty
     # string, which turns the dispatch into "always run the loop" again.
+    # Audit F-179 (round 3 residual). FOUR paths write TLS key material and the
+    # renew loop was the one that never fixed the ownership afterwards.
+    #
+    # tools/fix-cert-perms.sh is a HOST script; this container cannot call it,
+    # so the same three operations are inlined as a certbot --deploy-hook. It
+    # must stay in step with that helper — test/cert-perms.test.js asserts both.
+    #
+    # Why a deploy-hook rather than a line after `certbot renew`: the hook runs
+    # ONLY when a certificate was actually renewed, so the ordinary no-op renew
+    # (every 12h for ~60 days) does not churn the tree, and the fix lands in the
+    # same invocation that wrote the new key rather than up to 12 hours later.
+    #
+    # Group 101 by NUMBER, not by name: `chgrp nginx` resolves against THIS
+    # container's /etc/group, where 101 is something else entirely.
+    #
+    # 0640 on the key, never 0644 — uid 101 needs to READ it, not the world.
+    environment:
+      FIXPERMS: >-
+        chgrp -R 101 /etc/letsencrypt/live /etc/letsencrypt/archive 2>/dev/null || true;
+        find /etc/letsencrypt/live /etc/letsencrypt/archive -type d -exec chmod 0750 {} + 2>/dev/null || true;
+        find /etc/letsencrypt/live /etc/letsencrypt/archive -type f -name '*.pem' -exec chmod 0640 {} + 2>/dev/null || true
     entrypoint:
       - /bin/sh
       - -c
       - |
         if [ "$$#" -gt 0 ]; then exec certbot "$$@"; fi
         trap exit TERM
-        while :; do certbot renew; sleep 12h & wait $${!}; done
+        while :; do certbot renew --deploy-hook "$$FIXPERMS"; sleep 12h & wait $${!}; done
       - compose-certbot

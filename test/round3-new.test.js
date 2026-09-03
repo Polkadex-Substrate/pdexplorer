@@ -346,3 +346,27 @@ describe('F-196 — a database migrated by the buggy build is repaired', () => {
             'every HTTP worker would race to rewrite the same sync-state row');
     });
 });
+
+describe('F-198 — the rebuild reports what it REMOVED, not just what it kept', () => {
+    // Found by reading a production log line: "rebuilt commission triggers for
+    // 223 validator(s), 373 genuine crossing(s) kept". That number says nothing
+    // about whether any fabricated crossing was deleted — which is the entire
+    // purpose of the migration. An operator could not distinguish a real
+    // cleanup from a no-op, and once the flag is set the count is gone for good.
+    test('it counts the prior rows before replacing them', () => {
+        const fn = dbSrc.slice(dbSrc.indexOf('export function rebuildValidatorTriggers'),
+                               dbSrc.indexOf('export function rebuildValidatorTriggers') + 1600);
+        assert.match(fn, /before \+= \(getValidatorTriggers\(address\) \|\| \[\]\)\.length;/,
+            'the rebuild cannot report what it removed');
+        assert.match(fn, /const removed = Math\.max\(0, before - triggers\);/);
+        assert.match(fn, /removed,/, 'the delta is not persisted with the flag');
+    });
+
+    test('the boot log states the delta', () => {
+        const i = server.indexOf('rebuilt commission triggers for');
+        assert.ok(i !== -1, 'the rebuild log line moved');
+        const line = server.slice(i, i + 260);
+        assert.match(line, /\$\{r\.before\}/);
+        assert.match(line, /\$\{r\.removed\}/, 'the log still reports only what was kept');
+    });
+});

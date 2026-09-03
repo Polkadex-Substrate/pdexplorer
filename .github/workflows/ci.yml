@@ -1,0 +1,85 @@
+# Continuous integration.  (Audit F-028)
+#
+# The finding was "there are no automated tests; probes are not tests". A suite
+# now exists — 1,128 assertions plus six mutation harnesses — but round 3's
+# residual is sharper and still true: *a green deploy can skip the suite*.
+# `deploy.sh` builds and restarts; nothing forces `npm test` to have passed
+# first. A suite nobody is obliged to run is documentation, not a gate.
+#
+# This is that gate. It is deliberately small and dependency-free: the tests use
+# node:test and node:sqlite from the standard library, so there is nothing to
+# install beyond the lockfile and nothing to keep current.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  # Lets an operator confirm a red main before deploying, without a push.
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Must match the Dockerfiles. node:sqlite is behind a flag before 22.5
+      # and the suite opens real databases, so a mismatch here would pass CI
+      # and fail in the image — the exact class of thing CI exists to prevent.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.11'
+          cache: npm
+
+      # `ci`, not `install`: it installs exactly the lockfile (F-102) and fails
+      # if package.json and package-lock.json have drifted apart.
+      - run: npm ci
+
+      - name: Unit and contract tests
+        run: npm test
+
+      # The build catches what the suite cannot: a syntax error or bad import in
+      # script.js only surfaces when Vite bundles it.
+      - name: Frontend build
+        run: npm run build
+
+      # Shell entrypoints are part of the deploy path and are not covered by
+      # node --test. A parse error here is a failed production deploy.
+      - name: Shell syntax
+        run: |
+          for f in deploy.sh provision-ubuntu.sh init-letsencrypt.sh tools/*.sh; do
+            [ -f "$f" ] || continue
+            bash -n "$f" || { echo "::error file=$f::bash -n failed"; exit 1; }
+          done
+
+  # Separate job: mutation runs rewrite files in place and take minutes. Keeping
+  # them out of the fast path means a normal push still gets a quick answer,
+  # while a regression in the *tests themselves* is still caught before release.
+  mutation:
+    runs-on: ubuntu-latest
+    # Only where it is worth the minutes — these are the assertions protecting
+    # the fixes that have most often been reintroduced.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.11'
+          cache: npm
+      - run: npm ci
+      - name: Mutation harnesses
+        run: |
+          fail=0
+          for h in tools/mutation-*.mjs; do
+            echo "=== $h ==="
+            node "$h" || fail=1
+          done
+          # Every harness restores the file it mutated; if one crashed midway,
+          # say so loudly rather than leaving a rewritten tree behind.
+          if ! git diff --quiet; then
+            echo "::error::a mutation harness left the tree modified"
+            git diff --stat
+            exit 1
+          fi
+          exit $fail

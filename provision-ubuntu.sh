@@ -180,31 +180,18 @@ _nginx_cert_name() {
 }
 
 _align_nginx_cert_name() {
-    local want; want="$(_nginx_cert_name)"
-    [ -n "$want" ] || { warn "No ssl_certificate live/<name> found in nginx.conf — cannot verify the cert path matches."; return 0; }
-    [ "$want" != "$DOMAIN" ] || return 0
-    local live_dir="$CERTBOT_PATH/conf/live"
-    [ -d "$live_dir/$DOMAIN" ] || { warn "nginx opens live/$want but $live_dir/$DOMAIN does not exist yet — skipping alias."; return 0; }
-    # If live/$want is a REAL directory (a box that previously ran under the
-    # default name and still holds that certificate), do not touch it. `ln -sfn`
-    # against a real directory does not replace it — it silently creates the
-    # link INSIDE it — and even if it did replace it, deleting a directory
-    # holding a private key on a live host is not something a provisioning
-    # script should decide by itself. Say what is wrong and let the operator
-    # choose which certificate wins.
-    if [ -d "$live_dir/$want" ] && [ ! -L "$live_dir/$want" ]; then
-        warn "nginx.conf opens live/$want, which is a REAL directory holding its own certificate,"
-        warn "but this deployment's DOMAIN is $DOMAIN. Refusing to guess which one should win."
-        warn "Either point DOMAIN at $want, or move $live_dir/$want aside and re-run this phase."
-        return 0
+    # Audit F-189 (round 3): this logic used to live here only, so deploy.sh —
+    # the other path that stands a site up — never performed the alias and a
+    # deployment whose DOMAIN differs from the name baked into nginx.conf could
+    # not start. Extracted to tools/align-cert-name.sh so both callers share one
+    # copy rather than two that drift.
+    local helper="${DEPLOY_DIR:-.}/tools/align-cert-name.sh"
+    [ -f "$helper" ] || helper="./tools/align-cert-name.sh"
+    if [ -f "$helper" ]; then
+        bash "$helper" "$DOMAIN" "$CERTBOT_PATH" "${DEPLOY_DIR:-.}/nginx.conf" || true
+    else
+        warn "tools/align-cert-name.sh missing — cannot verify nginx's cert path matches DOMAIN."
     fi
-    warn "nginx.conf opens live/$want but this deployment's DOMAIN is $DOMAIN."
-    warn "Linking $live_dir/$want -> $DOMAIN so the container reads the cert that was actually installed."
-    warn "The durable fix is to edit the ssl_certificate/ssl_certificate_key lines in nginx.conf and rebuild the frontend image."
-    # Relative target: the link is resolved INSIDE the container, where the
-    # parent is /etc/letsencrypt/live, not $live_dir. An absolute host path
-    # would dangle there.
-    ln -sfn "$DOMAIN" "$live_dir/$want"
 }
 
 require_ubuntu() {

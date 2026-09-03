@@ -2212,19 +2212,27 @@ export function getLowestScanFailure(indexer) {
 // `rebuild` is passed in by server.js — this module must not import the
 // trigger-derivation logic, which lives with the scanner.
 export function rebuildValidatorTriggers(rebuild) {
-    if (getKv('migration:rebuild-commission-triggers')) return { skipped: true, addresses: 0, triggers: 0 };
-    let addresses = 0, triggers = 0;
+    if (getKv('migration:rebuild-commission-triggers')) return { skipped: true, addresses: 0, triggers: 0, removed: 0 };
+    let addresses = 0, triggers = 0, before = 0;
     const rows = db.prepare('SELECT DISTINCT address FROM validator_history').all();
     for (const { address } of rows) {
         const history = getValidatorHistory(address);
         if (!history || !history.length) continue;
+        // Count what was there FIRST. The first version of this reported only
+        // the crossings it kept — "373 genuine crossing(s) kept" — which says
+        // nothing about whether the migration removed any fabricated ones, and
+        // removing them is the entire point. An operator reading that line
+        // could not tell a real cleanup from a no-op, and by the time anyone
+        // asks, the flag has been set and the number is unrecoverable.
+        before += (getValidatorTriggers(address) || []).length;
         const rebuilt = rebuild(history) || [];
         replaceValidatorTriggers(address, rebuilt);
         addresses++;
         triggers += rebuilt.length;
     }
-    setKv('migration:rebuild-commission-triggers', { addresses, triggers, completedAt: Date.now() });
-    return { skipped: false, addresses, triggers };
+    const removed = Math.max(0, before - triggers);
+    setKv('migration:rebuild-commission-triggers', { addresses, before, triggers, removed, completedAt: Date.now() });
+    return { skipped: false, addresses, before, triggers, removed };
 }
 
 // Periodic amnesty for scan failures that have exhausted their retry budget.

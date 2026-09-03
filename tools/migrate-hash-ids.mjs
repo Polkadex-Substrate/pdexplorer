@@ -115,6 +115,37 @@ try {
     const r = migrateHashKeyedIds(db, {
         chunkBlocks,
         progress,
+        // Audit F-182 (round 3 residual). The BOOT path passes onForkDelete —
+        // it queues every height whose fork-inconsistent rows were removed, so
+        // the chain_index failure pass re-fetches the canonical data (F-187).
+        // This script did not, so running the migration the DOCUMENTED way left
+        // those heights as permanent holes: the orphan row deleted, the
+        // canonical one never fetched, and nothing recording that it was owed.
+        // The operator path must not be worse than the accidental one.
+        //
+        // One deliberate difference from the boot path: it calls
+        // recordScanFailure, which does `attempts = attempts + 1`. Here the
+        // conflict resets attempts to 0. A fork delete is a NEW obligation —
+        // we removed rows and owe a re-fetch — not another failure of the same
+        // attempt, and counting it as one could push a height past the retry
+        // cap for something it never did.
+        onForkDelete: (heights) => {
+            let queued = 0;
+            for (const h of heights) {
+                try {
+                    db.prepare(`
+                        INSERT INTO scan_failures (indexer, block, attempts, last_error, first_at, last_at)
+                        VALUES ('chain_index', ?, 0, ?, ?, ?)
+                        ON CONFLICT(indexer, block) DO UPDATE SET
+                            attempts = 0, last_error = excluded.last_error, last_at = excluded.last_at
+                    `).run(h,
+                        'fork-inconsistent rows removed by the hash-id migration; canonical data needs re-fetching (F-187)',
+                        Date.now(), Date.now());
+                    queued++;
+                } catch (e) { /* one height must not abort the migration */ }
+            }
+            if (queued) console.log(`  queued ${queued} height(s) for re-crawl after fork cleanup (F-187)`);
+        },
         onProgress: (info) => {
             // One line every few seconds, not one per chunk.
             if (Date.now() - lastLog < 3000) return;

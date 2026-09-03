@@ -392,3 +392,33 @@ disk, normal reads queue up and the server goes I/O-bound (high load, ~99%
 (provisioned) IOPS, give SQLite a large cache/mmap (step 2), and keep backups on
 a separate volume so they never contend with serving. This is the single most
 important sizing decision — especially ahead of the orderbook launch.
+
+## One-off maintenance: the hash-keyed id migration (audit F-021 / F-182)
+
+Transaction and staking-reward rows are keyed by `event-<blockHash>-<eventIndex>`.
+Databases created before that change key them by block NUMBER, which names a
+*slot* rather than an event — after a reorg the canonical chain puts a different
+block in the same slot and `INSERT OR IGNORE` silently drops the real one.
+
+`initDb` runs the migration automatically, once, behind a kv flag. It is chunked
+with a commit per chunk, so it does not hold the write lock for minutes. **On a
+large database you may still prefer to run it yourself, during a window:**
+
+```sh
+docker compose exec backend node --experimental-sqlite tools/migrate-hash-ids.mjs
+# resumable — re-running continues from the last committed chunk
+# --chunk=<blocks> tunes the transaction size (default 250000)
+```
+
+Either path queues every height whose fork-inconsistent rows were removed into
+`scan_failures`, so the chain indexer re-fetches the canonical data. Audit F-182:
+the script previously omitted that hook, which made running it the documented way
+*worse* than letting it happen at boot — the orphan row deleted, the canonical one
+never fetched, and nothing recording the debt.
+
+Check whether it has already run:
+
+```sh
+sqlite3 /opt/pdexplorer/data/explorer.db \
+  "SELECT value FROM kv WHERE key='migration:hash-keyed-ids';"
+```
