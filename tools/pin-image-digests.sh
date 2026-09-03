@@ -38,23 +38,76 @@ TARGETS=(
     "docker-compose.yml:certbot/certbot:v2.11.0"
 )
 
+# Resolve each distinct tag ONCE, and reuse that answer for every file that
+# names it. node:22.11-alpine appears in both Dockerfiles; resolving it twice
+# invites the two files to pin DIFFERENT digests if the tag is retagged between
+# the two `docker image inspect` calls — two copies of a pin that drift, which
+# is the failure this whole script exists to prevent, reintroduced by the fix.
+declare -A RESOLVED=()
+
+resolve_digest() {
+    local tag="$1"
+    if [ -n "${RESOLVED[$tag]:-}" ]; then printf '%s' "${RESOLVED[$tag]}"; return 0; fi
+
+    # An image can be PRESENT with an empty .RepoDigests — that happens when it
+    # was built locally or loaded from a tarball rather than pulled from a
+    # registry. `{{index .RepoDigests 0}}` then fails with an index error, and
+    # the old code swallowed it and printed "not pulled locally", which sends
+    # the operator to `docker pull` for an image they already have. Distinguish
+    # the two, because the remedy is genuinely different.
+    if ! docker image inspect "$tag" >/dev/null 2>&1; then
+        echo "MISS  $tag is not present locally. Run: docker pull $tag" >&2
+        return 1
+    fi
+    local d
+    d=$(docker image inspect "$tag" --format '{{range .RepoDigests}}{{.}}{{"\n"}}{{end}}' 2>/dev/null | head -1 | sed 's/.*@//')
+    if [ -z "$d" ]; then
+        echo "MISS  $tag is present but carries no registry digest (built locally, or" >&2
+        echo "      loaded from a tarball). Re-fetch it so a digest exists: docker pull $tag" >&2
+        return 1
+    fi
+    RESOLVED[$tag]="$d"
+    printf '%s' "$d"
+}
+
+# Is this tag pinned on a REAL FROM / image: line — as opposed to appearing in a
+# comment? The first version of this check was a bare `grep -F "$tag@sha256:"`,
+# and Dockerfile.backend carries a comment reading
+#     # then change this line to `FROM node:22.11-alpine@sha256:…`
+# which matched. The script reported "already digest-pinned" and skipped a file
+# that was not pinned at all — a false OK, and the single worst outcome for a
+# supply-chain tool, because it reports success while leaving the hole open.
+# Same self-match trap this repo's TEST suite has hit repeatedly; the lesson
+# evidently had not reached the tooling.
+is_pinned() {
+    local file="$1" tag="$2"
+    grep -Eq "^[[:space:]]*(FROM|image:)[[:space:]]+${tag//\//\\/}@sha256:" "$file"
+}
+
+# Does this tag appear on a real FROM / image: line at all?
+has_tag() {
+    local file="$1" tag="$2"
+    grep -Eq "^[[:space:]]*(FROM|image:)[[:space:]]+${tag//\//\\/}([[:space:]]|\$)" "$file"
+}
+
 changed=0
+missing=0
 for entry in "${TARGETS[@]}"; do
     file="${entry%%:*}"
     tag="${entry#*:}"
     [ -f "$file" ] || { echo "SKIP  $file not found"; continue; }
 
-    # Already pinned? Leave it — re-pinning silently would defeat the purpose.
-    if grep -qF "${tag}@sha256:" "$file"; then
+    if is_pinned "$file" "$tag"; then
         echo "OK    $file  $tag is already digest-pinned"
         continue
     fi
 
-    digest=$(docker image inspect "$tag" --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/.*@//')
-    if [ -z "$digest" ]; then
-        echo "MISS  $file  $tag — not pulled locally. Run: docker pull $tag" >&2
+    if ! has_tag "$file" "$tag"; then
+        echo "STALE $file  no FROM/image: line names $tag any more — update TARGETS" >&2
         continue
     fi
+
+    digest=$(resolve_digest "$tag") || { missing=1; continue; }
 
     echo "PIN   $file  $tag@$digest"
     changed=1
@@ -71,7 +124,12 @@ for entry in "${TARGETS[@]}"; do
     fi
 done
 
-if [ "$changed" = "0" ]; then
+if [ "$missing" = "1" ]; then
+    echo >&2
+    echo "One or more images could not be resolved — NOTHING above is a complete answer." >&2
+    echo "Pull the images named above and re-run before using --write." >&2
+    exit 1
+elif [ "$changed" = "0" ]; then
     echo; echo "Nothing to do — every base image is already pinned by digest."
 elif [ "$WRITE" = "0" ]; then
     echo; echo "Dry run. Re-run with --write to apply, then commit the change."

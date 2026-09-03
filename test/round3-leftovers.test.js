@@ -167,7 +167,13 @@ describe('F-150 — the digest-pinning tooling', () => {
 
     test('it reads digests from the local daemon, not the network', () => {
         // So it needs no registry credentials and can run on the deploy host.
-        assert.match(pinner, /docker image inspect "\$tag" --format '\{\{index \.RepoDigests 0\}\}'/);
+        // `docker image inspect` reads the LOCAL daemon; `docker manifest
+        // inspect` would hit the registry and need credentials. The exact
+        // --format template changed when empty-RepoDigests handling was added,
+        // so assert the property that matters rather than the template text.
+        assert.match(pinner, /docker image inspect "\$tag"/);
+        assert.ok(!/docker manifest inspect|skopeo|curl .*registry/.test(pinner),
+            'the pinner now reaches out to a registry — it must work offline on the deploy host');
     });
 
     test('it covers every base image the build uses', () => {
@@ -178,6 +184,51 @@ describe('F-150 — the digest-pinning tooling', () => {
 
     test('it will not silently re-pin something already pinned', () => {
         assert.match(pinner, /already digest-pinned/);
+    });
+
+    test('the already-pinned check ignores COMMENTS', () => {
+        // The first version was a bare `grep -qF "$tag@sha256:"`. Dockerfile.backend
+        // carries a comment reading:
+        //     # then change this line to `FROM node:22.11-alpine@sha256:…`
+        // which matched — so the script printed "already digest-pinned" and
+        // skipped a file that was not pinned at all. A false OK is the worst
+        // possible outcome for a supply-chain tool: it reports success while
+        // leaving the hole open. Same self-match trap this suite has hit
+        // repeatedly, this time in the tooling rather than the tests.
+        assert.match(pinner, /is_pinned\(\) \{/);
+        assert.match(pinner, /grep -Eq "\^\[\[:space:\]\]\*\(FROM\|image:\)/,
+            'the pinned check is not anchored to real FROM/image: lines');
+        assert.ok(!/grep -qF "\$\{tag\}@sha256:"/.test(pinner),
+            'the comment-matching grep is back');
+    });
+
+    test('a tag is resolved once and reused across files', () => {
+        // node:22.11-alpine appears in BOTH Dockerfiles. Resolving it twice
+        // lets the two files pin different digests if the tag is retagged
+        // between the calls — two copies of a pin that drift, i.e. exactly the
+        // failure this script exists to prevent, reintroduced by the fix.
+        assert.match(pinner, /declare -A RESOLVED/);
+        assert.match(pinner, /if \[ -n "\$\{RESOLVED\[\$tag\]:-\}" \]/);
+    });
+
+    test('"present but no registry digest" is distinguished from "absent"', () => {
+        // An image built locally or loaded from a tarball IS present but has an
+        // empty .RepoDigests, so `{{index .RepoDigests 0}}` errors. The old
+        // code swallowed that and said "not pulled locally", sending the
+        // operator to docker pull for an image they already had.
+        assert.match(pinner, /is not present locally/);
+        assert.match(pinner, /carries no registry digest/);
+    });
+
+    test('an unresolved image makes the run FAIL, not succeed quietly', () => {
+        // Otherwise a partial run reads as a complete one and the operator
+        // commits a half-pinned build.
+        assert.match(pinner, /NOTHING above is a complete answer/);
+        assert.match(pinner, /exit 1/);
+    });
+
+    test('a TARGETS entry naming a tag no longer in the file is reported', () => {
+        assert.match(pinner, /STALE/);
     });
 
     test('it only rewrites FROM / image: lines', () => {
