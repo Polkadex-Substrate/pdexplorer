@@ -9,7 +9,7 @@
 #     docker inspect --format='{{index .RepoDigests 0}}' node:22.11-alpine
 # then change this line to `FROM node:22.11-alpine@sha256:…`. Do it from a host
 # with registry access and commit the digest — do not guess it.
-FROM node:22.11-alpine
+FROM node:22.11-alpine@sha256:b64ced2e7cd0a4816699fe308ce6e8a08ccba463c757c00c14cd372e3d2c763e
 
 WORKDIR /app
 

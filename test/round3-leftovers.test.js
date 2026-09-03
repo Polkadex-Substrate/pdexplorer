@@ -216,7 +216,7 @@ describe('F-150 — the digest-pinning tooling', () => {
         // empty .RepoDigests, so `{{index .RepoDigests 0}}` errors. The old
         // code swallowed that and said "not pulled locally", sending the
         // operator to docker pull for an image they already had.
-        assert.match(pinner, /is not present locally/);
+        assert.match(pinner, /is not in the local image store/);
         assert.match(pinner, /carries no registry digest/);
     });
 
@@ -231,9 +231,63 @@ describe('F-150 — the digest-pinning tooling', () => {
         assert.match(pinner, /STALE/);
     });
 
+    test('the "not present" message explains the BuildKit case', () => {
+        // Observed on the production host: node:22.11-alpine reported absent
+        // while BOTH Dockerfiles build FROM it. Not a contradiction — BuildKit
+        // caches base images outside the image store `docker image inspect`
+        // reads. Without this note the next operator concludes the tool is
+        // broken, or worse, that their build is not using the image they think.
+        assert.match(pinner, /BuildKit/);
+        assert.match(pinner, /not in the local image store/);
+    });
+
+    test('the forward-pin caveat is documented', () => {
+        // A pulled digest is what the tag means TODAY, which need not match the
+        // bytes in the running images. Applying a pin is therefore not a no-op.
+        assert.match(pinner, /FORWARD pin/);
+        assert.match(pinner, /Rebuild\s*\n#\s*and run the deploy verification/);
+    });
+
     test('it only rewrites FROM / image: lines', () => {
         // A tag mentioned in a comment or a RUN line must stay prose.
         assert.match(pinner, /\(FROM\|image:\)/);
+    });
+
+    test('every base image is now pinned by digest on a real FROM/image: line', () => {
+        // Applied 2026-09-02 from digests resolved on the production host.
+        // Asserting the LINE, not merely the presence of a sha256 string —
+        // a digest in a comment is what made the tool report a false OK.
+        const files = {
+            'Dockerfile.backend': ['node:22.11-alpine'],
+            'Dockerfile.frontend': ['node:22.11-alpine', 'nginxinc/nginx-unprivileged:1.27-alpine'],
+            'docker-compose.yml': ['certbot/certbot:v2.11.0']
+        };
+        for (const [file, tags] of Object.entries(files)) {
+            const src = raw(file);
+            for (const tag of tags) {
+                const re = new RegExp('^\\s*(FROM|image:)\\s+' + tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '@sha256:[0-9a-f]{64}', 'm');
+                assert.match(src, re, `${file} does not pin ${tag} by digest on a FROM/image: line`);
+            }
+        }
+    });
+
+    test('the two node:22.11-alpine references pin the SAME digest', () => {
+        // Both Dockerfiles build from this image. Two different digests would
+        // mean the frontend build stage and the backend run on different
+        // bytes of the "same" base — the precise drift this finding is about,
+        // and the reason the resolver caches per tag.
+        const grab = (f) => (raw(f).match(/^\s*FROM\s+node:22\.11-alpine@(sha256:[0-9a-f]{64})/m) || [])[1];
+        const a = grab('Dockerfile.backend');
+        const b = grab('Dockerfile.frontend');
+        assert.ok(a && b, 'a node digest is missing');
+        assert.equal(a, b, 'the two Dockerfiles pin DIFFERENT digests for node:22.11-alpine');
+    });
+
+    test('the readable tag survives alongside the digest', () => {
+        // `name:tag@sha256:…` — dropping the tag would leave an unreadable
+        // line that tells a maintainer nothing about which version it is.
+        assert.match(raw('Dockerfile.frontend'), /FROM node:22\.11-alpine@sha256:[0-9a-f]{64} AS build/,
+            'the multi-stage `AS build` alias or the readable tag was lost');
     });
 
     test('the tags it targets are the ones actually in the build files', () => {

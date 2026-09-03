@@ -23,6 +23,16 @@
 # After a bump: change the TAG by hand, `docker compose pull`, re-run with
 # --write, and commit both. The digest is the record of what you actually
 # shipped, which is the point.
+#
+# ONE CAVEAT WORTH UNDERSTANDING BEFORE YOU COMMIT A PIN.
+#
+# If a tag has to be `docker pull`ed before this script can resolve it, the
+# digest you get is whatever that tag points to TODAY — which is not necessarily
+# the bytes inside the images currently running. Pinning it is therefore a
+# FORWARD pin: it fixes what the NEXT build will use, and that may differ from
+# what is deployed right now. That is the correct outcome (the whole point is to
+# stop the base floating), but it means applying a pin is not a no-op. Rebuild
+# and run the deploy verification afterwards rather than assuming nothing moved.
 set -uo pipefail
 
 WRITE=0
@@ -56,7 +66,16 @@ resolve_digest() {
     # the operator to `docker pull` for an image they already have. Distinguish
     # the two, because the remedy is genuinely different.
     if ! docker image inspect "$tag" >/dev/null 2>&1; then
-        echo "MISS  $tag is not present locally. Run: docker pull $tag" >&2
+        # This fires even for a base image both Dockerfiles obviously build
+        # FROM, and that is not a contradiction: BuildKit (the default builder
+        # since Docker 23) pulls base images into the BUILD CACHE, not into the
+        # image store that `docker image inspect` reads. So a tag can be in
+        # active use on this host and still be absent here. `docker pull`
+        # populates the image store and makes it resolvable.
+        echo "MISS  $tag is not in the local image store." >&2
+        echo "      (Normal with BuildKit: it caches base images outside the image store," >&2
+        echo "       so this says nothing about whether your builds use it.)" >&2
+        echo "      Run: docker pull $tag" >&2
         return 1
     fi
     local d

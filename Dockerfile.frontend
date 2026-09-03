@@ -7,7 +7,7 @@
 #     docker inspect --format='{{index .RepoDigests 0}}' node:22.11-alpine
 #     docker inspect --format='{{index .RepoDigests 0}}' nginxinc/nginx-unprivileged:1.27-alpine
 # then write `image@sha256:…`. Resolve them on a host with registry access.
-FROM node:22.11-alpine AS build
+FROM node:22.11-alpine@sha256:b64ced2e7cd0a4816699fe308ce6e8a08ccba463c757c00c14cd372e3d2c763e AS build
 
 WORKDIR /app
 # Audit F-149: the lockfile was copied but then IGNORED — `npm install`
@@ -41,7 +41,7 @@ RUN npm run build \
 # OPERATOR NOTE (first deploy after this change): the bind-mounted cert tree
 # must be readable by uid/gid 101 — deploy.sh handles the chgrp/chmod
 # idempotently. Pinned to the same 1.27 minor as before.
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

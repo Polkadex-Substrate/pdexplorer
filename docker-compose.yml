@@ -143,7 +143,7 @@ services:
     # When bumping, add the digest for full supply-chain pinning:
     #   docker pull certbot/certbot:<ver> && docker inspect --format='{{index .RepoDigests 0}}' certbot/certbot:<ver>
     # then write image: certbot/certbot:<ver>@sha256:…
-    image: certbot/certbot:v2.11.0
+    image: certbot/certbot:v2.11.0@sha256:ddf9e5d226a56e886986838fa0ebedc0237511c78664352e8d0f4346ee022cd8
     container_name: certbot
     # Audit F-096, half one. Compose's default restart policy is `no`, so the
     # renew loop below was a single shell that never came back if it died — an
