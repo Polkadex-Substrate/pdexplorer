@@ -7908,12 +7908,19 @@ function drainSkipTail(indexer) {
     const ranges = normalizeTail((stored || {}).ranges || []);
     if (!ranges.length) return 0;
     const { heights, rest } = takeFromTail(ranges, SKIP_DRAIN_PER_TICK);
+    // queueScanFailureIfAbsent, NOT recordScanFailure: this is bookkeeping for a
+    // height that was never attempted, so it must not increment the attempt
+    // counter of a row that already exists. See the note on that function.
+    let queued = 0;
     for (const n of heights) {
-        db.recordScanFailure(indexer, n, 'skip tail: queued after SKIP_RECORD_MAX truncation (F-010)');
+        if (db.queueScanFailureIfAbsent(indexer, n, 'skip tail: queued after SKIP_RECORD_MAX truncation (F-010)')) queued++;
     }
     db.setKv(key, { ranges: rest, updatedAt: Date.now() });
     if (heights.length) {
-        console.log(`[${indexer}] skip tail: queued ${heights.length} height(s), ${tailSize(rest)} still owed (F-010)`);
+        // Report both: `queued` is new work, the difference is heights that
+        // already had a row (expected, because the tail over-approximates).
+        console.log(`[${indexer}] skip tail: drained ${heights.length} height(s), ${queued} newly queued, ` +
+            `${tailSize(rest)} still owed (F-010)`);
     }
     return heights.length;
 }

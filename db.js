@@ -21,6 +21,7 @@ import { rpcUnavailableLikePatterns } from './lib/rpc-errors.js';
 import { migrateHashKeyedIds, purgeLegacyExtrinsicKeyedTx, deleteForkRows as deleteForkRowsImpl } from './lib/id-migration.js';
 import fs from 'fs';
 import path from 'path';
+import { APY_FIELD, APY_DEPRECATED_ALIASES } from './lib/apy.js';
 
 let db = null;
 
@@ -1076,12 +1077,38 @@ export function replaceValidators(list, meta) {
     runTx(() => {
         db.prepare('DELETE FROM validators').run();
         const stmt = db.prepare('INSERT OR REPLACE INTO validators(address,name,total_stake,commission,real_apy,avg30day_apy,position) VALUES(?,?,?,?,?,?,?)');
-        list.forEach((v, i) => stmt.run(v.address, v.name ?? null, v.totalStake ?? 0, v.commission ?? 0, v.realApy ?? 0, v.avg30DayApy ?? 0, i));
+        // F-044: `?? 0` turned a MISSING apy into 0, which renders as "0.00%" —
+        // a validator that looks like it pays nothing. estimatedApy() returns
+        // null precisely so absent data stays absent; store it that way.
+        list.forEach((v, i) => stmt.run(
+            v.address, v.name ?? null, v.totalStake ?? 0, v.commission ?? 0,
+            v[APY_FIELD] ?? v.realApy ?? null, v[APY_FIELD] ?? v.avg30DayApy ?? null, i));
     });
     setSyncState('validators', { totalCount: meta.totalCount, lastSync: meta.lastSync, status: meta.status });
 }
 export function getValidators() {
-    const validators = db.prepare('SELECT address, name, total_stake AS totalStake, commission, real_apy AS realApy, avg30day_apy AS avg30DayApy FROM validators ORDER BY position ASC').all();
+    // Audit F-044, found by checking the LIVE endpoint rather than the tests.
+    //
+    // The indexer was updated to build its payload with apyFields(), which emits
+    // the honest `estimatedApyAtCurrentCommission` plus the three deprecated
+    // aliases. But this table has only two APY columns, so the write truncated
+    // four keys to two and the read handed callers exactly the two dishonest
+    // names the finding is about. The fix had been applied at the layer that
+    // builds the object and not at the layer that persists and returns it —
+    // which is the same shape as the finding itself, one level down.
+    //
+    // The stored value is one number (both columns are written from the same
+    // expression), so re-deriving every name from it is exact rather than a
+    // guess. The alias list stays in lib/apy.js so dropping a name is still one
+    // edit. NOT a schema change: adding a column would mean a migration on a
+    // multi-million-row table to store a third copy of a number we already have.
+    const rows = db.prepare('SELECT address, name, total_stake AS totalStake, commission, real_apy AS storedApy FROM validators ORDER BY position ASC').all();
+    const validators = rows.map(({ storedApy, ...rest }) => {
+        const value = storedApy == null ? null : Number(storedApy);
+        const out = { ...rest, [APY_FIELD]: value };
+        for (const alias of APY_DEPRECATED_ALIASES) out[alias] = value;
+        return out;
+    });
     const s = getSyncState('validators');
     // Audit F-084 (round 2): `error: s.error` used to be here.
     //
@@ -2154,6 +2181,37 @@ export function recordScanFailure(indexer, block, errMessage) {
             last_error = excluded.last_error,
             last_at    = excluded.last_at
     `).run(indexer, block, msg, now, now);
+}
+
+// Queue a height for scanning WITHOUT counting it as an attempt.
+//
+// Audit F-010. recordScanFailure() above does `attempts = attempts + 1` on
+// conflict, which is right for its job: it records that a fetch was tried and
+// failed. The skip-tail drain is not that. It is bookkeeping — "this height was
+// never attempted, put it in the queue" — and routing it through
+// recordScanFailure would increment the attempt counter of any height that
+// already had a row.
+//
+// That matters because addTail()'s bounding step deliberately OVER-approximates
+// (it merges the two closest ranges rather than dropping one, so no height is
+// ever lost), which means the drain can legitimately touch heights that were
+// never skipped and may already be mid-retry. A height sitting at 9 real
+// failures would be pushed to 10 by a write that attempted nothing — and
+// getScanFailures() filters `attempts < maxAttempts`, so it would silently stop
+// being retried. A repair queue that retires blocks it never tried is worse
+// than no queue, because the status line still counts it as known and handled.
+//
+// DO NOTHING on conflict: if a row already exists, the existing bookkeeping is
+// better than anything this call knows. The row is already queued either way.
+export function queueScanFailureIfAbsent(indexer, block, errMessage) {
+    const now = Date.now();
+    const msg = String(errMessage || '').slice(0, 500);
+    const info = db.prepare(`
+        INSERT INTO scan_failures (indexer, block, attempts, last_error, first_at, last_at)
+        VALUES (?, ?, 0, ?, ?, ?)
+        ON CONFLICT(indexer, block) DO NOTHING
+    `).run(indexer, block, msg, now, now);
+    return info.changes > 0;
 }
 
 // Clear a single (indexer, block) entry — called after a retry succeeds.
