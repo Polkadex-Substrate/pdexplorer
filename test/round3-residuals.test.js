@@ -427,3 +427,63 @@ describe('F-047 — the gap sweep stays bounded and instrumented', () => {
             'the reason the stall hits no user request is not stated');
     });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cloudflare Web Analytics — the one real CSP violation on the live site
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('CSP allows the Cloudflare beacon, and no more than that', () => {
+    const conf = raw('nginx.conf');
+    const policies = conf.split('\n').filter(l => l.includes('add_header Content-Security-Policy'));
+
+    test('script-src allows the beacon ORIGIN, not the exact path', () => {
+        // Cloudflare's own docs say to allow
+        // `https://static.cloudflareinsights.com/beacon.min.js`, but the URL
+        // served is versioned (/beacon.min.js/v31edd6df95...). CSP path
+        // matching is EXACT unless the source ends in `/`, so the documented
+        // value would not match and the script would stay blocked — a fix that
+        // reads correctly in the diff and does nothing at runtime.
+        for (const p of policies) {
+            assert.match(p, /script-src [^;]*https:\/\/static\.cloudflareinsights\.com(;| )/,
+                'the beacon origin is not allowed');
+            assert.ok(!/static\.cloudflareinsights\.com\/beacon\.min\.js/.test(p),
+                'an exact path was used; it cannot match the versioned URL Cloudflare serves');
+        }
+    });
+
+    test('connect-src is NOT widened', () => {
+        // Automatic injection (ours) posts same-origin to /cdn-cgi/rum, already
+        // covered by 'self'. Only MANUAL embedding needs cloudflareinsights.com.
+        // Widening it would loosen the policy on the page carrying wallet
+        // signing, for nothing.
+        for (const p of policies) {
+            assert.ok(!/connect-src [^;]*cloudflareinsights/.test(p),
+                'connect-src was widened for the beacon — automatic injection does not need it');
+            assert.match(p, /connect-src 'self' wss:\/\/rpc\.polkadex\.ee/);
+        }
+    });
+
+    test('nothing else was let into script-src', () => {
+        // The wallet lives on this origin. Every additional script source is a
+        // party that can read a signing page.
+        for (const p of policies) {
+            const m = p.match(/script-src ([^;]+);/);
+            assert.ok(m, 'no script-src');
+            assert.deepEqual(m[1].trim().split(/\s+/).sort(),
+                ["'self'", "'wasm-unsafe-eval'", 'https://static.cloudflareinsights.com'].sort());
+        }
+    });
+
+    test('the two policies are still byte-identical', () => {
+        // The drift check depends on there being exactly two, and equal.
+        assert.equal(policies.length, 2);
+        assert.equal(policies[0].trim(), policies[1].trim(),
+            'the :8080 and :8443 policies have drifted');
+    });
+
+    test('the reasoning is recorded, including why no SRI', () => {
+        assert.match(conf, /CSP path matching is EXACT unless the source expression ends in `\/`/);
+        assert.match(conf, /No SRI: the URL is versioned by Cloudflare/);
+    });
+});
