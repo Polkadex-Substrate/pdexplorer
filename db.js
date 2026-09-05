@@ -18,7 +18,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { rpcUnavailableLikePatterns } from './lib/rpc-errors.js';
-import { migrateHashKeyedIds, purgeLegacyExtrinsicKeyedTx, deleteForkRows as deleteForkRowsImpl } from './lib/id-migration.js';
+import { migrateHashKeyedIds, purgeLegacyExtrinsicKeyedTx, countHashKeyedIdCandidates, deleteForkRows as deleteForkRowsImpl } from './lib/id-migration.js';
 import fs from 'fs';
 import path from 'path';
 import { APY_FIELD, APY_DEPRECATED_ALIASES } from './lib/apy.js';
@@ -607,6 +607,50 @@ function readIntEnv(name, fallback) {
     return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// The cursor a post-purge backfill must resume from. (Audit F-203)
+//
+// The purge writers below used to set `txBackfillCursor: null` and let
+// syncTransactions' first-run branch pick a starting height. That branch says:
+//
+//     txBackfillCursor = Math.max(TX_MIN_BLOCK - 1, oldestScannedBlock - 1);
+//     txBackfillComplete = txBackfillCursor < TX_MIN_BLOCK;
+//
+// which is CORRECT in general — if transfer coverage already reaches genesis
+// there is genuinely nothing left to walk. But it is wrong after a purge. On a
+// host that had already finished the F-008 local walk, `oldestScannedBlock` is
+// 1, so the cursor becomes 0, `complete` flips true, and
+// deriveTransactionsFromLocalEvents never runs. F-196 made the writer and the
+// reader agree on key names; this made the agreed-upon value a no-op. The purge
+// deleted rows throughout history and only the 20k head recrawl replaced any of
+// them, so a visitor saw a Synced transfer list permanently missing everything
+// below that window.
+//
+// The purge is the one caller that knows the walk must happen REGARDLESS of
+// existing coverage, so it states a height instead of delegating the decision.
+// Walking down from the top of known coverage is right because the purge
+// deleted legacy rows at any height, not only old ones. Re-deriving a row that
+// still exists is harmless — the writers are keyed by hash and upsert.
+// How many legacy-keyed rows the hash-id rewrite may fix on the BOOT path.
+// (Audit F-182)
+//
+// Above this the rewrite is deferred to tools/migrate-hash-ids.mjs, which an
+// operator runs in a window they chose. 25k is roughly a second of rewriting on
+// the production disk and well under any gateway timeout; production itself has
+// zero candidates, so the ordinary path is unaffected either way. Raise it to
+// force an inline migration on a large database — the cost is a boot that holds
+// the SQLite write lock until the rewrite finishes.
+const HASH_ID_INLINE_MAX = Number(process.env.HASH_ID_INLINE_MAX) > 0
+    ? Number(process.env.HASH_ID_INLINE_MAX)
+    : 25_000;
+
+function postPurgeBackfillCursor(st) {
+    const candidates = [st && st.latestScannedBlock, st && st.oldestScannedBlock]
+        .map(Number).filter(n => Number.isFinite(n) && n > 0);
+    // null only when this row has no coverage recorded at all, in which case
+    // there was nothing to purge and first-run's own logic is right anyway.
+    return candidates.length ? Math.max(...candidates) : null;
+}
+
 export function initDb(dataDir, seedCounts = false, opts = {}) {
     const isMigrator = !!seedCounts;
     const awaitMigrator = opts.awaitMigrator === undefined ? !isMigrator : !!opts.awaitMigrator;
@@ -728,6 +772,41 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
         try {
             const done = getKv('migration:hash-keyed-ids');
             if (!done || !done.completedAt) {
+                // Audit F-182: SIZE-GATE the rewrite. This is the same trade
+                // the analytics indexes make (F-088/F-138): work that is
+                // instant on a small database and an outage on a large one
+                // does not belong on the boot path unconditionally.
+                //
+                // The rewrite is one BEGIN IMMEDIATE per table, so it holds the
+                // write lock for the whole pass before the indexer may start.
+                // On a fresh install that is zero rows and invisible. On a
+                // database with real legacy history it is a stall nobody chose,
+                // at the least convenient moment, with no way to decline.
+                //
+                // COUNT first (read-only, no write lock). Under the ceiling:
+                // migrate inline exactly as before, so fresh installs and the
+                // ordinary case are unchanged. Over it: DO NOT migrate. Record
+                // why, say so loudly, and hand the operator a command they can
+                // run in a window they picked. The indexer still starts — a
+                // deferred migration is a degraded index, not a dead site, and
+                // refusing to boot would turn a maintenance task into an outage.
+                const pending = countHashKeyedIdCandidates(db);
+                if (pending.total > HASH_ID_INLINE_MAX) {
+                    const state = {
+                        deferred: true, pending, ceiling: HASH_ID_INLINE_MAX, at: Date.now(),
+                        command: 'docker compose exec backend node --experimental-sqlite tools/migrate-hash-ids.mjs'
+                    };
+                    setKv('migration:hash-keyed-ids:deferred', state);
+                    console.warn(
+                        `[migration] hash-keyed id rewrite DEFERRED: ${pending.total} row(s) ` +
+                        `(${pending.transactions} tx, ${pending.stakingRewards} rewards) exceed the ` +
+                        `${HASH_ID_INLINE_MAX}-row inline ceiling. Running it here would hold the write ` +
+                        'lock through boot. Run it in a maintenance window:\n' +
+                        `    ${state.command}\n` +
+                        '  Until then ids stay legacy-keyed: reward and transfer rows written before the ' +
+                        'F-021 change keep block-number ids, so a reorg at those heights is not detected. ' +
+                        'Raise HASH_ID_INLINE_MAX to migrate at boot anyway. Status: /api/diag/schema.');
+                } else {
                 // F-182: chunked + resumable. The cursor lives in kv so an
                 // interrupted run (a restart, a deploy mid-migration) picks up
                 // where it stopped instead of re-walking from genesis. Each
@@ -760,6 +839,10 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
                     }
                 });
                 setKv('migration:hash-keyed-ids', { ...r, completedAt: Date.now() });
+                // A previously-deferred database that has since shrunk (or had
+                // the ceiling raised) is no longer deferred. Leaving the marker
+                // would keep /api/diag/schema reporting work that is done.
+                try { setKv('migration:hash-keyed-ids:deferred', null); } catch (_) { }
                 console.log(`[migration] hash-keyed ids: ${r.txRewritten} tx rewritten, ${r.txDuplicatesDeleted} tx duplicates removed, ` +
                     `${r.rewardRewritten} rewards rewritten, ${r.rewardDuplicatesDeleted} reward duplicates removed; ` +
                     `fork-inconsistent rows deleted: ${r.forkEventsDeleted} events, ${r.forkTxDeleted} tx, ${r.forkRewardsDeleted} rewards ` +
@@ -767,6 +850,7 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
                 // The walk finished; drop the resume cursor so a future
                 // migration does not inherit a stale one.
                 setKv('migration:hash-keyed-ids:progress', {});
+                }
             }
         } catch (e) {
             // Do NOT swallow into a warning: new-format writers against an
@@ -809,6 +893,7 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
     // the reset it should have done is performed now, once.
     //
     // Deliberately NOT re-running the purge: the rows are already gone, and
+
     // re-running a destructive migration to repair the bookkeeping around it
     // would be a much worse trade. Only the backfill reset is replayed.
     if (seedCounts) {
@@ -816,10 +901,11 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
             const prior = getKv('migration:purge-legacy-tx-rows');
             if (prior && !prior.resetVersion && Number(prior.deleted) > 0) {
                 const st = getSyncState('transactions') || {};
+                // F-203: an explicit height, not null. See postPurgeBackfillCursor.
                 setSyncState('transactions', {
                     ...st,
                     scannerVersion: null,
-                    txBackfillCursor: null,
+                    txBackfillCursor: postPurgeBackfillCursor(st),
                     txBackfillComplete: false
                 });
                 setKv('migration:purge-legacy-tx-rows', { ...prior, resetVersion: TX_PURGE_RESET_VERSION, repairedAt: Date.now() });
@@ -874,10 +960,13 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
                     // test/id-migration.test.js, which greps them out of
                     // syncTransactions() rather than restating them.
                     const st = getSyncState('transactions') || {};
+                    // F-203: an explicit height, not null — otherwise first-run
+                    // sees oldestScannedBlock === 1 and marks the walk complete
+                    // before it runs. See postPurgeBackfillCursor.
                     setSyncState('transactions', {
                         ...st,
                         scannerVersion: null,
-                        txBackfillCursor: null,
+                        txBackfillCursor: postPurgeBackfillCursor(st),
                         txBackfillComplete: false
                     });
                     console.log(`[migration] legacy tx purge (F-049): removed ${p.deleted} extrinsic-hash-keyed row(s) of ${p.total}; ` +

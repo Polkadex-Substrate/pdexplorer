@@ -43,7 +43,13 @@ describe('F-196 — purge resets the backfill keys the scanner actually reads', 
     const readerFields = (() => {
         const at = serverSrc.lastIndexOf("const state = db.getSyncState('transactions');");
         assert.ok(at !== -1, 'the transactions scanner moved — re-point this test');
-        const reader = serverSrc.slice(at, at + 4000);
+        // Bound by the END of the function, not a byte count. A +4000 window
+        // silently stopped covering `state.txBackfillComplete` the moment the
+        // comment above the read grew (F-203). Fifth time a fixed-size slice
+        // in this suite has overrun or underrun its target.
+        const rest = serverSrc.slice(at);
+        const stop = rest.search(/\n(async )?function /);
+        const reader = stop === -1 ? rest : rest.slice(0, stop);
         return {
             cursor: (reader.match(/state\.(\w*[Bb]ackfillCursor)/) || [])[1],
             complete: (reader.match(/state\.(\w*[Bb]ackfillComplete)/) || [])[1]
@@ -63,8 +69,15 @@ describe('F-196 — purge resets the backfill keys the scanner actually reads', 
     });
 
     test('the writer resets exactly those', () => {
-        assert.ok(purgeBlock.includes(`${readerFields.cursor}: null`),
+        // F-203: the value is now an explicit height from
+        // postPurgeBackfillCursor(), not null — null was read back as the
+        // NUMBER 0 (Number(null) is finite), so the reader's first-run branch
+        // never fired and the walk never ran. Assert the FIELD is reset and
+        // that it is not reset to the no-op value.
+        assert.ok(purgeBlock.includes(`${readerFields.cursor}:`),
             `the purge resets a cursor field the scanner does not read (expected ${readerFields.cursor})`);
+        assert.ok(!purgeBlock.includes(`${readerFields.cursor}: null`),
+            'the purge hands over null again, which the reader turns into 0 and never walks (F-203)');
         assert.ok(purgeBlock.includes(`${readerFields.complete}: false`),
             `the purge resets a complete field the scanner does not read (expected ${readerFields.complete})`);
     });
@@ -310,7 +323,8 @@ describe('F-196 — a database migrated by the buggy build is repaired', () => {
         const at = dbSrc.indexOf('prior && !prior.resetVersion && Number(prior.deleted) > 0');
         const block = dbSrc.slice(at, at + 900);
         assert.match(block, /txBackfillComplete: false/);
-        assert.match(block, /txBackfillCursor: null/);
+        // F-203: an explicit height, never null.
+        assert.match(block, /txBackfillCursor: postPurgeBackfillCursor\(st\)/);
         assert.match(block, /scannerVersion: null/);
     });
 

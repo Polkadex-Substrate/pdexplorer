@@ -414,6 +414,13 @@ const CHAIN_FULL_SCAN_WINDOW = readPositiveInteger(process.env.CHAIN_FULL_SCAN_W
 // far larger, CHAIN_FULL_SCAN_WINDOW was raised, or the index is gone (see the
 // F-138 readback at /api/diag/schema, which is the other half of that story).
 const GAP_SCAN_SLOW_MS = readPositiveInteger(process.env.GAP_SCAN_SLOW_MS, 500);
+// F-047: the largest range one synchronous LEAD may cover before the sweep
+// yields the event loop. 500k measured 85ms at the production row count; 50k is
+// ~8ms, which is below a frame and indistinguishable from the 5k recent scan.
+// The sweep still covers CHAIN_FULL_SCAN_WINDOW heights per pass — same
+// coverage rate, same hourly cadence — it just does so in slices that let the
+// loop breathe between them.
+const GAP_SCAN_SLICE = readPositiveInteger(process.env.GAP_SCAN_SLICE, 50_000);
 // Per-tick parallelism for block fetches. Each Promise.all batch hits the RPC
 // node with this many concurrent block-hash + derived-block requests. Higher
 // = faster catch-up but more RPC load; lower = gentler but slower. 8 is a
@@ -3151,6 +3158,11 @@ app.get('/api/health', (req, res) => {
 app.get('/api/diag/schema', (req, res) => {
     if (!diagGate(req, res)) return;
     const state = db.getKv('schema:index_state');
+    // F-182: a deferred hash-id rewrite is exactly the kind of "we chose not to
+    // do this, and you should know" state that belongs on the same readback as
+    // the deferred analytics indexes. Both are boot-path work declined for
+    // size, and both are invisible in a log nobody was watching.
+    const hashIds = db.getKv('migration:hash-keyed-ids:deferred');
     if (!state) {
         // No record means this process has not run the check — most likely a
         // worker that is not the indexer, or a boot that predates this field.
@@ -3163,7 +3175,10 @@ app.get('/api/diag/schema', (req, res) => {
         });
     }
     res.set('Cache-Control', 'no-store');
-    res.json({ pid: process.pid, recorded: true, ...state });
+    res.json({
+        pid: process.pid, recorded: true, ...state,
+        hashKeyedIdMigration: hashIds || { deferred: false }
+    });
 });
 
 app.get('/api/diag/rpc-cache', (req, res) => {
@@ -6512,7 +6527,48 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
         const blockHash = await getBlockHashCached(blockNumber);
         // Decode with the block's OWN runtime metadata — see getEventsAtBlock.
         const events = await getEventsAtBlock(blockHash);
-        if (!events) return null;
+
+        // Audit F-202. `if (!events) return null` was the last exit in this
+        // function that recorded nothing — the catch below and the F-114
+        // timestamp branch both already return { ok: false }.
+        //
+        // WHY IT MATTERED, WHICH IS NOT OBVIOUS FROM HERE
+        //
+        // F-010 taught this indexer to queue never-attempted skip-tail heights
+        // at `attempts = 0`. Governance is the crawler that feature was written
+        // for. But a queued height whose events cannot be decoded came back
+        // here, returned null, and the gap-fill's `else stillFailing++` did not
+        // touch the row. So attempts stayed 0 for ever:
+        //
+        //   * `getLowestScanFailure('governance')` kept returning that height,
+        //     so `contiguousWatermark` stayed pinned at F-1;
+        //   * `deriveIndexStatus` therefore reported Repairing permanently —
+        //     never Synced, and never Degraded either, because Degraded needs
+        //     PERMANENT failures and permanent needs attempts >= the cap;
+        //   * `requeueExhaustedScanFailures` (the 6-hour amnesty) only matches
+        //     rows at or past the cap, so the operator's unstick tool could
+        //     never see it.
+        //
+        // The F-010 fix traded "Synced over a hole" for "never Synced, never
+        // Degraded, never amnestied", which is worse: the first is a wrong
+        // answer, the second is a stuck system with no operator recourse.
+        //
+        // The error text deliberately avoids the words
+        // requeueTransientScanFailures matches on (rpc / websocket /
+        // disconnected / socket / econn…). If it contained one, the transient
+        // amnesty would reset attempts to 0 on every pass and recreate exactly
+        // the stuck state this fixes.
+        //
+        // EVENTS_STRICT=0 stays the pruned-node escape hatch, same as
+        // transactions and rewards: on a node that has discarded historical
+        // state, undecodable events are the steady state and queueing every one
+        // of them just fills the table.
+        if (!events) {
+            if (!EVENTS_STRICT) return { treasury: [], motions: [], ok: true };
+            db.recordScanFailure('governance', blockNumber,
+                'events could not be decoded at this height (F-006)');
+            return { treasury: [], motions: [], ok: false };
+        }
 
         const TREASURY_METHODS = ['Proposed', 'Awarded', 'Rejected', 'SpendApproved'];
         const COLLECTIVE_METHODS = ['Proposed', 'Closed', 'Approved', 'Disapproved', 'Executed', 'MemberExecuted'];
@@ -6765,6 +6821,16 @@ async function syncGovernance() {
                     db.clearScanFailure('governance', f.block);
                     recovered++;
                 } else {
+                    // F-202: belt and braces. scanBlockForGovernance now
+                    // records its own failures on every path, but if it ever
+                    // returns a falsy value again — a future edit, a throw
+                    // above the try — the row must still age. A retry that
+                    // leaves attempts untouched is indistinguishable from no
+                    // retry at all, and pins the watermark for ever.
+                    if (!r) {
+                        db.recordScanFailure('governance', f.block,
+                            'gap-fill retry produced no result (F-202)');
+                    }
                     stillFailing++;
                 }
             }
@@ -7897,6 +7963,63 @@ function recordSkippedRange(indexer, from, to, reason) {
     return cap;
 }
 
+// Walk a height range for interior gaps WITHOUT holding the event loop for the
+// whole scan. (Audit F-047)
+//
+// node:sqlite is synchronous, so a LEAD window over N rows blocks this thread
+// for the duration. Round 2 bounded N by slicing the full sweep into
+// CHAIN_FULL_SCAN_WINDOW-height passes, which took the stall from 2,272ms
+// (whole 12.9M-row table) to 85ms. Measured, not guessed — see
+// tools/ and the benchmark note in .env.example.
+//
+// 85ms once an hour on a worker that serves no HTTP is small, and that is why
+// this sat as STILL OPEN for three rounds: the honest answer was "the cost is
+// negligible". But "negligible" is a judgement about today's row count on
+// today's hardware, and the finding is about the SHAPE — a synchronous scan on
+// the writer loop whose cost scales with the table. The table only grows.
+//
+// So: same total work per sweep, same coverage rate, but the longest
+// uninterrupted stall is now GAP_SCAN_SLICE-sized (~8ms) instead of
+// CHAIN_FULL_SCAN_WINDOW-sized (~85ms), because the loop yields between
+// slices. At 12x the rows it is still ~8ms per slice; only the number of
+// slices grows.
+//
+// SEAM SAFETY is why this is correct rather than merely faster. getBlockGaps
+// snaps its range OUTWARD to real stored rows before applying the predicate
+// (that snapping was itself an F-047 round-2 fix), so a hole straddling a slice
+// boundary is visible to the slices on both sides — never invisible to both.
+// The cost of that is double-reporting, so results are de-duplicated by
+// gapStart. Asserted against an unsliced scan in test/gap-scan-slicing.test.js.
+async function scanGapsYielding(limit, sinceBlock, untilBlock, slice = GAP_SCAN_SLICE) {
+    const seen = new Set();
+    const out = [];
+    let longestMs = 0;
+    let slices = 0;
+    let hi = untilBlock;
+    // Newest-first, matching getBlockGaps' own ORDER BY number DESC, so an
+    // early `limit` cutoff drops the OLDEST gaps rather than an arbitrary set.
+    while (hi >= sinceBlock && out.length < limit) {
+        const lo = Math.max(sinceBlock, hi - slice + 1);
+        const t0 = process.hrtime.bigint();
+        const part = db.getBlockGaps(limit, lo, hi);
+        const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+        if (ms > longestMs) longestMs = ms;
+        slices++;
+        for (const g of part) {
+            if (seen.has(g.gapStart)) continue;   // seam overlap, not a new hole
+            seen.add(g.gapStart);
+            out.push(g);
+            if (out.length >= limit) break;
+        }
+        hi = lo - 1;
+        // Yield. This is the whole point: without it the loop below is just the
+        // same synchronous scan spelled differently.
+        if (hi >= sinceBlock && out.length < limit) await new Promise(r => setImmediate(r));
+    }
+    out.sort((a, b) => b.gapStart - a.gapStart);
+    return { gaps: out, longestMs, slices };
+}
+
 // Drain a bounded slice of the skip tail into scan_failures, so the ordinary
 // retry machinery picks them up. Called once per tick by each scanner that can
 // skip. Bounded by SKIP_DRAIN_PER_TICK for the same reason SKIP_RECORD_MAX
@@ -8338,14 +8461,18 @@ async function syncChainIndex() {
             // that if the table grows an order of magnitude, or someone raises
             // CHAIN_FULL_SCAN_WINDOW, the regression is visible instead of
             // silently becoming the 2.3-second stall again.
-            const gapScanT0 = process.hrtime.bigint();
-            gaps = db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT, sinceBlock, untilBlock);
-            const gapScanMs = Number(process.hrtime.bigint() - gapScanT0) / 1e6;
-            if (gapScanMs > GAP_SCAN_SLOW_MS) {
-                console.warn(`[chain-index] gap scan took ${gapScanMs.toFixed(0)}ms ` +
-                    `(${fullScan ? 'full sweep' : 'recent'} ${sinceBlock}-${untilBlock}) — ` +
-                    `expected ~85ms for a ${CHAIN_FULL_SCAN_WINDOW}-height slice. ` +
-                    'Lower CHAIN_FULL_SCAN_WINDOW if this persists (F-047).');
+            // F-047: sliced and yielding. The tripwire now watches the longest
+            // SINGLE slice, which is the actual stall, rather than the total
+            // wall time of a scan that no longer blocks throughout.
+            const scan = await scanGapsYielding(
+                CHAIN_GAP_COUNT_LIMIT, sinceBlock, untilBlock,
+                fullScan ? GAP_SCAN_SLICE : Math.max(1, untilBlock - sinceBlock + 1));
+            gaps = scan.gaps;
+            if (scan.longestMs > GAP_SCAN_SLOW_MS) {
+                console.warn(`[chain-index] slowest gap-scan slice ${scan.longestMs.toFixed(0)}ms ` +
+                    `over ${scan.slices} slice(s) (${fullScan ? 'full sweep' : 'recent'} ` +
+                    `${sinceBlock}-${untilBlock}) — expected ~8ms per ${GAP_SCAN_SLICE}-height slice. ` +
+                    'Lower GAP_SCAN_SLICE if this persists (F-047).');
             }
             repairCandidates = gaps;
             lastRecentGapScanAt = nowTs;
@@ -8695,9 +8822,24 @@ async function syncTransactions() {
         // events are missing (F-006 undecodable rows) nothing is derivable —
         // the chain_index failure queue owns repairing those, and this cursor
         // must not stall waiting for them.
-        let txBackfillCursor = Number.isFinite(Number(state.txBackfillCursor))
-            ? Number(state.txBackfillCursor)
-            : null;
+        // F-203, second half. This read was `Number.isFinite(Number(state.txBackfillCursor))
+        // ? Number(...) : null`, and `Number(null)` is 0 — which IS finite. So a
+        // stored JSON null came back as the NUMBER 0, never as null, and the
+        // `if (txBackfillCursor === null)` first-run branch below was dead code
+        // for exactly the case it existed to handle.
+        //
+        // The audit reported this as "complete flips true". The real behaviour
+        // was worse: cursor 0, complete stays FALSE, `0 >= TX_MIN_BLOCK` is
+        // false so the walk never runs, and the status line reports "deriving
+        // historical transfers, next chunk ends at block 0" for ever. Found by
+        // transcribing this arithmetic into a test and watching the
+        // transcription disagree with the audit.
+        //
+        // Same `Number(null) === 0` trap as estimatedApy in lib/apy.js: reject
+        // the ABSENT values before coercing, never after.
+        let txBackfillCursor = (state.txBackfillCursor === null || state.txBackfillCursor === undefined)
+            ? null
+            : (Number.isFinite(Number(state.txBackfillCursor)) ? Number(state.txBackfillCursor) : null);
         let txBackfillComplete = !!state.txBackfillComplete;
         // The version bump forces an initial re-crawl; taking min() keeps the
         // previously earned coverage record instead of resetting it to

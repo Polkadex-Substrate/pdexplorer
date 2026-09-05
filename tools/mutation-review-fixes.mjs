@@ -19,9 +19,12 @@ const M = [
   ['lib/series-shape.js', 'if (Array.isArray(series)) return series.length > 0;',
    'if (Array.isArray(series)) return true;',
    'series-shape: an empty array counts as data (the original F-081 bug)'],
-  ['server.js', '        cacheShort(res);\n        const sinceTs = Date.now() - days',
-   "        res.set('Cache-Control', 'no-store');\n        const sinceTs = Date.now() - days",
-   'analytics: fallthrough uncacheable again'],
+  // Re-pointed: the F-081 rework moved cacheShort below the series/flag
+  // computation, so the old two-line target stopped existing and this mutant
+  // silently became a SKIP while the summary still read "0 survived".
+  ['server.js', "        cacheShort(res);\n\n        res.json({\n            days, requestedDays: askedDays, since: sinceTs,",
+   "        res.set('Cache-Control', 'no-store');\n\n        res.json({\n            days, requestedDays: askedDays, since: sinceTs,",
+   'analytics: fallthrough uncacheable again (the DoS I caused)'],
   ['server.js', 'repairCandidates = edgeForRepair.concat(gaps);', 'gaps = edgeForRepair.concat(gaps);',
    'edge holes double-counted into knownGapBlocks again'],
   ['server.js', 'const govUnverified = govFailCounts.total;',

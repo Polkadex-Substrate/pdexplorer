@@ -467,7 +467,12 @@ describe('F-049 — the caller does the half that makes it safe', () => {
         // and failed for a reason unrelated to the bug under test.)
         const at = serverSrc.lastIndexOf("const state = db.getSyncState('transactions');");
         assert.ok(at !== -1, 'the transactions scanner moved — re-point this test');
-        const reader = serverSrc.slice(at, at + 4000);
+        // Bound by the end of the function rather than +4000 — see the note in
+        // round3-new.test.js; the window stopped covering the complete-field
+        // read when the comment above it grew.
+        const readerRest = serverSrc.slice(at);
+        const readerStop = readerRest.search(/\n(async )?function /);
+        const reader = readerStop === -1 ? readerRest : readerRest.slice(0, readerStop);
         const cursorField = (reader.match(/state\.(\w*[Bb]ackfillCursor)/) || [])[1];
         const completeField = (reader.match(/state\.(\w*[Bb]ackfillComplete)/) || [])[1];
         assert.ok(cursorField && completeField,
@@ -483,8 +488,14 @@ describe('F-049 — the caller does the half that makes it safe', () => {
         const setAt = dbSrc.indexOf("setSyncState('transactions', {", purgeAt);
         assert.ok(setAt !== -1 && setAt > purgeAt, 'the purge no longer resets the sync state at all');
         const block = dbSrc.slice(setAt, dbSrc.indexOf('});', setAt));
-        assert.ok(block.includes(`${cursorField}: null`),
+        // F-203: the cursor is now an explicit height, never null — a stored
+        // null was read back as the NUMBER 0 (Number(null) is finite), so the
+        // reader's first-run branch never fired and the walk never ran. Assert
+        // the FIELD is reset, and that it is not reset to the no-op value.
+        assert.ok(block.includes(`${cursorField}:`),
             `the purge resets a field the scanner does not read (writes something other than ${cursorField})`);
+        assert.ok(!block.includes(`${cursorField}: null`),
+            'the purge hands over null again; the reader coerces it to 0 and never walks (F-203)');
         assert.ok(block.includes(`${completeField}: false`),
             `the purge resets a field the scanner does not read (writes something other than ${completeField})`);
     });

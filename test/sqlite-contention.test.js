@@ -121,7 +121,15 @@ describe('F-047 — the indexer sweeps in windows, not one unbounded pass', () =
         // Round 1 passed `null` for the full scan, which is the unbounded LEAD.
         assert.ok(!/getBlockGaps\(CHAIN_GAP_COUNT_LIMIT, sinceBlock\)\s*;/.test(code),
             'the full scan calls getBlockGaps without an upper bound again — that IS F-047');
-        assert.match(code, /getBlockGaps\(CHAIN_GAP_COUNT_LIMIT, sinceBlock, untilBlock\)/);
+        // Round 4: the sweep is now sliced AND yielding, so the bound lives in
+        // scanGapsYielding's slice walk rather than in one direct call. Both
+        // ends must still be passed, and every slice must be bounded.
+        assert.match(code, /await scanGapsYielding\(\s*CHAIN_GAP_COUNT_LIMIT, sinceBlock, untilBlock,/,
+            'the sweep no longer passes both ends of the range');
+        assert.match(code, /const part = db\.getBlockGaps\(limit, lo, hi\);/,
+            'a slice queries getBlockGaps without both bounds — that is the unbounded LEAD again');
+        assert.ok(!/db\.getBlockGaps\([^)]*null[^)]*\)/.test(code),
+            'a getBlockGaps call passes null for a bound');
     });
 
     test('the window size is configurable and documented', () => {

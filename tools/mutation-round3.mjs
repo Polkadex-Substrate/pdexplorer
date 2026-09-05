@@ -7,9 +7,27 @@ import { execSync } from 'node:child_process';
 
 const M = [
   // F-196
-  ['db.js', 'txBackfillCursor: null,\n                        txBackfillComplete: false',
-   'backfillCursor: null,\n                        backfillComplete: false',
+  // F-203 changed the VALUE from null to postPurgeBackfillCursor(st), so the
+  // old mutation string stopped existing and this silently became a SKIP —
+  // a mutant that cannot be applied proves nothing, and the count still read
+  // "0 survived". Re-pointed at the current text.
+  ['db.js', 'txBackfillCursor: postPurgeBackfillCursor(st),\n                        txBackfillComplete: false',
+   'backfillCursor: postPurgeBackfillCursor(st),\n                        backfillComplete: false',
    'F-196 purge resets keys the scanner does not read (the original bug)'],
+  // F-203 itself: hand over null and the reader coerces it to 0, never walks.
+  ['db.js', 'txBackfillCursor: postPurgeBackfillCursor(st),', 'txBackfillCursor: null,',
+   'F-203 purge hands over null; first-run turns it into 0 and skips the walk'],
+  // F-203 second half: the coercion that made the first-run branch dead code.
+  ['server.js', '(state.txBackfillCursor === null || state.txBackfillCursor === undefined)',
+   'Number.isFinite(Number(state.txBackfillCursor)) && false || false ? 0 : (false)',
+   'F-203 Number(null)===0 makes the first-run branch unreachable'],
+  // F-202: governance null-events recording nothing.
+  ['server.js', "db.recordScanFailure('governance', blockNumber,", "void (0) && db.recordScanFailure('governance', blockNumber,",
+   'F-202 governance null-events record nothing; watermark pins for ever'],
+  // F-201: the Insights host-source back on the wallet origin.
+  ['nginx.conf', "script-src 'self' 'wasm-unsafe-eval';",
+   "script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com;",
+   'F-201 third-party script origin on the wallet-serving CSP'],
   ['db.js', '                        txBackfillComplete: false', '',
    'F-196 backfill-complete never cleared — deleted history not re-derived'],
   ['db.js', 'if (prior && !prior.resetVersion && Number(prior.deleted) > 0) {', 'if (false) {',

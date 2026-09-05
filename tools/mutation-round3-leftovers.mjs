@@ -21,7 +21,10 @@ const M = [
    'F-182 fork-deleted heights are not queued for re-crawl'],
   ['tools/pin-image-digests.sh', 'WRITE=0', 'WRITE=1',
    'F-150 pinner rewrites build files without being asked'],
-  ['tools/pin-image-digests.sh', "docker image inspect \"$tag\" --format '{{index .RepoDigests 0}}'", 'echo sha256:fake',
+  // Re-pointed: the --format template changed when empty-RepoDigests handling
+  // was added (an image present but never pulled from a registry), so the old
+  // exact string stopped existing and this became a SKIP.
+  ['tools/pin-image-digests.sh', 'docker image inspect "$tag" --format', 'echo sha256:fake #',
    'F-150 digest no longer read from the daemon'],
 ];
 

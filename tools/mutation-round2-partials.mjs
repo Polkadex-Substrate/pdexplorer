@@ -23,8 +23,11 @@ const MUTANTS = [
         'SUM(CASE WHEN event_derived IS NULL OR event_derived != 1 THEN 1 ELSE 0 END) AS legacy',
         'SUM(CASE WHEN event_derived != 1 THEN 1 ELSE 0 END) AS legacy',
         'F-049 NULL event_derived no longer counted as legacy'],
+    // Re-pointed twice: F-196 fixed the key NAMES (backfillCursor ->
+    // txBackfillCursor) and F-203 fixed the VALUE (null -> an explicit
+    // height). Each change silently turned this into a SKIP.
     ['db.js',
-        'scannerVersion: null,\n                        backfillCursor: null,\n                        backfillComplete: false',
+        'scannerVersion: null,\n                        txBackfillCursor: postPurgeBackfillCursor(st),\n                        txBackfillComplete: false',
         'scannerVersion: null',
         'F-049 re-crawl no longer resets the backfill — deleted history is not re-derived'],
     ['db.js',

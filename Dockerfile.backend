@@ -40,6 +40,14 @@ COPY --chown=node:node server.js db.js email.js backfill-transactions-from-event
 # Operator scripts under tools/ are deliberately NOT copied — run them with
 #     docker compose exec -T backend node --experimental-sqlite - < tools/<script>
 COPY --chown=node:node lib ./lib
+# Audit F-182: INSTALL documents
+#   docker compose exec backend node --experimental-sqlite tools/migrate-hash-ids.mjs
+# as the maintenance-window path for the hash-keyed id rewrite. That command runs
+# in THIS image, so the script has to be in it — it was not, and an operator who
+# followed the documented advice got a missing-module error, left the migration
+# flag unset, and hit the full-table rewrite at the next indexer boot instead.
+# The whole point of documenting an operator path is that it works.
+COPY --chown=node:node tools ./tools
 
 # Build provenance, surfaced by GET /api/version. Declared AFTER npm install so
 # a new SHA doesn't invalidate the dependency layer on every deploy.

@@ -395,19 +395,31 @@ describe('F-047 — the gap sweep stays bounded and instrumented', () => {
     test('the sweep is timed and the duration is checked', () => {
         // Without this, the sweep silently regressing to seconds looks
         // identical to it running in 85ms.
-        assert.match(srv, /const gapScanT0 = process\.hrtime\.bigint\(\)/);
-        assert.match(srv, /gapScanMs > GAP_SCAN_SLOW_MS/);
+        //
+        // Round 4: the timer moved INSIDE scanGapsYielding and now measures the
+        // longest single SLICE, which is the actual stall. Total wall time
+        // would be the wrong thing to watch — it includes the yields, so it
+        // would fire on a sweep that never blocked and stay quiet on one that
+        // did.
+        assert.match(srv, /const t0 = process\.hrtime\.bigint\(\);/);
+        assert.match(srv, /if \(ms > longestMs\) longestMs = ms;/);
+        assert.match(srv, /scan\.longestMs > GAP_SCAN_SLOW_MS/);
     });
 
     test('the timer brackets ONLY the query', () => {
-        // A timer that also spans the repair work would report a duration that
-        // is not the stall being bounded, and the tripwire would fire for the
-        // wrong reason.
-        const t0 = srv.indexOf('const gapScanT0');
-        const call = srv.indexOf('db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT', t0);
-        const t1 = srv.indexOf('const gapScanMs', call);
+        // A timer that also spans the repair work — or the yields — would
+        // report a duration that is not the stall being bounded, and the
+        // tripwire would fire for the wrong reason.
+        const fnAt = srv.indexOf('async function scanGapsYielding');
+        assert.ok(fnAt > 0, 'the sliced sweep is gone');
+        const t0 = srv.indexOf('const t0 = process.hrtime.bigint();', fnAt);
+        const call = srv.indexOf('const part = db.getBlockGaps(limit, lo, hi);', t0);
+        const t1 = srv.indexOf('const ms = Number(process.hrtime.bigint() - t0)', call);
         assert.ok(t0 > 0 && call > t0 && t1 > call,
-            'the timing no longer brackets exactly the getBlockGaps call');
+            'the timing no longer brackets exactly one getBlockGaps slice');
+        // And the yield must be OUTSIDE the bracket.
+        const yieldAt = srv.indexOf('await new Promise(r => setImmediate(r));', fnAt);
+        assert.ok(yieldAt > t1, 'the yield is inside the timed region, so the stall reads too long');
     });
 
     test('the threshold is configurable and documented', () => {
@@ -433,57 +445,65 @@ describe('F-047 — the gap sweep stays bounded and instrumented', () => {
 // Cloudflare Web Analytics — the one real CSP violation on the live site
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('CSP allows the Cloudflare beacon, and no more than that', () => {
+describe('F-201 — no third-party script origin on the wallet CSP', () => {
+    // Reversal of a change made hours earlier in the same session. The beacon
+    // host-source was added to silence a console error and make Cloudflare Web
+    // Analytics work; audit round 4 rated it HIGH and it was reverted. Both
+    // directions are asserted here so neither is re-made by accident.
     const conf = raw('nginx.conf');
     const policies = conf.split('\n').filter(l => l.includes('add_header Content-Security-Policy'));
 
-    test('script-src allows the beacon ORIGIN, not the exact path', () => {
-        // Cloudflare's own docs say to allow
-        // `https://static.cloudflareinsights.com/beacon.min.js`, but the URL
-        // served is versioned (/beacon.min.js/v31edd6df95...). CSP path
-        // matching is EXACT unless the source ends in `/`, so the documented
-        // value would not match and the script would stay blocked — a fix that
-        // reads correctly in the diff and does nothing at runtime.
+    test('script-src is exactly self plus wasm-unsafe-eval', () => {
+        // index.html is the SPA shell for EVERY route including /wallet, so a
+        // script origin allowed anywhere is allowed on the signing page. There
+        // is no per-route CSP available here.
         for (const p of policies) {
-            assert.match(p, /script-src [^;]*https:\/\/static\.cloudflareinsights\.com(;| )/,
-                'the beacon origin is not allowed');
-            assert.ok(!/static\.cloudflareinsights\.com\/beacon\.min\.js/.test(p),
-                'an exact path was used; it cannot match the versioned URL Cloudflare serves');
+            const m = p.match(/script-src ([^;]+);/);
+            assert.ok(m, 'no script-src');
+            assert.deepEqual(m[1].trim().split(/\s+/).sort(), ["'self'", "'wasm-unsafe-eval'"],
+                'a script origin was added to the CSP that also serves the wallet');
         }
     });
 
-    test('connect-src is NOT widened', () => {
-        // Automatic injection (ours) posts same-origin to /cdn-cgi/rum, already
-        // covered by 'self'. Only MANUAL embedding needs cloudflareinsights.com.
-        // Widening it would loosen the policy on the page carrying wallet
-        // signing, for nothing.
+    test('the Insights host-source is not in any policy line', () => {
         for (const p of policies) {
-            assert.ok(!/connect-src [^;]*cloudflareinsights/.test(p),
-                'connect-src was widened for the beacon — automatic injection does not need it');
+            assert.ok(!p.includes('cloudflareinsights'),
+                'the Cloudflare Insights host-source is back on the wallet origin (F-201)');
+        }
+    });
+
+    test('connect-src was never widened for it either', () => {
+        for (const p of policies) {
+            assert.ok(!/connect-src [^;]*cloudflareinsights/.test(p));
             assert.match(p, /connect-src 'self' wss:\/\/rpc\.polkadex\.ee/);
         }
     });
 
-    test('nothing else was let into script-src', () => {
-        // The wallet lives on this origin. Every additional script source is a
-        // party that can read a signing page.
+    test('the two policies stay byte-identical', () => {
+        assert.equal(policies.length, 2);
+        assert.equal(policies[0].trim(), policies[1].trim());
+    });
+
+    test('the reversal reasoning is recorded, not just the reversal', () => {
+        // Specifically the two arguments that decided it, because the case FOR
+        // allowing the beacon is reasonable and will be made again.
+        assert.match(conf, /'wasm-unsafe-eval' is not scoped to our own bundle/);
+        assert.match(conf, /being in the path is exactly why the constraint\n\s*#\s*mattered/);
+    });
+
+    test('F-104 — the privacy page and the CSP agree', () => {
+        // The privacy copy claims no third-party analytics and says the CSP
+        // enforces it. With the host-source present that sentence was false.
+        // This ties the two together so they cannot drift apart again: if the
+        // policy ever admits a third-party script origin, this fails.
+        const html = raw('index.html');
+        assert.match(html, /We do not load Google Analytics, Mixpanel, Segment, advertising pixels, or any other analytics\/tracking script/);
+        assert.match(html, /the browser itself refuses to load scripts from anywhere else/);
         for (const p of policies) {
             const m = p.match(/script-src ([^;]+);/);
-            assert.ok(m, 'no script-src');
-            assert.deepEqual(m[1].trim().split(/\s+/).sort(),
-                ["'self'", "'wasm-unsafe-eval'", 'https://static.cloudflareinsights.com'].sort());
+            const thirdParty = m[1].trim().split(/\s+/).filter(s => s.startsWith('http'));
+            assert.deepEqual(thirdParty, [],
+                `privacy §4 promises no third-party scripts, but the CSP admits ${thirdParty.join(' ')}`);
         }
-    });
-
-    test('the two policies are still byte-identical', () => {
-        // The drift check depends on there being exactly two, and equal.
-        assert.equal(policies.length, 2);
-        assert.equal(policies[0].trim(), policies[1].trim(),
-            'the :8080 and :8443 policies have drifted');
-    });
-
-    test('the reasoning is recorded, including why no SRI', () => {
-        assert.match(conf, /CSP path matching is EXACT unless the source expression ends in `\/`/);
-        assert.match(conf, /No SRI: the URL is versioned by Cloudflare/);
     });
 });

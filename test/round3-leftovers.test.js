@@ -168,10 +168,17 @@ describe('F-150 — the digest-pinning tooling', () => {
     test('it reads digests from the local daemon, not the network', () => {
         // So it needs no registry credentials and can run on the deploy host.
         // `docker image inspect` reads the LOCAL daemon; `docker manifest
-        // inspect` would hit the registry and need credentials. The exact
-        // --format template changed when empty-RepoDigests handling was added,
-        // so assert the property that matters rather than the template text.
-        assert.match(pinner, /docker image inspect "\$tag"/);
+        // inspect` would hit the registry and need credentials.
+        //
+        // Pin the DIGEST READ specifically, not just any occurrence. The
+        // relaxed version matched the presence check on the line above, so a
+        // mutant replacing the actual read with `echo sha256:fake` SURVIVED —
+        // the script would have pinned a fabricated digest and the test would
+        // have passed. Two calls to the same command are not interchangeable.
+        assert.match(pinner, /d=\$\(docker image inspect "\$tag" --format '\{\{range \.RepoDigests\}\}/,
+            'the digest is no longer read from the local daemon — it could be fabricated');
+        assert.match(pinner, /docker image inspect "\$tag" >\/dev\/null 2>&1/,
+            'the present-vs-absent check is gone, so BuildKit absence is misreported');
         assert.ok(!/docker manifest inspect|skopeo|curl .*registry/.test(pinner),
             'the pinner now reaches out to a registry — it must work offline on the deploy host');
     });

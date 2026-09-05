@@ -35,6 +35,13 @@ import { migrateHashKeyedIds } from '../lib/id-migration.js';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
+    // Both `--chunk 100000` and `--chunk=100000`. Audit F-182 noted only the
+    // first form parsed, so the second silently fell back to the default — in a
+    // maintenance window, on a destructive-ish migration, with no error. An
+    // operator typing the shape they are used to should not get a different
+    // chunk size than the one they asked for.
+    const eq = argv.find(a => a.startsWith(name + '='));
+    if (eq) return eq.slice(name.length + 1) || fallback;
     const i = argv.indexOf(name);
     return i !== -1 && argv[i + 1] ? argv[i + 1] : fallback;
 };

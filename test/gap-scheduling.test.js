@@ -189,8 +189,11 @@ describe('F-046 — the indexer actually uses this', () => {
         // reached the status total — and then nothing ever scanned them. The
         // operator saw "Repairing" over a hole no pass was going to visit.
         const src = readRepo('server.js', import.meta.url);
+        // Re-anchored: F-047 replaced the direct db.getBlockGaps call with the
+        // sliced, yielding sweep. Anchor on the assignment, which is stable
+        // across both shapes, rather than on the callee's name.
         const repair = src.slice(
-            src.indexOf('gaps = db.getBlockGaps(CHAIN_GAP_COUNT_LIMIT'),
+            src.indexOf('gaps = scan.gaps;'),
             src.indexOf('const g = chooseGap(repairCandidates')
         );
         assert.ok(repair.length > 0, 'the gap-fill pass moved');
