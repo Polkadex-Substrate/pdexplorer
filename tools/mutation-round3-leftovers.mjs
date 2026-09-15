@@ -35,7 +35,12 @@ for (const [file, from, to, label] of M) {
   copyFileSync(file, `${file}.bak`);
   writeFileSync(file, src.replace(from, to));
   let caught = false;
-  try { execSync("node --test 'test/**/*.test.js' 2>&1 | grep -q '# fail 0'", { stdio: 'pipe' }); }
+  // THE FLAG IS LOAD-BEARING. node:sqlite arrived in Node 22.5.0 behind
+  // --experimental-sqlite and was unflagged in 22.13.0. The Dockerfiles and CI
+  // pin 22.11, where it is REQUIRED. Without it every test run dies at import,
+  // the grep for '# fail 0' never matches, and EVERY mutant is reported KILLED —
+  // a harness that can only return success. Verified against a real 22.11.
+  try { execSync("node --experimental-sqlite --test 'test/**/*.test.js' 2>&1 | grep -q '# fail 0'", { stdio: 'pipe' }); }
   catch { caught = true; }
   copyFileSync(`${file}.bak`, file); rmSync(`${file}.bak`, { force: true });
   if (caught) console.log(`KILLED   ${label}`);

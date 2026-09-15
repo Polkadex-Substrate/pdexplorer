@@ -24,9 +24,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Must match the Dockerfiles. node:sqlite is behind a flag before 22.5
-      # and the suite opens real databases, so a mismatch here would pass CI
-      # and fail in the image — the exact class of thing CI exists to prevent.
+      # Must match the Dockerfiles (22.11).
+      #
+      # This comment used to say "node:sqlite is behind a flag before 22.5",
+      # which has the direction backwards and cost a red CI for ten days.
+      # node:sqlite ARRIVED in 22.5.0 behind --experimental-sqlite and was
+      # unflagged in 22.13.0. So on 22.11 — the version pinned here and in both
+      # Dockerfiles — the flag is REQUIRED.
+      #
+      # `npm test` did not pass it. It passed locally anyway because a developer
+      # machine on >=22.13 needs no flag, so the suite was green everywhere
+      # except the one environment that matches production. That is precisely
+      # the mismatch this step exists to prevent, and the wrong comment is what
+      # let it through. The flag now lives in the npm script (harmless on newer
+      # Node, required on this one) rather than here, so `npm test` behaves the
+      # same for a developer, for CI, and inside the image.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.11'
