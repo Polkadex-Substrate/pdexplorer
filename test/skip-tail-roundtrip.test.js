@@ -187,11 +187,17 @@ describe('F-010 — production uses the non-incrementing write', () => {
     });
 
     test('queueScanFailureIfAbsent does not increment on conflict', () => {
+        // The SQL moved to lib/scan-queue.js (shared with the operator tool);
+        // db.js must delegate to it, and the statement must keep its shape.
         const dbSrc = fs.readFileSync(new URL('../db.js', import.meta.url), 'utf8');
         const at = dbSrc.indexOf('export function queueScanFailureIfAbsent');
         const fn = dbSrc.slice(at, dbSrc.indexOf('\n}', at));
-        assert.match(fn, /ON CONFLICT\(indexer, block\) DO NOTHING/);
+        assert.match(fn, /queueOneIfAbsent\(db,/, 'db.js no longer delegates to lib/scan-queue.js');
         assert.ok(!/attempts\s*=\s*attempts\s*\+\s*1/.test(fn));
-        assert.match(fn, /VALUES \(\?, \?, 0,/, 'a new row must start at zero attempts');
+        const sql = fs.readFileSync(new URL('../lib/scan-queue.js', import.meta.url), 'utf8');
+        const stmt = sql.slice(sql.indexOf('QUEUE_IF_ABSENT_SQL'), sql.indexOf('`;', sql.indexOf('QUEUE_IF_ABSENT_SQL')));
+        assert.match(stmt, /ON CONFLICT\(indexer, block\) DO NOTHING/);
+        assert.ok(!/attempts\s*=\s*attempts\s*\+\s*1/.test(stmt));
+        assert.match(stmt, /VALUES \(\?, \?, 0,/, 'a new row must start at zero attempts');
     });
 });

@@ -22,6 +22,7 @@ import { migrateHashKeyedIds, purgeLegacyExtrinsicKeyedTx, countHashKeyedIdCandi
 import fs from 'fs';
 import path from 'path';
 import { APY_FIELD, APY_DEPRECATED_ALIASES } from './lib/apy.js';
+import { queueOneIfAbsent } from './lib/scan-queue.js';
 
 let db = null;
 
@@ -2292,15 +2293,11 @@ export function recordScanFailure(indexer, block, errMessage) {
 //
 // DO NOTHING on conflict: if a row already exists, the existing bookkeeping is
 // better than anything this call knows. The row is already queued either way.
+//
+// The SQL lives in lib/scan-queue.js so tools/requeue-scan-range.mjs runs the
+// identical statement.
 export function queueScanFailureIfAbsent(indexer, block, errMessage) {
-    const now = Date.now();
-    const msg = String(errMessage || '').slice(0, 500);
-    const info = db.prepare(`
-        INSERT INTO scan_failures (indexer, block, attempts, last_error, first_at, last_at)
-        VALUES (?, ?, 0, ?, ?, ?)
-        ON CONFLICT(indexer, block) DO NOTHING
-    `).run(indexer, block, msg, now, now);
-    return info.changes > 0;
+    return queueOneIfAbsent(db, indexer, block, errMessage);
 }
 
 // Clear a single (indexer, block) entry — called after a retry succeeds.

@@ -1393,6 +1393,37 @@ function mergeFinancialTransactions(existingTransactions, incomingTransactions) 
         .slice(0, TX_CACHE_LIMIT);
 }
 
+// A block could not be scanned because the NODE was unavailable (timeout,
+// disconnect), not because the block is bad.
+//
+// Two different questions were answered as one here, and that lost data:
+//   1. Should this count as one of the block's SCAN_MAX_ATTEMPTS lives?
+//      No. Ten unlucky disconnects permanently retired three governance
+//      blocks in June (lib/rpc-errors.js).
+//   2. Should the block be remembered for a retry?
+//      YES. The forward and backfill passes move their watermarks past every
+//      height they ATTEMPTED, ok or not, and governance, staking_rewards and
+//      transactions have no gap scan to rediscover a hole later (only
+//      chain_index does). A transient failure that was neither counted nor
+//      recorded was simply gone.
+//
+// Found in production, Oct 2026: during the rpc1 suspension the node answered
+// slowly or not at all, and council motion #134 (proposed at #13,141,046,
+// closed ~#13,146,18x) never reached the explorer, along with whatever
+// rewards and transfers sat in the same window.
+//
+// So: queue it at attempts = 0, and only if absent (an existing row keeps its
+// real count and error). The message keeps the original error text on
+// purpose — it contains the transport words requeueTransientScanFailures
+// matches, which is correct for a row that really was transient.
+function deferTransientScan(indexer, blockNumber, short) {
+    try {
+        db.queueScanFailureIfAbsent(indexer, blockNumber, `node unavailable, deferred (attempt not counted): ${short}`);
+    } catch (e) {
+        console.warn(`[${indexer}] could not queue transient block ${blockNumber} for retry: ${e && e.message}`);
+    }
+}
+
 // Scan one block for financial-transaction (transfer) events. Extracted
 // from scanFinancialTransactions's inline Promise.all so the gap-fill
 // retry phase in syncTransactions can share the same logic. Returns
@@ -1442,6 +1473,7 @@ async function scanBlockForTransactions(blockNumber) {
         // retry attempts on the node being down (see lib/rpc-errors.js).
         if (isRpcUnavailableError(err)) {
             console.warn(`Financial transaction scan deferred block ${blockNumber} (node unavailable, attempt not counted): ${short}`);
+            deferTransientScan('transactions', blockNumber, short);
             return { blockNumber, transactions: [], ok: false, transient: true };
         }
         console.warn(`Financial transaction scan skipped block ${blockNumber}: ${short}`);
@@ -6667,6 +6699,7 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
         // 2026 — see lib/rpc-errors.js.
         if (isRpcUnavailableError(err)) {
             console.warn(`Governance scan deferred block ${blockNumber} (node unavailable, attempt not counted): ${short}`);
+            deferTransientScan('governance', blockNumber, short);
             return { treasury: [], motions: [], ok: false, transient: true };
         }
         console.warn(`Governance scan skipped block ${blockNumber}: ${short}`);
@@ -9146,6 +9179,7 @@ async function scanBlockForRewards(blockNumber) {
         // Transport failure ≠ bad block (see lib/rpc-errors.js).
         if (isRpcUnavailableError(err)) {
             console.warn(`Staking rewards scan deferred block ${blockNumber} (node unavailable, attempt not counted): ${short}`);
+            deferTransientScan('staking_rewards', blockNumber, short);
             return { rewards: [], ok: false, transient: true };
         }
         console.warn(`Staking rewards scan skipped block ${blockNumber}: ${short}`);
