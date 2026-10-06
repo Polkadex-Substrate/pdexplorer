@@ -23,6 +23,7 @@ import fs from 'fs';
 import path from 'path';
 import { APY_FIELD, APY_DEPRECATED_ALIASES } from './lib/apy.js';
 import { queueOneIfAbsent } from './lib/scan-queue.js';
+import { attributeMotionEvents, EVENT_KINDS } from './lib/collective-motions.js';
 
 let db = null;
 
@@ -253,6 +254,42 @@ CREATE TABLE IF NOT EXISTS council_motions (
   updated_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_motions_index ON council_motions(motion_index DESC);
+-- council_motions above is LEGACY (read once by migrateCouncilMotionsToCollective,
+-- never written again): it was keyed by proposal hash, and a re-proposed call
+-- has the same hash, so re-proposals overwrote earlier motions. Motions are
+-- keyed by the pallet's own identity, (collective, index); the resolving events
+-- carry only the hash, so they live in their own table and are attributed to
+-- the right motion at read time (lib/collective-motions.js).
+CREATE TABLE IF NOT EXISTS collective_motions (
+  collective TEXT NOT NULL,
+  motion_index INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  proposer TEXT,
+  proposer_name TEXT,
+  section TEXT,
+  method TEXT,
+  threshold INTEGER,
+  proposed_block INTEGER,
+  proposed_event_index INTEGER,
+  proposed_at INTEGER,
+  live_ayes INTEGER,
+  live_nays INTEGER,
+  left_storage_at INTEGER,
+  updated_at INTEGER,
+  PRIMARY KEY (collective, motion_index)
+);
+CREATE INDEX IF NOT EXISTS idx_cmotions_hash ON collective_motions(collective, hash);
+CREATE TABLE IF NOT EXISTS collective_motion_events (
+  collective TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  block INTEGER NOT NULL,
+  event_index INTEGER NOT NULL DEFAULT -1,
+  kind TEXT NOT NULL,
+  ayes INTEGER,
+  nays INTEGER,
+  at INTEGER,
+  PRIMARY KEY (collective, hash, block, kind)
+);
 
 -- Address labels. v1 = self-labels: the row's address and signer columns
 -- are the same (proof of ownership via signature). Schema leaves room for
@@ -2012,71 +2049,167 @@ export function resolveMissingTreasuryProposals(liveIds, { trusted = false } = {
     return gone.length;
 }
 
-export function resolveMissingCouncilMotions(liveHashes, { trusted = false } = {}) {
+// F-052 for collectives: `liveIndices` is the COMPLETE set of motion indices
+// open on chain right now (the caller must prove that — hence trusted:true).
+// A stored motion that is still 'proposed' (no resolving event attributed to
+// it) but is no longer open left storage without us seeing how; mark it so it
+// stops showing as open. `asOfBlock` is the block the live set was read at: a
+// motion proposed after it cannot be judged against that set (the crawler can
+// write a brand-new motion between the live read and this call).
+export function resolveMissingCollectiveMotions(collective, liveIndices, { trusted = false, asOfBlock = null } = {}) {
+    if (!trusted) {
+        console.warn('resolveMissingCollectiveMotions called without trusted:true — refusing (F-052).');
+        return 0;
+    }
+    if (!Array.isArray(liveIndices)) return 0;
+    const live = new Set(liveIndices.map(Number));
+    const stillOpen = getCollectiveMotions(collective).filter(m => m.status === 'proposed');
+    const gone = stillOpen.filter(m => !live.has(Number(m.motionIndex))
+        && (asOfBlock === null || m.proposedBlock == null || Number(m.proposedBlock) <= Number(asOfBlock)));
+    if (gone.length === 0) return 0;
+    const upd = db.prepare('UPDATE collective_motions SET left_storage_at = ?, updated_at = ? WHERE collective = ? AND motion_index = ?');
+    const now = Date.now();
+    runTx(() => { for (const m of gone) upd.run(now, now, collective, m.motionIndex); });
+    return gone.length;
+}
+// Back-compat name for the council (F-052 tests and callers). Indices, not
+// hashes: two motions can share a hash, never an index.
+export function resolveMissingCouncilMotions(liveIndices, { trusted = false, asOfBlock = null } = {}) {
     if (!trusted) {
         console.warn('resolveMissingCouncilMotions called without trusted:true — refusing (F-052).');
         return 0;
     }
-    if (!Array.isArray(liveHashes)) return 0;
-    const open = db.prepare("SELECT hash FROM council_motions WHERE status = 'proposed'").all();
-    const live = new Set(liveHashes.map(String));
-    const gone = open.filter(r => !live.has(String(r.hash)));
-    if (gone.length === 0) return 0;
-    const upd = db.prepare(
-        "UPDATE council_motions SET status = 'resolved', updated_at = ? WHERE hash = ?"
-    );
-    const now = Date.now();
-    db.exec('BEGIN IMMEDIATE');
-    try {
-        for (const r of gone) upd.run(now, r.hash);
-        db.exec('COMMIT');
-    } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-    }
-    return gone.length;
+    return resolveMissingCollectiveMotions('council', liveIndices, { trusted, asOfBlock });
 }
 
-// --- council motions (full history, crawled from chain events) ---
-const MOTION_STATUS_RANK = { proposed: 0, resolved: 1, closed: 2, approved: 3, disapproved: 3, executed: 4 };   // F-052: see TREASURY_STATUS_RANK
-export function upsertCouncilMotion(m) {
-    if (m == null || !m.hash) return;
-    const ex = db.prepare('SELECT motion_index,proposer,proposer_name,section,method,threshold,status,ayes,nays,proposed_block,proposed_at,resolved_block,resolved_at FROM council_motions WHERE hash = ?').get(m.hash);
-    const keep = (v, old) => (v !== undefined && v !== null) ? v : (ex ? old : null);
-    let status = ex ? ex.status : null;
-    if (m.status) {
-        const newRank = MOTION_STATUS_RANK[m.status] ?? 0;
-        const oldRank = status ? (MOTION_STATUS_RANK[status] ?? 0) : -1;
-        if (newRank >= oldRank) status = m.status;
-    }
-    db.prepare(`INSERT OR REPLACE INTO council_motions
-        (hash,motion_index,proposer,proposer_name,section,method,threshold,status,ayes,nays,proposed_block,proposed_at,resolved_block,resolved_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        m.hash,
-        keep(m.motionIndex, ex && ex.motion_index),
-        keep(m.proposer, ex && ex.proposer),
-        keep(m.proposerName, ex && ex.proposer_name),
-        keep(m.section, ex && ex.section),
-        keep(m.method, ex && ex.method),
-        keep(m.threshold, ex && ex.threshold),
-        status,
-        keep(m.ayes, ex && ex.ayes),
-        keep(m.nays, ex && ex.nays),
-        keep(m.proposedBlock, ex && ex.proposed_block),
-        keep(m.proposedAt, ex && ex.proposed_at),
-        keep(m.resolvedBlock, ex && ex.resolved_block),
-        keep(m.resolvedAt, ex && ex.resolved_at),
-        Date.now()
-    );
+// --- collective motions (council + technical committee) ---------------------
+const isIndex = (v) => Number.isInteger(Number(v)) && v !== null && v !== '' && Number(v) >= 0;
+
+// Insert or enrich one motion. Only non-null fields overwrite, so the crawler
+// (proposer, proposal block) and the live sync (live tallies) can each fill in
+// what they know without erasing the other's. `open: true` means "seen in
+// chain storage right now" and clears a stale left-storage mark.
+export function upsertCollectiveMotion(collective, m, { open = false } = {}) {
+    if (!m || !m.hash || !isIndex(m.motionIndex)) return false;
+    db.prepare(`INSERT INTO collective_motions
+        (collective, motion_index, hash, proposer, proposer_name, section, method, threshold,
+         proposed_block, proposed_event_index, proposed_at, live_ayes, live_nays, left_storage_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)
+        ON CONFLICT(collective, motion_index) DO UPDATE SET
+            hash                 = excluded.hash,
+            proposer             = COALESCE(excluded.proposer, proposer),
+            proposer_name        = COALESCE(excluded.proposer_name, proposer_name),
+            section              = COALESCE(excluded.section, section),
+            method               = COALESCE(excluded.method, method),
+            threshold            = COALESCE(excluded.threshold, threshold),
+            proposed_block       = COALESCE(excluded.proposed_block, proposed_block),
+            proposed_event_index = COALESCE(excluded.proposed_event_index, proposed_event_index),
+            proposed_at          = COALESCE(excluded.proposed_at, proposed_at),
+            live_ayes            = COALESCE(excluded.live_ayes, live_ayes),
+            live_nays            = COALESCE(excluded.live_nays, live_nays),
+            left_storage_at      = CASE WHEN ? THEN NULL ELSE left_storage_at END,
+            updated_at           = excluded.updated_at`).run(
+        collective, Number(m.motionIndex), String(m.hash),
+        m.proposer ?? null, m.proposerName ?? null, m.section ?? null, m.method ?? null,
+        m.threshold ?? null, m.proposedBlock ?? null, m.proposedEventIndex ?? null, m.proposedAt ?? null,
+        m.liveAyes ?? null, m.liveNays ?? null, Date.now(), open ? 1 : 0);
+    return true;
 }
-export function getCouncilMotions() {
-    return db.prepare(`SELECT hash, motion_index AS motionIndex, proposer, proposer_name AS proposerName,
-        section, method, threshold, status, ayes, nays, proposed_block AS proposedBlock, proposed_at AS proposedAt,
-        resolved_block AS resolvedBlock, resolved_at AS resolvedAt
-        FROM council_motions ORDER BY motion_index DESC`).all();
+
+// Record one resolving event (Closed / Approved / Disapproved / Executed). It
+// carries only the hash; attribution to a motion happens at read time.
+export function insertCollectiveMotionEvent(collective, e) {
+    if (!e || !e.hash || !EVENT_KINDS.includes(e.kind) || !Number.isInteger(Number(e.block))) return false;
+    db.prepare(`INSERT INTO collective_motion_events (collective, hash, block, event_index, kind, ayes, nays, at)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(collective, hash, block, kind) DO UPDATE SET
+            event_index = CASE WHEN excluded.event_index >= 0 THEN excluded.event_index ELSE event_index END,
+            ayes = COALESCE(excluded.ayes, ayes),
+            nays = COALESCE(excluded.nays, nays),
+            at   = COALESCE(excluded.at, at)`).run(
+        collective, String(e.hash), Number(e.block),
+        Number.isInteger(Number(e.eventIndex)) && e.eventIndex !== null ? Number(e.eventIndex) : -1,
+        e.kind, e.ayes ?? null, e.nays ?? null, e.at ?? null);
+    return true;
 }
-export function countCouncilMotions() {
-    return db.prepare('SELECT COUNT(*) AS c FROM council_motions').get().c;
+
+// Every motion of one collective, newest first, with status / tally / resolved
+// block attributed from the event table. Same shape the API has always served.
+export function getCollectiveMotions(collective) {
+    const motions = db.prepare(`SELECT motion_index AS motionIndex, hash, proposer, proposer_name AS proposerName,
+            section, method, threshold, proposed_block AS proposedBlock, proposed_event_index AS proposedEventIndex,
+            proposed_at AS proposedAt, live_ayes AS liveAyes, live_nays AS liveNays, left_storage_at AS leftStorageAt
+        FROM collective_motions WHERE collective = ?`).all(collective).map(r => ({ ...r }));
+    const events = db.prepare(`SELECT hash, block, event_index AS eventIndex, kind, ayes, nays, at
+        FROM collective_motion_events WHERE collective = ?`).all(collective).map(r => ({ ...r }));
+    return attributeMotionEvents(motions, events)
+        .sort((a, b) => Number(b.motionIndex) - Number(a.motionIndex))
+        .map(m => ({
+            hash: m.hash, motionIndex: m.motionIndex, proposer: m.proposer, proposerName: m.proposerName,
+            section: m.section, method: m.method, threshold: m.threshold, status: m.status,
+            ayes: m.ayes, nays: m.nays, proposedBlock: m.proposedBlock, proposedAt: m.proposedAt,
+            resolvedBlock: m.resolvedBlock, resolvedAt: m.resolvedAt
+        }));
+}
+export function getCouncilMotions() { return getCollectiveMotions('council'); }
+export function countCollectiveMotions(collective) {
+    return db.prepare('SELECT COUNT(*) AS c FROM collective_motions WHERE collective = ?').get(collective).c;
+}
+export function countCouncilMotions() { return countCollectiveMotions('council'); }
+
+// One-time: carry the legacy hash-keyed council table over.
+//
+// Only the MOTIONS move, plus a "left storage" mark for anything that was not
+// still open. The legacy OUTCOME fields are not trusted: in a merged row the
+// status, the tally and the resolved block can each come from a different one
+// of the merged motions (the status rank took the highest; the block and the
+// tally took whichever event the descending backfill wrote last). Turning that
+// into an event would hand one motion the other's outcome, permanently — a
+// review reproduced exactly that (#31 disapproved shown as executed). Instead
+// every block the legacy table knew about is QUEUED for the governance
+// gap-fill pass, which re-reads the real events; the motion locator finds
+// whatever the legacy table never had.
+export function migrateCouncilMotionsToCollective() {
+    const done = getKv('migration:collective-motions');
+    if (done) return { ...done, skipped: true };
+    const rows = db.prepare(`SELECT hash, motion_index, proposer, proposer_name, section, method, threshold, status,
+        ayes, nays, proposed_block, proposed_at, resolved_block, updated_at FROM council_motions`).all();
+    let motions = 0, queued = 0, unindexed = 0;
+    const blocks = new Set();
+    runTx(() => {
+        for (const r of rows) {
+            if (!isIndex(r.motion_index) || !r.hash) { unindexed++; continue; }
+            upsertCollectiveMotion('council', {
+                motionIndex: r.motion_index, hash: r.hash, proposer: r.proposer, proposerName: r.proposer_name,
+                section: r.section, method: r.method, threshold: r.threshold,
+                proposedBlock: r.proposed_block, proposedAt: r.proposed_at,
+                liveAyes: r.status === 'proposed' ? r.ayes : null,
+                liveNays: r.status === 'proposed' ? r.nays : null
+            });
+            motions++;
+            // Not open any more (or outcome unknown): show it as finished until
+            // the re-read events say how — never as still open.
+            if (r.status && r.status !== 'proposed') {
+                db.prepare('UPDATE collective_motions SET left_storage_at = ? WHERE collective = ? AND motion_index = ?')
+                    .run(r.updated_at || Date.now(), 'council', r.motion_index);
+            }
+            for (const b of [r.proposed_block, r.resolved_block]) {
+                if (Number.isInteger(Number(b)) && b !== null && Number(b) > 0) blocks.add(Number(b));
+            }
+        }
+        for (const b of blocks) {
+            if (queueOneIfAbsent(db, 'governance', b, 'collective-motions migration: re-read the events of a legacy motion block')) queued++;
+        }
+    });
+    const result = { motions, queued, unindexed, completedAt: Date.now() };
+    setKv('migration:collective-motions', result);
+    return { ...result, skipped: false };
+}
+
+// Light rows for the locator: what we hold per index.
+export function getCollectiveMotionIndex(collective) {
+    return db.prepare(`SELECT motion_index AS motionIndex, hash, proposed_block AS proposedBlock
+        FROM collective_motions WHERE collective = ? ORDER BY motion_index`).all(collective).map(r => ({ ...r }));
 }
 
 // ─── Address labels (v2: community-sourced + voting) ──────────────────────

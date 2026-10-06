@@ -638,7 +638,7 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 | Tier | Used by | Header |
 |---|---|---|
-| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
+| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
 | **Medium** | `/api/validators`, `/api/network-info`, `/api/holders`, `/api/price-latest`, `/api/staking-rewards-status`, `/api/discussions`, `/api/analytics/*`, `/api/labels/:address` (anonymous only), `/api/consts/*` + `/api/runtime` at head | `public, max-age=30, s-maxage=60, stale-while-revalidate=120` |
 | **Long** | `/api/price-history`, `/api/treasury`, `/api/democracy`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and any inspection route pinned to a past block with `?at=` | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
 
@@ -764,6 +764,7 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 ### Governance
 
 - `GET /api/council` — council members, motions, runners-up
+- `GET /api/technical-committee` — technical committee members (with prime), open motions with live votes, and full motion history
 - `GET /api/treasury` — treasury balance, proposals (open + historical)
 - `GET /api/democracy` — referenda + public proposals
 - `GET /api/governance/latest` — most-recent OPEN referendum / proposal (drives homepage banner; only ongoing events)
@@ -1040,7 +1041,7 @@ topology where indexer stalls show up as request latency.
 
 | Tier | Headers | Endpoints |
 | --- | --- | --- |
-| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/governance/latest`, `/api/state/*` |
+| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/technical-committee`, `/api/governance/latest`, `/api/state/*` |
 | `cacheMedium` | `max-age=30, s-maxage=60, stale-while-revalidate=120` | `/api/network-info`, `/api/validators`, `/api/holders`, `/api/price-latest`, `/api/discussions`, `/api/staking-rewards-status`, `/api/analytics/*`, `GET /api/labels/:address` (anonymous callers only) |
 | `cacheLong` | `max-age=300, s-maxage=600, stale-while-revalidate=3600` | `/api/treasury`, `/api/democracy`, `/api/price-history`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and inspection routes pinned to a past block with `?at=` |
 

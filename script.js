@@ -4385,7 +4385,7 @@ function startCouncilPolling() {
     if (councilPollTimer) return;
     councilPollTimer = setInterval(() => {
         // Skip hidden tabs — no point polling a page nobody is looking at.
-        if (document.visibilityState === 'visible') fetchCouncilData();
+        if (document.visibilityState === 'visible') { fetchCouncilData(); fetchTechnicalCommitteeData(); }
     }, 30000);
 }
 function stopCouncilPolling() {
@@ -4512,6 +4512,7 @@ function routeTo(target) {
                 renderWatchlistPage();
             } else if (mainTarget === 'council') {
                 fetchCouncilData();
+                fetchTechnicalCommitteeData();
                 // Poll while the page is open. Motions are the one governance
                 // surface where minutes matter — a 3-seat threshold can resolve
                 // in a couple of blocks, and council members watching a live
@@ -5972,17 +5973,50 @@ function tryOpenFromQueryString(page) {
                 return;
             }
         }
-    } else if (page === 'council' && typeof councilData === 'object' && councilData) {
-        const motionIdx = params.get('motion');
-        if (motionIdx != null && motionIdx !== '') {
-            const motions = Array.isArray(councilData.motions) ? councilData.motions : [];
-            const row = motions.find(m => String(m.motionIndex) === String(motionIdx));
+    } else if ((page === 'council' || page === 'council-tc')) {
+        // /council?motion=N (council) and /council?tcmotion=N (technical
+        // committee). Open motions carry `index`, history rows `motionIndex`;
+        // it used to search open motions by motionIndex only, so a link to any
+        // resolved motion (every calendar and email link, in practice) opened
+        // nothing.
+        const key = page === 'council-tc' ? 'technicalCommittee' : 'council';
+        const wanted = params.get(key === 'council' ? 'motion' : 'tcmotion');
+        if (wanted != null && wanted !== '') {
+            const row = findCollectiveMotion(key, wanted);
             if (row) {
+                if (key === 'technicalCommittee') {
+                    const tabBtn = document.querySelector('.council-page .account-tab[data-tab="council-tc"]');
+                    if (tabBtn) tabBtn.click();
+                }
+                // Consume the parameter: the council page re-fetches every 30s
+                // and calls this again, which would re-open the modal (and
+                // re-click the tab) on every poll while it is open. Same history
+                // entry, so the modal's history-back still leaves the page.
+                try {
+                    params.delete(key === 'council' ? 'motion' : 'tcmotion');
+                    const qs = params.toString();
+                    history.replaceState(history.state, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+                } catch (_) { /* cosmetic */ }
                 openGovernanceDetailModal({ kind: 'motion', row, returnPage: 'history-back' });
                 return;
             }
         }
     }
+}
+
+// One motion of one collective by INDEX, open or resolved, tagged with its
+// collective so the detail modal can title it. Never by hash: two motions can
+// share one.
+function findCollectiveMotion(collectiveKey, index) {
+    const data = collectiveView(collectiveKey).getData();
+    if (!data) return null;
+    const want = String(index);
+    const open = (Array.isArray(data.motions) ? data.motions : []).find(m => String(m.index) === want);
+    const hist = (Array.isArray(data.motionHistory) ? data.motionHistory : []).find(m => String(m.motionIndex) === want);
+    if (!open && !hist) return null;
+    // Prefer the history row's crawled fields (proposer, blocks) and the open
+    // row's live tally when both exist.
+    return { ...(hist || {}), ...(open ? { motionIndex: open.index, ayes: open.ayes ? open.ayes.length : undefined, nays: open.nays ? open.nays.length : undefined, threshold: open.threshold, section: open.section || (hist && hist.section), method: open.method || (hist && hist.method), hash: open.hash, status: (hist && hist.status) || 'proposed' } : {}), __collective: collectiveKey };
 }
 
 // Audit F-015: every string and key MUST be HTML-escaped. This tree renders
@@ -11414,6 +11448,30 @@ let councilMotionsFilter = 'all';
 // Call-type filter (e.g. 'treasury.approveProposal'), 'unknown', or 'all'.
 let councilCallFilter = 'all';
 
+// Two collectives share the motion UI: the council and the technical
+// committee. Same pallet, same vote/close calls; each view keeps its own data,
+// filters and DOM root. The council keeps its legacy filter globals (read and
+// written through the getters below) so nothing else on the page changes.
+let tcData = null;
+const COLLECTIVE_VIEWS = {
+    council: {
+        key: 'council', rootId: 'council-motions-content', tabId: 'council-motions',
+        label: 'Council', bodyNoun: 'the council', memberRole: 'Council member', seatLabel: 'Council Seats',
+        motionLabel: 'Council Motion', canPropose: true,
+        get filter() { return councilMotionsFilter; }, set filter(v) { councilMotionsFilter = v; },
+        get callFilter() { return councilCallFilter; }, set callFilter(v) { councilCallFilter = v; },
+        getData: () => councilData, refresh: () => fetchCouncilData()
+    },
+    technicalCommittee: {
+        key: 'technicalCommittee', rootId: 'tc-motions-content', tabId: 'council-tc',
+        label: 'Technical Committee', bodyNoun: 'the technical committee', memberRole: 'Technical committee member', seatLabel: 'Members',
+        motionLabel: 'Technical Committee Motion', canPropose: false,
+        filter: 'all', callFilter: 'all',
+        getData: () => tcData, refresh: () => fetchTechnicalCommitteeData()
+    }
+};
+const collectiveView = (key) => COLLECTIVE_VIEWS[key] || COLLECTIVE_VIEWS.council;
+
 async function fetchCouncilData() {
     try {
         const response = await fetch('/api/council');
@@ -11496,6 +11554,42 @@ async function fetchCouncilData() {
     }
 }
 
+// --- Technical committee: members + motions -----------------------------------
+// No elections, stakes or terms — just a member list (with an optional prime,
+// whose vote counts as the default for members who abstain) and motions that
+// use the same collective pallet as the council.
+async function fetchTechnicalCommitteeData() {
+    const list = document.getElementById('tc-members-list');
+    try {
+        const response = await fetch('/api/technical-committee');
+        const data = await parseJsonResponse(response);
+        if (data.error) throw new Error(data.error);
+        tcData = data;
+        const members = Array.isArray(data.members) ? data.members : [];
+        const countEl = document.getElementById('tc-members-count');
+        if (countEl) countEl.innerText = stakingFormatNumber(members.length);
+        const totalEl = document.getElementById('tc-motions-total');
+        if (totalEl) totalEl.innerText = data.proposalCount == null ? '—' : stakingFormatNumber(data.proposalCount);
+        if (list) {
+            list.innerHTML = members.length ? members.map(m => {
+                const addr = stakingEscapeHtml(m.address);
+                const prime = m.isPrime ? ' <span class="reward-badge claimed" title="The prime member\'s vote is the default for members who do not vote">Prime</span>' : '';
+                return `<tr style="background: rgba(255,255,255,0.02);"><td>
+                    <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">${stakingEscapeHtml(m.name || 'Unknown')}${prime}</div>
+                    <div class="address-cell" data-address="${addr}" style="font-size:13px;"><a href="/account/${encodeURIComponent(m.address)}" class="item-link" style="color:var(--brand-secondary);">${addr}</a></div>
+                </td></tr>`;
+            }).join('') : '<tr><td style="text-align:center;padding:20px;">No members</td></tr>';
+        }
+        renderCollectiveMotions(COLLECTIVE_VIEWS.technicalCommittee, data);
+        tryOpenFromQueryString('council-tc');
+    } catch (err) {
+        console.error('Failed to fetch technical committee data', err);
+        if (list) list.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--error);">Failed to load the technical committee.</td></tr>';
+        const root = document.getElementById('tc-motions-content');
+        if (root) root.innerHTML = '<div style="padding:40px;text-align:center;color:var(--error);">Failed to load technical committee motions.</div>';
+    }
+}
+
 // --- Council Motions: rendering + on-chain actions ---
 function councilMotionStatus(m, currentBlock) {
     const ayes = (m.ayes || []).length;
@@ -11508,7 +11602,11 @@ function councilMotionStatus(m, currentBlock) {
 }
 
 function renderCouncilMotions(data = councilData) {
-    const root = document.getElementById('council-motions-content');
+    return renderCollectiveMotions(COLLECTIVE_VIEWS.council, data);
+}
+
+function renderCollectiveMotions(view, data = view.getData()) {
+    const root = document.getElementById(view.rootId);
     if (!root || !data) return;
     const motions = Array.isArray(data.motions) ? data.motions : [];
     const members = Array.isArray(data.members) ? data.members : [];
@@ -11517,15 +11615,23 @@ function renderCouncilMotions(data = councilData) {
     const isCouncilMember = !!stored && members.some(m => isSameAddress(m.address, stored));
 
     if (!data.collectivePallet) {
-        root.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">Council motions are not available on this runtime.</div>';
+        root.innerHTML = `<div style="padding:40px;text-align:center;color:var(--text-muted);">${stakingEscapeHtml(view.label)} motions are not available on this runtime.</div>`;
         return;
     }
 
-    const summary = `
+    // The technical committee's history is recovered by the motion locator
+    // after deploy, not by the (already complete) governance backfill, so the
+    // generic index note would claim "complete" while motions are still being
+    // found. Say what is actually known.
+    const historyCount = Array.isArray(data.motionHistory) ? data.motionHistory.length : 0;
+    const recoveringNote = (view.key !== 'council' && Number.isFinite(Number(data.proposalCount)) && historyCount < Number(data.proposalCount))
+        ? `<div style="margin-bottom:14px;padding:10px 12px;border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-secondary);font-size:0.82rem;">Recovering history: ${stakingFormatNumber(historyCount)} of ${stakingFormatNumber(Number(data.proposalCount))} motions indexed so far. Older motions appear as the indexer locates them.</div>`
+        : '';
+    const summary = recoveringNote + `
         <div class="staking-summary-grid" style="margin-bottom:20px;">
             <div class="staking-summary-card"><div class="label">Active Motions</div><div class="value accent">${stakingFormatNumber(motions.length)}</div></div>
-            <div class="staking-summary-card"><div class="label">Council Seats</div><div class="value">${stakingFormatNumber(members.length)}</div></div>
-            <div class="staking-summary-card"><div class="label">Your Role</div><div class="value" style="font-size:1rem;">${isCouncilMember ? 'Council member' : (stored ? 'Observer' : 'Not connected')}</div></div>
+            <div class="staking-summary-card"><div class="label">${stakingEscapeHtml(view.seatLabel)}</div><div class="value">${stakingFormatNumber(members.length)}</div></div>
+            <div class="staking-summary-card"><div class="label">Your Role</div><div class="value" style="font-size:1rem;">${isCouncilMember ? stakingEscapeHtml(view.memberRole) : (stored ? 'Observer' : 'Not connected')}</div></div>
         </div>`;
 
     // Shared call-type key/label helpers — both open and resolved motions
@@ -11547,7 +11653,12 @@ function renderCouncilMotions(data = councilData) {
     // CTA to table a new motion (e.g. a treasury approval). Shown to everyone
     // for discoverability; the modal + submit path prompt to connect and
     // enforce council membership at action time.
-    const proposeBtn = `<button type="button" class="reward-filter-btn" id="open-propose-motion-btn" style="border-color:var(--brand-primary);color:var(--brand-primary);font-weight:600;"><i class='bx bx-plus-circle'></i> Propose motion</button>${helpIcon('council-and-motions', 'How to propose, vote on, and close motions')}`;
+    // Council only: the Propose modal builds treasury approvals, which are the
+    // council's business. Technical committee motions (fast-tracks, emergency
+    // cancellations) are proposed from polkadot.js apps.
+    const proposeBtn = view.canPropose
+        ? `<button type="button" class="reward-filter-btn" id="open-propose-motion-btn" style="border-color:var(--brand-primary);color:var(--brand-primary);font-weight:600;"><i class='bx bx-plus-circle'></i> Propose motion</button>${helpIcon('council-and-motions', 'How to propose, vote on, and close motions')}`
+        : '';
 
     // Nothing on chain at all — still surface the Propose action so a council
     // member can open the first motion (the common "empty page" case).
@@ -11555,8 +11666,8 @@ function renderCouncilMotions(data = councilData) {
         root.innerHTML = summary
             + (proposeBtn ? `<div class="staking-toolbar" style="margin-bottom:14px;"><div class="reward-filter">${proposeBtn}</div></div>` : '')
             + governanceIndexNote(data.history, 'motions')
-            + '<div style="padding:28px;text-align:center;color:var(--text-muted);">No motions are currently open before the council.</div>';
-        wireMotionControls(root);
+            + `<div style="padding:28px;text-align:center;color:var(--text-muted);">No motions are currently open before ${stakingEscapeHtml(view.bodyNoun)}.</div>`;
+        wireMotionControls(root, view);
         return;
     }
 
@@ -11575,14 +11686,14 @@ function renderCouncilMotions(data = councilData) {
     }
     // If a previously-selected filter no longer matches anything (data moved
     // on), silently fall back to 'all' so the user never sees a dead view.
-    if (councilMotionsFilter !== 'all' && !statusCounts[councilMotionsFilter]) councilMotionsFilter = 'all';
-    if (councilCallFilter !== 'all' && !callCounts[councilCallFilter]) councilCallFilter = 'all';
+    if (view.filter !== 'all' && !statusCounts[view.filter]) view.filter = 'all';
+    if (view.callFilter !== 'all' && !callCounts[view.callFilter]) view.callFilter = 'all';
 
     const statusPills = ['all'].concat(STATUS_ORDER.filter(k => statusCounts[k]))
         .map(k => {
             const label = k === 'all' ? 'All' : STATUS_LABELS[k];
             const count = k === 'all' ? combined.length : statusCounts[k];
-            return `<button class="reward-filter-btn${councilMotionsFilter === k ? ' active' : ''}" data-motionfilter="${k}">${label} (${count})</button>`;
+            return `<button class="reward-filter-btn${view.filter === k ? ' active' : ''}" data-motionfilter="${k}">${label} (${count})</button>`;
         }).join('');
 
     const callKeys = Object.keys(callCounts).sort((a, b) => {
@@ -11590,26 +11701,26 @@ function renderCouncilMotions(data = councilData) {
         if (b === 'unknown') return -1;
         return a.localeCompare(b);
     });
-    const callOptions = `<option value="all"${councilCallFilter === 'all' ? ' selected' : ''}>All calls (${combined.length})</option>`
-        + callKeys.map(k => `<option value="${stakingEscapeHtml(k)}"${councilCallFilter === k ? ' selected' : ''}>${stakingEscapeHtml(callLabelOf(k))} (${callCounts[k]})</option>`).join('');
+    const callOptions = `<option value="all"${view.callFilter === 'all' ? ' selected' : ''}>All calls (${combined.length})</option>`
+        + callKeys.map(k => `<option value="${stakingEscapeHtml(k)}"${view.callFilter === k ? ' selected' : ''}>${stakingEscapeHtml(callLabelOf(k))} (${callCounts[k]})</option>`).join('');
 
     const toolbar = `
         <div class="staking-toolbar" style="margin-bottom:14px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
             <div class="reward-filter">${statusPills}</div>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <label for="motion-call-filter" style="font-size:0.8rem;color:var(--text-muted);">Call type</label>
-                <select id="motion-call-filter" class="motion-call-select" style="padding:6px 10px;border-radius:var(--radius-sm);background:rgba(0,0,0,0.3);color:var(--text-primary);border:1px solid var(--border-color);font-size:0.82rem;">${callOptions}</select>
+                <label for="${view.key}-motion-call-filter" style="font-size:0.8rem;color:var(--text-muted);">Call type</label>
+                <select id="${view.key}-motion-call-filter" class="motion-call-select" style="padding:6px 10px;border-radius:var(--radius-sm);background:rgba(0,0,0,0.3);color:var(--text-primary);border:1px solid var(--border-color);font-size:0.82rem;">${callOptions}</select>
                 ${proposeBtn}
             </div>
         </div>`;
 
     const roleNote = isCouncilMember
-        ? '<div style="margin-bottom:16px;color:var(--text-secondary);font-size:0.82rem;">You are a council member — you can propose, vote on, and close motions.</div>'
-        : `<div style="margin-bottom:16px;color:var(--text-muted);font-size:0.82rem;">Anyone can view and explore motions. Proposing, voting and closing require a council seat — ${stored ? 'your connected wallet does not hold one.' : 'connect your council wallet to act.'}</div>`;
+        ? `<div style="margin-bottom:16px;color:var(--text-secondary);font-size:0.82rem;">You are a ${stakingEscapeHtml(view.memberRole.toLowerCase())} — you can ${view.canPropose ? 'propose, ' : ''}vote on, and close motions.</div>`
+        : `<div style="margin-bottom:16px;color:var(--text-muted);font-size:0.82rem;">Anyone can view and explore motions. ${view.canPropose ? 'Proposing, voting' : 'Voting'} and closing require a seat on ${stakingEscapeHtml(view.bodyNoun)} — ${stored ? 'your connected wallet does not hold one.' : 'connect a member wallet to act.'}</div>`;
 
     // A motion is visible when it passes BOTH the status and call-type filters.
-    const matches = (m) => (councilMotionsFilter === 'all' || m.__statusKey === councilMotionsFilter)
-        && (councilCallFilter === 'all' || m.__call === councilCallFilter);
+    const matches = (m) => (view.filter === 'all' || m.__statusKey === view.filter)
+        && (view.callFilter === 'all' || m.__call === view.callFilter);
 
     const visibleMotions = annotatedOpen.filter(matches);
     const visibleResolved = resolved.filter(matches);
@@ -11642,18 +11753,18 @@ function renderCouncilMotions(data = councilData) {
         // councilMotionClose prompt to connect and enforce council membership at
         // click time, so a non-member simply gets a clear message.
         const actions = `<div class="motion-actions">
-                <button class="motion-btn aye motion-aye-btn" data-hash="${m.hash}" data-index="${m.index}" ${votedAye ? 'disabled' : ''}>${votedAye ? 'Voted Aye' : 'Vote Aye'}</button>
-                <button class="motion-btn nay motion-nay-btn" data-hash="${m.hash}" data-index="${m.index}" ${votedNay ? 'disabled' : ''}>${votedNay ? 'Voted Nay' : 'Vote Nay'}</button>
-                <button class="motion-btn close motion-close-btn" data-hash="${m.hash}" data-index="${m.index}" ${st.closeable ? '' : 'disabled'} title="${st.closeable ? 'Finalize this motion' : 'Available once the vote is decided or has ended'}">Close motion</button>
+                <button class="motion-btn aye motion-aye-btn" data-hash="${stakingEscapeHtml(m.hash)}" data-index="${m.index}" ${votedAye ? 'disabled' : ''}>${votedAye ? 'Voted Aye' : 'Vote Aye'}</button>
+                <button class="motion-btn nay motion-nay-btn" data-hash="${stakingEscapeHtml(m.hash)}" data-index="${m.index}" ${votedNay ? 'disabled' : ''}>${votedNay ? 'Voted Nay' : 'Vote Nay'}</button>
+                <button class="motion-btn close motion-close-btn" data-hash="${stakingEscapeHtml(m.hash)}" data-index="${m.index}" ${st.closeable ? '' : 'disabled'} title="${st.closeable ? 'Finalize this motion' : 'Available once the vote is decided or has ended'}">Close motion</button>
             </div>`;
 
         return `<div class="motion-card">
             <div class="motion-card-head">
                 <div>
-                    ${m.hash
-                        ? `<button type="button" class="gov-proposal-link motion-index" data-kind="motion" data-id="${stakingEscapeHtml(m.hash)}" title="View motion details">${stakingEscapeHtml(idxLabel)}</button>`
+                    ${(m.index !== null && m.index !== undefined)
+                        ? `<button type="button" class="gov-proposal-link motion-index" data-kind="motion" data-id="${stakingEscapeHtml(view.key + ':' + m.index)}" title="View motion details">${stakingEscapeHtml(idxLabel)}</button>`
                         : `<span class="motion-index">${stakingEscapeHtml(idxLabel)}</span>`}
-                    <span class="motion-title">${stakingEscapeHtml(m.title || 'Council Motion')}</span>
+                    <span class="motion-title">${stakingEscapeHtml(m.title || view.motionLabel)}</span>
                 </div>
                 <span class="reward-badge ${st.badge}">${st.label}</span>
             </div>
@@ -11673,7 +11784,7 @@ function renderCouncilMotions(data = councilData) {
     }).join('');
 
     const openSection = visibleMotions.length ? `<div class="motion-list">${cards}</div>` : '';
-    const resolvedSection = renderResolvedMotions(visibleResolved);
+    const resolvedSection = renderResolvedMotions(visibleResolved, view);
     const nothingVisible = (visibleMotions.length + visibleResolved.length) === 0
         ? `<div style="padding:28px;text-align:center;color:var(--text-muted);">No motions match the current filters.</div>`
         : '';
@@ -11681,29 +11792,29 @@ function renderCouncilMotions(data = councilData) {
     root.innerHTML = summary + toolbar + governanceIndexNote(data.history, 'motions') + roleNote
         + openSection + nothingVisible + resolvedSection;
 
-    wireMotionControls(root);
+    wireMotionControls(root, view);
 }
 
 // Wire the filter controls, Propose button, and per-motion action buttons.
 // Shared by every render path (including the empty state) so the Propose
 // action is always live for council members.
-function wireMotionControls(root) {
+function wireMotionControls(root, view = COLLECTIVE_VIEWS.council) {
     root.querySelectorAll('[data-motionfilter]').forEach(btn => {
         btn.addEventListener('click', () => {
-            councilMotionsFilter = btn.getAttribute('data-motionfilter');
-            renderCouncilMotions();
+            view.filter = btn.getAttribute('data-motionfilter');
+            renderCollectiveMotions(view);
         });
     });
-    const callSel = root.querySelector('#motion-call-filter');
+    const callSel = root.querySelector(`#${view.key}-motion-call-filter`);
     if (callSel) callSel.addEventListener('change', () => {
-        councilCallFilter = callSel.value;
-        renderCouncilMotions();
+        view.callFilter = callSel.value;
+        renderCollectiveMotions(view);
     });
-    const proposeBtn = root.querySelector('#open-propose-motion-btn');
+    const proposeBtn = view.canPropose ? root.querySelector('#open-propose-motion-btn') : null;
     if (proposeBtn) proposeBtn.addEventListener('click', () => openProposeMotionModal());
-    root.querySelectorAll('.motion-aye-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), true)));
-    root.querySelectorAll('.motion-nay-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), false)));
-    root.querySelectorAll('.motion-close-btn').forEach(b => b.addEventListener('click', () => councilMotionClose(b.getAttribute('data-hash'), b.getAttribute('data-index'))));
+    root.querySelectorAll('.motion-aye-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), true, view.key)));
+    root.querySelectorAll('.motion-nay-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), false, view.key)));
+    root.querySelectorAll('.motion-close-btn').forEach(b => b.addEventListener('click', () => councilMotionClose(b.getAttribute('data-hash'), b.getAttribute('data-index'), view.key)));
 }
 
 // Resolved (historical) council motions, crawled from chain events.
@@ -11717,18 +11828,17 @@ function resolvedMotionBadge(status) {
 // Renders the already-filtered list of resolved motions (the caller applies
 // the status + call-type filters so this table stays in sync with the open
 // cards above it). Returns '' when nothing matches.
-function renderResolvedMotions(resolved) {
+function renderResolvedMotions(resolved, view = COLLECTIVE_VIEWS.council) {
     if (!Array.isArray(resolved) || !resolved.length) return '';
     const rows = resolved.map(m => {
-        // The motion # is keyed by the hash (not motionIndex), because that's
-        // what the global click delegate uses to look up the row from
-        // councilData.motionHistory — motionIndex can be null on older
-        // motions, but hash is always present.
+        // Keyed "<collective>:<index>". It used to be the hash, but two motions
+        // can share a hash (the same call proposed twice) and the lookup then
+        // opened the wrong one; the index is the motion's real identity.
         const idxLabel = (m.motionIndex === null || m.motionIndex === undefined) ? '—' : ('#' + m.motionIndex);
-        const idx = m.hash
-            ? `<button type="button" class="gov-proposal-link" data-kind="motion" data-id="${stakingEscapeHtml(m.hash)}">${stakingEscapeHtml(idxLabel)}</button>`
+        const idx = (m.motionIndex !== null && m.motionIndex !== undefined)
+            ? `<button type="button" class="gov-proposal-link" data-kind="motion" data-id="${stakingEscapeHtml(view.key + ':' + m.motionIndex)}">${stakingEscapeHtml(idxLabel)}</button>`
             : idxLabel;
-        const call = (m.section && m.method) ? `${m.section}.${m.method}` : 'Council Motion';
+        const call = (m.section && m.method) ? `${m.section}.${m.method}` : view.motionLabel;
         const proposer = m.proposer
             ? `<a href="/account/${encodeURIComponent(m.proposer)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(treasuryPartyName(m.proposerName, m.proposer))}</a>`
             : '<span style="color:var(--text-muted);">—</span>';
@@ -11752,12 +11862,14 @@ function renderResolvedMotions(resolved) {
     </div>`;
 }
 
-function councilMotionVote(hash, index, approve) {
-    if (!councilData || !councilData.collectivePallet) return alert('Council data is not ready yet.');
-    if (!requireWallet('vote on council motions')) return;
+function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
+    const view = collectiveView(collectiveKey);
+    const data = view.getData();
+    if (!data || !data.collectivePallet) return alert(`${view.label} data is not ready yet.`);
+    if (!requireWallet(`vote on ${view.label.toLowerCase()} motions`)) return;
     const stored = getStoredWallet();
-    if (!(councilData.members || []).some(m => isSameAddress(m.address, stored)))
-        return alert('Only council members can vote on motions. Your connected wallet does not hold a council seat.');
+    if (!(data.members || []).some(m => isSameAddress(m.address, stored)))
+        return alert(`Only ${view.label.toLowerCase()} members can vote on its motions. Your connected wallet does not hold a seat.`);
     // Validate the index BEFORE building the call.
     //
     // `index` arrives as a DOM attribute string, and the backend leaves it null
@@ -11779,8 +11891,8 @@ function councilMotionVote(hash, index, approve) {
                      `That usually means the motion just closed, or the page data is stale — reload and try again.\n\n` +
                      `(Refusing rather than guessing: an unset index would encode as 0 and cast your vote on motion #0.)`);
     }
-    if (!confirm(`Cast a ${approve ? 'AYE' : 'NAY'} vote on council motion #${idx}?`)) return;
-    const pallet = councilData.collectivePallet;
+    if (!confirm(`Cast a ${approve ? 'AYE' : 'NAY'} vote on ${view.label.toLowerCase()} motion #${idx}?`)) return;
+    const pallet = data.collectivePallet;
     submitSignedTx({
         buildTx: (api) => {
             const tx = api.tx[pallet].vote(hash, idx, approve);
@@ -11797,7 +11909,7 @@ function councilMotionVote(hash, index, approve) {
             // declares an extension that is missing from this list, the
             // envelope is wrong, not the call.
             try {
-                console.info('[council.vote] pallet=%s hash=%s index=%s approve=%s\n  call=%s\n  endpoint=%s\n  runtime=%s/%s\n  signedExtensions=%s',
+                console.info('[collective.vote] pallet=%s hash=%s index=%s approve=%s\n  call=%s\n  endpoint=%s\n  runtime=%s/%s\n  signedExtensions=%s',
                     pallet, hash, idx, approve,
                     tx.method.toHex(),
                     (api._options && api._options.provider && api._options.provider.endpoint) || 'unknown',
@@ -11806,18 +11918,20 @@ function councilMotionVote(hash, index, approve) {
             } catch (e) { /* diagnostics must never block a vote */ }
             return tx;
         },
-        label: `Motion #${idx} ${approve ? 'aye' : 'nay'} vote`,
-        onSuccess: () => setTimeout(fetchCouncilData, 2500)
+        label: `${view.label} motion #${idx} ${approve ? 'aye' : 'nay'} vote`,
+        onSuccess: () => setTimeout(view.refresh, 2500)
     });
 }
 
-function councilMotionClose(hash, index) {
-    if (!councilData || !councilData.collectivePallet) return alert('Council data is not ready yet.');
-    if (!requireWallet('close council motions')) return;
+function councilMotionClose(hash, index, collectiveKey = 'council') {
+    const view = collectiveView(collectiveKey);
+    const data = view.getData();
+    if (!data || !data.collectivePallet) return alert(`${view.label} data is not ready yet.`);
+    if (!requireWallet(`close ${view.label.toLowerCase()} motions`)) return;
     const stored = getStoredWallet();
-    if (!(councilData.members || []).some(m => isSameAddress(m.address, stored)))
-        return alert('Only council members can close motions. Your connected wallet does not hold a council seat.');
-    const motion = (councilData.motions || []).find(m => m.hash === hash);
+    if (!(data.members || []).some(m => isSameAddress(m.address, stored)))
+        return alert(`Only ${view.label.toLowerCase()} members can close its motions. Your connected wallet does not hold a seat.`);
+    const motion = (data.motions || []).find(m => m.hash === hash);
     if (!motion) return alert('Motion details are no longer available — refresh the page.');
     // Audit F-118 (round 2): councilMotionVote above got the digit check in
     // round 1 and this sibling did not, though `index` reaches both the same
@@ -11837,13 +11951,13 @@ function councilMotionClose(hash, index) {
     if (!Number.isInteger(idx) || idx < 0) {
         return alert('This motion has no on-chain vote index available, so it cannot be closed safely.\n\nReload the page and try again.');
     }
-    if (!confirm(`Close council motion #${idx}?\n\nThis finalizes the vote and, if it passed, dispatches the proposed call.`)) return;
-    const pallet = councilData.collectivePallet;
+    if (!confirm(`Close ${view.label.toLowerCase()} motion #${idx}?\n\nThis finalizes the vote and, if it passed, dispatches the proposed call.`)) return;
+    const pallet = data.collectivePallet;
     const weightBound = { refTime: motion.weightRefTime || '10000000000', proofSize: motion.weightProofSize || '500000' };
     submitSignedTx({
         buildTx: (api) => api.tx[pallet].close(hash, idx, weightBound, motion.lengthBound || 0),
-        label: `Motion #${idx} close`,
-        onSuccess: () => setTimeout(fetchCouncilData, 2500)
+        label: `${view.label} motion #${idx} close`,
+        onSuccess: () => setTimeout(view.refresh, 2500)
     });
 }
 
@@ -12828,13 +12942,15 @@ function renderMotionDetail(row) {
     const tally = (row.ayes == null && row.nays == null)
         ? '<span style="color:var(--text-muted);">—</span>'
         : `${row.ayes || 0} aye / ${row.nays || 0} nay`;
-    const callLabel = (row.section && row.method) ? `${row.section}.${row.method}` : 'Council Motion';
+    const isTc = row.__collective === 'technicalCommittee';
+    const bodyLabel = isTc ? 'Technical Committee Motion' : 'Council Motion';
+    const callLabel = (row.section && row.method) ? `${row.section}.${row.method}` : bodyLabel;
     const statusBadge = (typeof resolvedMotionBadge === 'function' && row.status && row.status !== 'proposed')
         ? resolvedMotionBadge(row.status)
         : `<span class="reward-badge neutral">${stakingEscapeHtml(row.status || 'Open')}</span>`;
-    return `<h2 style="margin:0 0 8px 0;font-size:1.4rem;">Council Motion${idxLabel}</h2>
+    return `<h2 style="margin:0 0 8px 0;font-size:1.4rem;">${bodyLabel}${idxLabel}</h2>
         <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
-            Council vote on a privileged on-chain call. The proposal hash uniquely identifies the underlying extrinsic; the resolved block is where the council finalized the vote.
+            ${isTc ? 'Technical committee' : 'Council'} vote on a privileged on-chain call. The proposal hash identifies the underlying call (the same call can be proposed again as a new motion); the resolved block is where ${isTc ? 'the committee' : 'the council'} finalized the vote.
         </div>
         ${govDetailRow('Status', statusBadge)}
         ${govDetailRow('Call', `<code style="font-size:0.85rem;">${stakingEscapeHtml(callLabel)}</code>`)}
@@ -13155,11 +13271,18 @@ async function submitReferendumVote() {
             row = all.find(p => String(p.id) === String(id));
             returnPage = 'treasury';
             returnTab = treasuryTab;
-        } else if (kind === 'motion' && councilData) {
-            // Either an open motion (matched by hash) or a resolved one (by hash too).
-            const open = Array.isArray(councilData.motions) ? councilData.motions : [];
-            const history = Array.isArray(councilData.motionHistory) ? councilData.motionHistory : [];
-            row = open.find(m => m.hash === id) || history.find(m => m.hash === id);
+        } else if (kind === 'motion') {
+            // "<collective>:<index>" since Oct 2026. A bare hash (an old link
+            // still rendered somewhere) falls back to the council, newest match.
+            const sep = id.indexOf(':');
+            if (sep > 0) {
+                row = findCollectiveMotion(id.slice(0, sep), id.slice(sep + 1));
+            } else if (councilData) {
+                const open = Array.isArray(councilData.motions) ? councilData.motions : [];
+                const history = Array.isArray(councilData.motionHistory) ? councilData.motionHistory : [];
+                const hit = open.find(m => m.hash === id) || history.find(m => m.hash === id);
+                row = hit ? { ...hit, __collective: 'council' } : null;
+            }
             returnPage = 'council';
             const activeTab = document.querySelector('.council-page .account-tab.active');
             returnTab = activeTab ? activeTab.getAttribute('data-tab') : null;

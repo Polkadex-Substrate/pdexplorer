@@ -476,6 +476,7 @@
                     <div class="account-tabs" style="margin: 0 24px;">
                         <button class="account-tab active" data-tab="council-members">Members</button>
                         <button class="account-tab" data-tab="council-motions">Motions</button>
+                        <button class="account-tab" data-tab="council-tc">Technical Committee</button>
                     </div>
                     
                     <!-- Council Members Tab -->
@@ -563,6 +564,27 @@
                     <div id="council-motions" class="account-tab-content" style="padding: 24px;">
                         <div id="council-motions-content">
                             <div style="padding: 40px; text-align: center; color: var(--text-secondary);">Fetching council motions…</div>
+                        </div>
+                    </div>
+
+                    <!-- Technical Committee Tab: members (set by governance, no
+                         elections or stakes; an optional prime) and its motions,
+                         rendered by the same code as council motions. -->
+                    <div id="council-tc" class="account-tab-content" style="padding: 24px;">
+                        <div class="staking-summary-grid" style="margin-bottom: 20px;">
+                            <div class="staking-summary-card"><div class="label">Members</div><div class="value" id="tc-members-count">--</div></div>
+                            <div class="staking-summary-card"><div class="label">Motions since genesis</div><div class="value" id="tc-motions-total">--</div></div>
+                        </div>
+                        <h3 style="font-size: 0.95rem; color: var(--text-primary); margin-bottom: 12px;">Members</h3>
+                        <div class="table-responsive" style="margin-bottom: 26px;">
+                            <table class="data-table">
+                                <tbody id="tc-members-list">
+                                    <tr><td style="text-align:center; padding: 20px;">Fetching technical committee…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="tc-motions-content">
+                            <div style="padding: 40px; text-align: center; color: var(--text-secondary);">Fetching technical committee motions…</div>
                         </div>
                     </div>
                 </div>

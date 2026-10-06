@@ -25,6 +25,7 @@ import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.j
 import { addTail, takeFromTail, tailSize, normalizeTail } from './lib/skip-tail.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { hasSeriesData } from './lib/series-shape.js';
+import { COLLECTIVES, findProposalBlock, findCloseBlock, missingIndices, neighbourHints } from './lib/collective-motions.js';
 // Audit F-164 — the superOf → identityOf walk lives in ONE module that this
 // file and the debug probes both import. Two copies of it drifted apart across
 // a runtime upgrade once; see the header of lib/identity.js.
@@ -476,6 +477,11 @@ const GOV_SCAN_BATCH = readPositiveInteger(process.env.GOV_SCAN_BATCH, 50);
 // when explicitly running a fresh-install catch-up.
 const GOV_BACKFILL_CHUNK = readPositiveInteger(process.env.GOV_BACKFILL_CHUNK, 200);
 const GOV_FORWARD_MAX = readPositiveInteger(process.env.GOV_FORWARD_MAX, 5000);
+// Motion locator (lib/collective-motions.js): time it may spend per governance
+// tick bisecting chain state for missing motions, and how long before a motion
+// it already located (and queued) is tried again if it still looks missing.
+const MOTION_LOCATOR_BUDGET_MS = readPositiveInteger(process.env.MOTION_LOCATOR_BUDGET_MS, 30 * 1000);
+const MOTION_LOCATOR_RETRY_MS  = readPositiveInteger(process.env.MOTION_LOCATOR_RETRY_MS, 24 * 3600 * 1000);
 const GOV_MIN_BLOCK = readPositiveInteger(process.env.GOV_MIN_BLOCK, 1);
 // Wallet dashboard / price chart / unpaid-reward tuning.
 // CMC API key for the PDEX/USD price feed. Never hardcode — supply via .env
@@ -4367,6 +4373,20 @@ app.get('/api/council', (req, res) => {
     }
 });
 
+app.get('/api/technical-committee', (req, res) => {
+    try {
+        const data = db.getKv('technicalCommittee') || { members: [], prime: null, motions: [], proposalCount: null, currentBlock: 0, collectivePallet: null };
+        data.motionHistory = db.getCollectiveMotions('technicalCommittee');
+        data.history = governanceHistoryMeta();
+        // Short tier for the same reason as /api/council: live vote tallies.
+        cacheShort(res);
+        res.json(data);
+    } catch (err) {
+        console.error('API Error /api/technical-committee:', err);
+        res.status(500).json({ error: 'Failed to fetch technical committee data' });
+    }
+});
+
 app.get('/api/treasury', (req, res) => {
     try {
         const data = db.getKv('treasury') || {
@@ -4495,7 +4515,8 @@ app.get('/api/governance/calendar', async (req, res) => {
     try {
         const referenda = db.getDemocracyReferenda();
         const treasury  = db.getTreasuryProposals();
-        const motions   = db.getCouncilMotions();
+        const motions   = db.getCouncilMotions().map(m => ({ ...m, __collective: 'council' }))
+            .concat(db.getCollectiveMotions('technicalCommittee').map(m => ({ ...m, __collective: 'technicalCommittee' })));
         const meta      = db.getKv('democracy_meta') || {};
 
         const currentBlock = meta.currentBlock || 0;
@@ -4564,16 +4585,20 @@ app.get('/api/governance/calendar', async (req, res) => {
             });
         }
 
-        // Council motions — similar to treasury, with proposer + extrinsic info.
+        // Council AND technical committee motions — similar to treasury, with
+        // proposer + extrinsic info. Both are kind 'motion' so the existing
+        // Motions filter shows them together; id and title say which body.
         for (const m of motions) {
+            const isTc = m.__collective === 'technicalCommittee';
             // F-052: 'resolved' (left chain storage, outcome unknown) is NOT
             // active. Motions have no equivalent of treasury's approved-and-
             // waiting state — a motion is open until it is closed.
             const isActive = !m.status || m.status === 'proposed';
             events.push({
-                id: 'motion-' + m.motionIndex,
+                id: (isTc ? 'tc-motion-' : 'motion-') + m.motionIndex,
                 kind: 'motion',
-                title: 'Council Motion #' + m.motionIndex,
+                collective: m.__collective,
+                title: (isTc ? 'Technical Committee Motion #' : 'Council Motion #') + m.motionIndex,
                 status: m.status || 'proposed',
                 proposer: m.proposer || null,
                 proposerName: m.proposerName || null,
@@ -4587,7 +4612,7 @@ app.get('/api/governance/calendar', async (req, res) => {
                 endBlock: m.resolvedBlock || null,
                 endTime: m.resolvedAt || blockToTime(m.resolvedBlock),
                 isActive,
-                link: '/council?motion=' + m.motionIndex
+                link: (isTc ? '/council?tcmotion=' : '/council?motion=') + m.motionIndex
             });
         }
 
@@ -6318,6 +6343,83 @@ async function syncTreasury() {
     }
 }
 
+// Read every OPEN motion of one collective (council or technicalCommittee):
+// call, args, live votes, and a close() weight/length bound. `trusted` is true
+// only when the proposals list was read AND every hash walked without throwing
+// — the F-052 reconcile and the motion threads may act on the list only then.
+async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
+    const motions = [];
+    let motionsTrusted = false;
+    const collectiveModule = globalApi.query[collectivePallet];
+    if (!collectiveModule || !collectiveModule.proposals || !collectiveModule.proposalOf) return { motions, trusted: false };
+    try {
+        const motionHashes = await collectiveModule.proposals();
+        
+        for (const h of motionHashes) {
+            const hash = h.toString();
+            let section = '', method = '', args = [];
+            let lengthBound = 0;
+            // Generous defaults used as the close() weight bound when an
+            // exact estimate cannot be computed (bound only needs to be >= actual).
+            let weightRefTime = '10000000000', weightProofSize = '500000';
+            try {
+                const callOpt = await collectiveModule.proposalOf(h);
+                if (callOpt && callOpt.isSome) {
+                    const call = callOpt.unwrap();
+                    section = String(call.section);
+                    method = String(call.method);
+                    lengthBound = call.encodedLength;
+                    const argMeta = (call.meta && call.meta.args) || [];
+                    args = call.args.map((a, i) => {
+                        let value;
+                        try { value = a.toString(); } catch (e) { value = '[unprintable]'; }
+                        // Cap large args (e.g. a runtime wasm blob) so the
+                        // council payload stays small.
+                        if (value.length > 512) value = value.slice(0, 512) + '…(truncated)';
+                        return { name: argMeta[i] ? String(argMeta[i].name) : ('arg' + i), value };
+                    });
+                    if (probeAddress) {
+                        try {
+                            const info = await globalApi.tx(call).paymentInfo(probeAddress);
+                            const w = info.weight;
+                            if (w && w.refTime !== undefined) {
+                                weightRefTime = (BigInt(w.refTime.toString()) * 2n).toString();
+                                weightProofSize = (BigInt(w.proofSize.toString()) * 2n + 32768n).toString();
+                            } else if (w) {
+                                weightRefTime = (BigInt(w.toString()) * 2n).toString();
+                            }
+                        } catch (e) { /* keep generous defaults */ }
+                    }
+                }
+            } catch (e) { }
+            let index = null, threshold = 0, ayes = [], nays = [], end = 0;
+            try {
+                const votingOpt = await collectiveModule.voting(h);
+                if (votingOpt && votingOpt.isSome) {
+                    const v = votingOpt.unwrap();
+                    index = v.index.toNumber();
+                    threshold = v.threshold.toNumber();
+                    ayes = v.ayes.map(a => a.toString());
+                    nays = v.nays.map(a => a.toString());
+                    end = v.end.toNumber();
+                }
+            } catch (e) { }
+            motions.push({
+                hash,
+                title: (section && method) ? `${section}.${method}` : (collectivePallet === 'technicalCommittee' ? 'Technical Committee Motion' : 'Council Motion'),
+                section, method, args,
+                index, threshold, ayes, nays, end,
+                lengthBound, weightRefTime, weightProofSize
+            });
+        }
+        motions.sort((a, b) => (b.index || 0) - (a.index || 0));
+        // Only here — after proposals() returned AND every hash was
+        // walked without throwing — is `motions` the complete live set.
+        motionsTrusted = true;
+    } catch (e) { console.warn(`${collectivePallet} motions skipped:`, e.message); }
+    return { motions, trusted: motionsTrusted };
+}
+
 async function syncCouncil() {
     // isRpcReady() also covers !globalApi, plus catches the half-reconnected
     // case where globalApi exists but the WsProvider has dropped.
@@ -6395,72 +6497,9 @@ async function syncCouncil() {
             if (mod && mod.proposals && mod.proposalOf) { collectivePallet = name; break; }
         }
         if (collectivePallet) {
-            const collectiveModule = globalApi.query[collectivePallet];
-            try {
-                const motionHashes = await collectiveModule.proposals();
-                const probeAddress = members[0] ? members[0].address : null;
-                for (const h of motionHashes) {
-                    const hash = h.toString();
-                    let section = '', method = '', args = [];
-                    let lengthBound = 0;
-                    // Generous defaults used as the close() weight bound when an
-                    // exact estimate cannot be computed (bound only needs to be >= actual).
-                    let weightRefTime = '10000000000', weightProofSize = '500000';
-                    try {
-                        const callOpt = await collectiveModule.proposalOf(h);
-                        if (callOpt && callOpt.isSome) {
-                            const call = callOpt.unwrap();
-                            section = String(call.section);
-                            method = String(call.method);
-                            lengthBound = call.encodedLength;
-                            const argMeta = (call.meta && call.meta.args) || [];
-                            args = call.args.map((a, i) => {
-                                let value;
-                                try { value = a.toString(); } catch (e) { value = '[unprintable]'; }
-                                // Cap large args (e.g. a runtime wasm blob) so the
-                                // council payload stays small.
-                                if (value.length > 512) value = value.slice(0, 512) + '…(truncated)';
-                                return { name: argMeta[i] ? String(argMeta[i].name) : ('arg' + i), value };
-                            });
-                            if (probeAddress) {
-                                try {
-                                    const info = await globalApi.tx(call).paymentInfo(probeAddress);
-                                    const w = info.weight;
-                                    if (w && w.refTime !== undefined) {
-                                        weightRefTime = (BigInt(w.refTime.toString()) * 2n).toString();
-                                        weightProofSize = (BigInt(w.proofSize.toString()) * 2n + 32768n).toString();
-                                    } else if (w) {
-                                        weightRefTime = (BigInt(w.toString()) * 2n).toString();
-                                    }
-                                } catch (e) { /* keep generous defaults */ }
-                            }
-                        }
-                    } catch (e) { }
-                    let index = null, threshold = 0, ayes = [], nays = [], end = 0;
-                    try {
-                        const votingOpt = await collectiveModule.voting(h);
-                        if (votingOpt && votingOpt.isSome) {
-                            const v = votingOpt.unwrap();
-                            index = v.index.toNumber();
-                            threshold = v.threshold.toNumber();
-                            ayes = v.ayes.map(a => a.toString());
-                            nays = v.nays.map(a => a.toString());
-                            end = v.end.toNumber();
-                        }
-                    } catch (e) { }
-                    motions.push({
-                        hash,
-                        title: (section && method) ? `${section}.${method}` : 'Council Motion',
-                        section, method, args,
-                        index, threshold, ayes, nays, end,
-                        lengthBound, weightRefTime, weightProofSize
-                    });
-                }
-                motions.sort((a, b) => (b.index || 0) - (a.index || 0));
-                // Only here — after proposals() returned AND every hash was
-                // walked without throwing — is `motions` the complete live set.
-                motionsTrusted = true;
-            } catch (e) { console.warn('Council motions skipped:', e.message); }
+            const live = await readLiveCollectiveMotions(collectivePallet, members[0] ? members[0].address : null);
+            for (const m of live.motions) motions.push(m);
+            motionsTrusted = live.trusted;
         }
 
         const councilData = {
@@ -6487,18 +6526,7 @@ async function syncCouncil() {
         if (motionsTrusted) reconcileMotionThreads(motions);
 
         // Keep the persistent motions history fresh with the live open motions.
-        for (const m of motions) {
-            db.upsertCouncilMotion({
-                hash: m.hash,
-                motionIndex: m.index,
-                section: m.section || null,
-                method: m.method || null,
-                threshold: m.threshold || null,
-                ayes: (m.ayes || []).length,
-                nays: (m.nays || []).length,
-                status: 'proposed'
-            });
-        }
+        upsertLiveCollectiveMotions('council', motions);
 
         // F-052, council half. Same reasoning as syncTreasury: `motions` is the
         // full live open set, so a stored 'proposed' motion missing from it was
@@ -6507,7 +6535,9 @@ async function syncCouncil() {
             console.warn('Council sync: motion list incomplete this tick; skipping the F-052 reconcile.');
         } else {
             try {
-                const closed = db.resolveMissingCouncilMotions(motions.map(m => m.hash), { trusted: true });
+                const closed = db.resolveMissingCouncilMotions(
+                    motions.map(m => m.index).filter(i => i !== null && i !== undefined),
+                    { trusted: true, asOfBlock: currentBlock });
                 if (closed > 0) {
                     console.log(`Council sync: ${closed} motion(s) left chain storage without a resolving event; marked resolved (F-052).`);
                 }
@@ -6519,6 +6549,85 @@ async function syncCouncil() {
         logSyncError('Council sync', err);
     } finally {
         isSyncingCouncil = false;
+    }
+}
+
+// Write the live open motions into the history table. A motion seen open in
+// chain storage is by definition not resolved, so this also clears a stale
+// left-storage mark. Motions without a vote index (Voting entry missing) are
+// skipped: the index is the key, and guessing one is how votes land on #0.
+function upsertLiveCollectiveMotions(collective, motions) {
+    for (const m of motions) {
+        if (m.index === null || m.index === undefined) continue;
+        db.upsertCollectiveMotion(collective, {
+            hash: m.hash,
+            motionIndex: m.index,
+            section: m.section || null,
+            method: m.method || null,
+            threshold: m.threshold || null,
+            liveAyes: (m.ayes || []).length,
+            liveNays: (m.nays || []).length
+        }, { open: true });
+    }
+}
+
+// --- Technical committee ---------------------------------------------------
+// A second collective with the same pallet as the council, but no elections:
+// members are set by governance, there are no stakes or terms, and it may have
+// a prime member whose vote is the default for absentees. Same live-motion
+// reader, same F-052 reconcile, its own KV row and history.
+let isSyncingTechnicalCommittee = false;
+async function syncTechnicalCommittee() {
+    if (!isRpcReady() || isSyncingTechnicalCommittee) return;
+    const q = globalApi.query.technicalCommittee;
+    if (!q || !q.members || !q.proposals) {
+        db.setSyncState('technicalCommittee', { lastSync: Date.now(), status: 'Unavailable' });
+        return;
+    }
+    isSyncingTechnicalCommittee = true;
+    try {
+        const [membersRaw, primeRaw, countRaw, currentBlockObj] = await Promise.all([
+            q.members(), q.prime ? q.prime() : Promise.resolve(null),
+            q.proposalCount ? q.proposalCount() : Promise.resolve(null),
+            globalApi.query.system.number()
+        ]);
+        const currentBlock = currentBlockObj.toNumber();
+        const prime = primeRaw && primeRaw.isSome ? primeRaw.unwrap().toString() : null;
+        const members = [];
+        for (const a of membersRaw.map(x => x.toString())) {
+            let name = null;
+            try { name = await getIdentity(globalApi, a); } catch (e) { }
+            members.push({ address: a, name, isPrime: prime !== null && a === prime });
+        }
+        const live = await readLiveCollectiveMotions('technicalCommittee', members[0] ? members[0].address : null);
+        const data = {
+            members,
+            prime,
+            motions: live.motions,
+            proposalCount: countRaw ? countRaw.toNumber() : null,
+            currentBlock,
+            collectivePallet: 'technicalCommittee',
+            lastSync: Date.now()
+        };
+        db.setKv('technicalCommittee', data);
+        db.setSyncState('technicalCommittee', { lastSync: Date.now(), status: 'Synced' });
+        upsertLiveCollectiveMotions('technicalCommittee', live.motions);
+        if (!live.trusted) {
+            console.warn('Technical committee sync: motion list incomplete this tick; skipping the F-052 reconcile.');
+        } else {
+            try {
+                const closed = db.resolveMissingCollectiveMotions('technicalCommittee',
+                    live.motions.map(m => m.index).filter(i => i !== null && i !== undefined),
+                    { trusted: true, asOfBlock: currentBlock });
+                if (closed > 0) console.log(`Technical committee sync: ${closed} motion(s) left chain storage without a resolving event; marked resolved (F-052).`);
+            } catch (e) {
+                console.warn('Technical committee reconcile failed (non-fatal):', e.message);
+            }
+        }
+    } catch (err) {
+        logSyncError('Technical committee sync', err);
+    } finally {
+        isSyncingTechnicalCommittee = false;
     }
 }
 
@@ -6554,7 +6663,19 @@ function govStr(x) {
 // Scan one block's events for governance activity. Returns null when the block
 // has none (the overwhelming majority), so the extra block/storage reads only
 // happen on the rare blocks that matter.
-async function scanBlockForGovernance(blockNumber, collectiveName) {
+// The collective pallets this runtime actually has, in a fixed order. Both
+// bodies are crawled from the same blocks: one fetch per block serves both.
+function governanceCollectives() {
+    if (!globalApi) return ['council'];
+    const found = COLLECTIVES.filter(n => globalApi.query[n] && globalApi.query[n].proposalOf);
+    return found.length ? found : ['council'];
+}
+
+// `collectives` is the list of collective pallets present on this runtime
+// (council, technicalCommittee) — see governanceCollectives(). A bare string
+// is accepted for old callers.
+async function scanBlockForGovernance(blockNumber, collectives) {
+    const collectiveList = Array.isArray(collectives) ? collectives : [collectives].filter(Boolean);
     try {
         const blockHash = await getBlockHashCached(blockNumber);
         // Decode with the block's OWN runtime metadata — see getEventsAtBlock.
@@ -6605,10 +6726,10 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
         const TREASURY_METHODS = ['Proposed', 'Awarded', 'Rejected', 'SpendApproved'];
         const COLLECTIVE_METHODS = ['Proposed', 'Closed', 'Approved', 'Disapproved', 'Executed', 'MemberExecuted'];
         const relevant = [];
-        events.forEach((record) => {
+        events.forEach((record, eventIndex) => {
             const ev = record.event;
-            if (ev.section === 'treasury' && TREASURY_METHODS.includes(ev.method)) relevant.push(ev);
-            else if (ev.section === collectiveName && COLLECTIVE_METHODS.includes(ev.method)) relevant.push(ev);
+            if (ev.section === 'treasury' && TREASURY_METHODS.includes(ev.method)) relevant.push({ ev, eventIndex });
+            else if (collectiveList.includes(ev.section) && COLLECTIVE_METHODS.includes(ev.method)) relevant.push({ ev, eventIndex });
         });
         // Clean scan with no governance events of interest in this block.
         // Returned as ok=true so the gap-fill retry phase clears the
@@ -6627,7 +6748,7 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
         const treasury = [];
         const motions = [];
 
-        for (const ev of relevant) {
+        for (const { ev, eventIndex } of relevant) {
             const f = govEventFields(ev);
             if (ev.section === 'treasury') {
                 const id = govNum(f.proposalIndex ?? f.index ?? f[0]);
@@ -6653,21 +6774,24 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
                     treasury.push({ id, status: 'approved' });
                 }
             } else {
-                // Collective (council) motion events.
+                // Collective motion events (council or technical committee).
+                // `collective` is the event's own pallet, so the two bodies'
+                // motion #N never collide.
+                const collective = ev.section;
                 if (ev.method === 'Proposed') {
                     const hash = govStr(f.proposalHash ?? f[2]);
-                    if (!hash) continue;
+                    const motionIndex = govNum(f.proposalIndex ?? f[1]);
+                    if (!hash || motionIndex === null) continue;
                     const rec = {
-                        hash,
-                        motionIndex: govNum(f.proposalIndex ?? f[1]),
+                        type: 'proposed', collective, hash, motionIndex,
                         proposer: govStr(f.account ?? f[0]),
                         threshold: govNum(f.threshold ?? f[3]),
-                        status: 'proposed',
                         proposedBlock: blockNumber,
+                        proposedEventIndex: eventIndex,
                         proposedAt: timestamp
                     };
                     try {
-                        const opt = await globalApi.query[collectiveName].proposalOf.at(blockHash, hash);
+                        const opt = await globalApi.query[collective].proposalOf.at(blockHash, hash);
                         if (opt && opt.isSome) {
                             const call = opt.unwrap();
                             rec.section = String(call.section);
@@ -6676,16 +6800,20 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
                     } catch (e) { }
                     motions.push(rec);
                 } else {
+                    // MemberExecuted is deliberately absent: a threshold-1
+                    // proposal executes immediately and never becomes a motion
+                    // (no index), so there is nothing to attribute it to.
                     const hash = govStr(f.proposalHash ?? f[0]);
                     if (!hash) continue;
+                    const base = { type: 'event', collective, hash, block: blockNumber, eventIndex, at: timestamp };
                     if (ev.method === 'Closed') {
-                        motions.push({ hash, status: 'closed', ayes: govNum(f.yes ?? f[1]), nays: govNum(f.no ?? f[2]), resolvedBlock: blockNumber, resolvedAt: timestamp });
+                        motions.push({ ...base, kind: 'closed', ayes: govNum(f.yes ?? f[1]), nays: govNum(f.no ?? f[2]) });
                     } else if (ev.method === 'Approved') {
-                        motions.push({ hash, status: 'approved', resolvedBlock: blockNumber, resolvedAt: timestamp });
+                        motions.push({ ...base, kind: 'approved' });
                     } else if (ev.method === 'Disapproved') {
-                        motions.push({ hash, status: 'disapproved', resolvedBlock: blockNumber, resolvedAt: timestamp });
-                    } else if (ev.method === 'Executed' || ev.method === 'MemberExecuted') {
-                        motions.push({ hash, status: 'executed', resolvedBlock: blockNumber, resolvedAt: timestamp });
+                        motions.push({ ...base, kind: 'disapproved' });
+                    } else if (ev.method === 'Executed') {
+                        motions.push({ ...base, kind: 'executed' });
                     }
                 }
             }
@@ -6708,8 +6836,111 @@ async function scanBlockForGovernance(blockNumber, collectiveName) {
     }
 }
 
+// ─── Motion locator ─────────────────────────────────────────────────────────
+// The event crawler only knows what it scanned. This step asks the CHAIN what
+// should exist and queues the blocks that prove it, so a motion can never be
+// missing for good — whatever the cause (an outage, a capped forward pass, a
+// bug like the hash-keyed table this replaced):
+//
+//   1. proposalCount says N motions exist → every index 0..N-1 we do not hold
+//      is bisected to its proposal block (first block where the count passed
+//      it) and that block is queued for the gap-fill pass;
+//   2. a motion with no resolving event that is no longer open is bisected to
+//      the block where its Voting entry disappeared, and that block is queued.
+//
+// Nothing is written here except queue rows; the existing scanner does the
+// recording, so there is one parser, not two. Bounded per tick by
+// MOTION_LOCATOR_BUDGET_MS and remembered in kv so a motion is not re-bisected
+// every tick while its block waits in the queue.
+async function locateMissingMotions(collectives, head) {
+    const started = Date.now();
+    const overBudget = () => Date.now() - started > MOTION_LOCATOR_BUDGET_MS;
+    let queued = 0;
+    for (const collective of collectives) {
+        if (overBudget()) break;
+        const q = globalApi.query[collective];
+        if (!q || !q.proposalCount || !q.voting) continue;
+        const stateKey = `locator:${collective}`;
+        const state = db.getKv(stateKey) || {};
+        const recent = (k) => state[k] && (Date.now() - state[k]) < MOTION_LOCATOR_RETRY_MS;
+        const hashAt = async (b) => { try { return await withTimeout(getBlockHashCached(b), 10000, 'blockHash'); } catch { return null; } };
+        const countAt = async (b) => {
+            const h = await hashAt(b); if (!h) return null;
+            try { return (await withTimeout(q.proposalCount.at(h), 10000, 'proposalCount')).toNumber(); } catch { return null; }
+        };
+        const openAt = (motionHash) => async (b) => {
+            const h = await hashAt(b); if (!h) return null;
+            try { return (await withTimeout(q.voting.at(h, motionHash), 10000, 'voting')).isSome; } catch { return null; }
+        };
+
+        let count;
+        try { count = (await q.proposalCount()).toNumber(); } catch { continue; }
+        const rows = db.getCollectiveMotionIndex(collective);
+        // A found (or definitively absent) target is not re-bisected for
+        // MOTION_LOCATOR_RETRY_MS; a search that failed on RPC trouble only
+        // backs off ~10 minutes, so one timeout does not cost a day.
+        const SHORT_RETRY_MS = 10 * 60 * 1000;
+        const markDone  = (k) => { state[k] = Date.now(); };
+        const markRetry = (k) => { state[k] = Date.now() - MOTION_LOCATOR_RETRY_MS + SHORT_RETRY_MS; };
+
+        // 1. motions we do not hold, or hold without a proposal block (a row
+        //    written by the live sync alone has no proposer, block or time).
+        //    Newest first: the most likely to be looked for, and cheapest to
+        //    bracket.
+        const located = rows.filter(r => r.proposedBlock != null).map(r => r.motionIndex);
+        for (const index of missingIndices(located, count).reverse()) {
+            if (overBudget()) break;
+            const key = `${index}:p`;
+            if (recent(key)) continue;
+            const { lo, hi } = neighbourHints(index, rows);
+            const block = await findProposalBlock({ index, countAt, head, lo, hi });
+            if (block !== null && block > 0) {
+                if (db.queueScanFailureIfAbsent('governance', block, `motion locator: ${collective} #${index} proposed here`)) queued++;
+                markDone(key);
+            } else {
+                markRetry(key);
+            }
+        }
+
+        // 2. motions with no outcome that are no longer open.
+        let liveHashes = null;
+        try { liveHashes = new Set((await q.proposals()).map(h => h.toHex())); } catch { liveHashes = null; }
+        if (liveHashes) {
+            const byHash = new Map();
+            for (const r of rows) { if (!byHash.has(r.hash)) byHash.set(r.hash, []); byHash.get(r.hash).push(r); }
+            const unresolved = db.getCollectiveMotions(collective)
+                .filter(m => (m.status === 'proposed' || m.status === 'resolved') && m.proposedBlock != null);
+            for (const m of unresolved) {
+                if (overBudget()) break;
+                const key = `${m.motionIndex}:c`;
+                if (recent(key)) continue;
+                const sameHashLater = (byHash.get(m.hash) || [])
+                    .filter(r => r.proposedBlock != null && Number(r.proposedBlock) > Number(m.proposedBlock))
+                    .map(r => Number(r.proposedBlock));
+                // Open right now and this is the newest motion with the hash: nothing to find.
+                if (!sameHashLater.length && liveHashes.has(m.hash)) continue;
+                const until = sameHashLater.length ? Math.min(...sameHashLater) - 1 : head;
+                let block = await findCloseBlock({ proposedBlock: Number(m.proposedBlock), isOpenAt: openAt(m.hash), until });
+                // Still "open" one block before the identical call was proposed
+                // again means it was closed and re-proposed in that SAME block:
+                // the re-proposal block holds this motion's outcome too.
+                if (block === null && sameHashLater.length && (await openAt(m.hash)(until)) === true) block = until + 1;
+                if (block !== null && block > 0) {
+                    if (db.queueScanFailureIfAbsent('governance', block, `motion locator: ${collective} #${m.motionIndex} resolved here`)) queued++;
+                    markDone(key);
+                } else {
+                    markRetry(key);
+                }
+            }
+        }
+        db.setKv(stateKey, state);
+    }
+    if (queued) console.log(`[governance] motion locator queued ${queued} block(s) for re-scan`);
+    return queued;
+}
+
 // Scan a descending block range in concurrent batches.
-async function scanGovernanceRange({ startBlock, stopBlock, maxBlocks, collectiveName }) {
+async function scanGovernanceRange({ startBlock, stopBlock, maxBlocks, collectives }) {
     const treasury = [];
     const motions = [];
     let scanned = 0;
@@ -6721,7 +6952,7 @@ async function scanGovernanceRange({ startBlock, stopBlock, maxBlocks, collectiv
             next--;
         }
         if (!nums.length) break;
-        const results = await Promise.all(nums.map(b => scanBlockForGovernance(b, collectiveName)));
+        const results = await Promise.all(nums.map(b => scanBlockForGovernance(b, collectives)));
         scanned += nums.length;
         oldest = nums[nums.length - 1];
         for (const r of results) {
@@ -6741,8 +6972,10 @@ async function applyGovernanceRecords(treasury, motions) {
         db.upsertTreasuryProposal(t);
     }
     for (const m of motions) {
+        if (m.type === 'event') { db.insertCollectiveMotionEvent(m.collective, m); continue; }
+        if (m.type !== 'proposed') continue;
         if (m.proposer && !m.proposerName) { try { m.proposerName = await getIdentity(globalApi, m.proposer); } catch (e) { } }
-        db.upsertCouncilMotion(m);
+        db.upsertCollectiveMotion(m.collective, m);
     }
 }
 
@@ -6756,8 +6989,7 @@ async function syncGovernance() {
         // past SKIP_RECORD_MAX on an earlier tick. Wrapped so a failure to
         // drain can never take down the scan that follows it.
         try { drainSkipTail('governance'); } catch (e) { console.warn('[governance] skip-tail drain failed:', e && e.message); }
-        const collectiveName = ['council', 'councilCollective', 'generalCouncil']
-            .find(n => globalApi.query[n] && globalApi.query[n].proposalOf) || 'council';
+        const collectives = governanceCollectives();
 
         const state = db.getSyncState('governance');
         const head = (await globalApi.rpc.chain.getHeader()).number.toNumber();
@@ -6790,7 +7022,7 @@ async function syncGovernance() {
                 startBlock: head,
                 stopBlock: headSeen + 1,
                 maxBlocks: GOV_FORWARD_MAX,
-                collectiveName
+                collectives
             });
             await applyGovernanceRecords(fwd.treasury, fwd.motions);
             // Audit F-010: after downtime longer than GOV_FORWARD_MAX blocks,
@@ -6825,7 +7057,7 @@ async function syncGovernance() {
                     startBlock: backfillCursor,
                     stopBlock: stop,
                     maxBlocks: GOV_BACKFILL_CHUNK,
-                    collectiveName
+                    collectives
                 });
                 await applyGovernanceRecords(bf.treasury, bf.motions);
                 oldestScannedBlock = Math.min(oldestScannedBlock || backfillCursor, bf.oldest);
@@ -6847,7 +7079,7 @@ async function syncGovernance() {
             let recovered = 0;
             let stillFailing = 0;
             for (const f of govFailures) {
-                const r = await scanBlockForGovernance(f.block, collectiveName);
+                const r = await scanBlockForGovernance(f.block, collectives);
                 if (r && r.ok) {
                     for (const t of r.treasury) recoveredTreasury.push(t);
                     for (const m of r.motions) recoveredMotions.push(m);
@@ -6873,6 +7105,12 @@ async function syncGovernance() {
             const stats = db.countScanFailures('governance', SCAN_MAX_ATTEMPTS);
             console.log(`[governance] gap-fill: ${recovered} recovered, ${stillFailing} still failing (${stats.retrying} retrying / ${stats.permanent} permanent in queue)`);
         }
+
+        // Motion locator — after the passes above, so it sees what they wrote.
+        // Non-fatal: it only queues blocks; a failure here must not stop the
+        // crawl that keeps the site current.
+        try { await locateMissingMotions(collectives, head); }
+        catch (e) { console.warn('[governance] motion locator failed (non-fatal):', e && e.message); }
 
         // Audit F-010 (round 2). The status was `backfillComplete ? 'Synced' :
         // 'Backfilling'` — it could not say 'Repairing' at all, so a governance
@@ -6911,7 +7149,7 @@ async function syncGovernance() {
                 permanentFailures: govFailCounts.permanent
             }) || undefined
         });
-        console.log(`Governance indexer: reached ${oldestScannedBlock}-${headSeen} verified ${latestScannedBlock}, ${db.countTreasuryProposals()} treasury proposals, ${db.countCouncilMotions()} motions, status=${govStatus}, backfill ${backfillComplete ? 'complete' : 'in progress'}.`);
+        console.log(`Governance indexer: reached ${oldestScannedBlock}-${headSeen} verified ${latestScannedBlock}, ${db.countTreasuryProposals()} treasury proposals, ${db.countCouncilMotions()} council + ${db.countCollectiveMotions('technicalCommittee')} TC motions, status=${govStatus}, backfill ${backfillComplete ? 'complete' : 'in progress'}.`);
     } catch (err) {
         logSyncError('Governance sync', err);
         db.setSyncState('governance', { ...db.getSyncState('governance'), status: 'Error', error: err.message });
@@ -7406,9 +7644,13 @@ async function dispatchNewCouncilMotions() {
         items: db.getCouncilMotions(),
         rankOf: m => m.motionIndex,
         timeOf: m => m.proposedAt,
-        // Keyed by hash, not index: a motion index can be reused across
-        // council terms, and the hash is the row's actual primary key.
-        eventIdOf: m => m.hash,
+        // Keyed by INDEX. It used to be the hash, on the belief that "a motion
+        // index can be reused across council terms" — it cannot (ProposalCount
+        // only grows); it is the HASH that repeats, whenever the same call is
+        // proposed again, and a hash key would silently skip the email for the
+        // re-proposal. The watermark (rankOf, the index) is what stops old
+        // motions being re-sent under the new key format.
+        eventIdOf: m => `council:${m.motionIndex}`,
         prefMatches: (p) => p.governance && p.governance.councilMotion,
         makeEmail: (m, subscriber) => {
             const unsub = unsubscribeUrlFor(subscriber);
@@ -8338,6 +8580,10 @@ async function syncChainIndex() {
             if (forward.events.some(e => /^(council|councilCollective|generalCouncil)$/i.test(e.section || ''))) {
                 console.log('[chain-index] council event in fresh block — refreshing council snapshot now');
                 syncCouncil().catch(() => { /* the interval pass remains the safety net */ });
+            }
+            if (forward.events.some(e => /^technicalCommittee$/i.test(e.section || ''))) {
+                console.log('[chain-index] technical committee event in fresh block — refreshing its snapshot now');
+                syncTechnicalCommittee().catch(() => { /* the interval pass remains the safety net */ });
             }
             if (forward.failedNumbers && forward.failedNumbers.length) tickHadFailures = true;
 
@@ -9692,7 +9938,7 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
     // writes to SQLite. The indexer worker is the single writer.
     if (kickSyncsOnConnect) {
         syncChainIndex(); syncTransactions(); syncData(); syncHolders();
-        syncStakingRewards(); syncCouncil(); syncTreasury(); syncDemocracy(); syncGovernance();
+        syncStakingRewards(); syncCouncil(); syncTechnicalCommittee(); syncTreasury(); syncDemocracy(); syncGovernance();
         refreshNetworkInfoInBackground();
         refreshTotalUnlockingInBackground();
     }
@@ -10130,6 +10376,16 @@ function startIndexerLoops() {
     // history. mergeValidatorTriggers is additive on purpose (F-115), so
     // fabricated "0% → 51%" crossings already stored would otherwise persist
     // forever even though the code that produced them is fixed.
+    // One-time: council motions move from the hash-keyed table to
+    // (collective, index). See migrateCouncilMotionsToCollective in db.js.
+    try {
+        const r = db.migrateCouncilMotionsToCollective();
+        if (!r.skipped) {
+            console.log(`[migration] council motions → collective_motions: ${r.motions} motion(s), ${r.queued} block(s) queued to re-read their events, ${r.unindexed} unindexed row(s) skipped`);
+        }
+    } catch (err) {
+        console.error('[migration] council motion migration failed (history will refill via the motion locator):', err && err.message);
+    }
     try {
         const r = db.rebuildValidatorTriggers(getCommissionTriggers);
         if (!r.skipped) {
@@ -10164,6 +10420,7 @@ function startIndexerLoops() {
     setTimeout(syncHolders,      3000);
     setTimeout(syncStakingRewards, 4500);
     setTimeout(syncCouncil,      6000);
+    setTimeout(syncTechnicalCommittee, 6500);
     setTimeout(syncTreasury,     7000);
     setTimeout(syncDemocracy,    8000);
     setTimeout(syncGovernance,   9000);
@@ -10203,6 +10460,7 @@ function startIndexerLoops() {
     setInterval(syncData, VALIDATOR_SYNC_INTERVAL_MS);
     setInterval(syncHolders, THIRTY_MINUTES);
     setInterval(syncCouncil,   COUNCIL_REFRESH_MS);
+    setInterval(syncTechnicalCommittee, COUNCIL_REFRESH_MS);
     setInterval(syncTreasury,  TREASURY_REFRESH_MS);
     setInterval(syncDemocracy, DEMOCRACY_REFRESH_MS);
     setInterval(syncTransactions, THIRTY_SECONDS);

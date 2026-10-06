@@ -11,10 +11,14 @@
 //      surface and no DOM harness; see test/escaping.test.js for the reasoning.
 //      These are drift checks, and they say so.
 
-import { test, describe, before } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import * as realDb from '../db.js';
+import { EVENT_RANK } from '../lib/collective-motions.js';
 
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
 const serverSrc = read('server.js');
@@ -42,9 +46,6 @@ function makeGovDb() {
     db.exec(`
         CREATE TABLE treasury_proposals (
             id INTEGER PRIMARY KEY, status TEXT, updated_at INTEGER
-        );
-        CREATE TABLE council_motions (
-            hash TEXT PRIMARY KEY, motion_index INTEGER, status TEXT, updated_at INTEGER
         );
     `);
     return db;
@@ -114,20 +115,29 @@ describe('F-052 — the local re-implementation matches db.js', () => {
     });
     test('the UPDATE writes the resolved status the same way', () => {
         assert.match(dbSrc, /UPDATE treasury_proposals SET status = 'resolved', updated_at = \? WHERE id = \?/);
-        assert.match(dbSrc, /UPDATE council_motions SET status = 'resolved', updated_at = \? WHERE hash = \?/);
     });
-    test('the council half selects only proposed motions', () => {
-        assert.match(dbSrc, /SELECT hash FROM council_motions WHERE status = 'proposed'/);
+    test('the collective half marks only still-proposed motions, by index', () => {
+        // Motions moved to (collective, index) in Oct 2026; the council half is
+        // now tested against the REAL db.js below rather than a local copy.
+        const fn = dbSrc.slice(dbSrc.indexOf('export function resolveMissingCollectiveMotions'),
+                               dbSrc.indexOf('export function resolveMissingCouncilMotions'));
+        assert.match(fn, /filter\(m => m\.status === 'proposed'\)/);
+        assert.match(fn, /UPDATE collective_motions SET left_storage_at = \?, updated_at = \? WHERE collective = \? AND motion_index = \?/);
     });
     test('both functions wrap their writes in a transaction that rolls back', () => {
         // The one part with a real runtime failure mode, and the part the
         // local copy cannot exercise.
-        const fns = dbSrc.slice(
+        const treasury = dbSrc.slice(
             dbSrc.indexOf('export function resolveMissingTreasuryProposals'),
-            dbSrc.indexOf('// --- council motions')
+            dbSrc.indexOf('export function resolveMissingCollectiveMotions')
         );
-        assert.equal((fns.match(/BEGIN IMMEDIATE/g) || []).length, 2);
-        assert.equal((fns.match(/ROLLBACK/g) || []).length, 2);
+        assert.equal((treasury.match(/BEGIN IMMEDIATE/g) || []).length, 1);
+        assert.equal((treasury.match(/ROLLBACK/g) || []).length, 1);
+        const collective = dbSrc.slice(
+            dbSrc.indexOf('export function resolveMissingCollectiveMotions'),
+            dbSrc.indexOf('export function resolveMissingCouncilMotions')
+        );
+        assert.match(collective, /runTx\(\(\) => \{/, 'the collective reconcile must write inside runTx (BEGIN IMMEDIATE + ROLLBACK)');
     });
 });
 
@@ -136,59 +146,87 @@ describe('F-052 — the council half, which is the one that can lose data', () =
     // half carrying a blocker — its live set is built inside a log-and-continue
     // catch, so an RPC error left it empty and would have closed every open
     // motion permanently.
-    function resolveMissingMotions(db, liveHashes) {
-        const open = db.prepare("SELECT hash FROM council_motions WHERE status = 'proposed'").all();
-        const live = new Set(liveHashes.map(String));
-        const gone = open.filter(r => !live.has(String(r.hash)));
-        const upd = db.prepare("UPDATE council_motions SET status = 'resolved', updated_at = ? WHERE hash = ?");
-        for (const r of gone) upd.run(Date.now(), r.hash);
-        return gone.length;
+    //
+    // Since Oct 2026 this runs against the REAL db.js (temp database), not a
+    // local copy: motions are keyed (collective, index) and their status is
+    // derived at read time, so a copy would be testing a different system.
+    const dirs = [];
+    after(() => { for (const d of dirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } });
+    function freshDb() {
+        const dir = mkdtempSync(join(tmpdir(), 'pdex-f052-'));
+        dirs.push(dir);
+        realDb.initDb(dir, false, { awaitMigrator: false });
+        return realDb;
     }
+    const seed = (db) => {
+        db.upsertCollectiveMotion('council', { motionIndex: 1, hash: '0xaa', proposedBlock: 100 });
+        db.upsertCollectiveMotion('council', { motionIndex: 2, hash: '0xbb', proposedBlock: 200 });
+        db.upsertCollectiveMotion('council', { motionIndex: 3, hash: '0xcc', proposedBlock: 300 });
+        db.insertCollectiveMotionEvent('council', { hash: '0xcc', block: 310, kind: 'executed' });
+    };
+    const statuses = (db) => db.getCouncilMotions().sort((x, y) => x.motionIndex - y.motionIndex).map(m => m.status);
 
     test('only motions absent from the live set are closed', () => {
-        const db = makeGovDb();
-        const ins = db.prepare('INSERT INTO council_motions(hash,motion_index,status,updated_at) VALUES(?,?,?,?)');
-        ins.run('0xaa', 1, 'proposed', 0);
-        ins.run('0xbb', 2, 'proposed', 0);
-        ins.run('0xcc', 3, 'executed', 0);
-        assert.equal(resolveMissingMotions(db, ['0xaa']), 1);
-        const rows = db.prepare('SELECT hash,status FROM council_motions ORDER BY motion_index').all();
-        assert.deepEqual(rows.map(r => r.status), ['proposed', 'resolved', 'executed']);
+        const db = freshDb(); seed(db);
+        assert.equal(db.resolveMissingCouncilMotions([1], { trusted: true }), 1);
+        assert.deepEqual(statuses(db), ['proposed', 'resolved', 'executed']);
     });
 
     test('an EMPTY live set would close everything — hence the trusted flag', () => {
         // This is the blocker, reproduced. The protection is not in this
         // function; it is that the caller must prove the set is complete.
-        const db = makeGovDb();
-        const ins = db.prepare('INSERT INTO council_motions(hash,motion_index,status,updated_at) VALUES(?,?,?,?)');
-        ins.run('0xaa', 1, 'proposed', 0);
-        ins.run('0xbb', 2, 'proposed', 0);
-        assert.equal(resolveMissingMotions(db, []), 2,
+        const db = freshDb(); seed(db);
+        assert.equal(db.resolveMissingCouncilMotions([], { trusted: true }), 2,
             'sanity: an empty live set really does close every open motion');
+        const guarded = freshDb(); seed(guarded);
+        assert.equal(guarded.resolveMissingCouncilMotions([]), 0, 'without trusted:true it must refuse');
+        assert.deepEqual(statuses(guarded), ['proposed', 'proposed', 'executed'], 'and must write nothing');
+    });
+
+    test('a resolved mark is undone by a real outcome, and by being seen open again', () => {
+        const db = freshDb(); seed(db);
+        db.resolveMissingCouncilMotions([], { trusted: true });
+        db.insertCollectiveMotionEvent('council', { hash: '0xaa', block: 150, kind: 'closed', ayes: 3, nays: 0 });
+        db.upsertCollectiveMotion('council', { motionIndex: 2, hash: '0xbb' }, { open: true });
+        assert.deepEqual(statuses(db), ['closed', 'proposed', 'executed']);
+    });
+
+    test('a motion proposed after the live snapshot is not judged against it', () => {
+        const db = freshDb(); seed(db);
+        db.upsertCollectiveMotion('council', { motionIndex: 4, hash: '0xdd', proposedBlock: 999 });
+        db.resolveMissingCouncilMotions([], { trusted: true, asOfBlock: 500 });
+        assert.equal(db.getCouncilMotions().find(m => m.motionIndex === 4).status, 'proposed');
     });
 
     test('db.js REFUSES to run without trusted:true', () => {
-        assert.match(dbSrc, /export function resolveMissingCouncilMotions\(liveHashes, \{ trusted = false \} = \{\}\)/);
+        assert.match(dbSrc, /export function resolveMissingCollectiveMotions\(collective, liveIndices, \{ trusted = false, asOfBlock = null \} = \{\}\)/);
+        assert.match(dbSrc, /export function resolveMissingCouncilMotions\(liveIndices, \{ trusted = false, asOfBlock = null \} = \{\}\)/);
         assert.match(dbSrc, /export function resolveMissingTreasuryProposals\(liveIds, \{ trusted = false \} = \{\}\)/);
         const fns = dbSrc.slice(
             dbSrc.indexOf('export function resolveMissingTreasuryProposals'),
-            dbSrc.indexOf('// --- council motions')
+            dbSrc.indexOf('// --- collective motions')
         );
-        assert.equal((fns.match(/if \(!trusted\)/g) || []).length, 2,
+        assert.equal((fns.match(/if \(!trusted\)/g) || []).length, 3,
             'a precondition that is only a comment is not a precondition');
     });
 
     test('the council caller only trusts the set after a clean walk', () => {
+        const reader = serverSrc.slice(
+            serverSrc.indexOf('async function readLiveCollectiveMotions'),
+            serverSrc.indexOf('async function syncCouncil')
+        );
+        assert.match(reader, /let motionsTrusted = false/);
+        // Set INSIDE the try, after the sort — not before the loop.
+        const trustAt = reader.indexOf('motionsTrusted = true');
+        const catchAt = reader.indexOf('motions skipped:');
+        assert.ok(trustAt !== -1 && catchAt !== -1);
+        assert.ok(trustAt < catchAt, 'the flag must be set inside the try it protects');
         const fn = serverSrc.slice(
             serverSrc.indexOf('async function syncCouncil'),
             serverSrc.indexOf('// --- Governance history crawler')
         );
         assert.match(fn, /let motionsTrusted = false/);
-        // Set INSIDE the try, after the sort — not before the loop.
-        const trustAt = fn.indexOf('motionsTrusted = true');
-        const catchAt = fn.indexOf("catch (e) { console.warn('Council motions skipped:");
-        assert.ok(trustAt !== -1 && catchAt !== -1);
-        assert.ok(trustAt < catchAt, 'the flag must be set inside the try it protects');
+        assert.match(fn, /motionsTrusted = live\.trusted/);
         assert.match(fn, /if \(!motionsTrusted\)/, 'the reconcile is not gated');
         assert.match(fn, /if \(motionsTrusted\) reconcileMotionThreads\(motions\)/,
             'thread reconciliation has the same empty-set hazard and must share the gate');
@@ -217,12 +255,14 @@ describe('F-052 — the status ranks let resolved be upgraded, never downgraded'
         assert.equal(r.awarded, r.rejected, 'the two terminal outcomes are peers');
     });
 
-    test('motions: proposed < resolved < closed < approved = disapproved < executed', () => {
-        const r = rankTable('MOTION_STATUS_RANK');
-        assert.ok(r.proposed < r.resolved);
-        assert.ok(r.resolved < r.closed);
-        assert.ok(r.closed < r.approved && r.approved === r.disapproved);
-        assert.ok(r.approved < r.executed);
+    test('motions: closed < approved = disapproved < executed; resolved only without an outcome', () => {
+        // Motion status is derived at read time now (lib/collective-motions.js):
+        // the highest-ranked attributed event wins, and 'resolved' is what a
+        // left-storage motion shows only while it has NO event — so a real
+        // outcome always replaces it and can never be replaced by it.
+        assert.ok(EVENT_RANK.closed < EVENT_RANK.approved && EVENT_RANK.approved === EVENT_RANK.disapproved);
+        assert.ok(EVENT_RANK.approved < EVENT_RANK.executed);
+        assert.equal(EVENT_RANK.resolved, undefined, 'resolved is not an event and must not compete with one');
     });
 });
 
@@ -247,7 +287,7 @@ describe('F-052 — the reconcile is only called with a trusted live set', () =>
             serverSrc.indexOf('async function syncCouncil'),
             serverSrc.indexOf('// --- Governance history crawler')
         );
-        const upsertAt = fn.indexOf('db.upsertCouncilMotion(');
+        const upsertAt = fn.indexOf("upsertLiveCollectiveMotions('council', motions)");
         const reconcileAt = fn.indexOf('db.resolveMissingCouncilMotions(');
         assert.ok(upsertAt !== -1 && reconcileAt !== -1 && upsertAt < reconcileAt);
     });
@@ -263,7 +303,7 @@ describe('F-052 — the reconcile is only called with a trusted live set', () =>
 describe('F-111 — approved-but-unpaid treasury is ACTIVE on the calendar', () => {
     const calendar = serverSrc.slice(
         serverSrc.indexOf('// Treasury proposals — proposed_at'),
-        serverSrc.indexOf('// Council motions — similar to treasury')
+        serverSrc.indexOf('// Council AND technical committee motions')
     );
 
     test('approved counts as active', () => {
@@ -279,7 +319,7 @@ describe('F-111 — approved-but-unpaid treasury is ACTIVE on the calendar', () 
 
     test('motions treat only proposed as active', () => {
         const m = serverSrc.slice(
-            serverSrc.indexOf('// Council motions — similar to treasury'),
+            serverSrc.indexOf('// Council AND technical committee motions'),
             serverSrc.indexOf('// Sort: most recently-active first')
         );
         assert.match(m, /const isActive = !m\.status \|\| m\.status === 'proposed'/);

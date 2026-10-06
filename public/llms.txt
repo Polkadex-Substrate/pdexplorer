@@ -194,6 +194,7 @@ is CoinGecko (keyless public API).
 ## Public JSON API — governance
 
 - GET /api/council — council members, motions, runners-up
+- GET /api/technical-committee — technical committee members (with prime), open motions with live votes, and full motion history
 - GET /api/treasury — treasury balance and proposals (open + historical)
 - GET /api/democracy — referenda and public proposals
 - GET /api/governance/latest — most-recent OPEN referendum / proposal
@@ -285,7 +286,7 @@ backoff — it is not a permanent error. `RPC_NOT_READY` is currently the only
 ## Caching tiers (respect the Cache-Control headers)
 
 - Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events,
-  /api/council, /api/governance/latest, /api/state/* at the current head):
+  /api/council, /api/technical-committee, /api/governance/latest, /api/state/* at the current head):
   public, max-age=5, s-maxage=10, stale-while-revalidate=30
 - Medium — /api/validators, /api/network-info, /api/holders, /api/price-latest,
   /api/discussions, /api/staking-rewards-status, /api/analytics/*, and
