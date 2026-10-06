@@ -6848,6 +6848,10 @@ async function scanBlockForGovernance(blockNumber, collectives) {
 //   2. a motion with no resolving event that is no longer open is bisected to
 //      the block where its Voting entry disappeared, and that block is queued.
 //
+// The chain proves something happened in each block it queues, so a block
+// whose row already burned all its retries (an outage, a bad batch) gets them
+// back — "queue if absent" alone was a silent no-op for exactly the blocks
+// most likely to need it (motion #134's close block, Oct 2026).
 // Nothing is written here except queue rows; the existing scanner does the
 // recording, so there is one parser, not two. Bounded per tick by
 // MOTION_LOCATOR_BUDGET_MS and remembered in kv so a motion is not re-bisected
@@ -6895,7 +6899,7 @@ async function locateMissingMotions(collectives, head) {
             const { lo, hi } = neighbourHints(index, rows);
             const block = await findProposalBlock({ index, countAt, head, lo, hi });
             if (block !== null && block > 0) {
-                if (db.queueScanFailureIfAbsent('governance', block, `motion locator: ${collective} #${index} proposed here`)) queued++;
+                if (db.queueOrRearmScanFailure('governance', block, `motion locator: ${collective} #${index} proposed here`) !== 'pending') queued++;
                 markDone(key);
             } else {
                 markRetry(key);
@@ -6926,7 +6930,7 @@ async function locateMissingMotions(collectives, head) {
                 // the re-proposal block holds this motion's outcome too.
                 if (block === null && sameHashLater.length && (await openAt(m.hash)(until)) === true) block = until + 1;
                 if (block !== null && block > 0) {
-                    if (db.queueScanFailureIfAbsent('governance', block, `motion locator: ${collective} #${m.motionIndex} resolved here`)) queued++;
+                    if (db.queueOrRearmScanFailure('governance', block, `motion locator: ${collective} #${m.motionIndex} resolved here`) !== 'pending') queued++;
                     markDone(key);
                 } else {
                     markRetry(key);

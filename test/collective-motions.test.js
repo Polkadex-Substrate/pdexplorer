@@ -265,7 +265,9 @@ describe('wiring (source contracts — server.js cannot be imported)', () => {
         assert.ok(locAt > fn.indexOf('GAP-FILL') || locAt > fn.indexOf('govFailures'), 'locator must run after gap-fill');
         assert.match(fn, /catch \(e\) \{ console\.warn\('\[governance\] motion locator failed \(non-fatal\):'/);
         const loc = src.slice(src.indexOf('async function locateMissingMotions'), src.indexOf('async function scanGovernanceRange'));
-        assert.match(loc, /db\.queueScanFailureIfAbsent\('governance', block/);
+        assert.equal((loc.match(/db\.queueOrRearmScanFailure\('governance', block/g) || []).length, 2,
+            'both locator paths must re-arm retired rows — a plain queue is a no-op on them (#134, Oct 2026)');
+        assert.ok(!/queueScanFailureIfAbsent/.test(loc), 'queue-if-absent is back in the locator');
         assert.ok(!/upsertCollectiveMotion|insertCollectiveMotionEvent/.test(loc), 'the locator only queues; the scanner records');
     });
 

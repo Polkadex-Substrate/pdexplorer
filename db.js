@@ -22,7 +22,7 @@ import { migrateHashKeyedIds, purgeLegacyExtrinsicKeyedTx, countHashKeyedIdCandi
 import fs from 'fs';
 import path from 'path';
 import { APY_FIELD, APY_DEPRECATED_ALIASES } from './lib/apy.js';
-import { queueOneIfAbsent } from './lib/scan-queue.js';
+import { queueOneIfAbsent, queueOrRearm } from './lib/scan-queue.js';
 import { attributeMotionEvents, EVENT_KINDS } from './lib/collective-motions.js';
 
 let db = null;
@@ -2431,6 +2431,11 @@ export function recordScanFailure(indexer, block, errMessage) {
 // identical statement.
 export function queueScanFailureIfAbsent(indexer, block, errMessage) {
     return queueOneIfAbsent(db, indexer, block, errMessage);
+}
+// For heights backed by independent evidence (the motion locator): queue, or
+// give a retired row its attempts back. See lib/scan-queue.js.
+export function queueOrRearmScanFailure(indexer, block, reason) {
+    return queueOrRearm(db, indexer, block, reason);
 }
 
 // Clear a single (indexer, block) entry — called after a retry succeeds.

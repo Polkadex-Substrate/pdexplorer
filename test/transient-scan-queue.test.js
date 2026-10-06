@@ -89,6 +89,16 @@ describe('lib/scan-queue range queueing (the operator repair path)', () => {
         assert.ok(rows.filter(r => r.block !== 105).every(r => r.attempts === 0));
     });
 
+    test('queueOrRearm: queues new heights, re-arms retired ones, leaves fresh ones alone', () => {
+        freshDir();
+        for (let i = 0; i < 10; i++) db.recordScanFailure('governance', 13146179, 'rpc timeout');
+        assert.equal(db.getScanFailures('governance', 20, 10).length, 0, 'sanity: retired rows are not retried');
+        assert.equal(db.queueOrRearmScanFailure('governance', 13146179, 'motion locator: council #134 resolved here'), 'rearmed');
+        assert.deepEqual(db.getScanFailures('governance', 20, 10).map(r => [r.block, r.attempts]), [[13146179, 0]]);
+        assert.equal(db.queueOrRearmScanFailure('governance', 13146179, 'again'), 'pending');
+        assert.equal(db.queueOrRearmScanFailure('governance', 13141046, 'new'), 'queued');
+    });
+
     test('rejects unknown indexers and bad ranges instead of writing junk', () => {
         const dir = freshDir();
         const h = new DatabaseSync(path.join(dir, 'explorer.db'));
@@ -117,6 +127,16 @@ describe('tools/requeue-scan-range.mjs end to end', () => {
         const out = run(dir, '--indexer', 'governance', '--blocks', '13146180,13141046,13141046');
         assert.match(out, /2 new/);
         assert.deepEqual(rowsFor(dir, 'governance').map(r => r.block), [13141046, 13146180]);
+    });
+
+    test('--rearm gives a retired height its retries back; without it the row stays retired', () => {
+        const dir = freshDir();
+        for (let i = 0; i < 10; i++) db.recordScanFailure('governance', 13146179, 'rpc timeout');
+        run(dir, '--indexer', 'governance', '--blocks', '13146179');
+        assert.equal(rowsFor(dir, 'governance')[0].attempts, 10, 'plain queueing must not touch an existing row');
+        const out = run(dir, '--indexer', 'governance', '--blocks', '13146179', '--rearm');
+        assert.match(out, /1 re-armed/);
+        assert.equal(rowsFor(dir, 'governance')[0].attempts, 0);
     });
 
     test('--dry-run writes nothing', () => {

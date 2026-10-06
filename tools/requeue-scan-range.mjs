@@ -23,12 +23,16 @@
 //   --indexer   governance | staking_rewards | transactions | chain_index
 //   --from/--to inclusive range (max 200,000 heights per run)
 //   --blocks    comma-separated heights instead of a range
+//   --rearm     also give heights that ALREADY have a row their retries back
+//               (attempts = 0). Without it, a height that burned all its
+//               retries (shown "permanent" / status Degraded) stays retired and
+//               queueing it is a no-op. Use when you know the block is good.
 //   --data-dir  defaults to $DATA_DIR, then ./data
 
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
-import { queueRangeIfAbsent, queueOneIfAbsent, QUEUEABLE_INDEXERS } from '../lib/scan-queue.js';
+import { queueRangeIfAbsent, queueOneIfAbsent, rearmOne, QUEUEABLE_INDEXERS } from '../lib/scan-queue.js';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -50,6 +54,7 @@ const MAX_RANGE = 200_000;
 const indexer = flag('--indexer');
 const dataDir = flag('--data-dir', process.env.DATA_DIR || './data');
 const dryRun = has('--dry-run');
+const rearm = has('--rearm');
 const dbPath = path.join(dataDir, 'explorer.db');
 
 if (!QUEUEABLE_INDEXERS.includes(indexer)) die(`--indexer must be one of: ${QUEUEABLE_INDEXERS.join(', ')}`);
@@ -86,13 +91,21 @@ if (dryRun) {
     process.exit(0);
 }
 
-let added = 0, already = 0;
+let added = 0, already = 0, rearmed = 0;
 if (list) {
     for (const b of list) queueOneIfAbsent(db, indexer, b, reason) ? added++ : already++;
 } else {
     ({ added, alreadyQueued: already } = queueRangeIfAbsent(db, indexer, from, to, reason));
 }
+if (rearm) {
+    const heights = list || Array.from({ length: to - from + 1 }, (_, i) => from + i);
+    db.exec('BEGIN IMMEDIATE');
+    try { for (const b of heights) if (rearmOne(db, indexer, b, reason)) rearmed++; db.exec('COMMIT'); }
+    catch (e) { try { db.exec('ROLLBACK'); } catch {} throw e; }
+}
 const after = db.prepare('SELECT COUNT(*) AS c FROM scan_failures WHERE indexer = ?').get(indexer).c;
-console.log(`Queued ${what} for ${indexer}: ${count(added)} new, ${count(already)} already queued. Queue now ${count(after)}.`);
+console.log(`Queued ${what} for ${indexer}: ${count(added)} new, ${count(already)} already queued` +
+    (rearm ? `, ${count(rearmed)} re-armed (attempts reset)` : (already ? ' (add --rearm to reset retired ones)' : '')) +
+    `. Queue now ${count(after)}.`);
 console.log(`The running backend drains ${process.env.SCAN_GAP_FILL_BATCH || 20} per tick for this indexer; watch "gap-fill:" lines in its log.`);
 db.close();
