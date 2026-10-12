@@ -207,6 +207,13 @@
 
                 <div class="nav-section-title">My Wallet</div>
                 <a href="/wallet" class="nav-item" data-target="wallet" id="nav-my-account"><i class='bx bx-user-circle'></i> My Account</a>
+                <!-- Shortcut to the staking controls, which live on the wallet
+                     dashboard. Separate from "My Account" on purpose: that
+                     label does not read as "where I stake", and Nova Wallet
+                     drops Polkadex from its own Staking tab on 25 Oct 2026 and
+                     points stakers at this explorer instead. routeTo() resolves
+                     /stake to the wallet page and opens Stake & Nominate. -->
+                <a href="/stake" class="nav-item" data-target="stake" id="nav-stake"><i class='bx bx-coin'></i> Stake PDEX <span class="badge">NEW</span></a>
 
                 <div class="nav-section-title">Governance</div>
                 <a href="/democracy" class="nav-item" data-target="democracy"><i class='bx bx-book-content'></i> Democracy</a>

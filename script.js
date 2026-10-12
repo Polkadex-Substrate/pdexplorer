@@ -4411,6 +4411,10 @@ function routeTo(target) {
     let mainTarget = target;
     let detailId = null;
     let detailId2 = null;
+    // Set by routes that are an alias for another page, so the canonical URL
+    // points at the page rather than at the alias (two indexable URLs serving
+    // identical content is the duplicate-content problem F-124 warns about).
+    let canonicalOverride = null;
 
     if (target.startsWith('account/')) {
         mainTarget = 'account-details';
@@ -4434,6 +4438,20 @@ function routeTo(target) {
     } else if (target.startsWith('wallet/')) {
         mainTarget = 'wallet';
         detailId = target.substring('wallet/'.length);
+    } else if (target === 'stake' || target === 'staking') {
+        // /stake — the sidebar shortcut. The staking controls (Stake &
+        // Nominate, Unstake, Pay out rewards) have always been on the wallet
+        // dashboard; what was missing was a way in that says so. From 25 Oct
+        // 2026 Nova Wallet removes Polkadex from its Staking tab and tells
+        // users to manage their stake in "Polkadex Explorer", so this is the
+        // URL that audience can be pointed at directly.
+        //
+        // 'staking' is accepted as an alias because it is the obvious guess
+        // (and the word Nova's own announcement uses); without it that guess
+        // lands on the 404 pane.
+        mainTarget = 'wallet';
+        walletEntryIntent = 'stake';
+        canonicalOverride = '/wallet';
     } else if (target.startsWith('discussions/')) {
         mainTarget = 'discussions';
         detailId = target.substring('discussions/'.length);
@@ -4449,10 +4467,19 @@ function routeTo(target) {
         detailId = target.substring('help/'.length);
     }
 
-    // Update active nav
+    // Update active nav. An exact match on the route the user actually clicked
+    // wins over the page that route resolves to: /stake and /wallet are two
+    // sidebar entries rendering the same page, and matching on mainTarget
+    // alone lit up both of them at once. The fallback is unchanged, so detail
+    // routes (block/123 -> block-details) still highlight their section.
+    const exactNav = Array.from(navItems).some(n => n.getAttribute('data-target') === target);
     navItems.forEach(n => {
         n.classList.remove('active');
-        if (n.getAttribute('data-target') === mainTarget || n.getAttribute('data-target') === target) {
+        const navTarget = n.getAttribute('data-target');
+        const isActive = exactNav
+            ? navTarget === target
+            : (navTarget === mainTarget || navTarget === target);
+        if (isActive) {
             n.classList.add('active');
         }
     });
@@ -4471,7 +4498,7 @@ function routeTo(target) {
         const known = Array.from(pageSections).some(pg => pg.getAttribute('data-page') === mainTarget);
         if (!known) mainTarget = 'not-found';
     }
-    updateSeoMeta(mainTarget, { canonicalPath: '/' + (target === 'home' ? '' : target) });
+    updateSeoMeta(mainTarget, { canonicalPath: canonicalOverride || ('/' + (target === 'home' ? '' : target)) });
 
     // Show target page
     pageSections.forEach(page => {
@@ -8201,6 +8228,34 @@ function consumeSkipAutoPickFlag() {
     } catch (e) { return false; }
 }
 
+// One-shot intent carried from a sidebar shortcut into the wallet dashboard.
+// Module-scoped rather than re-read from the URL because initWalletPage
+// rewrites /stake to /wallet/<addr> via replaceState as soon as it knows the
+// address — by the time the dashboard paints, the URL no longer records what
+// the user clicked.
+let walletEntryIntent = null;
+
+// Act on a pending shortcut intent once the dashboard is on screen with live
+// data. Called from the FRESH paint only, never the cache-first paint: the
+// stake modal reads balances and the minimum bond at open time, and opening it
+// over a cached snapshot would show numbers that are a few minutes stale.
+//
+// Consumed unconditionally, so an intent can never survive into a later visit
+// and pop a modal the user did not ask for. The guards below decide only
+// whether it does anything: no action bar means a view-only session with no
+// signing capability, and a disabled button means either nothing to stake or
+// actions blocked by applyWalletActionBlock(). In both cases the user still
+// gets the dashboard, just without a modal that could not have worked.
+function maybeRunWalletEntryIntent() {
+    const intent = walletEntryIntent;
+    if (!intent) return;
+    walletEntryIntent = null;
+    if (intent !== 'stake') return;
+    const btn = document.getElementById('wallet-act-stake');
+    if (!btn || btn.disabled) return;
+    openStakeModal();
+}
+
 function initWalletPage(address) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
@@ -8295,7 +8350,11 @@ async function tryAutoSelectFirstWallet() {
         // against the freshest state, not stale captures from start time.
         if (getStoredWallet()) return;
         const here = readRouteFromLocation();
-        if (here !== 'wallet') return;
+        // /stake and /staking land on this same dashboard (see routeTo), so
+        // they get the same auto-pick. Without them listed the shortcut used
+        // to dead-end on the connect panel for a user whose extension was
+        // already unlocked, which /wallet would have walked straight past.
+        if (here !== 'wallet' && here !== 'stake' && here !== 'staking') return;
 
         // Prefer the address the user previously picked from this same
         // extension. The `lastUsed` value may belong to a different wallet
@@ -8688,6 +8747,8 @@ async function fetchWalletDashboard(address) {
         // into the rendered DOM via the targeted handlers below.
         renderWalletDashboard(latestWallet, latestPrice, latestRewards);
         writeWalletCache(address, { wallet: latestWallet, price: latestPrice, rewards: latestRewards });
+        // Live data is on screen — safe to open a shortcut's modal now.
+        maybeRunWalletEntryIntent();
     }).catch(err => {
         stopLoading();
         const msg = err && err.message ? err.message : String(err);
