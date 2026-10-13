@@ -14528,6 +14528,19 @@ function renderWatchlistPage() {
 
 const TOUR_STORAGE_KEY = 'pdex_tour_seen_v1';
 
+// Landing routes where a first-time visitor already has one task in hand.
+// On /stake the Stake & Nominate window opens a few seconds after load, and the
+// tour used to open on top of it. So the tour waits for a later visit. It is
+// not marked as seen, so landing on any other page still shows it, and
+// ?tour=1 still forces it.
+const TOUR_SKIP_ROUTES = ['stake', 'staking'];
+
+function shouldAutoShowTour({ forceShow, seen, landingRoute }) {
+    if (forceShow) return true;
+    if (seen) return false;
+    return !TOUR_SKIP_ROUTES.includes(landingRoute);
+}
+
 const TOUR_SLIDES = [
     {
         icon: 'bx-grid-alt',
@@ -14626,12 +14639,17 @@ function renderTourSlide() {
     // Auto-show on first visit, OR when ?tour=1 is in the URL (anyone can
     // re-trigger the tour by sharing such a link). Defer to after init() so
     // the SPA router has already painted the home page underneath.
+    //
+    // The landing route is read here, at load, not inside the timer: by the
+    // time the timer fires the wallet page may already have rewritten /stake
+    // to /wallet/<addr>.
+    const landingRoute = readRouteFromLocation();
     setTimeout(() => {
         const params = new URLSearchParams(window.location.search);
         const forceShow = params.has('tour');
         let seen = false;
         try { seen = localStorage.getItem(TOUR_STORAGE_KEY) === '1'; } catch (_) { seen = false; }
-        if (forceShow || !seen) openOnboardingTour();
+        if (shouldAutoShowTour({ forceShow, seen, landingRoute })) openOnboardingTour();
     }, 800);
 
     // Expose `?` as a keyboard shortcut to re-open the tour. Skipped when
