@@ -135,6 +135,44 @@ describe('the shortcut does not dead-end on the connect panel', () => {
     });
 });
 
+describe('the intent does not outlive the trip to the wallet page', () => {
+    // The intent is consumed only on a successful live dashboard paint. So a
+    // user who opened /stake with no wallet connected, wandered off, and
+    // connected later from another page would get the stake modal over a
+    // dashboard they never asked to stake from; a live fetch that failed on
+    // the first try left it armed the same way. routeTo drops it for any
+    // page that is not the wallet.
+    const routeTo = bodyOf('routeTo');
+    const clearAt = routeTo.indexOf("if (mainTarget !== 'wallet') walletEntryIntent = null;");
+
+    test('routeTo clears the intent for any non-wallet page', () => {
+        assert.ok(clearAt !== -1,
+            'the clearing line is gone — an armed intent now survives into a later wallet visit');
+    });
+
+    test('it clears AFTER the route resolves, so the auto-pick hop keeps it', () => {
+        // /stake resolves to the wallet page and then re-enters routeTo as
+        // /wallet/<addr> once an account is picked. Clearing at the top of
+        // routeTo would wipe the intent on that second entry and the
+        // shortcut would silently become a plain link to My Account.
+        const armAt = routeTo.indexOf("walletEntryIntent = 'stake'");
+        assert.ok(armAt !== -1 && clearAt > armAt,
+            'the clear runs before the stake branch arms the intent — the shortcut is dead');
+        const walletHop = routeTo.indexOf("target.startsWith('wallet/')");
+        assert.ok(walletHop !== -1 && clearAt > walletHop,
+            'the clear runs before the wallet/<addr> branch resolves mainTarget');
+    });
+
+    test('the resolution ladder itself never clears it', () => {
+        // Guards against someone "simplifying" by clearing inside a branch of
+        // the ladder, which would reintroduce the bug for whichever branches
+        // were missed.
+        const ladder = routeTo.slice(0, clearAt);
+        assert.equal((ladder.match(/walletEntryIntent = null/g) || []).length, 0,
+            'the intent is cleared inside the resolution ladder instead of after it');
+    });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // maybeRunWalletEntryIntent — lifted out and run
 // ─────────────────────────────────────────────────────────────────────────────

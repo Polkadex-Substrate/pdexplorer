@@ -4467,6 +4467,15 @@ function routeTo(target) {
         detailId = target.substring('help/'.length);
     }
 
+    // A shortcut intent lives exactly as long as the user is heading for the
+    // wallet page. It has to survive the auto-pick hop (/stake resolves here,
+    // then re-enters as /wallet/<addr>), so it is cleared by resolved page,
+    // not at the top of routeTo. Without this, a user who opened /stake with
+    // no wallet connected, left, and connected later from some other page got
+    // the stake modal over a dashboard they never asked to stake from — and a
+    // live fetch that failed on the first try left it armed the same way.
+    if (mainTarget !== 'wallet') walletEntryIntent = null;
+
     // Update active nav. An exact match on the route the user actually clicked
     // wins over the page that route resolves to: /stake and /wallet are two
     // sidebar entries rendering the same page, and matching on mainTarget
