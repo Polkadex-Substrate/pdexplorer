@@ -2839,6 +2839,7 @@ const SITEMAP_STATIC_ROUTES = [
     { path: '/help/governance-overview',      changefreq: 'monthly', priority: '0.6' },
     { path: '/help/democracy-and-voting',     changefreq: 'monthly', priority: '0.6' },
     { path: '/help/council-and-motions',      changefreq: 'monthly', priority: '0.5' },
+    { path: '/help/transaction-status',       changefreq: 'monthly', priority: '0.6' },
     { path: '/help/treasury',                 changefreq: 'monthly', priority: '0.5' },
     { path: '/help/discussions',              changefreq: 'monthly', priority: '0.5' },
     { path: '/help/analytics',                changefreq: 'monthly', priority: '0.5' },
@@ -4365,7 +4366,11 @@ app.get('/api/council', (req, res) => {
         // of browser cache + 10 min of CDN cache — council members watched
         // their own just-cast vote fail to appear. The KV read this serves is
         // trivially cheap, so the short tier costs the origin nothing.
-        cacheShort(res);
+        // ?fresh=1 is the client's refetch right after a vote, close or
+        // propose is in a block: no-store, so neither the browser nor
+        // Cloudflare hands back the pre-transaction copy. There is no
+        // in-process response cache to bypass; the KV row is the snapshot.
+        if (req.query && req.query.fresh) res.set('Cache-Control', 'no-store'); else cacheShort(res);
         res.json(data);
     } catch (err) {
         console.error('API Error /api/council:', err);
@@ -4379,7 +4384,7 @@ app.get('/api/technical-committee', (req, res) => {
         data.motionHistory = db.getCollectiveMotions('technicalCommittee');
         data.history = governanceHistoryMeta();
         // Short tier for the same reason as /api/council: live vote tallies.
-        cacheShort(res);
+        if (req.query && req.query.fresh) res.set('Cache-Control', 'no-store'); else cacheShort(res);
         res.json(data);
     } catch (err) {
         console.error('API Error /api/technical-committee:', err);

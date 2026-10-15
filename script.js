@@ -25,6 +25,10 @@ import { developersBodies } from './lib/developers-bodies.js';
 // can look different and still cannot say different things. See the header of
 // lib/api-reference.js.
 import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READY, rpcNotReadyExample } from './lib/api-reference.js';
+// Transaction status card (replaces the alert popups) and live council motions.
+import { stageOf, BUTTON_STAGE_TEXT, defaultThreshold, checkThreshold, motionState, overlayLiveMotions, pendingChipText, pendingSettled } from './lib/tx-status.js';
+import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
+import { startCollectiveLive } from './lib/collective-live.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -722,6 +726,7 @@ function adoptChainApi(api) {
     // Chain-derived stat cards. These DO need the api.
     fetchNetworkStats(globalApi);
     subscribeNewBlocks(globalApi);
+    if (councilPollTimer) startCouncilLive();   // the Council page opened before the node link was up
 
     // F-063 review catch: anything that no-opped because globalApi was null
     // during the pre-handshake window has to be re-driven here, or it stays
@@ -4381,7 +4386,28 @@ function bootSeoRouter() {
 // staleness of the backend's 12s event-driven snapshot + short cache tier
 // without adding meaningful load: it's one KV-backed GET per open tab.
 let councilPollTimer = null;
+// Live motions: storage subscriptions on the browser's own node link (see
+// lib/collective-live.js), so a vote or close shows within a block. The poll
+// below stays as the fallback and for the parts only the backend has.
+let councilLive = null;
+function startCouncilLive() {
+    if (councilLive || !globalApi) return;
+    councilLive = startCollectiveLive(globalApi, {
+        toAddress: toPolkadexAddress,
+        knownHashes: (key) => ((collectiveView(key).getData() || {}).motions || []).map(m => m.hash),
+        onUpdate: (key, u) => {
+            renderCollectiveMotions(collectiveView(key));
+            // A motion opened or closed: the backend's history and proposer
+            // catch up within an indexer tick, so ask again shortly.
+            if (u.kind === 'hashes' && !u.initial) setTimeout(() => collectiveView(key).refresh({ fresh: true }), 8000);
+        },
+        onError: (e) => console.warn('[council-live]', e && e.message)
+    });
+}
+function stopCouncilLive() { if (councilLive) { councilLive.stop(); councilLive = null; } }
+const liveMotions = (key) => (councilLive && councilLive.state[key]) || null;
 function startCouncilPolling() {
+    startCouncilLive();
     if (councilPollTimer) return;
     councilPollTimer = setInterval(() => {
         // Skip hidden tabs — no point polling a page nobody is looking at.
@@ -4389,6 +4415,7 @@ function startCouncilPolling() {
     }, 30000);
 }
 function stopCouncilPolling() {
+    stopCouncilLive();
     if (councilPollTimer) { clearInterval(councilPollTimer); councilPollTimer = null; }
 }
 
@@ -9308,7 +9335,7 @@ function clearStakeError() {
 
 async function openStakeModal() {
     const data = currentWalletData;
-    if (!data) return alert('Wallet data is not loaded yet.');
+    if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const modal = document.getElementById('stake-modal');
     if (!modal) return;
     clearStakeError();
@@ -9491,6 +9518,7 @@ async function submitStakeTx() {
             return batchTx(api, calls);
         },
         label: 'Stake & nominate',
+        action: { key: 'staking.bondNominate', params: { amount: hasAmount ? amtStr : null, n: targets.length, eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null } },
         button: document.getElementById('submit-stake-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Submit',
@@ -9525,7 +9553,7 @@ const PAYOUT_BATCH_MAX = 30;
 
 function openPayoutModal() {
     const data = currentWalletData;
-    if (!data) return alert('Wallet data is not loaded yet.');
+    if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const entries = (data.rewards && data.rewards.unpaidEntries) || [];
     const total = (data.rewards && data.rewards.unpaidTotal) || 0;
     document.getElementById('payout-count').textContent = stakingFormatNumber(entries.length);
@@ -9577,6 +9605,7 @@ async function submitPayoutTx() {
     await submitSignedTx({
         buildTx: (api) => batchTx(api, batch.map(e => buildPayoutCall(api, e.validator, e.era))),
         label: 'Payout rewards' + (truncated ? ` (${batch.length} of ${entries.length})` : ''),
+        action: { key: 'staking.payout', params: { k: batch.length, remaining: entries.length - batch.length } },
         button: document.getElementById('submit-payout-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Pay Out',
@@ -9605,7 +9634,7 @@ let unstakeMaxPlanck = null;
 
 function openUnstakeModal() {
     const data = currentWalletData;
-    if (!data) return alert('Wallet data is not loaded yet.');
+    if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const errEl = document.getElementById('unstake-modal-error');
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     // Reset Max-intent state every time the modal is opened so a previous
@@ -9735,6 +9764,7 @@ async function submitWithdrawUnbonded() {
     await submitSignedTx({
         buildTx: (api) => api.tx.staking.withdrawUnbonded(spans),
         label: 'Withdraw unbonded',
+        action: { key: 'staking.withdraw' },
         button: document.getElementById('submit-withdraw-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Withdraw unbonded funds',
@@ -9798,17 +9828,18 @@ async function submitUnstakeTx() {
                 ]);
             },
             label: 'Unstake',
+            action: { key: 'staking.unbond', params: { amount: planckToPdexString(planckStr), full: true, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
             button: document.getElementById('submit-unstake-tx-btn'),
             busyText: 'Signing…',
             idleText: 'Sign & Unstake',
-            onError: (err) => {
+            onError: (err, m) => {
                 console.warn('[unstake] full-unbond fast-path errored:', err && (err.message || err));
-                fail(decodeUnstakeError(err, {
+                fail(decodeUnstakeError((m && m.raw) || err, {
                     active: Number(data.staking.activeStaked) || 0,
                     amt: Number(data.staking.activeStaked) || 0,
                     minBond: Number((data.network && data.network.minStake) || 0),
                     isFullUnbond: true,
-                }));
+                }, err));
             },
             onSuccess: () => {
                 const modal = document.getElementById('unstake-modal');
@@ -9867,10 +9898,11 @@ async function submitUnstakeTx() {
     await submitSignedTx({
         buildTx: (api) => api.tx.staking.unbond(pdexToPlanck(amtStr)),
         label: 'Unstake',
+        action: { key: 'staking.unbond', params: { amount: amtStr, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
         button: document.getElementById('submit-unstake-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Unstake',
-        onError: (err) => fail(decodeUnstakeError(err, { active, amt, minBond })),
+        onError: (err, m) => fail(decodeUnstakeError((m && m.raw) || err, { active, amt, minBond }, err)),
         onSuccess: () => {
             const modal = document.getElementById('unstake-modal');
             if (modal) modal.style.display = 'none';
@@ -9885,7 +9917,7 @@ async function submitUnstakeTx() {
 // minNominatorBond, or post-unbond active=0 while the stash is still in
 // Nominators::contains_key). Surfacing the raw stack trace makes users
 // think the explorer is broken; this turns it into actionable advice.
-function decodeUnstakeError(rawErr, ctx) {
+function decodeUnstakeError(rawErr, ctx, friendly) {
     const msg = (rawErr && (rawErr.message || String(rawErr))) || '';
     // WASM trap from TaggedTransactionQueue_validate_transaction:
     if (/wasm.*unreachable|TaggedTransactionQueue|Verification Error.*1002|InsufficientBond/i.test(msg)) {
@@ -9913,8 +9945,8 @@ function decodeUnstakeError(rawErr, ctx) {
         }
         return lines.join(' ');
     }
-    // Otherwise return the raw message — it's almost always already user-readable.
-    return msg || 'Unstake failed. Please try again or refresh the page.';
+    // Otherwise the decoded sentence from the status card, then the raw message.
+    return friendly || msg || 'Unstake failed. Please try again or refresh the page.';
 }
 
 // --- Set / Clear on-chain identity -----------------------------------------
@@ -9952,7 +9984,7 @@ function hideIdentityError() {
 
 async function openIdentityModal() {
     const address = getStoredWallet();
-    if (!address) return alert('Please connect a wallet first.');
+    if (!address) return showTxNotice('Please connect a wallet first.');
     const modal = document.getElementById('identity-modal');
     if (!modal) return;
 
@@ -10077,6 +10109,7 @@ async function submitSetIdentity() {
     await submitSignedTx({
         buildTx: (api) => api.tx.identity.setIdentity(info),
         label: 'Set identity',
+        action: { key: 'identity.set' },
         button: document.getElementById('submit-identity-tx-btn'),
         busyText: 'Signing…',
         idleText: data && data.identity && data.identity !== 'Unknown' ? 'Update identity' : 'Save identity',
@@ -10101,6 +10134,7 @@ async function submitClearIdentity() {
     await submitSignedTx({
         buildTx: (api) => api.tx.identity.clearIdentity(),
         label: 'Clear identity',
+        action: { key: 'identity.clear' },
         button: document.getElementById('clear-identity-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Reset (clear)',
@@ -10444,8 +10478,8 @@ function wireModalAccessibility() {
 
 function openSendModal() {
     const data = currentWalletData;
-    if (!data) return alert('Wallet data is not loaded yet.');
-    if (!isSameAddress(getStoredWallet(), data.address)) return alert('Connect this wallet to send PDEX.');
+    if (!data) return showTxNotice('Wallet data is not loaded yet.');
+    if (!isSameAddress(getStoredWallet(), data.address)) return showTxNotice('Connect this wallet to send PDEX.');
     // Audit F-063 review catch. Before that fix, routeTo() could not run until
     // the WebSocket handshake completed, so globalApi was always present by the
     // time any modal could open. Now the page routes first and the connection
@@ -10457,7 +10491,7 @@ function openSendModal() {
     // never a funds-loss path — but offering a form whose safety checks are
     // quietly disabled is not something to leave to a downstream guard.
     if (!globalApi) {
-        return alert('Still connecting to the Polkadex node. Sending needs that connection for fee and '
+        return showTxNotice('Still connecting to the Polkadex node. Sending needs that connection for fee and '
             + 'existential-deposit checks — please try again in a moment.');
     }
     const modal = document.getElementById('send-modal');
@@ -10529,6 +10563,7 @@ async function submitSendTx() {
     await submitSignedTx({
         buildTx: (api) => buildTransferTx(api, to, pdexToPlanck(amtStr), keepAlive),
         label: 'Transfer',
+        action: { key: 'balances.transfer', params: { amount: amtStr, to } },
         button: document.getElementById('submit-send-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Send',
@@ -11530,21 +11565,28 @@ const COLLECTIVE_VIEWS = {
         motionLabel: 'Council Motion', canPropose: true,
         get filter() { return councilMotionsFilter; }, set filter(v) { councilMotionsFilter = v; },
         get callFilter() { return councilCallFilter; }, set callFilter(v) { councilCallFilter = v; },
-        getData: () => councilData, refresh: () => fetchCouncilData()
+        getData: () => councilData, refresh: (o) => fetchCouncilData(o)
     },
     technicalCommittee: {
         key: 'technicalCommittee', rootId: 'tc-motions-content', tabId: 'council-tc',
         label: 'Technical Committee', bodyNoun: 'the technical committee', memberRole: 'Technical committee member', seatLabel: 'Members',
         motionLabel: 'Technical Committee Motion', canPropose: false,
         filter: 'all', callFilter: 'all',
-        getData: () => tcData, refresh: () => fetchTechnicalCommitteeData()
+        getData: () => tcData, refresh: (o) => fetchTechnicalCommitteeData(o)
     }
 };
 const collectiveView = (key) => COLLECTIVE_VIEWS[key] || COLLECTIVE_VIEWS.council;
+// { fresh: true } after a transaction: skip the browser and CDN caches (the
+// server answers ?fresh=1 with no-store).
+const freshFetch = (url, o) => (o && o.fresh ? fetch(url + '?fresh=1', { cache: 'no-store' }) : fetch(url));
+// In-flight motion votes and closes, keyed "<collective>:<hash>", so the card
+// keeps its spinner and chip across the re-renders the poll and the live
+// subscription cause. { kind: 'aye'|'nay'|'close', stage, error }
+const motionPending = new Map();
 
-async function fetchCouncilData() {
+async function fetchCouncilData(opts) {
     try {
-        const response = await fetch('/api/council');
+        const response = await freshFetch('/api/council', opts);
         // Survive HTML error pages from nginx/Cloudflare with a clean message
         // instead of "Unexpected token '<'".
         const data = await parseJsonResponse(response);
@@ -11628,10 +11670,10 @@ async function fetchCouncilData() {
 // No elections, stakes or terms — just a member list (with an optional prime,
 // whose vote counts as the default for members who abstain) and motions that
 // use the same collective pallet as the council.
-async function fetchTechnicalCommitteeData() {
+async function fetchTechnicalCommitteeData(opts) {
     const list = document.getElementById('tc-members-list');
     try {
-        const response = await fetch('/api/technical-committee');
+        const response = await freshFetch('/api/technical-committee', opts);
         const data = await parseJsonResponse(response);
         if (data.error) throw new Error(data.error);
         tcData = data;
@@ -11661,14 +11703,11 @@ async function fetchTechnicalCommitteeData() {
 }
 
 // --- Council Motions: rendering + on-chain actions ---
-function councilMotionStatus(m, currentBlock) {
-    const ayes = (m.ayes || []).length;
-    const nays = (m.nays || []).length;
-    const threshold = Number(m.threshold) || 0;
-    if (threshold && ayes >= threshold) return { key: 'approved', label: 'Threshold met', badge: 'claimed', closeable: true };
-    if (threshold && nays >= threshold) return { key: 'rejected', label: 'Rejected', badge: 'unclaimed', closeable: true };
-    if (m.end && currentBlock && currentBlock >= m.end) return { key: 'expired', label: 'Voting ended', badge: 'neutral', closeable: true };
-    return { key: 'voting', label: 'Voting open', badge: 'neutral', closeable: false };
+// pallet_collective's rules, in lib/tx-status.js: Rejected once the remaining
+// seats can no longer reach the threshold (seats - nays < threshold), not at
+// nays >= threshold, which called a 1-of-5 motion rejected after one Nay.
+function councilMotionStatus(m, currentBlock, seats) {
+    return motionState(m, { currentBlock, seats, you: getStoredWallet(), isSame: isSameAddress });
 }
 
 function renderCouncilMotions(data = councilData) {
@@ -11678,8 +11717,10 @@ function renderCouncilMotions(data = councilData) {
 function renderCollectiveMotions(view, data = view.getData()) {
     const root = document.getElementById(view.rootId);
     if (!root || !data) return;
-    const motions = Array.isArray(data.motions) ? data.motions : [];
+    const motions = overlayLiveMotions(Array.isArray(data.motions) ? data.motions : [], liveMotions(view.key));
     const members = Array.isArray(data.members) ? data.members : [];
+    // Keep voter lists the user opened open across live re-renders.
+    const openDetails = new Set(Array.from(root.querySelectorAll('details[open][data-dkey]')).map(d => d.getAttribute('data-dkey')));
     const currentBlock = Number(data.currentBlock) || 0;
     const stored = getStoredWallet();
     const isCouncilMember = !!stored && members.some(m => isSameAddress(m.address, stored));
@@ -11713,7 +11754,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
     // filters span both sections. Status keys are namespaced (open_/res_) so
     // an open "Threshold met" never collides with a resolved "Approved".
     const annotatedOpen = motions.map(m => {
-        const st = councilMotionStatus(m, currentBlock);
+        const st = councilMotionStatus(m, currentBlock, members.length);
         return { ...m, __status: st, __statusKey: 'open_' + st.key, __call: callKeyOf(m) };
     });
     const resolved = (Array.isArray(data.motionHistory) ? data.motionHistory : [])
@@ -11795,40 +11836,56 @@ function renderCollectiveMotions(view, data = view.getData()) {
     const visibleMotions = annotatedOpen.filter(matches);
     const visibleResolved = resolved.filter(matches);
 
+    const history = Array.isArray(data.motionHistory) ? data.motionHistory : [];
+    // Identity names the API already sends with the member list; no new lookups.
+    const nameOf = (a) => { const x = members.find(mm => isSameAddress(mm.address, a)); return x && x.name && x.name !== 'Unknown' ? x.name : stakingShortAddress(a); };
+    const youTag = (a) => (stored && isSameAddress(a, stored) ? ' <span class="motion-you">you</span>' : '');
     const cards = visibleMotions.map(m => {
         const st = m.__status;
-        const ayes = (m.ayes || []).length;
-        const nays = (m.nays || []).length;
-        const threshold = Number(m.threshold) || 0;
-        const ayePct = threshold ? Math.min(100, Math.round(ayes / threshold * 100)) : 0;
-        const nayPct = threshold ? Math.min(100, Math.round(nays / threshold * 100)) : 0;
-        const votedAye = !!stored && (m.ayes || []).includes(stored);
-        const votedNay = !!stored && (m.nays || []).includes(stored);
+        const { ayes, nays, threshold, ayePct, nayPct, naysToReject } = st;
+        const votedAye = st.youVoted === 'aye';
+        const votedNay = st.youVoted === 'nay';
         const idxLabel = (m.index === null || m.index === undefined) ? '—' : ('#' + m.index);
+        const pkey = view.key + ':' + m.hash;
+        if (motionPending.has(pkey) && pendingSettled(motionPending.get(pkey), st)) motionPending.delete(pkey);
+        const pend = motionPending.get(pkey);
+        const busy = !!pend && !pend.error;
+        const h = history.find(x => x.hash === m.hash && Number(x.motionIndex) === Number(m.index));
+        const proposer = h && h.proposer
+            ? `<div class="motion-meta">Proposed by <a href="/account/${encodeURIComponent(h.proposer)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(treasuryPartyName(h.proposerName, h.proposer))}</a>${youTag(h.proposer)}</div>`
+            : '';
 
         const argsHtml = (m.args && m.args.length)
-            ? `<details class="motion-details"><summary>Call arguments (${m.args.length})</summary>
+            ? `<details class="motion-details" data-dkey="${stakingEscapeHtml(m.hash + ':args')}"${openDetails.has(m.hash + ':args') ? ' open' : ''}><summary>Call arguments (${m.args.length})</summary>
                  <div class="motion-args">${m.args.map(a => `<div><span>${stakingEscapeHtml(a.name)}</span><code>${stakingEscapeHtml(String(a.value).slice(0, 220))}${String(a.value).length > 220 ? '…' : ''}</code></div>`).join('')}</div>
                </details>`
             : '';
 
         const voterList = (label, addrs) => {
             if (!addrs || !addrs.length) return '';
-            return `<details class="motion-details"><summary>${label} (${addrs.length})</summary>
-                <div class="motion-voters">${addrs.map(a => `<a href="/account/${encodeURIComponent(a)}" class="item-link" style="color:var(--brand-secondary);">${stakingShortAddress(a)}</a>`).join('')}</div>
+            const dkey = `${m.hash}:${label}`;
+            return `<details class="motion-details" data-dkey="${stakingEscapeHtml(dkey)}"${openDetails.has(dkey) ? ' open' : ''}><summary>${label} (${addrs.length})</summary>
+                <div class="motion-voters">${addrs.map(a => `<span><a href="/account/${encodeURIComponent(a)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(nameOf(a))}</a>${youTag(a)}</span>`).join('')}</div>
             </details>`;
         };
 
-        // Actions are shown to everyone for discoverability. councilMotionVote /
-        // councilMotionClose prompt to connect and enforce council membership at
-        // click time, so a non-member simply gets a clear message.
-        const actions = `<div class="motion-actions">
-                <button class="motion-btn aye motion-aye-btn" data-hash="${stakingEscapeHtml(m.hash)}" data-index="${m.index}" ${votedAye ? 'disabled' : ''}>${votedAye ? 'Voted Aye' : 'Vote Aye'}</button>
-                <button class="motion-btn nay motion-nay-btn" data-hash="${stakingEscapeHtml(m.hash)}" data-index="${m.index}" ${votedNay ? 'disabled' : ''}>${votedNay ? 'Voted Nay' : 'Vote Nay'}</button>
-                <button class="motion-btn close motion-close-btn" data-hash="${stakingEscapeHtml(m.hash)}" data-index="${m.index}" ${st.closeable ? '' : 'disabled'} title="${st.closeable ? 'Finalize this motion' : 'Available once the vote is decided or has ended'}">Close motion</button>
-            </div>`;
+        // Members only; councilMotionVote / councilMotionClose still check the
+        // seat at click time. While a vote or close is in flight the pressed
+        // button shows its stage and the others are disabled.
+        const btn = (kind, cls, idle, off, extra = '') => {
+            const pressed = busy && pend.kind === kind;
+            const text = pressed ? `<i class='bx bx-loader-alt bx-spin' aria-hidden="true"></i> ${BUTTON_STAGE_TEXT[pend.stage] || BUTTON_STAGE_TEXT.signing}` : idle;
+            return `<button class="motion-btn ${cls}" data-hash="${stakingEscapeHtml(m.hash)}" data-index="${m.index}" ${busy || off ? 'disabled' : ''}${pressed ? ' aria-busy="true"' : ''} ${extra}>${text}</button>`;
+        };
+        const actions = !isCouncilMember ? '' : `<div class="motion-actions">
+                ${btn('aye', 'aye motion-aye-btn', votedAye ? 'Voted Aye' : 'Vote Aye', votedAye)}
+                ${btn('nay', 'nay motion-nay-btn', votedNay ? 'Voted Nay' : 'Vote Nay', votedNay)}
+                ${btn('close', 'close motion-close-btn', 'Close motion', !st.closeable, `title="${st.closeable ? 'Finalize this motion' : 'Available once the vote is decided or has ended'}"`)}
+            </div>
+            ${busy ? `<div class="motion-pending-chip" role="status"><i class='bx bx-loader-alt bx-spin' aria-hidden="true"></i> ${pendingChipText(pend.kind)}</div>` : ''}
+            ${pend && pend.error ? `<div class="motion-tx-error" role="alert">${stakingEscapeHtml(pend.error)}</div>` : ''}`;
 
-        return `<div class="motion-card">
+        return `<div class="motion-card" data-hash="${stakingEscapeHtml(m.hash)}">
             <div class="motion-card-head">
                 <div>
                     ${(m.index !== null && m.index !== undefined)
@@ -11842,9 +11899,10 @@ function renderCollectiveMotions(view, data = view.getData()) {
             <div class="motion-tally">
                 <div class="motion-tally-row"><span>Ayes</span><span>${ayes} / ${threshold} threshold</span></div>
                 <div class="motion-bar"><div class="motion-bar-fill aye" style="width:${ayePct}%;"></div></div>
-                <div class="motion-tally-row"><span>Nays</span><span>${nays} / ${threshold} threshold</span></div>
+                <div class="motion-tally-row"><span>Nays</span><span>${nays} / ${naysToReject} to reject</span></div>
                 <div class="motion-bar"><div class="motion-bar-fill nay" style="width:${nayPct}%;"></div></div>
             </div>
+            ${proposer}
             <div class="motion-meta">Voting ends at block ${stakingFormatNumber(m.end)}${currentBlock ? ` &middot; current block ${stakingFormatNumber(currentBlock)}` : ''}</div>
             ${argsHtml}
             ${voterList('Aye voters', m.ayes)}
@@ -11935,11 +11993,11 @@ function renderResolvedMotions(resolved, view = COLLECTIVE_VIEWS.council) {
 function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
     const view = collectiveView(collectiveKey);
     const data = view.getData();
-    if (!data || !data.collectivePallet) return alert(`${view.label} data is not ready yet.`);
+    if (!data || !data.collectivePallet) return showTxNotice(`${view.label} data is not ready yet.`);
     if (!requireWallet(`vote on ${view.label.toLowerCase()} motions`)) return;
     const stored = getStoredWallet();
     if (!(data.members || []).some(m => isSameAddress(m.address, stored)))
-        return alert(`Only ${view.label.toLowerCase()} members can vote on its motions. Your connected wallet does not hold a seat.`);
+        return showTxNotice(`Only ${view.label.toLowerCase()} members can vote on its motions. Your connected wallet does not hold a seat.`);
     // Validate the index BEFORE building the call.
     //
     // `index` arrives as a DOM attribute string, and the backend leaves it null
@@ -11957,7 +12015,7 @@ function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
     const rawIndex = String(index == null ? '' : index).trim();
     const idx = /^\d+$/.test(rawIndex) ? Number(rawIndex) : NaN;
     if (!Number.isInteger(idx) || idx < 0) {
-        return alert(`This motion has no on-chain vote index available, so a vote can't be cast safely.\n\n` +
+        return showTxNotice(`This motion has no on-chain vote index available, so a vote can't be cast safely.\n\n` +
                      `That usually means the motion just closed, or the page data is stale — reload and try again.\n\n` +
                      `(Refusing rather than guessing: an unset index would encode as 0 and cast your vote on motion #0.)`);
     }
@@ -11989,20 +12047,22 @@ function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
             return tx;
         },
         label: `${view.label} motion #${idx} ${approve ? 'aye' : 'nay'} vote`,
-        onSuccess: () => setTimeout(view.refresh, 2500)
+        action: { key: 'council.vote', params: { aye: approve, idx, body: view.label.toLowerCase() } },
+        onStage: motionStage(view, hash, approve ? 'aye' : 'nay'),
+        onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
     });
 }
 
 function councilMotionClose(hash, index, collectiveKey = 'council') {
     const view = collectiveView(collectiveKey);
     const data = view.getData();
-    if (!data || !data.collectivePallet) return alert(`${view.label} data is not ready yet.`);
+    if (!data || !data.collectivePallet) return showTxNotice(`${view.label} data is not ready yet.`);
     if (!requireWallet(`close ${view.label.toLowerCase()} motions`)) return;
     const stored = getStoredWallet();
     if (!(data.members || []).some(m => isSameAddress(m.address, stored)))
-        return alert(`Only ${view.label.toLowerCase()} members can close its motions. Your connected wallet does not hold a seat.`);
-    const motion = (data.motions || []).find(m => m.hash === hash);
-    if (!motion) return alert('Motion details are no longer available — refresh the page.');
+        return showTxNotice(`Only ${view.label.toLowerCase()} members can close its motions. Your connected wallet does not hold a seat.`);
+    const motion = overlayLiveMotions(data.motions, liveMotions(view.key)).find(m => m.hash === hash);
+    if (!motion) return showTxNotice('Motion details are no longer available. Refresh the page.');
     // Audit F-118 (round 2): councilMotionVote above got the digit check in
     // round 1 and this sibling did not, though `index` reaches both the same
     // way — as a DOM attribute that is the literal "null" when the backend's
@@ -12019,7 +12079,7 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
     const rawIndex = String(index == null ? '' : index).trim();
     const idx = /^\d+$/.test(rawIndex) ? Number(rawIndex) : NaN;
     if (!Number.isInteger(idx) || idx < 0) {
-        return alert('This motion has no on-chain vote index available, so it cannot be closed safely.\n\nReload the page and try again.');
+        return showTxNotice('This motion has no on-chain vote index available, so it cannot be closed safely.\n\nReload the page and try again.');
     }
     if (!confirm(`Close ${view.label.toLowerCase()} motion #${idx}?\n\nThis finalizes the vote and, if it passed, dispatches the proposed call.`)) return;
     const pallet = data.collectivePallet;
@@ -12027,8 +12087,22 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
     submitSignedTx({
         buildTx: (api) => api.tx[pallet].close(hash, idx, weightBound, motion.lengthBound || 0),
         label: `${view.label} motion #${idx} close`,
-        onSuccess: () => setTimeout(view.refresh, 2500)
+        action: { key: 'council.close', params: { idx, method: motion.method } },
+        onStage: motionStage(view, hash, 'close'),
+        onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
     });
+}
+
+// The motion card's half of a vote or close: stage, chip, and the decoded
+// reason on failure (lib/tx-status.js pendingSettled decides when it is done).
+function motionStage(view, hash, kind) {
+    return (stage, m) => {
+        const key = view.key + ':' + hash;
+        if (stage === 'cancelled' || stage === 'stalled') motionPending.delete(key);
+        else motionPending.set(key, stage === 'failed' ? { kind, stage, error: (m && m.text) || 'The transaction failed.' } : { kind, stage });
+        if (stage === 'inBlock') view.refresh({ fresh: true });
+        renderCollectiveMotions(view);
+    };
 }
 
 // --- Propose a council motion -------------------------------------------------
@@ -12037,35 +12111,54 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
 // reject a pending treasury proposal — built as treasury.approveProposal(id) /
 // treasury.rejectProposal(id) and wrapped in <pallet>.propose(threshold, call,
 // lengthBound). Threshold defaults to a simple majority of the current seats.
-function councilSimpleMajority() {
-    const seats = (councilData && Array.isArray(councilData.members)) ? councilData.members.length : 0;
-    return seats ? Math.floor(seats / 2) + 1 : 1;
+// Seats come from the live council (3 of 5 today); with no council data there
+// is no default at all, never 1 (a threshold of 1 runs the call with no vote).
+let proposeModalLoading = false;
+async function ensureCouncilData() {
+    if (councilData && councilData.collectivePallet && Array.isArray(councilData.members)) return councilData;
+    try {
+        const data = await parseJsonResponse(await fetch('/api/council', { cache: 'no-store' }));
+        if (data && !data.error) { if (data.pallet) councilPalletName = data.pallet; councilData = data; }
+    } catch (e) { console.warn('[propose] could not load council data', e && e.message); }
+    return councilData;
 }
 
-function openProposeMotionModal(prefill) {
+// One place decides the warning, the confirm box and whether Submit is live:
+// disabled while loading, while signing, and whenever the error line shows.
+function syncProposeModal() {
+    const btn = document.getElementById('submit-propose-tx-btn');
+    const errEl = document.getElementById('propose-modal-error');
+    const confirmEl = document.getElementById('propose-threshold-confirm');
+    const seats = (councilData && Array.isArray(councilData.members)) ? councilData.members.length : 0;
+    const raw = (document.getElementById('propose-threshold') || {}).value || '';
+    const chk = checkThreshold(raw, seats, !!(confirmEl && confirmEl.checked));
+    if (errEl && chk.error && raw.trim() && !proposeModalLoading) { errEl.textContent = chk.error; errEl.style.display = 'block'; }
+    const warnBox = document.getElementById('propose-threshold-warning');
+    if (warnBox) warnBox.style.display = chk.warning ? 'block' : 'none';
+    const warnText = document.getElementById('propose-threshold-warning-text');
+    if (warnText) warnText.textContent = chk.warning || '';
+    const confirmRow = document.getElementById('propose-threshold-confirm-row');
+    if (confirmRow) confirmRow.style.display = chk.needsConfirm ? 'flex' : 'none';
+    if (!btn || btn.getAttribute('aria-busy') === 'true') return chk;
+    const errShowing = !!(errEl && errEl.style.display !== 'none' && errEl.textContent);
+    btn.disabled = proposeModalLoading || errShowing || !chk.canSubmit || !seats;
+    btn.textContent = proposeModalLoading ? 'Loading council...' : 'Sign & Submit Motion';
+    return chk;
+}
+
+async function openProposeMotionModal(prefill) {
     const modal = document.getElementById('council-propose-modal');
     if (!modal) return;
     // Guard against being passed a DOM Event when used directly as a click
     // handler — only a plain {callType, proposalId} object is treated as prefill.
     const pf = (prefill && typeof prefill === 'object' && !(prefill instanceof Event)) ? prefill : null;
-    const stored = getStoredWallet();
-    const members = (councilData && Array.isArray(councilData.members)) ? councilData.members : [];
-    const isMember = !!stored && members.some(m => isSameAddress(m.address, stored));
-
-    const warn = document.getElementById('propose-modal-wallet-warning');
-    if (warn) {
-        if (!stored) { warn.innerHTML = buildWalletConnectPrompt(); warn.style.display = 'block'; }
-        else if (!isMember) { warn.textContent = 'Only council members can propose a motion.'; warn.style.display = 'block'; }
-        else { warn.style.display = 'none'; warn.textContent = ''; }
-    }
-    const activeEl = document.getElementById('propose-active-wallet');
-    if (activeEl) activeEl.textContent = stored || '--';
-
+    // Never carry a threshold or a confirmation over from an earlier open.
     const thInput = document.getElementById('propose-threshold');
-    if (thInput && !thInput.value) thInput.value = String(councilSimpleMajority());
-    const seatHint = document.getElementById('propose-threshold-hint');
-    if (seatHint) seatHint.textContent = members.length ? `Council has ${members.length} seats — simple majority is ${councilSimpleMajority()}.` : '';
-
+    if (thInput) thInput.value = '';
+    const confirmEl = document.getElementById('propose-threshold-confirm');
+    if (confirmEl) confirmEl.checked = false;
+    const errEl = document.getElementById('propose-modal-error');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     // Prefill from a treasury proposal ("convert to motion") if provided.
     if (pf && pf.callType) {
         const sel = document.getElementById('propose-call-type');
@@ -12075,15 +12168,35 @@ function openProposeMotionModal(prefill) {
         const idEl = document.getElementById('propose-proposal-id');
         if (idEl) idEl.value = String(pf.proposalId);
     }
-
-    const errEl = document.getElementById('propose-modal-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    const seatHint = document.getElementById('propose-threshold-hint');
+    // Opened from Treasury, the council page has never loaded: load it first.
+    proposeModalLoading = !(councilData && councilData.collectivePallet && Array.isArray(councilData.members));
+    if (proposeModalLoading && seatHint) seatHint.textContent = 'Loading council...';
     modal.style.display = 'flex';
+    syncProposeModal();
+    if (proposeModalLoading) { await ensureCouncilData(); proposeModalLoading = false; }
+
+    const stored = getStoredWallet();
+    const members = (councilData && Array.isArray(councilData.members)) ? councilData.members : [];
+    const isMember = !!stored && members.some(m => isSameAddress(m.address, stored));
+    const warn = document.getElementById('propose-modal-wallet-warning');
+    if (warn) {
+        if (!stored) { warn.innerHTML = buildWalletConnectPrompt(); warn.style.display = 'block'; }
+        else if (!isMember) { warn.textContent = 'Only council members can propose a motion.'; warn.style.display = 'block'; }
+        else { warn.style.display = 'none'; warn.textContent = ''; }
+    }
+    const activeEl = document.getElementById('propose-active-wallet');
+    if (activeEl) activeEl.textContent = stored || '--';
+    const def = defaultThreshold(members.length);
+    if (thInput && !thInput.value && def) thInput.value = String(def);
+    if (seatHint) seatHint.textContent = def ? `Council has ${members.length} seats; a majority is ${def}.` : 'Council data could not be loaded. Close this window and try again.';
+    if (!def && errEl) { errEl.textContent = 'Council data is not ready yet. Close this window and try again in a moment.'; errEl.style.display = 'block'; }
+    syncProposeModal();
 }
 
 async function submitProposeMotion() {
     const errEl = document.getElementById('propose-modal-error');
-    const showErr = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } };
+    const showErr = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } syncProposeModal(); };
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
     if (!councilData || !councilData.collectivePallet) return showErr('Council data is not ready yet — try again in a moment.');
@@ -12094,12 +12207,13 @@ async function submitProposeMotion() {
 
     const callType = (document.getElementById('propose-call-type') || {}).value || 'treasury.approveProposal';
     const proposalId = parseInt((document.getElementById('propose-proposal-id') || {}).value, 10);
-    const threshold = parseInt((document.getElementById('propose-threshold') || {}).value, 10);
+    const chk = syncProposeModal();
 
     if (!Number.isInteger(proposalId) || proposalId < 0) return showErr('Enter a valid treasury proposal # (a whole number).');
-    if (!Number.isInteger(threshold) || threshold < 1) return showErr('Approval threshold must be a whole number of at least 1.');
+    if (chk.error) return showErr(chk.error);
+    if (!chk.canSubmit) return showErr('Tick the box to confirm a threshold of 1, or raise the threshold.');
+    const threshold = chk.value;
     const seats = members.length;
-    if (seats && threshold > seats) return showErr(`Threshold can't exceed the ${seats} council seats.`);
 
     const pallet = councilData.collectivePallet;
     await submitSignedTx({
@@ -12116,16 +12230,19 @@ async function submitProposeMotion() {
             return api.tx[pallet].propose(threshold, proposalCall, proposalCall.encodedLength);
         },
         label: `Propose ${callType}(#${proposalId})`,
+        action: { key: 'council.propose', params: { id: proposalId, callType, threshold, seats } },
         button: document.getElementById('submit-propose-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Submit Motion',
-        onError: showErr,
+        // A declined signature is not an error; the neutral card says so.
+        onError: (t, m) => (m && m.stage === 'cancelled' ? syncProposeModal() : showErr(t)),
         onSuccess: () => {
             const modal = document.getElementById('council-propose-modal');
             if (modal) modal.style.display = 'none';
             const idEl = document.getElementById('propose-proposal-id');
             if (idEl) idEl.value = '';
-            setTimeout(fetchCouncilData, 2500);
+            fetchCouncilData({ fresh: true });
+            setTimeout(() => fetchCouncilData({ fresh: true }), 6000);
         }
     });
 }
@@ -12138,6 +12255,15 @@ async function submitProposeMotion() {
     if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
     modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
     if (submitBtn) submitBtn.addEventListener('click', submitProposeMotion);
+    // Any edit clears the error line and re-checks; Submit follows.
+    ['propose-threshold', 'propose-proposal-id', 'propose-call-type', 'propose-threshold-confirm'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) ['input', 'change'].forEach(t => el.addEventListener(t, () => {
+            const e = document.getElementById('propose-modal-error');
+            if (e) { e.style.display = 'none'; e.textContent = ''; }
+            syncProposeModal();
+        }));
+    });
 })();
 
 // Tab switching
@@ -12368,7 +12494,7 @@ function renderCouncilVoteAvailable() {
             const cand = councilVoteCandidates.find(c => c.address === addr);
             if (!cand) return;
             if (councilVoteSelected.size >= 16) {
-                alert('You can vote for at most 16 candidates.');
+                showTxNotice('You can vote for at most 16 candidates.');
                 return;
             }
             councilVoteSelected.set(addr, cand);
@@ -12492,6 +12618,7 @@ async function submitCouncilCandidacy() {
             return api.tx[councilPalletName].submitCandidacy(count);
         },
         label: 'Council candidacy',
+        action: { key: 'elections.candidacy' },
         button: btn,
         busyText: 'Signing...',
         idleText: 'Sign & Submit Candidacy',
@@ -12505,19 +12632,19 @@ if (document.getElementById('submit-candidacy-tx-btn')) {
 
 async function submitCouncilVote() {
     const address = getStoredWallet();
-    if (!address) return alert('Please connect your wallet first');
+    if (!address) return showTxNotice('Please connect your wallet first');
 
     // Read from the in-memory picker state instead of a comma-separated
     // text input. The Map is keyed by the same Polkadex SS58 address the
     // chain's elections pallet expects, so addresses pass straight through
     // to api.tx[electionsPallet].vote(...).
     const candidates = Array.from(councilVoteSelected.keys());
-    if (candidates.length === 0) return alert('Pick at least one candidate from the list on the left.');
-    if (candidates.length > 16) return alert('You can vote for at most 16 candidates.');
+    if (candidates.length === 0) return showTxNotice('Pick at least one candidate from the list on the left.');
+    if (candidates.length > 16) return showTxNotice('You can vote for at most 16 candidates.');
 
     const stakeInput = document.getElementById('vote-stake-input').value;
-    if (!stakeInput) return alert('Enter a backing stake.');
-    if (!isPositiveNumberInput(stakeInput)) return alert('Invalid stake amount.');
+    if (!stakeInput) return showTxNotice('Enter a backing stake.');
+    if (!isPositiveNumberInput(stakeInput)) return showTxNotice('Invalid stake amount.');
     // Audit F-011: convert via decimal-string BigInt math, never Number*1e12.
     // parseFloat(x)*1e12 loses precision on decimals ("1.1" → one planck
     // short) and silently corrupts anything ≥ ~9007 PDEX — the user would
@@ -12529,6 +12656,7 @@ async function submitCouncilVote() {
     await submitSignedTx({
         buildTx: (api) => api.tx[councilPalletName].vote(candidates, stakePlanck.toString()),
         label: 'Council vote',
+        action: { key: 'elections.vote', params: { n: candidates.length, stake: stakeInput } },
         button: document.getElementById('submit-vote-tx-btn'),
         busyText: 'Signing...',
         idleText: 'Sign & Submit Vote',
@@ -12558,8 +12686,9 @@ function requireWallet(actionPhrase) {
     return false;
 }
 
-async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess }) {
-    const fail = (m) => { if (onError) onError(m); else alert(m); };
+// The connected wallet's injected account and signer, or null after telling
+// fail() why not. Split out of submitSignedTx so that function stays readable.
+async function resolveWalletSigner(fail) {
     const address = getStoredWallet();
     if (!address) return fail('Please connect your wallet first.');
     if (!globalApi) return fail('Blockchain connection is not ready yet. Please wait a moment and try again.');
@@ -12585,11 +12714,63 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         const ext = await provider.enable('Polkadex Explorer');
         signer = ext.signer;
     } catch (e) { return fail('Wallet extension authorization was rejected.'); }
+    return { account, signer };
+}
 
-    const setBusy = () => { if (button) { button.disabled = true; if (busyText) button.textContent = busyText; } };
-    const restore = () => { if (button) { button.disabled = false; if (idleText) button.textContent = idleText; } };
+// Every result goes to the status card (lib/tx-status-card.js). Success is
+// decided from the events, not from inclusion, and the subscription is kept
+// until Finalized (capped at 2 minutes after InBlock). onError(text, model)
+// keeps the modals' inline error lines; onStage(stage, model) drives the
+// motion cards. No alert popup anywhere on this path.
+async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage }) {
+    const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
+    const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
+    const fail = (m) => {
+        const model = onError ? { stage: 'failed', text: m } : showTxStatus(action, 'failed', null, m);
+        stage(model.stage, model);
+        if (onError) onError(m, model);
+    };
+    const w = await resolveWalletSigner(fail);
+    if (!w) return;
+    const { account, signer } = w;
 
-    setBusy();
+    const idleHtml = button ? button.innerHTML : '';
+    const setBusy = (s) => { if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); button.innerHTML = `<i class='bx bx-loader-alt bx-spin' aria-hidden="true"></i> ${BUTTON_STAGE_TEXT[s]}`; } };
+    const restore = () => { if (button) { button.disabled = false; button.removeAttribute('aria-busy'); if (idleText) button.textContent = idleText; else button.innerHTML = idleHtml; } };
+
+    let unsub = null, done = false, inBlockSeen = false, capTimer = null, txHash = null, blockNumber = null, lastEvents = null;
+    const extra = () => ({ registry: globalApi.registry, txHash, blockNumber });
+    const onDrop = () => { if (!done) failed(showTxStatus(action, 'failed', null, new Error('WebSocket disconnected'), extra())); };
+    const finish = () => { done = true; clearTimeout(capTimer); try { globalApi.off('disconnected', onDrop); } catch (e) { } if (typeof unsub === 'function') unsub(); };
+    const failed = (m) => { finish(); restore(); stage(m.stage, m); if (onError) onError(m.text, m); };
+    const onResult = async ({ status, events, dispatchError, txHash: h }) => {
+        if (done) return;
+        if (h) txHash = h.toHex();
+        const s = stageOf(status);
+        if (s === 'broadcast') { setBusy('broadcast'); showTxStatus(action, status, null, null, extra()); return stage('broadcast'); }
+        if (s === 'failed') return failed(showTxStatus(action, status, null, null, extra()));
+        if (blockNumber == null) blockNumber = await globalApi.rpc.chain.getHeader(s === 'inBlock' ? status.asInBlock : status.asFinalized).then(x => x.number.toNumber()).catch(() => null);
+        if (done) return;
+        lastEvents = events;
+        // F-056: a failed extrinsic is still included in a block. So are a
+        // forceBatch with failed items and a motion whose inner call failed;
+        // showTxStatus reads those from the events and reports them as failed.
+        if (dispatchError) return failed(showTxStatus(action, status, events, dispatchError, extra()));
+        const m = showTxStatus(action, status, events, null, extra());
+        if (m.stage === 'failed') return failed(m);
+        if (!inBlockSeen) {
+            inBlockSeen = true;
+            restore();
+            stage('inBlock', m);
+            if (onSuccess) onSuccess();
+            capTimer = setTimeout(() => { if (!done) { finish(); stage('stalled', showTxStatus(action, 'stalled', lastEvents, null, extra())); } }, 120000);
+        }
+        if (s === 'finalized') { finish(); stage('finalized', m); }
+    };
+
+    setBusy('signing');
+    showTxStatus(action, 'signing');
+    stage('signing');
     try {
         // `await` even though most builders are synchronous: awaiting a
         // non-promise is a no-op, and F-056 needs one builder to read chain
@@ -12599,32 +12780,15 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         // the wallet flow, at the worst possible moment.
         const tx = await buildTx(globalApi);
         // Sign with the extension's address (its native SS58 format) so the
-        // injected signer recognizes the account.
-        const unsub = await tx.signAndSend(account.address, { signer }, (result) => {
-            const { status, dispatchError } = result;
-            if (dispatchError) {
-                let msg = dispatchError.toString();
-                if (dispatchError.isModule) {
-                    try {
-                        const meta = globalApi.registry.findMetaError(dispatchError.asModule);
-                        msg = `${meta.section}.${meta.name}`;
-                    } catch (e) { }
-                }
-                fail((label || 'Transaction') + ' failed: ' + msg);
-                restore();
-                if (typeof unsub === 'function') unsub();
-                return;
-            }
-            if (status.isInBlock || status.isFinalized) {
-                restore();
-                if (typeof unsub === 'function') unsub();
-                alert((label || 'Transaction') + ' was included on-chain.');
-                if (onSuccess) onSuccess();
-            }
+        // injected signer recognizes the account. Results are handled one at
+        // a time, in order, because reading the block number is async.
+        let queue = Promise.resolve();
+        unsub = await tx.signAndSend(account.address, { signer }, (result) => {
+            queue = queue.then(() => onResult(result)).catch(e => console.warn('[tx-status]', e));
         });
+        if (done) unsub(); else globalApi.on('disconnected', onDrop);
     } catch (e) {
-        fail((label || 'Transaction') + ' failed: ' + (e && e.message ? e.message : String(e)));
-        restore();
+        if (!done) failed(showTxStatus(action, 'failed', null, e, extra()));
     }
 }
 
@@ -12903,6 +13067,7 @@ async function submitTreasuryProposal() {
     await submitSignedTx({
         buildTx: (api) => api.tx.treasury.proposeSpend(valuePlanck, beneficiary),
         label: 'Treasury proposal',
+        action: { key: 'treasury.propose', params: { value: amtStr, beneficiary } },
         button: document.getElementById('submit-treasury-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Submit Proposal',
@@ -13155,7 +13320,7 @@ function openReferendumVoteModal(refIndex, side) {
     // a Compact<u32> will happily SCALE-encode 0 — the user would sign a vote
     // on referendum #0 instead of the one they clicked.
     if (!/^\d+$/.test(String(refIndex))) {
-        alert('Invalid referendum index.');
+        showTxNotice('Invalid referendum index.');
         return;
     }
     pendingReferendumVote = { refIndex: Number(refIndex), side: side === 'nay' ? 'nay' : 'aye' };
@@ -13249,6 +13414,7 @@ async function submitReferendumVote() {
             }
         }),
         label: `Referendum #${refIndex} ${aye ? 'aye' : 'nay'} vote`,
+        action: { key: 'democracy.vote', params: { aye, ref: refIndex, amount: amtStr, conviction, lockPeriodDays: globalApi && globalApi.consts.democracy && globalApi.consts.democracy.voteLockingPeriod ? Number(globalApi.consts.democracy.voteLockingPeriod) * 12 / 86400 : null } },
         button: document.getElementById('submit-referendum-vote-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Submit Vote',
@@ -13479,6 +13645,7 @@ async function renderProxyList(address, isOwnWallet) {
                 submitSignedTx({
                     buildTx: api => api.tx.proxy.removeProxy(delegate, proxyType, delay),
                     label: `Remove ${proxyType} proxy`,
+                    action: { key: 'proxy.remove', params: { delegate, type: proxyType } },
                     button: btn,
                     busyText: 'Signing…',
                     idleText: 'Remove',
@@ -13538,6 +13705,7 @@ async function renderAddProxyForm(address) {
         submitSignedTx({
             buildTx: api => api.tx.proxy.addProxy(delegate, proxyType, delay),
             label: `Add ${proxyType} proxy`,
+            action: { key: 'proxy.add', params: { delegate, type: proxyType, delay } },
             button: submitBtn,
             busyText: 'Signing…',
             idleText: 'Add proxy',
