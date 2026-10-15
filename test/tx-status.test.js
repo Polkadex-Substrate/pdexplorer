@@ -182,11 +182,18 @@ describe('thrown errors before the chain', () => {
         assert.match(cls('WebSocket is not connected').text, /Lost connection/);
         assert.equal(cls('1010: Invalid Transaction: Inability to pay some fees').stage, 'failed');
     });
-    test('anything else is generic, with no raw text', () => {
-        const r = cls('TypeError: Cannot read properties of undefined (reading 0x1234567890abcdef1234)');
+    // Second Checker round (M2): a plain Error's own message is shown
+    // (sanitised); the generic text is for engine errors, non-Errors and
+    // empty messages. test/tx-lifecycle.test.js has the full set.
+    test('an engine error is generic, with no raw text', () => {
+        const r = classifyThrownError(new TypeError('Cannot read properties of undefined (reading 0x1234567890abcdef1234)'));
         assert.equal(r.stage, 'failed');
         assert.match(r.text, /could not tell what/);
-        assert.ok(!/TypeError/.test(r.text) && !HEX.test(r.text));
+        assert.ok(!/Cannot read/.test(r.text) && !HEX.test(r.text));
+    });
+    test('a plain Error keeps its message, hex removed', () => {
+        const r = cls('Unknown signed extension CheckFoo at 0x1234567890abcdef1234');
+        assert.equal(r.text, 'Unknown signed extension CheckFoo at [data]');
     });
 });
 
@@ -367,7 +374,7 @@ describe('the card never shows hex and escapes what it prints', () => {
         assert.ok(!HEX.test(html), 'hex in card');
         assert.ok(html.includes('&lt;b&gt;x&lt;/b&gt;'));
         assert.match(html, /aria-label="Close transaction status"/);
-        assert.match(html, /role="status"/);
+        assert.ok(!/role="status"/.test(html), 'the zone is the live region, not each card');
         assert.match(html, /Copy details/);
     });
     test('planck formatting for fees and amounts', () => {

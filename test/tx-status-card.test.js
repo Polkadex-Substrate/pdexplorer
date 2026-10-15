@@ -40,7 +40,7 @@ describe('status card DOM', () => {
     let dom;
     beforeEach(() => {
         dom = installDom();
-        mock.timers.enable({ apis: ['setTimeout'] });
+        mock.timers.enable({ apis: ['setTimeout', 'Date'] });
         console.debug = () => {};
     });
     afterEach(() => mock.timers.reset());
@@ -96,6 +96,7 @@ describe('status card DOM', () => {
     test('at most three cards; the oldest finished one goes first', () => {
         showTxStatus({ id: 'p1', key: 'council.vote' }, 'signing');
         showTxStatus({ id: 'f1' }, 'failed', null, 'first failure');
+        mock.timers.tick(2001);     // a card younger than 2 s is never dropped (L6)
         showTxStatus({ id: 'p2', key: 'council.vote' }, 'signing');
         showTxStatus({ id: 'p3', key: 'council.vote' }, 'signing');
         const html = dom.zone().children.map(c => c.innerHTML).join('\n');
@@ -103,5 +104,44 @@ describe('status card DOM', () => {
         assert.ok(!/first failure/.test(html), 'the finished card should have been dropped, not an in-flight one');
         assert.equal((html.match(/Waiting for your wallet/g) || []).length, 3, 'an in-flight card was dropped');
         ['p1', 'p2', 'p3'].forEach(dismissTxStatus);
+    });
+
+    // L6 (second Checker round): prune used to drop entries[0] when nothing
+    // was finished, which could be an in-flight card, and could drop a card
+    // the moment it appeared.
+    test('prune never drops a card younger than 2 s; it waits, then drops it', () => {
+        showTxStatus({ id: 'y1' }, 'failed', null, 'young failure');
+        ['q1', 'q2', 'q3'].forEach(id => showTxStatus({ id, key: 'council.vote' }, 'signing'));
+        assert.equal(dom.zone().children.length, 4, 'a 0 s old finished card was dropped');
+        mock.timers.tick(2001);
+        assert.equal(dom.zone().children.length, 3);
+        assert.ok(!dom.zone().children.some(c => /young failure/.test(c.innerHTML)));
+        ['q1', 'q2', 'q3'].forEach(dismissTxStatus);
+    });
+
+    test('prune never drops a card that is still in flight', () => {
+        ['i1', 'i2', 'i3', 'i4'].forEach(id => showTxStatus({ id, key: 'council.vote' }, 'signing'));
+        mock.timers.tick(60000);
+        showTxStatus({ id: 'i4', key: 'council.vote' }, { type: 'Ready' });
+        assert.equal(dom.zone().children.length, 4);
+        ['i1', 'i2', 'i3', 'i4'].forEach(dismissTxStatus);
+    });
+
+    test('a card closed at In block stays closed for that transaction', () => {
+        const a = { id: 'd1', key: 'council.vote', params: { aye: true, idx: 2 } };
+        showTxStatus(a, { type: 'InBlock' }, okEvents, null, { blockNumber: 9 });
+        dom.zone().children[0].fire('click', { target: targetFor('.tx-card-close') });
+        assert.equal(dom.zone().children.length, 0);
+        showTxStatus(a, { type: 'Finalized' }, okEvents, null, { blockNumber: 9, txHash: '0x' + 'ab'.repeat(32) });
+        showTxStatus(a, 'unconfirmed', okEvents, null, { blockNumber: 9 });
+        assert.equal(dom.zone().children.length, 0, 'the closed card came back');
+    });
+
+    test('unconfirmed and waiting cards never close themselves', () => {
+        showTxStatus({ id: 'w1', key: 'council.vote' }, 'unconfirmed', okEvents, null, { blockNumber: 5 });
+        showTxStatus({ id: 'w2', key: 'council.vote' }, 'waiting', null, null, {});
+        mock.timers.tick(600000);
+        assert.equal(dom.zone().children.length, 2);
+        dismissTxStatus('w1'); dismissTxStatus('w2');
     });
 });

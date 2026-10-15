@@ -141,3 +141,101 @@ describe('subscriptions follow the open motions', () => {
         live.stop();
     });
 });
+
+// Second Checker round. Namespace import so a missing export fails its own
+// tests, not the whole file.
+import * as CL from '../lib/collective-live.js';
+import { overlayLiveMotions } from '../lib/tx-status.js';
+
+// A node link that can drop and come back, like ApiPromise's events.
+function fakeLink(connected = true) {
+    const on = {};
+    const api = {
+        isConnected: connected,
+        on: (ev, fn) => { (on[ev] = on[ev] || []).push(fn); },
+        off: (ev, fn) => { on[ev] = (on[ev] || []).filter(f => f !== fn); }
+    };
+    const emit = (ev) => { api.isConnected = ev === 'connected'; for (const fn of (on[ev] || []).slice()) fn(); };
+    return { api, emit, listeners: (ev) => (on[ev] || []).length };
+}
+function feedMaker() {
+    const feeds = [];
+    const start = () => { const f = { stopped: false, state: { council: { hashes: ['0xold'], votings: { '0xold': { index: 1, threshold: 3, end: 9, ayes: ['m1'], nays: [] } }, stubs: {} } }, stop() { this.stopped = true; } }; feeds.push(f); return f; };
+    return { feeds, start };
+}
+
+describe('M3: while the node link is down the poll is the source of truth', () => {
+    test('disconnect drops the live feed; reconnect starts a fresh one', () => {
+        const L = fakeLink();
+        const { feeds, start } = feedMaker();
+        const changes = [];
+        const ctl = CL.liveWhileConnected(L.api, start, { onChange: (why) => changes.push(why) });
+        ctl.start();
+        assert.equal(feeds.length, 1);
+        assert.equal(ctl.current(), feeds[0]);
+        L.emit('disconnected');
+        assert.equal(ctl.current(), null, 'stale live state must not overlay the poll');
+        assert.equal(feeds[0].stopped, true);
+        L.emit('connected');
+        assert.equal(feeds.length, 2, 'a fresh subscription set on reconnect');
+        assert.equal(ctl.current(), feeds[1]);
+        assert.deepEqual(changes, ['disconnected', 'connected']);
+        ctl.stop();
+        assert.equal(feeds[1].stopped, true);
+        L.emit('connected');
+        assert.equal(feeds.length, 2, 'no restart after the page is left');
+    });
+    test('null even before the disconnected event lands, and no feed until connected', () => {
+        const L = fakeLink(false);
+        const { feeds, start } = feedMaker();
+        const ctl = CL.liveWhileConnected(L.api, start);
+        ctl.start();
+        assert.equal(feeds.length, 0);
+        assert.equal(ctl.current(), null);
+        L.emit('connected');
+        assert.equal(feeds.length, 1);
+        L.api.isConnected = false;          // link down, event not delivered yet
+        assert.equal(ctl.current(), null);
+        ctl.dispose();
+        assert.equal(L.listeners('connected') + L.listeners('disconnected'), 0);
+    });
+    test('during the outage new motions and tallies come from the poll', () => {
+        const L = fakeLink();
+        const { start } = feedMaker();
+        const ctl = CL.liveWhileConnected(L.api, start);
+        ctl.start();
+        const rest = [
+            { hash: '0xold', index: 1, threshold: 3, ayes: ['m1', 'm2'], nays: [], end: 9 },
+            { hash: '0xnew', index: 2, threshold: 3, ayes: [], nays: [], end: 20 }
+        ];
+        const live = () => { const f = ctl.current(); return (f && f.state.council) || null; };
+        assert.equal(overlayLiveMotions(rest, live()).length, 1, 'premise: the stale live set hides the new motion');
+        L.emit('disconnected');
+        const shown = overlayLiveMotions(rest, live());
+        assert.deepEqual(shown.map(m => m.hash).sort(), ['0xnew', '0xold']);
+        assert.deepEqual(shown.find(m => m.hash === '0xold').ayes, ['m1', 'm2'], 'tally from the poll');
+        ctl.stop();
+    });
+});
+
+describe('L7: keep asking for ?fresh=1 for two more polls', () => {
+    test('a fresh read carries to the next two polls of the same URL only', () => {
+        const carry = {};
+        assert.equal(CL.FRESH_CARRY, 2);
+        assert.equal(CL.freshPlan(carry, '/api/council', false), false);
+        assert.equal(CL.freshPlan(carry, '/api/council', true), true);
+        assert.equal(CL.freshPlan(carry, '/api/technical-committee', false), false, 'per URL');
+        assert.equal(CL.freshPlan(carry, '/api/council', false), true);
+        assert.equal(CL.freshPlan(carry, '/api/council', false), true);
+        assert.equal(CL.freshPlan(carry, '/api/council', false), false);
+    });
+    test('another fresh read restarts the carry', () => {
+        const carry = {};
+        CL.freshPlan(carry, '/api/council', true);
+        CL.freshPlan(carry, '/api/council', false);
+        CL.freshPlan(carry, '/api/council', true);
+        assert.equal(CL.freshPlan(carry, '/api/council', false), true);
+        assert.equal(CL.freshPlan(carry, '/api/council', false), true);
+        assert.equal(CL.freshPlan(carry, '/api/council', false), false);
+    });
+});
