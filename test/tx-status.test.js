@@ -407,6 +407,7 @@ describe('one model per card update', () => {
     test('pre-flight sentences are shown verbatim', () => {
         const m = buildTxModel(act('council.vote', {}), 'failed', null, 'Please connect your wallet first.');
         assert.equal(m.body, 'Please connect your wallet first.');
+        assert.equal(m.code, null, 'nothing was signed, so no support code');
     });
     test('pool statuses Dropped/Invalid/Usurped are failures with plain text', () => {
         for (const t of ['Dropped', 'Invalid', 'Usurped', 'FinalityTimeout']) {
