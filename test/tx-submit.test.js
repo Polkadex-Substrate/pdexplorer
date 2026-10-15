@@ -8,7 +8,9 @@
 import { test, describe, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { trackSignedTx } from '../lib/tx-submit.js';
-import { buildTxModel, PRE_INBLOCK_CAP_MS, FINALITY_CAP_MS } from '../lib/tx-status.js';
+import { buildTxModel, PRE_INBLOCK_CAP_MS, FINALITY_CAP_MS, BUTTON_STAGE_TEXT } from '../lib/tx-status.js';
+// Namespace import so a missing export fails its own test, not the file.
+import * as TS from '../lib/tx-status.js';
 import { motionDataId, patchMotionCards } from '../lib/motion-patch.js';
 
 const HASH = '0x' + 'ab'.repeat(32);
@@ -17,18 +19,22 @@ const ok = [{ event: { section: 'system', method: 'ExtrinsicSuccess', data: [] }
 const bad = [{ event: { section: 'system', method: 'ExtrinsicFailed', data: [{ isBadOrigin: true, type: 'BadOrigin' }] } }];
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r)); };
 
-function harness() {
+const header = (h) => Promise.resolve({ number: { toNumber: () => (h === undefined ? 99 : BLOCKS[h]) } });
+const fakeButton = () => ({ disabled: false, attrs: {}, innerHTML: 'Vote', textContent: '',
+    setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } });
+// opts.button shares one button between two submissions; opts.getHeader
+// replaces the header read (to hold it open while the link drops).
+function harness(opts = {}) {
     const listeners = {};
     const api = {
         registry: {},
         on: (e, f) => { (listeners[e] = listeners[e] || []).push(f); },
         off: (e, f) => { listeners[e] = (listeners[e] || []).filter(x => x !== f); },
-        rpc: { chain: { getHeader: (h) => Promise.resolve({ number: { toNumber: () => (h === undefined ? 99 : BLOCKS[h]) } }) } }
+        rpc: { chain: { getHeader: opts.getHeader || header } }
     };
     const shown = [];
     const show = (a, st, ev, err, ex) => { const m = buildTxModel(a, st, ev, err, ex); shown.push(m); return m; };
-    const button = { disabled: false, attrs: {}, innerHTML: 'Vote', textContent: '',
-        setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
+    const button = opts.button || fakeButton();
     const calls = { onError: [], onSuccess: 0, stages: [], unsub: 0 };
     let cb = null;
     const tx = { signAndSend: (addr, opts, f) => { cb = f; return Promise.resolve(() => { calls.unsub++; }); } };
@@ -115,6 +121,106 @@ describe('the tracker carries out the lifecycle', () => {
         await h.emit(IN2, ok);
         assert.equal(h.last().stageText, 'In block #43', 'the block number from before the retraction stuck');
         assert.equal(h.calls.onSuccess, 1, 'onSuccess ran twice');
+    });
+
+    test('Retracted then a dropped link: neutral unconfirmed, no onError after onSuccess', async () => {
+        const h = harness();
+        h.run.start();
+        await h.run.send(h.tx, 'addr', {});
+        await h.emit(READY);
+        await h.emit(IN1, ok);
+        await h.emit({ type: 'Retracted' });
+        await h.drop();
+        assert.deepEqual(h.calls.onError, [], 'onError ran after onSuccess');
+        assert.equal(h.calls.onSuccess, 1);
+        assert.equal(h.last().stage, 'unconfirmed');
+        assert.equal(h.last().tone, 'neutral');
+        assert.ok(h.last().links.some(l => l.href === `/tx/99/${HASH}`), JSON.stringify(h.last().links));
+        assert.equal(h.calls.stages[h.calls.stages.length - 1], 'unconfirmed');
+        assert.equal(h.button.disabled, false);
+        assert.equal(h.calls.unsub, 1);
+    });
+
+    // Holds the In block header read open until the test settles it.
+    function heldHeader() {
+        const held = [];
+        const getHeader = (hsh) => (hsh === undefined ? header(hsh) : new Promise((res, rej) => held.push({ hsh, res, rej })));
+        return { getHeader, held };
+    }
+
+    test('drop during the header read after In block: included in block #N, not failed', async () => {
+        const hh = heldHeader();
+        const h = harness({ getHeader: hh.getHeader });
+        h.run.start();
+        await h.run.send(h.tx, 'addr', {});
+        await h.emit(READY);
+        await h.emit(IN1, ok);
+        assert.equal(hh.held.length, 1, 'the In block header read was not held');
+        await h.drop();
+        assert.deepEqual(h.calls.onError, [], 'failed while the In block was still being read');
+        assert.notEqual(h.last().stage, 'failed');
+        hh.held[0].res({ number: { toNumber: () => 42 } });
+        await flush();
+        assert.deepEqual(h.calls.onError, []);
+        assert.equal(h.last().stage, 'unconfirmed');
+        assert.equal(h.last().stageText, 'Included in block #42, finality not yet confirmed');
+        assert.ok(h.last().links.some(l => l.href === `/tx/42/${HASH}`));
+        assert.equal(h.calls.onSuccess, 1, 'the events checked clean, so onSuccess is due once');
+        assert.equal(h.button.disabled, false);
+        assert.equal(h.calls.unsub, 1);
+    });
+
+    test('drop during the header read, and the read dies with the link: still not failed', async () => {
+        const hh = heldHeader();
+        const h = harness({ getHeader: hh.getHeader });
+        h.run.start();
+        await h.run.send(h.tx, 'addr', {});
+        await h.emit(READY);
+        await h.emit(IN1, ok);
+        await h.drop();
+        hh.held[0].rej(new Error('disconnected'));
+        await flush();
+        assert.deepEqual(h.calls.onError, []);
+        assert.equal(h.last().stage, 'unconfirmed');
+        assert.equal(h.last().stageText, 'Included, finality not yet confirmed');
+    });
+
+    test('a header read that never answers is cut off after HEADER_READ_MS', async () => {
+        const hh = heldHeader();
+        const h = harness({ getHeader: hh.getHeader });
+        h.run.start();
+        await h.run.send(h.tx, 'addr', {});
+        await h.emit(READY);
+        await h.emit(IN1, ok);
+        await h.drop();
+        assert.equal(typeof TS.HEADER_READ_MS, 'number', 'HEADER_READ_MS is not exported');
+        mock.timers.tick(TS.HEADER_READ_MS);
+        await flush();
+        assert.equal(h.last().stage, 'unconfirmed');
+        assert.deepEqual(h.calls.onError, []);
+        assert.equal(h.button.disabled, false);
+    });
+
+    test('a stalled or unconfirmed end only restores its own submission\'s button', async () => {
+        for (const end of ['stalled', 'unconfirmed']) {
+            const shared = fakeButton();
+            const a = harness({ button: shared });
+            a.run.start();
+            await a.run.send(a.tx, 'addr', {});
+            await a.emit(READY);
+            await a.emit(IN1, ok);
+            assert.equal(shared.disabled, false);
+            const b = harness({ button: shared });
+            b.run.start();
+            assert.equal(shared.disabled, true);
+            if (end === 'stalled') mock.timers.tick(FINALITY_CAP_MS); else await a.drop();
+            assert.equal(a.last().stage, end);
+            assert.equal(shared.disabled, true, `${end}: re-enabled a newer busy submission`);
+            assert.equal(shared.attrs['aria-busy'], 'true', end);
+            assert.match(shared.innerHTML, new RegExp(BUTTON_STAGE_TEXT.signing), end);
+            b.run.buildFailed(new Error('The treasury pallet is not available on this runtime.'));
+            assert.equal(shared.disabled, false, `${end}: the newer submission could not restore its own button`);
+        }
     });
 
     test('L5: not in a block within 90 s is waiting: no onError, buttons back, watching stops', async () => {

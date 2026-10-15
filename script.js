@@ -11917,7 +11917,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
                 ${btn('nay', 'nay motion-nay-btn', votedNay ? 'Voted Nay' : 'Vote Nay', votedNay)}
                 ${btn('close', 'close motion-close-btn', 'Close motion', !st.closeable, `title="${st.closeable ? 'Finalize this motion' : 'Available once the vote is decided or has ended'}"`)}
             </div>
-            ${busy ? `<div class="motion-pending-chip" role="status"><i class='bx bx-loader-alt bx-spin' aria-hidden="true"></i> ${pendingChipText(pend.kind)}</div>` : ''}
+            ${busy ? `<div class="motion-pending-chip"><i class='bx bx-loader-alt bx-spin' aria-hidden="true"></i> ${pendingChipText(pend.kind)}</div>` : ''}
             ${pend && pend.error ? `<div class="motion-tx-error" role="alert">${stakingEscapeHtml(pend.error)}</div>` : ''}`;
 
         const parts = {

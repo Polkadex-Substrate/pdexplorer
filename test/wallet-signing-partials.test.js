@@ -185,13 +185,27 @@ describe('F-056 — submitSignedTx supports an async builder', () => {
         // F-056's round-1 half. A failed extrinsic is still included in a
         // block; inclusion and success are different facts. The result
         // handling moved to lib/tx-submit.js (test/tx-submit.test.js drives it).
+        // There, the In block result is read in this order: the events and
+        // dispatchError go through show(), the verdict is stepped as an
+        // 'outcome', and only then may the In block settle (buttons back,
+        // onSuccess, the inBlock stage). Each marker must exist: a missing one
+        // fails here instead of letting the order check pass vacuously.
         const lib = stripComments(readRepo('lib/tx-submit.js', import.meta.url));
-        const onResult = lib.slice(lib.indexOf('const onResult = async'));
+        const from = lib.indexOf('const onResult = async');
+        assert.ok(from !== -1, 'onResult not found in lib/tx-submit.js');
+        const onResult = lib.slice(from, lib.indexOf('\n    return {', from));
         const errAt = onResult.indexOf('if (dispatchError)');
-        const inBlockAt = onResult.indexOf('status.isInBlock');
-        assert.ok(errAt !== -1, 'dispatchError is no longer checked');
+        const outcomeAt = onResult.indexOf("step({ type: 'outcome'");
+        const okAt = onResult.indexOf("o.act === 'firstOk'");
+        const successAt = onResult.indexOf('onSuccess()');
+        const inBlockAt = onResult.indexOf("stage('inBlock'");
         assert.match(fn, /trackSignedTx\(/, 'submitSignedTx no longer uses the tested tracker');
-        assert.ok(inBlockAt === -1 || errAt < inBlockAt,
-            'inclusion is treated as success before dispatchError is examined');
+        for (const [name, at] of Object.entries({ errAt, outcomeAt, okAt, successAt, inBlockAt })) {
+            assert.ok(at !== -1, `${name}: marker not found in onResult`);
+        }
+        assert.ok(errAt < outcomeAt, 'the outcome is stepped before dispatchError is examined');
+        assert.ok(outcomeAt < okAt, 'the In block settles before the outcome is stepped');
+        assert.ok(outcomeAt < successAt, 'onSuccess can run before the events are checked');
+        assert.ok(outcomeAt < inBlockAt, 'the inBlock stage is reported before the events are checked');
     });
 });

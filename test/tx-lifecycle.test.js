@@ -7,7 +7,10 @@
 //       checks) stay readable; the generic text is only for errors with
 //       nothing readable in them.
 //   L4  Retracted after In block puts the card back to Sent, buttons enabled,
-//       block number reset, and onSuccess does not run twice.
+//       block number reset, and onSuccess does not run twice; a dropped link
+//       after that is unconfirmed, never onError after onSuccess.
+//       A drop while the In block header is being read waits for the read and
+//       ends unconfirmed ("included in block #N"), not failed.
 //   L5  never included within 90 s: "Still waiting for the network", no
 //       onError, buttons enabled, link to look the transaction up.
 //   L8  the card itself carries no role="status" (the zone is the live
@@ -20,6 +23,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import * as T from '../lib/tx-status.js';
 import { buildTransferTx } from '../lib/wallet-safety.js';
+import { readRepo, stripComments } from './helpers/source.js';
 
 const HASH = '0x' + 'ab'.repeat(32);
 const okEvents = [{ event: { section: 'system', method: 'ExtrinsicSuccess', data: [] } }];
@@ -120,9 +124,16 @@ describe('L4: Retracted after In block', () => {
         const { acts } = run([st('Ready'), st('InBlock'), outcome('inBlock'), st('Retracted'), st('InBlock'), outcome('inBlock'), st('Finalized'), outcome('finalized')]);
         assert.deepEqual(acts, ['sent', 'read', 'firstOk', 'resent', 'read', 'ok', 'read', 'ok']);
     });
-    test('a retracted transaction is not "included": a disconnect then fails it', () => {
-        const { acts } = run([st('Ready'), st('InBlock'), outcome('inBlock'), st('Retracted'), { type: 'disconnected' }]);
-        assert.equal(acts[acts.length - 1], 'fail');
+    test('Retracted then a dropped link: unconfirmed, never a failure after onSuccess ran', () => {
+        // onSuccess ran at the first clean In block; an onError now would put a
+        // red line under a success. The chain never said it failed.
+        const { acts, t } = run([st('Ready'), st('InBlock'), outcome('inBlock'), st('Retracted'), { type: 'disconnected' }]);
+        assert.deepEqual(acts, ['sent', 'read', 'firstOk', 'resent', 'unconfirmed']);
+        assert.equal(t.done, true);
+    });
+    test('Retracted then FinalityTimeout: unconfirmed as well', () => {
+        const { acts } = run([st('Ready'), st('InBlock'), outcome('inBlock'), st('Retracted'), st('FinalityTimeout')]);
+        assert.equal(acts[acts.length - 1], 'unconfirmed');
     });
     test('Finalized ends tracking', () => {
         const r = T.txStep(run([st('Ready'), st('InBlock'), outcome('inBlock'), st('Finalized')]).t, outcome('finalized'));
@@ -134,6 +145,42 @@ describe('L4: Retracted after In block', () => {
         const m = T.buildTxModel(vote, { type: 'Retracted' }, null, null, { txHash: HASH });
         assert.equal(m.stageText, 'Sent to the network');
         assert.ok(!m.links.some(l => /^\/block\//.test(l.href)));
+    });
+});
+
+describe('the link drops while the In block header is being read', () => {
+    test('the drop waits for the read; clean events then end unconfirmed, with onSuccess due', () => {
+        const { acts, t } = run([st('Ready'), st('InBlock'), { type: 'disconnected' }, outcome('inBlock')]);
+        assert.deepEqual(acts, ['sent', 'read', 'ignore', 'unconfirmed']);
+        assert.equal(t.done, true);
+        let u = T.initialTxTrack();
+        for (const ev of [st('Ready'), st('InBlock'), { type: 'disconnected' }]) u = T.txStep(u, ev).state;
+        assert.equal(T.txStep(u, outcome('inBlock')).firstOk, true, 'onSuccess must run: the events checked clean');
+    });
+    test('failed events read after the drop are still a failure', () => {
+        assert.deepEqual(run([st('Ready'), st('InBlock'), { type: 'disconnected' }, outcome('inBlock', false)]).acts,
+            ['sent', 'read', 'ignore', 'fail']);
+    });
+    test('a re-read after a Retracted: unconfirmed, onSuccess not due again', () => {
+        let u = T.initialTxTrack();
+        for (const ev of [st('Ready'), st('InBlock'), outcome('inBlock'), st('Retracted'), st('InBlock'), { type: 'disconnected' }]) u = T.txStep(u, ev).state;
+        const r = T.txStep(u, outcome('inBlock'));
+        assert.equal(r.act, 'unconfirmed');
+        assert.ok(!r.firstOk);
+    });
+    test('the pre-inclusion cap does not fire "waiting" while an In block is being read', () => {
+        assert.deepEqual(run([st('Ready'), st('InBlock'), { type: 'preCap' }, outcome('inBlock')]).acts,
+            ['sent', 'read', 'ignore', 'firstOk']);
+    });
+    test('the header read is bounded', () => {
+        assert.equal(typeof T.HEADER_READ_MS, 'number');
+        assert.ok(T.HEADER_READ_MS > 0 && T.HEADER_READ_MS <= 15000, String(T.HEADER_READ_MS));
+    });
+    test('the unconfirmed card with no block number still offers a lookup from the Sent block', () => {
+        const m = T.buildTxModel(vote, 'unconfirmed', okEvents, null, { txHash: HASH, sentBlock: 100 });
+        assert.equal(m.tone, 'neutral');
+        assert.equal(m.stageText, 'Included, finality not yet confirmed');
+        assert.ok(m.links.some(l => l.href === `/tx/100/${HASH}`), JSON.stringify(m.links));
     });
 });
 
@@ -174,6 +221,13 @@ describe('L8: one live region, patch only what changed', () => {
     test('the card has no role="status" of its own', () => {
         const html = T.txCardHtml(T.buildTxModel(vote, 'signing'), (s) => String(s));
         assert.ok(!/role="status"/.test(html), html);
+    });
+    test('the motion pending chip has no role="status" either (the zone covers it)', () => {
+        const src = stripComments(readRepo('script.js', import.meta.url));
+        const chips = src.match(/<div class="motion-pending-chip"[^>]*>/g) || [];
+        assert.ok(chips.length > 0, 'pending chip markup not found');
+        for (const c of chips) assert.ok(!/role=/.test(c), c);
+        assert.match(readRepo('index.html', import.meta.url), /id="tx-status-zone" aria-live="polite"/);
     });
     const card = (hash, status, parts) => ({ hash, status, parts: { tally: 't', voters: 'v', badge: 'b', actions: 'a', ...parts } });
     test('same frame and statuses: only the changed parts are patched', () => {
