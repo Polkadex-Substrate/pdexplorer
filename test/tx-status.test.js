@@ -17,7 +17,7 @@ import {
     defaultThreshold, checkThreshold, THRESHOLD_ONE_WARNING,
     decodeDispatchError, classifyThrownError, evaluateEvents,
     motionState, overlayLiveMotions, pendingChipText, pendingSettled,
-    successCopy, txCardHtml, supportCode, formatPlanck
+    successCopy, txCardHtml, supportCode, formatPlanck, buildTxModel, ACTION_KEYS, PENDING_TITLE
 } from '../lib/tx-status.js';
 
 const HEX = /0x[0-9a-f]{12,}/i;
@@ -375,5 +375,58 @@ describe('the card never shows hex and escapes what it prints', () => {
         assert.equal(formatPlanck('123456789'), '0.0001');
         assert.equal(formatPlanck('0'), '0');
         assert.equal(formatPlanck(null), null);
+    });
+});
+
+describe('one model per card update', () => {
+    const act = (key, params) => ({ id: 't', key, label: 'Propose treasury.rejectProposal(#72)', params });
+    test('the developer label never becomes the title', () => {
+        const m = buildTxModel(act('council.propose', {}), 'signing');
+        assert.equal(m.title, 'Tabling a council motion');
+        assert.equal(m.stageText, 'Waiting for your wallet');
+    });
+    test('InBlock with a failed batch item is Failed, with the block', () => {
+        const events = [ev('utility', 'ItemFailed', [tokenErr('FundsUnavailable')]), ev('utility', 'BatchCompletedWithErrors')];
+        const m = buildTxModel(act('staking.bondNominate', { n: 2 }), { type: 'InBlock' }, events, null, { registry: REG, blockNumber: 9, txHash: '0x' + '12'.repeat(32) });
+        assert.equal(m.stage, 'failed');
+        assert.equal(m.tone, 'error');
+        assert.equal(m.stageText, 'Failed in block #9');
+        assert.equal(m.code, '0x12121212');
+    });
+    test('Finalized success gets the copy, the tx link and the ok tone', () => {
+        const m = buildTxModel(act('council.vote', { aye: true, idx: 4, body: 'council' }), { type: 'Finalized' }, [ev('system', 'ExtrinsicSuccess')], null, { registry: REG, blockNumber: 9, txHash: '0xfeed' });
+        assert.equal(m.tone, 'ok');
+        assert.equal(m.title, 'Vote recorded');
+        assert.equal(m.links[0].href, '/tx/9/0xfeed');
+    });
+    test('a wallet rejection is a neutral Cancelled card', () => {
+        const m = buildTxModel(act('balances.transfer', {}), 'failed', null, new Error('Cancelled'));
+        assert.equal(m.stage, 'cancelled');
+        assert.equal(m.tone, 'neutral');
+    });
+    test('pre-flight sentences are shown verbatim', () => {
+        const m = buildTxModel(act('council.vote', {}), 'failed', null, 'Please connect your wallet first.');
+        assert.equal(m.body, 'Please connect your wallet first.');
+    });
+    test('pool statuses Dropped/Invalid/Usurped are failures with plain text', () => {
+        for (const t of ['Dropped', 'Invalid', 'Usurped', 'FinalityTimeout']) {
+            const m = buildTxModel(act('balances.transfer', {}), { type: t });
+            assert.equal(m.stage, 'failed', t);
+            assert.ok(m.body.length > 20);
+        }
+    });
+    test('stalled keeps the success copy and says it is still waiting', () => {
+        const m = buildTxModel(act('council.vote', { aye: true, idx: 1 }), 'stalled', [ev('system', 'ExtrinsicSuccess')], null, { registry: REG, blockNumber: 5 });
+        assert.equal(m.tone, 'warn');
+        assert.match(m.next, /Still waiting for finality.*block #5/);
+    });
+    test('all 17 action keys have success copy and a pending title, with no hex', () => {
+        assert.equal(ACTION_KEYS.length, 17);
+        for (const k of ACTION_KEYS) {
+            assert.ok(PENDING_TITLE[k], `no pending title for ${k}`);
+            const c = successCopy(k, { id: 1, idx: 1, n: 2, amount: '1', to: 'e' + 'x'.repeat(47), delegate: 'e' + 'y'.repeat(47), beneficiary: 'e' + 'z'.repeat(47), type: 'Any', stake: '1', ref: 1, conviction: 'Locked1x', lockPeriodDays: 30 }, {});
+            assert.ok(c.title && c.body, k);
+            assert.ok(!HEX.test(c.title + c.body + c.next), k);
+        }
     });
 });
