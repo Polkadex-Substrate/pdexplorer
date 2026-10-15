@@ -26,9 +26,12 @@ import { developersBodies } from './lib/developers-bodies.js';
 // lib/api-reference.js.
 import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READY, rpcNotReadyExample } from './lib/api-reference.js';
 // Transaction status card (replaces the alert popups) and live council motions.
-import { stageOf, BUTTON_STAGE_TEXT, defaultThreshold, checkThreshold, motionState, overlayLiveMotions, pendingChipText, pendingSettled } from './lib/tx-status.js';
+import { BUTTON_STAGE_TEXT, defaultThreshold, checkThreshold, motionState, overlayLiveMotions, pendingChipText, pendingSettled,
+    motionPatchPlan } from './lib/tx-status.js';
 import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
-import { startCollectiveLive } from './lib/collective-live.js';
+import { startCollectiveLive, liveWhileConnected, freshPlan } from './lib/collective-live.js';
+import { trackSignedTx } from './lib/tx-submit.js';
+import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -4386,29 +4389,44 @@ function bootSeoRouter() {
 // staleness of the backend's 12s event-driven snapshot + short cache tier
 // without adding meaningful load: it's one KV-backed GET per open tab.
 let councilPollTimer = null;
+// url -> ?fresh=1 polls left (see freshFetch); reset on entering the route.
+let councilFreshCarry = {};
 // Live motions: storage subscriptions on the browser's own node link (see
 // lib/collective-live.js), so a vote or close shows within a block. The poll
 // below stays as the fallback and for the parts only the backend has.
-let councilLive = null;
+//
+// Only while the link is up (liveWhileConnected): while it is down the live
+// state is frozen, so liveMotions() returns null and the 30 s poll is the
+// source of truth (motions opened meanwhile show, tallies come from the
+// poll). On reconnect a fresh set of subscriptions takes over again.
+let councilLive = null;   // the controller; created once per api
 function startCouncilLive() {
-    if (councilLive || !globalApi) return;
-    councilLive = startCollectiveLive(globalApi, {
-        toAddress: toPolkadexAddress,
-        knownHashes: (key) => ((collectiveView(key).getData() || {}).motions || []).map(m => m.hash),
-        onUpdate: (key, u) => {
-            renderCollectiveMotions(collectiveView(key));
-            // A motion opened or closed: the backend's history and proposer
-            // catch up within an indexer tick, so ask again shortly.
-            if (u.kind === 'hashes' && !u.initial) setTimeout(() => collectiveView(key).refresh({ fresh: true }), 8000);
-        },
-        onError: (e) => console.warn('[council-live]', e && e.message)
-    });
+    if (!globalApi) return;
+    if (!councilLive) {
+        councilLive = liveWhileConnected(globalApi, (api) => startCollectiveLive(api, {
+            toAddress: toPolkadexAddress,
+            knownHashes: (key) => ((collectiveView(key).getData() || {}).motions || []).map(m => m.hash),
+            onUpdate: (key, u) => {
+                renderCollectiveMotions(collectiveView(key));
+                // A motion opened or closed: the backend's history and proposer
+                // catch up within an indexer tick, so ask again shortly.
+                if (u.kind === 'hashes' && !u.initial) setTimeout(() => collectiveView(key).refresh({ fresh: true }), 8000);
+            },
+            onError: (e) => console.warn('[council-live]', e && e.message)
+        }), {
+            // Redraw from the REST data the moment the link drops, rather
+            // than leaving frozen live tallies up until the next poll.
+            onChange: () => { renderCollectiveMotions(COLLECTIVE_VIEWS.council); renderCollectiveMotions(COLLECTIVE_VIEWS.technicalCommittee); }
+        });
+    }
+    councilLive.start();
 }
-function stopCouncilLive() { if (councilLive) { councilLive.stop(); councilLive = null; } }
-const liveMotions = (key) => (councilLive && councilLive.state[key]) || null;
+function stopCouncilLive() { if (councilLive) councilLive.stop(); }
+const liveMotions = (key) => { const f = councilLive && councilLive.current(); return (f && f.state[key]) || null; };
 function startCouncilPolling() {
     startCouncilLive();
     if (councilPollTimer) return;
+    councilFreshCarry = {};
     councilPollTimer = setInterval(() => {
         // Skip hidden tabs — no point polling a page nobody is looking at.
         if (document.visibilityState === 'visible') { fetchCouncilData(); fetchTechnicalCommitteeData(); }
@@ -11577,8 +11595,19 @@ const COLLECTIVE_VIEWS = {
 };
 const collectiveView = (key) => COLLECTIVE_VIEWS[key] || COLLECTIVE_VIEWS.council;
 // { fresh: true } after a transaction: skip the browser and CDN caches (the
-// server answers ?fresh=1 with no-store).
-const freshFetch = (url, o) => (o && o.fresh ? fetch(url + '?fresh=1', { cache: 'no-store' }) : fetch(url));
+// server answers ?fresh=1 with no-store). After a fresh read the next two
+// polls of the same URL are fresh as well (freshPlan, lib/collective-live.js):
+// a plain poll can still be answered by the CDN copy cached before the
+// transaction, which would put the old tally back over the new one.
+//
+// This relies on Cloudflare passing ?fresh=1 through. The response for
+// /api/council?fresh=1 and /api/technical-committee?fresh=1 must carry
+// cf-cache-status: BYPASS or DYNAMIC (never HIT), checked with
+//   curl -sI 'https://explorer.polkadex.ee/api/council?fresh=1' | grep -i cf-cache-status
+// A HIT means a cache rule ignores the query string or overrides the
+// origin's no-store, and the fresh view is then no fresher than the poll.
+const freshFetch = (url, o) => (freshPlan(councilFreshCarry, url, !!(o && o.fresh))
+    ? fetch(url + '?fresh=1', { cache: 'no-store' }) : fetch(url));
 // In-flight motion votes and closes, keyed "<collective>:<hash>", so the card
 // keeps its spinner and chip across the re-renders the poll and the live
 // subscription cause. { kind: 'aye'|'nay'|'close', stage, error }
@@ -11662,7 +11691,7 @@ async function fetchCouncilData(opts) {
             if (el) el.innerHTML = failMsg;
         });
         const motionsEl = document.getElementById('council-motions-content');
-        if (motionsEl) motionsEl.innerHTML = '<div style="padding:40px;text-align:center;color:var(--error);">Failed to load council motions.</div>';
+        if (motionsEl) { motionsEl.__motionRender = null; motionsEl.innerHTML = '<div style="padding:40px;text-align:center;color:var(--error);">Failed to load council motions.</div>'; }
     }
 }
 
@@ -11698,7 +11727,7 @@ async function fetchTechnicalCommitteeData(opts) {
         console.error('Failed to fetch technical committee data', err);
         if (list) list.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--error);">Failed to load the technical committee.</td></tr>';
         const root = document.getElementById('tc-motions-content');
-        if (root) root.innerHTML = '<div style="padding:40px;text-align:center;color:var(--error);">Failed to load technical committee motions.</div>';
+        if (root) { root.__motionRender = null; root.innerHTML = '<div style="padding:40px;text-align:center;color:var(--error);">Failed to load technical committee motions.</div>'; }
     }
 }
 
@@ -11726,6 +11755,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
     const isCouncilMember = !!stored && members.some(m => isSameAddress(m.address, stored));
 
     if (!data.collectivePallet) {
+        root.__motionRender = null;
         root.innerHTML = `<div style="padding:40px;text-align:center;color:var(--text-muted);">${stakingEscapeHtml(view.label)} motions are not available on this runtime.</div>`;
         return;
     }
@@ -11774,6 +11804,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
     // Nothing on chain at all — still surface the Propose action so a council
     // member can open the first motion (the common "empty page" case).
     if (annotatedOpen.length + resolved.length === 0) {
+        root.__motionRender = null;
         root.innerHTML = summary
             + (proposeBtn ? `<div class="staking-toolbar" style="margin-bottom:14px;"><div class="reward-filter">${proposeBtn}</div></div>` : '')
             + governanceIndexNote(data.history, 'motions')
@@ -11840,7 +11871,11 @@ function renderCollectiveMotions(view, data = view.getData()) {
     // Identity names the API already sends with the member list; no new lookups.
     const nameOf = (a) => { const x = members.find(mm => isSameAddress(mm.address, a)); return x && x.name && x.name !== 'Unknown' ? x.name : stakingShortAddress(a); };
     const youTag = (a) => (stored && isSameAddress(a, stored) ? ' <span class="motion-you">you</span>' : '');
-    const cards = visibleMotions.map(m => {
+    // Each card is built from parts (badge, tally bars, meta line, voter
+    // lists, actions) so a live vote can patch just the parts that changed
+    // (motionPatchPlan, lib/tx-status.js) instead of redrawing the section,
+    // which reset scroll, focus and hover on every block.
+    const cardModels = visibleMotions.map(m => {
         const st = m.__status;
         const { ayes, nays, threshold, ayePct, nayPct, naysToReject } = st;
         const votedAye = st.youVoted === 'aye';
@@ -11885,7 +11920,17 @@ function renderCollectiveMotions(view, data = view.getData()) {
             ${busy ? `<div class="motion-pending-chip" role="status"><i class='bx bx-loader-alt bx-spin' aria-hidden="true"></i> ${pendingChipText(pend.kind)}</div>` : ''}
             ${pend && pend.error ? `<div class="motion-tx-error" role="alert">${stakingEscapeHtml(pend.error)}</div>` : ''}`;
 
-        return `<div class="motion-card" data-hash="${stakingEscapeHtml(m.hash)}">
+        const parts = {
+            badge: `<span class="reward-badge ${st.badge}">${st.label}</span>`,
+            tally: `<div class="motion-tally-row"><span>Ayes</span><span>${ayes} / ${threshold} threshold</span></div>
+                <div class="motion-bar"><div class="motion-bar-fill aye" style="width:${ayePct}%;"></div></div>
+                <div class="motion-tally-row"><span>Nays</span><span>${nays} / ${naysToReject} to reject</span></div>
+                <div class="motion-bar"><div class="motion-bar-fill nay" style="width:${nayPct}%;"></div></div>`,
+            meta: `Voting ends at block ${stakingFormatNumber(m.end)}${currentBlock ? ` &middot; current block ${stakingFormatNumber(currentBlock)}` : ''}`,
+            voters: voterList('Aye voters', m.ayes) + voterList('Nay voters', m.nays),
+            actions
+        };
+        const html = `<div class="motion-card" data-hash="${stakingEscapeHtml(m.hash)}">
             <div class="motion-card-head">
                 <div>
                     ${(m.index !== null && m.index !== undefined)
@@ -11893,24 +11938,38 @@ function renderCollectiveMotions(view, data = view.getData()) {
                         : `<span class="motion-index">${stakingEscapeHtml(idxLabel)}</span>`}
                     <span class="motion-title">${stakingEscapeHtml(m.title || view.motionLabel)}</span>
                 </div>
-                <span class="reward-badge ${st.badge}">${st.label}</span>
+                <span data-part="badge">${parts.badge}</span>
             </div>
             <div class="motion-hash">${stakingEscapeHtml(m.hash)}</div>
-            <div class="motion-tally">
-                <div class="motion-tally-row"><span>Ayes</span><span>${ayes} / ${threshold} threshold</span></div>
-                <div class="motion-bar"><div class="motion-bar-fill aye" style="width:${ayePct}%;"></div></div>
-                <div class="motion-tally-row"><span>Nays</span><span>${nays} / ${naysToReject} to reject</span></div>
-                <div class="motion-bar"><div class="motion-bar-fill nay" style="width:${nayPct}%;"></div></div>
-            </div>
+            <div class="motion-tally" data-part="tally">${parts.tally}</div>
             ${proposer}
-            <div class="motion-meta">Voting ends at block ${stakingFormatNumber(m.end)}${currentBlock ? ` &middot; current block ${stakingFormatNumber(currentBlock)}` : ''}</div>
+            <div class="motion-meta" data-part="meta">${parts.meta}</div>
             ${argsHtml}
-            ${voterList('Aye voters', m.ayes)}
-            ${voterList('Nay voters', m.nays)}
-            ${actions}
+            <div data-part="voters">${parts.voters}</div>
+            <div data-part="actions">${parts.actions}</div>
         </div>`;
-    }).join('');
+        return { hash: m.hash, status: st.key, parts, html };
+    });
 
+    // Patch in place when only card parts changed (a live vote, a pending
+    // chip). Everything outside the cards is in the frame: the REST snapshot
+    // (a poll brings a new object), the filters, the wallet, and every open
+    // motion's hash, index, status and call (an added, removed or re-statused
+    // motion moves the counts and filters; a call arriving from proposalOf
+    // changes the title and the call filter). Any change renders it all.
+    const next = {
+        frame: [motionDataId(data), view.filter, view.callFilter, isCouncilMember ? 1 : 0, stored || '',
+            annotatedOpen.map(m => [m.hash, m.index, m.__statusKey, m.__call].join(':')).join(',')].join('|'),
+        cards: cardModels.map(c => ({ hash: c.hash, status: c.status, parts: c.parts }))
+    };
+    const plan = motionPatchPlan(root.__motionRender, next);
+    if (!plan.full && patchMotionCards(root, plan.changed, cardModels, (el) => wireMotionActionButtons(el, view))) {
+        root.__motionRender = next;
+        return;
+    }
+    root.__motionRender = next;
+
+    const cards = cardModels.map(c => c.html).join('');
     const openSection = visibleMotions.length ? `<div class="motion-list">${cards}</div>` : '';
     const resolvedSection = renderResolvedMotions(visibleResolved, view);
     const nothingVisible = (visibleMotions.length + visibleResolved.length) === 0
@@ -11921,6 +11980,12 @@ function renderCollectiveMotions(view, data = view.getData()) {
         + openSection + nothingVisible + resolvedSection;
 
     wireMotionControls(root, view);
+}
+
+function wireMotionActionButtons(scope, view) {
+    scope.querySelectorAll('.motion-aye-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), true, view.key)));
+    scope.querySelectorAll('.motion-nay-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), false, view.key)));
+    scope.querySelectorAll('.motion-close-btn').forEach(b => b.addEventListener('click', () => councilMotionClose(b.getAttribute('data-hash'), b.getAttribute('data-index'), view.key)));
 }
 
 // Wire the filter controls, Propose button, and per-motion action buttons.
@@ -11940,9 +12005,7 @@ function wireMotionControls(root, view = COLLECTIVE_VIEWS.council) {
     });
     const proposeBtn = view.canPropose ? root.querySelector('#open-propose-motion-btn') : null;
     if (proposeBtn) proposeBtn.addEventListener('click', () => openProposeMotionModal());
-    root.querySelectorAll('.motion-aye-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), true, view.key)));
-    root.querySelectorAll('.motion-nay-btn').forEach(b => b.addEventListener('click', () => councilMotionVote(b.getAttribute('data-hash'), b.getAttribute('data-index'), false, view.key)));
-    root.querySelectorAll('.motion-close-btn').forEach(b => b.addEventListener('click', () => councilMotionClose(b.getAttribute('data-hash'), b.getAttribute('data-index'), view.key)));
+    wireMotionActionButtons(root, view);
 }
 
 // Resolved (historical) council motions, crawled from chain events.
@@ -12095,10 +12158,14 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
 
 // The motion card's half of a vote or close: stage, chip, and the decoded
 // reason on failure (lib/tx-status.js pendingSettled decides when it is done).
+// Cancelled, stalled, unconfirmed (link dropped after a clean In block),
+// waiting (never included in time) and resent (Retracted) clear the chip and
+// re-enable the buttons; only a real failure leaves an error on the card.
+const MOTION_STAGE_CLEARS = new Set(['cancelled', 'stalled', 'unconfirmed', 'waiting', 'resent']);
 function motionStage(view, hash, kind) {
     return (stage, m) => {
         const key = view.key + ':' + hash;
-        if (stage === 'cancelled' || stage === 'stalled') motionPending.delete(key);
+        if (MOTION_STAGE_CLEARS.has(stage)) motionPending.delete(key);
         else motionPending.set(key, stage === 'failed' ? { kind, stage, error: (m && m.text) || 'The transaction failed.' } : { kind, stage });
         if (stage === 'inBlock') view.refresh({ fresh: true });
         renderCollectiveMotions(view);
@@ -12717,11 +12784,11 @@ async function resolveWalletSigner(fail) {
     return { account, signer };
 }
 
-// Every result goes to the status card (lib/tx-status-card.js). Success is
-// decided from the events, not from inclusion, and the subscription is kept
-// until Finalized (capped at 2 minutes after InBlock). onError(text, model)
-// keeps the modals' inline error lines; onStage(stage, model) drives the
-// motion cards. No alert popup anywhere on this path.
+// Every result goes to the status card (lib/tx-status-card.js); the watching
+// itself (events decide success, In block, Finalized, the caps, Retracted, a
+// dropped link) is lib/tx-submit.js, tested in test/tx-submit.test.js.
+// onError(text, model) keeps the modals' inline error lines; onStage(stage,
+// model) drives the motion cards. No alert popup anywhere on this path.
 async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage }) {
     const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
     const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
@@ -12732,63 +12799,18 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
     };
     const w = await resolveWalletSigner(fail);
     if (!w) return;
-    const { account, signer } = w;
-
-    const idleHtml = button ? button.innerHTML : '';
-    const setBusy = (s) => { if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); button.innerHTML = `<i class='bx bx-loader-alt bx-spin' aria-hidden="true"></i> ${BUTTON_STAGE_TEXT[s]}`; } };
-    const restore = () => { if (button) { button.disabled = false; button.removeAttribute('aria-busy'); if (idleText) button.textContent = idleText; else button.innerHTML = idleHtml; } };
-
-    let unsub = null, done = false, inBlockSeen = false, capTimer = null, txHash = null, blockNumber = null, lastEvents = null;
-    const extra = () => ({ registry: globalApi.registry, txHash, blockNumber });
-    const onDrop = () => { if (!done) failed(showTxStatus(action, 'failed', null, new Error('WebSocket disconnected'), extra())); };
-    const finish = () => { done = true; clearTimeout(capTimer); try { globalApi.off('disconnected', onDrop); } catch (e) { } if (typeof unsub === 'function') unsub(); };
-    const failed = (m) => { finish(); restore(); stage(m.stage, m); if (onError) onError(m.text, m); };
-    const onResult = async ({ status, events, dispatchError, txHash: h }) => {
-        if (done) return;
-        if (h) txHash = h.toHex();
-        const s = stageOf(status);
-        if (s === 'broadcast') { setBusy('broadcast'); showTxStatus(action, status, null, null, extra()); return stage('broadcast'); }
-        if (s === 'failed') return failed(showTxStatus(action, status, null, null, extra()));
-        if (blockNumber == null) blockNumber = await globalApi.rpc.chain.getHeader(s === 'inBlock' ? status.asInBlock : status.asFinalized).then(x => x.number.toNumber()).catch(() => null);
-        if (done) return;
-        lastEvents = events;
-        // F-056: a failed extrinsic is still included in a block. So are a
-        // forceBatch with failed items and a motion whose inner call failed;
-        // showTxStatus reads those from the events and reports them as failed.
-        if (dispatchError) return failed(showTxStatus(action, status, events, dispatchError, extra()));
-        const m = showTxStatus(action, status, events, null, extra());
-        if (m.stage === 'failed') return failed(m);
-        if (!inBlockSeen) {
-            inBlockSeen = true;
-            restore();
-            stage('inBlock', m);
-            if (onSuccess) onSuccess();
-            capTimer = setTimeout(() => { if (!done) { finish(); stage('stalled', showTxStatus(action, 'stalled', lastEvents, null, extra())); } }, 120000);
-        }
-        if (s === 'finalized') { finish(); stage('finalized', m); }
-    };
-
-    setBusy('signing');
-    showTxStatus(action, 'signing');
-    stage('signing');
+    const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: stage, show: showTxStatus });
+    run.start();
     try {
-        // `await` even though most builders are synchronous: awaiting a
-        // non-promise is a no-op, and F-056 needs one builder to read chain
-        // state (elections.candidates) at signing time rather than trusting a
-        // value captured earlier. Without this, an async builder would hand
-        // signAndSend a Promise, which has no .signAndSend — a TypeError in
-        // the wallet flow, at the worst possible moment.
+        // `await` even though most builders are synchronous: F-056 needs one
+        // builder to read chain state (elections.candidates) at signing time,
+        // and an un-awaited async builder would hand signAndSend a Promise.
         const tx = await buildTx(globalApi);
-        // Sign with the extension's address (its native SS58 format) so the
-        // injected signer recognizes the account. Results are handled one at
-        // a time, in order, because reading the block number is async.
-        let queue = Promise.resolve();
-        unsub = await tx.signAndSend(account.address, { signer }, (result) => {
-            queue = queue.then(() => onResult(result)).catch(e => console.warn('[tx-status]', e));
-        });
-        if (done) unsub(); else globalApi.on('disconnected', onDrop);
+        await run.send(tx, w.account.address, w.signer);   // never throws; reports its own errors
     } catch (e) {
-        if (!done) failed(showTxStatus(action, 'failed', null, e, extra()));
+        // Only buildTx gets here: the explorer's own guard (the keep-alive
+        // refusal, "treasury pallet not available"), shown as written.
+        run.buildFailed(e);
     }
 }
 

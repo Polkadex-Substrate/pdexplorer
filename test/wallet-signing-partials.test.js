@@ -183,10 +183,14 @@ describe('F-056 — submitSignedTx supports an async builder', () => {
 
     test('dispatchError is still checked before treating inclusion as success', () => {
         // F-056's round-1 half. A failed extrinsic is still included in a
-        // block; inclusion and success are different facts.
-        const errAt = fn.indexOf('if (dispatchError)');
-        const inBlockAt = fn.indexOf('status.isInBlock');
+        // block; inclusion and success are different facts. The result
+        // handling moved to lib/tx-submit.js (test/tx-submit.test.js drives it).
+        const lib = stripComments(readRepo('lib/tx-submit.js', import.meta.url));
+        const onResult = lib.slice(lib.indexOf('const onResult = async'));
+        const errAt = onResult.indexOf('if (dispatchError)');
+        const inBlockAt = onResult.indexOf('status.isInBlock');
         assert.ok(errAt !== -1, 'dispatchError is no longer checked');
+        assert.match(fn, /trackSignedTx\(/, 'submitSignedTx no longer uses the tested tracker');
         assert.ok(inBlockAt === -1 || errAt < inBlockAt,
             'inclusion is treated as success before dispatchError is examined');
     });
