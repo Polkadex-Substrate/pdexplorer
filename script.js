@@ -1,7 +1,13 @@
 import { ApiPromise, WsProvider } from '@polkadot/api';
+import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
+import { installPolkadotFixes } from './lib/tx-extensions.js';
 import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses,
          blake2AsHex, xxhashAsHex, keccakAsHex, signatureVerify } from '@polkadot/util-crypto';
 import { u8aToHex, hexToU8a, stringToU8a, isHex } from '@polkadot/util';
+// Asset-fee extension types from each runtime's metadata + the v5 General
+// re-encoding fix (lib/tx-extensions.js, docs/392-readiness.md). Runs before
+// any ApiPromise so the signing registry is covered.
+installPolkadotFixes({ TypeRegistry, GenericExtrinsic });
 // Signing-critical helpers live in lib/ so they can be unit-tested without a
 // browser — see lib/wallet-safety.js and test/wallet-safety.test.js. Do not
 // re-inline these; the audit findings they encode (F-011, F-012, F-054) are
@@ -823,7 +829,11 @@ async function init() {
         // Cloudflare LB endpoint — auto-fails over between origin nodes
         // (so.polkadex.ee, polkadex-rpc.faradaynodes.com, ...) so this single
         // URL is resilient without the frontend needing to know the topology.
-        const wsProvider = new WsProvider('wss://rpc.polkadex.ee');
+        // Dev-only override for the 392 testnet proof (docs/392-readiness.md):
+        // VITE_POLKADEX_WS is read only by the Vite dev server; a production
+        // build always uses the mainnet LB.
+        const wsEndpoint = (import.meta.env && import.meta.env.DEV && import.meta.env.VITE_POLKADEX_WS) || 'wss://rpc.polkadex.ee';
+        const wsProvider = new WsProvider(wsEndpoint);
         // F-063: `await ApiPromise.create(...)` does not REJECT when the
         // WebSocket cannot be established — WsProvider retries forever, so the
         // promise simply never settles. That is why the old ordering was so
@@ -836,28 +846,15 @@ async function init() {
         // trying in the background, and the continuation below adopts the
         // connection whenever it does arrive. So a slow network gets a fully
         // working REST explorer now and live streaming a moment later.
-        const apiPromise = ApiPromise.create({
-            provider: wsProvider,
-            // The runtime declares the CheckMetadataHash signed extension, but
-            // @polkadot/api 10.13.1 predates support for it and logs
-            //   "Unknown signed extensions CheckMetadataHash ... no-effect"
-            // then encodes NOTHING for it. The runtime still expects a Mode
-            // byte in the signed extra and an Option<[u8;32]> in the signing
-            // payload, so every signed extrinsic we submitted decoded
-            // misaligned on-chain and panicked inside
-            // TaggedTransactionQueue_validate_transaction — surfacing to the
-            // user as "wasm `unreachable` instruction executed". Declaring the
-            // shape here makes 10.13.1 encode Mode::Disabled (0) + None, which
-            // is exactly what a current api sends when metadata-hash checking
-            // is not in use. Remove this block only when @polkadot/api is
-            // upgraded to a version that knows the extension natively.
-            signedExtensions: {
-                CheckMetadataHash: {
-                    extrinsic: { mode: 'u8' },
-                    payload: { metadataHash: 'Option<[u8;32]>' }
-                }
-            }
-        });
+        // No signedExtensions override any more. 10.13.1 did not know
+        // CheckMetadataHash and encoded nothing for it, so every signed
+        // extrinsic decoded misaligned on chain ("wasm `unreachable`
+        // instruction executed"); a hand-declared shape fixed that. 17.x knows
+        // the extension natively and encodes Mode::Disabled (0) + None unless
+        // a caller passes mode: 1, which nothing here does (tx-submit passes
+        // only { signer }). Signing stays on extrinsic v4, which spec 373 and
+        // 392 both accept.
+        const apiPromise = ApiPromise.create({ provider: wsProvider });
 
         // Adopt the connection whenever it lands — this tick or in five
         // minutes. Idempotent: adoptChainApi guards against running twice.

@@ -3,8 +3,11 @@ import cors from 'cors';
 import cluster from 'node:cluster';
 import { cpus } from 'node:os';
 import { ApiPromise, WsProvider } from '@polkadot/api';
-import { decodeAddress, encodeAddress, signatureVerify, randomAsHex } from '@polkadot/util-crypto';
-import { u8aWrapBytes, stringToU8a, u8aConcat } from '@polkadot/util';
+import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
+import { decodeAddress, encodeAddress, signatureVerify, randomAsHex, blake2AsHex } from '@polkadot/util-crypto';
+import { u8aWrapBytes, stringToU8a, u8aConcat, hexToU8a } from '@polkadot/util';
+import { installPolkadotFixes } from './lib/tx-extensions.js';
+import { decodeExtrinsicsTolerant, timestampFromExtrinsics } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
@@ -44,6 +47,12 @@ import {
 import path from 'path';
 import * as db from './db.js';
 import { sendEmail, emailProviderStatus } from './email.js';
+
+// Transaction extension types from each runtime's own metadata, and the v5
+// General extrinsic re-encoding fix. Must run before any ApiPromise exists so
+// every registry (tip and api.at(hash) historical ones) is covered. See
+// lib/tx-extensions.js and docs/392-readiness.md.
+installPolkadotFixes({ TypeRegistry, GenericExtrinsic });
 
 // --- Timestamped logging ---------------------------------------------------
 // Prefix every console.* line with an ISO-8601 UTC timestamp so raw stdout
@@ -1176,11 +1185,8 @@ async function getIdentity(api, address) {
 // which corrupts the analytics day-buckets and makes timeAgo nonsense. Null
 // says "unknown", and callers already treat a null timestamp as unknown.
 function getBlockTimestamp(signedBlock) {
-    let timestamp = null;
-    signedBlock.block.extrinsics.forEach((ex) => {
-        if (ex.method.section === 'timestamp' && ex.method.method === 'set') timestamp = ex.method.args[0].toNumber();
-    });
-    return timestamp;
+    // Skips undecoded stubs from getBlockTolerant (lib/extrinsic-decode.js).
+    return timestampFromExtrinsics(signedBlock.block.extrinsics);
 }
 
 function getExtrinsicStatus(events, index) {
@@ -1959,10 +1965,10 @@ const DEV_API_TIMEOUT_MS = readPositiveInteger(process.env.DEV_API_TIMEOUT_MS, 2
 // ─── Audit F-073: what a timeout can and cannot do here ─────────────────────
 //
 // The finding asks for an abort signal so a timed-out query stops running on
-// the shared WsProvider. That is not available: @polkadot/api 10.13.1 exposes
-// no cancellation on `api.query.*()`, `api.rpc.*` or `entriesPaged`, and the
-// version is pinned hard (removing the pin breaks wallet signing — see the
-// CheckMetadataHash note at both ApiPromise.create sites). Claiming to cancel
+// the shared WsProvider. That is not available: @polkadot/api (10.13.1, and
+// still 17.0.2, re-checked 2026-10-18) exposes no cancellation on
+// `api.query.*()`, `api.rpc.*` or `entriesPaged`, and the version is pinned
+// exactly (see docs/392-readiness.md before changing it). Claiming to cancel
 // would be worse than the current behaviour, because the next reader would
 // stop worrying about the load.
 //
@@ -2025,9 +2031,9 @@ const DEV_RPC_SLOT_MAX_MS = readPositiveInteger(process.env.DEV_RPC_SLOT_MAX_MS,
 //
 // ── Audit F-073 round 3: "inflight cap 12; timeout still does not abort" ─────
 //
-// The abort half is not fixable here. @polkadot/api is pinned to EXACTLY
-// 10.13.1 (see the CheckMetadataHash note at ApiPromise.create — unpinning
-// breaks wallet signing), and its provider signature is
+// The abort half is not fixable here. @polkadot/api is pinned exactly (now
+// 17.0.2; see docs/392-readiness.md before changing it), and its provider
+// signature, unchanged from 10.13.1, is
 // `send(method, params, isCacheable?, subscription?)`: no AbortSignal, no
 // cancel handle, nothing to call. Once a request is on the wire the node WILL
 // do the work. Verified against the installed package, not assumed.
@@ -8120,7 +8126,17 @@ async function scanSingleBlock(blockNumber) {
     // differs ("Decoded input doesn't match input, 64 vs 67 bytes"). That throw
     // aborted the whole block and re-queued it forever, stalling the backfill —
     // and meant the getEventsAtBlock mitigation below was never even reached.
-    const signedBlock = await globalApi.rpc.chain.getBlock(hash);
+    // An extrinsic the library cannot decode makes getBlock throw for the WHOLE
+    // block. Transport errors still propagate (retry handling is unchanged);
+    // anything else falls back to per-extrinsic decoding so the block and its
+    // events are indexed and the bad extrinsic is recorded, not lost.
+    let signedBlock;
+    try {
+        signedBlock = await globalApi.rpc.chain.getBlock(hash);
+    } catch (err) {
+        if (isRpcUnavailableError(err)) throw err;
+        signedBlock = await getBlockTolerant(hash, blockNumber, err);
+    }
     if (!signedBlock || !signedBlock.block) return null;
     const header = signedBlock.block.header;
     const blockHash = header.hash.toHex();
@@ -8182,6 +8198,39 @@ async function scanSingleBlock(blockNumber) {
         });
     }
     return { block, events, eventsIncomplete };
+}
+
+// Fallback for scanSingleBlock: fetch the block undecoded, then decode each
+// extrinsic on its own against the block's OWN registry (the runtime that
+// produced it). Undecodable extrinsics become marked stubs (true hash, signer
+// when readable) and each one is written to scan_failures under
+// 'extrinsic_decode' so it is visible, never silently skipped. Nothing retries
+// that indexer automatically; it is an operator signal (docs/392-readiness.md).
+async function getBlockTolerant(hash, blockNumber, cause) {
+    if (!isRpcReady()) throw new Error('rpc not ready (disconnected mid-fetch)');
+    const hashHex = typeof hash === 'string' ? hash : hash.toHex();
+    const raw = await globalApi.rpc.chain.getBlock.raw(hashHex);
+    if (!raw || !raw.block) return null;
+    const { registry } = await globalApi.getBlockRegistry(hexToU8a(hashHex));
+    const header = registry.createType('Header', raw.block.header);
+    const ss58 = registry.chainSS58 != null ? registry.chainSS58 : 88;
+    const { extrinsics, failures } = decodeExtrinsicsTolerant(
+        raw.block.extrinsics || [],
+        hex => registry.createType('Extrinsic', hex),
+        { hashHex: hex => blake2AsHex(hexToU8a(hex)), encodeAddress: u8a => encodeAddress(u8a, ss58) }
+    );
+    if (!failures.length) {
+        // Whole-block decode failed but every extrinsic decodes alone: say so,
+        // because then the fault is elsewhere (header, digest) and worth a look.
+        console.warn(`[chain-index] block ${blockNumber}: whole-block decode failed (${shortErrorMessage(cause)}) but each extrinsic decoded individually`);
+    }
+    for (const f of failures) {
+        const fmt = f.format ? `v${f.format.version} ${f.format.kind}` : 'unknown format';
+        const msg = `extrinsic ${f.index} (${fmt}, ${f.hash}) undecodable: ${f.error}`;
+        console.warn(`[chain-index] block ${blockNumber}: ${msg}`);
+        try { db.recordScanFailure('extrinsic_decode', blockNumber, msg); } catch (e) { console.warn('[chain-index] could not record extrinsic_decode failure:', e && e.message); }
+    }
+    return { block: { header, extrinsics } };
 }
 
 // Scan an inclusive numeric range, processing blocks in parallel batches.
@@ -9944,23 +9993,13 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
 
     let newApi;
     try {
-        // signedExtensions: same declaration as the frontend, for a different
-        // reason. The backend never signs anything, but it DECODES signed
-        // extrinsics (/api/decode, block indexing). @polkadot/api 10.13.1
-        // doesn't know the runtime's CheckMetadataHash extension, so it skips
-        // the Mode byte when reading an extrinsic's signed extra — every field
-        // after it (era, nonce, tip) is then read from the wrong offset.
-        // Declaring the shape keeps decoded output faithful to the chain,
-        // which is the whole point of the forensic endpoints.
-        newApi = await ApiPromise.create({
-            provider: wsProvider,
-            signedExtensions: {
-                CheckMetadataHash: {
-                    extrinsic: { mode: 'u8' },
-                    payload: { metadataHash: 'Option<[u8;32]>' }
-                }
-            }
-        });
+        // No signedExtensions override. 10.13.1 needed a hand-declared
+        // CheckMetadataHash shape to decode (it did not know the extension and
+        // read every later field from the wrong offset). 17.x knows it
+        // natively, and the asset-fee extension's types now come from each
+        // runtime's metadata via installPolkadotFixes at the top of this file,
+        // which also covers the api.at(hash) registries used for old blocks.
+        newApi = await ApiPromise.create({ provider: wsProvider });
     } catch (err) {
         // ApiPromise.create only rejects on hard errors (bad metadata, etc.);
         // transient connect failures are handled by WsProvider's retry loop.

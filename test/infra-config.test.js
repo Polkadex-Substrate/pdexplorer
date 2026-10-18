@@ -215,7 +215,7 @@ describe('--experimental-sqlite is present everywhere it is load-bearing (F-147)
         const major = parseInt(nodeTag.split('.')[0], 10);
         assert.equal(major, 22,
             `Dockerfile.backend now builds on Node ${major}. That is not a config change: @polkadot/api is ` +
-            `pinned to exactly 10.13.1 with a hand-declared CheckMetadataHash signed extension, and wallet ` +
+            `pinned to exactly 17.0.2 with metadata-driven extension types (lib/tx-extensions.js), and wallet ` +
             `signing correctness depends on that pair. Re-qualify signing before changing this, and update ` +
             `the F-147 comment above CMD and the L-3 status note in SECURITY_AUDIT.md.`);
     });
