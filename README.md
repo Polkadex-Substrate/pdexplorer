@@ -657,6 +657,7 @@ stored one caller's copy would serve it to the next.
 **Sends no `Cache-Control` header at all:** `/api/block/:id`,
 `/api/extrinsic/:block/:txHash`, `/api/extrinsic-by-hash/:txHash`,
 `/api/validator/:address`, `/api/search/:query`, `/api/account/:address`,
+`/api/account/:address/history`,
 `/api/staking-rewards/:address`, `/api/transactions/older`,
 `/api/proxies/:address`, `/api/multisigs/:address`, `/api/discussions/:id`,
 every **other** `POST`/`DELETE` route (`POST /api/rpc/call` and the `/api/email/*`
@@ -682,6 +683,7 @@ edge accordingly.
 - `GET /api/validator/:address` — per-validator era history
 - `GET /api/holders` — top-balance accounts
 - `GET /api/account/:address` — account-level summary
+- `GET /api/account/:address/history?list=transactions|events&before=<block>:<rowId>` — older pages of the indexed transactions or events of an address, 200 per page, newest first, read from the index (no RPC). Start from `index.next` in `/api/account/:address`, then follow the `next` of each page; `next: null` means nothing older.
 - `GET /api/network-info` — home-page network metrics
 - `GET /api/search/:query` — **live-RPC** block-hash / block-number / account lookup. Does *not* query the SQLite index and does *not* resolve extrinsic hashes — see the note below.
 - `GET /api/staking-rewards/:address` — per-address reward history
@@ -1059,7 +1061,7 @@ The `stale-while-revalidate` clause means users never block on a cache refresh �
 mutation-bearing, or have a URL space large enough that CDN caching wouldn't
 help:
 
-- `/api/account/:address`, `/api/wallet/:address`, `/api/staking-rewards/:address`
+- `/api/account/:address`, `/api/account/:address/history`, `/api/wallet/:address`, `/api/staking-rewards/:address`
 - `/api/search/:query`, `/api/block/:id`, `/api/extrinsic/*`, `/api/validator/:address`
 - `/api/extrinsic-by-hash/:txHash` — **listed separately on purpose.** A rule written as `/api/extrinsic/*` does not match it: the path is `extrinsic-by-hash`, not a child of `extrinsic/`. It is also the single most expensive route we have (it scans up to 2000 blocks backwards from the head per call), so an edge rule that silently misses it is the one omission on this list that costs RPC budget as well as freshness
 - `/api/transactions/older`, `/api/proxies/:address`, `/api/multisigs/:address`, `/api/discussions/:id` — per-address or cursor-keyed, and all four send no `Cache-Control` at all

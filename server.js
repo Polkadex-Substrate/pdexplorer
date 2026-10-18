@@ -13,7 +13,7 @@ import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/rew
 import { attributeBatchRewards, isBatchDelimiter, isAttributableBatch } from './lib/reward-attribution.js';
 import { resolveClientIp } from './lib/client-ip.js';
 import { planReorgSweep, hashesDiffer, heightsToVerify } from './lib/reorg.js';
-import { planTxPage } from './lib/tx-paging.js';
+import { planTxPage, cursorPage, parseCursor, withoutRowId } from './lib/tx-paging.js';
 import { buildTxRowFromEventRow, eventTxId, rewardId } from './lib/tx-from-event.js';
 import { checkUserText } from './lib/user-text.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
@@ -4023,6 +4023,19 @@ app.get('/api/search/:query', async (req, res) => {
     } catch (err) { serverError(res, err, req.path); }
 });
 
+// Rows per page of an account's indexed lists, on /api/account and /api/account/:address/history.
+const ACCOUNT_PAGE = 200;
+// One page of each account list, newest first, below the `before` cursor when one is given.
+const ACCOUNT_LISTS = {
+    transactions: (acct, before) => db.getTransactionsByAddress(acct.address, ACCOUNT_PAGE, acct.raw, before),
+    events: (acct, before) => db.getEventsByAddress(acct.address, ACCOUNT_PAGE, before)
+};
+// The :address gate both account routes share; raw also finds rows indexed before normalisation (F-080).
+function gateAccountAddress(req, res) {
+    const gated = gateAddressParams(req, res, 'address');
+    return gated && { address: gated.address, raw: String(req.params.address).trim() };
+}
+
 app.get('/api/account/:address', async (req, res) => {
     // Audit F-080 / F-082: this endpoint took the path segment raw — no
     // validation, no SS58 normalisation — so a prefix-42 spelling of an
@@ -4031,11 +4044,9 @@ app.get('/api/account/:address', async (req, res) => {
     // route already validates + normalises; this one now shares that gate,
     // and the raw form is passed alongside so history written before the
     // writer normalised is still found.
-    const raw = (req.params.address || '').trim();
-    if (!isValidAddress(raw)) return res.status(400).json({ error: 'Invalid Polkadex address.' });
-    let address;
-    try { address = normalizeAddress(raw); }
-    catch (e) { return res.status(400).json({ error: 'Invalid Polkadex address.' }); }
+    const acct = gateAccountAddress(req, res);
+    if (!acct) return;
+    const { address, raw } = acct;
     if (!requireRpc(res)) return;
     try {
         const accountInfo = await globalApi.query.system.account(address);
@@ -4046,12 +4057,16 @@ app.get('/api/account/:address', async (req, res) => {
         // F-053: rank is null when the address is outside the top-500
         // snapshot — "0" read as a rank better than #1.
         let txs = [], evs = [], rank = null;
+        const totals = { transactions: null, events: null };
         try {
             const holderRank = db.getHolderRank(address);
             if (holderRank) rank = holderRank.toString();
-            txs = db.getTransactionsByAddress(address, 200, raw);
-            evs = db.getEventsByAddress(address, 200);
+            txs = ACCOUNT_LISTS.transactions(acct);
+            evs = ACCOUNT_LISTS.events(acct);
+            totals.transactions = db.countTransactionsByAddress(address, raw);
+            totals.events = db.countEventsByAddress(address);
         } catch (e) { }
+        const txPage = cursorPage(txs, ACCOUNT_PAGE), evPage = cursorPage(evs, ACCOUNT_PAGE);
 
         // Audit F-136 (round 2). `balanceFrozen` used to be the RESERVED value.
         //
@@ -4100,7 +4115,7 @@ app.get('/api/account/:address', async (req, res) => {
             balanceTotal: free + reserved, balanceFree: free,
             balanceReserved: reserved, balanceFrozen: frozen,
             roles: "User", rank: rank,
-            transactions: txs, events: evs,
+            transactions: txPage.rows, events: evPage.rows,
             // F-085: what each half of this response actually is.
             provenance: {
                 balances: 'live-rpc',
@@ -4122,19 +4137,39 @@ app.get('/api/account/:address', async (req, res) => {
                 // all older than oldestScannedBlock returned truncated:false
                 // and read as "no earlier activity" — the absence-as-fact this
                 // finding exists to stop, surviving inside its own fix.
-                truncated: (txs.length >= 200) || (evs.length >= 200)
+                truncated: (txs.length >= ACCOUNT_PAGE) || (evs.length >= ACCOUNT_PAGE)
                     || !chainState.backfillComplete,
-                rowLimit: 200,
+                rowLimit: ACCOUNT_PAGE,
                 // Below this height we have not indexed yet; anything older is
                 // unknown rather than absent.
                 oldestScannedBlock: chainState.oldestScannedBlock ?? null,
-                backfillComplete: !!chainState.backfillComplete
+                backfillComplete: !!chainState.backfillComplete,
+                // Cursors for /api/account/:address/history (null: nothing older) and each list's indexed row count.
+                next: { transactions: txPage.next, events: evPage.next },
+                totals
             },
             // Deprecated: kept one release so an older cached bundle does not
             // render "undefined". It was never a truthful field — read
             // `index.status` instead.
             status: chainState.status || 'Unknown'
         });
+    } catch (err) { serverError(res, err, req.path); }
+});
+
+// Older pages of an account's lists, read from the index alone (no RPC): start at index.next, then follow each next.
+app.get('/api/account/:address/history', (req, res) => {
+    const acct = gateAccountAddress(req, res);
+    if (!acct) return;
+    const { list, before } = req.query;
+    if (typeof list !== 'string' || !Object.hasOwn(ACCOUNT_LISTS, list)) {
+        return res.status(400).json({ error: 'list must be transactions or events.' });
+    }
+    const cursor = parseCursor(before);
+    if (before !== undefined && !cursor) {
+        return res.status(400).json({ error: 'before must be the <block>:<rowId> cursor from next.' });
+    }
+    try {
+        res.json({ list, ...cursorPage(ACCOUNT_LISTS[list](acct, cursor), ACCOUNT_PAGE) });
     } catch (err) { serverError(res, err, req.path); }
 });
 
@@ -6150,7 +6185,7 @@ app.get('/api/wallet/:address', async (req, res) => {
                 // "Pay out rewards" action.
                 unpaidEntries: unclaimed.slice(0, 200)
             },
-            recentTransactions: db.getTransactionsByAddress(address, 10, raw), // F-080
+            recentTransactions: withoutRowId(db.getTransactionsByAddress(address, 10, raw)), // F-080
             // ── F-085 (wallet route) ─────────────────────────────────────────
             // Marked differently from the account route's block on purpose:
             // test/server-infra.test.js locates that route by searching for its

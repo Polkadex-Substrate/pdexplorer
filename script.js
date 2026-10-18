@@ -6273,7 +6273,7 @@ async function fetchAccountDetails(address) {
         // independent of the makeTable mounts below.
         ensureAddressLabel(data.account);
         renderAccountLabelEditor(data.account);
-        makeTable({
+        const txTable = makeTable({
             container: document.getElementById('account-tx-table'),
             rows: data.transactions || [],
             defaultSort: { key: 'timestamp', dir: 'desc' },
@@ -6332,7 +6332,7 @@ async function fetchAccountDetails(address) {
 
         const eventSections = Array.from(new Set((data.events || []).map(e => e.section).filter(Boolean))).sort();
         const eventMethods  = Array.from(new Set((data.events || []).map(e => e.method).filter(Boolean))).sort();
-        makeTable({
+        const evTable = makeTable({
             container: document.getElementById('account-ev-table'),
             rows: data.events || [],
             defaultSort: { key: 'timestamp', dir: 'desc' },
@@ -6371,9 +6371,37 @@ async function fetchAccountDetails(address) {
                 }
             ]
         });
+        for (const [list, table] of [['transactions', txTable], ['events', evTable]]) {
+            mountAccountLoadOlder(document.getElementById(`account-tab-${list}`), { address: data.account, list, table,
+                rows: data[list] || [], next: data.index?.next?.[list], total: data.index?.totals?.[list] });
+        }
     } catch (e) {
         renderApiError(accountDetailsContainer, e, () => fetchAccountDetails(address));
     }
+}
+
+// Load older under an account table: appends /api/account/:address/history pages until next is null.
+function mountAccountLoadOlder(tab, { address, list, table, rows, next, total }) {
+    if (!tab || !next) return;
+    tab.insertAdjacentHTML('beforeend', `<div style="display: flex; gap: 10px; justify-content: center; align-items: center; padding: 20px;">
+        <span class="js-older-count" style="color: var(--text-secondary); font-size: 13px;"></span><button type="button" class="glass js-older-btn" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--brand-primary); background: rgba(229,0,122,0.1); border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition-fast);">Load older</button>
+        <span class="js-older-error" style="color: var(--error); font-size: 13px;"></span></div>`);
+    const [count, button, error] = ['.js-older-count', '.js-older-btn', '.js-older-error'].map(s => tab.querySelector(s));
+    const showCount = () => { count.textContent = `Showing ${rows.length.toLocaleString()}` + (total != null ? ` of ${total.toLocaleString()} ${list}` : ''); };
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        error.innerHTML = '';
+        try {
+            const page = await fetchApiJson(`/api/account/${encodeURIComponent(address)}/history?list=${encodeURIComponent(list)}&before=${encodeURIComponent(next)}`);
+            rows = rows.concat(page.rows);
+            next = page.next;
+            table.setData(rows);
+            showCount();
+            if (!next) button.style.display = 'none';
+        } catch (e) { error.innerHTML = stakingEscapeHtml(e.message); }
+        button.disabled = false;
+    });
+    showCount();
 }
 
 async function fetchBlockDetails(id) {
