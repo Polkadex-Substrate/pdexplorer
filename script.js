@@ -851,9 +851,11 @@ async function init() {
         // extrinsic decoded misaligned on chain ("wasm `unreachable`
         // instruction executed"); a hand-declared shape fixed that. 17.x knows
         // the extension natively and encodes Mode::Disabled (0) + None unless
-        // a caller passes mode: 1, which nothing here does (tx-submit passes
-        // only { signer }). Signing stays on extrinsic v4, which spec 373 and
-        // 392 both accept.
+        // a caller passes mode: 1, which the explorer never does
+        // (signAndSendOptions in lib/tx-submit.js). A wallet may still return
+        // its own signed transaction with mode 1 and a metadata hash (Ledger);
+        // that is accepted only with the call data unchanged. Signing stays on
+        // extrinsic v4, which spec 373 and 392 both accept.
         const apiPromise = ApiPromise.create({ provider: wsProvider });
 
         // Adopt the connection whenever it lands — this tick or in five
