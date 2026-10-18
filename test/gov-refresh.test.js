@@ -40,6 +40,16 @@ describe('which events start a governance refresh', () => {
         assert.deepEqual(govSyncsForEvents([ev('Democracy')]).sort(), ['council', 'democracy', 'treasury']);
     });
 
+    test('treasury.Deposit (fee share, nearly every block) is not a trigger', () => {
+        // Transaction fees are split into the treasury, so a Deposit event
+        // lands in most blocks with any transaction. Triggering on it would run
+        // all three syncs back to back for ever.
+        assert.deepEqual(govSyncsForEvents([ev('treasury', 'Deposit'), ev('balances', 'Withdraw')]), []);
+        assert.deepEqual(govSyncsForEvents([ev('Treasury', 'deposit')]), []);
+        assert.ok(govSyncsForEvents([ev('treasury', 'Deposit'), ev('treasury', 'Proposed')]).includes('treasury'));
+        assert.ok(govSyncsForEvents([ev('treasury', 'Awarded')]).includes('democracy'));
+    });
+
     test('a block with no governance event starts nothing', () => {
         assert.deepEqual(govSyncsForEvents([ev('balances'), ev('system'), ev('staking')]), []);
         assert.deepEqual(govSyncsForEvents([]), []);
