@@ -279,3 +279,86 @@ describe('the route list stays truthful', () => {
             '/staking resolves now, so "neither route exists" is false');
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The welcome tour stays out of the way on /stake
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A first-time visitor from Nova lands on /stake to do one thing. The tour used
+// to open ~800ms after load and sit on top of the Stake & Nominate window,
+// which opens a few seconds later underneath it. Found in a simulated Nova
+// session on a phone-sized screen.
+
+// Like bodyOf, but starts brace-matching after the parameter list, because
+// shouldAutoShowTour takes a destructured object and bodyOf would stop at the
+// closing brace of its parameters.
+function fnSource(name) {
+    const i = src.indexOf(`function ${name}(`);
+    assert.ok(i !== -1, `${name} not found in script.js`);
+    const open = src.indexOf(") {", i) + 2;
+    let depth = 0;
+    for (let j = open; j < src.length; j++) {
+        if (src[j] === "{") depth++;
+        else if (src[j] === "}" && --depth === 0) return src.slice(i, j + 1);
+    }
+    throw new Error(`unbalanced braces in ${name}`);
+}
+
+function liftTourDecision() {
+    const decl = src.match(/const TOUR_SKIP_ROUTES = \[[^\]]*\];/);
+    assert.ok(decl, 'TOUR_SKIP_ROUTES not found in script.js');
+    // eslint-disable-next-line no-new-func
+    return new Function(`${decl[0]}\n${fnSource('shouldAutoShowTour')}\nreturn shouldAutoShowTour;`)();
+}
+
+describe('shouldAutoShowTour', () => {
+    const show = liftTourDecision();
+
+    test('a first visit to an ordinary page still gets the tour', () => {
+        assert.equal(show({ forceShow: false, seen: false, landingRoute: 'home' }), true);
+        assert.equal(show({ forceShow: false, seen: false, landingRoute: 'wallet' }), true);
+    });
+
+    test('a first visit landing on /stake or /staking does not', () => {
+        assert.equal(show({ forceShow: false, seen: false, landingRoute: 'stake' }), false);
+        assert.equal(show({ forceShow: false, seen: false, landingRoute: 'staking' }), false);
+    });
+
+    test('?tour=1 still forces it, even on /stake', () => {
+        assert.equal(show({ forceShow: true, seen: false, landingRoute: 'stake' }), true);
+        assert.equal(show({ forceShow: true, seen: true, landingRoute: 'home' }), true);
+    });
+
+    test('a visitor who has seen it is not shown it again', () => {
+        assert.equal(show({ forceShow: false, seen: true, landingRoute: 'home' }), false);
+    });
+});
+
+describe('the tour reads where the visitor landed, not where they are now', () => {
+    const body = bodyOf('wireOnboardingTour');
+
+    test('the landing route is captured before the timer, at load', () => {
+        const read = body.indexOf('const landingRoute = readRouteFromLocation()');
+        const timer = body.indexOf('setTimeout(');
+        assert.ok(read !== -1, 'landingRoute is no longer read from the location');
+        assert.ok(timer !== -1);
+        assert.ok(read < timer,
+            'the landing route is read inside the timer. By then the wallet page may have rewritten ' +
+            '/stake to /wallet/<addr>, so the skip would silently stop working');
+    });
+
+    test('the auto-show goes through shouldAutoShowTour', () => {
+        assert.match(body, /if \(shouldAutoShowTour\(\{ forceShow, seen, landingRoute \}\)\) openOnboardingTour\(\);/,
+            'the auto-show condition bypasses shouldAutoShowTour');
+    });
+
+    test('skipping does not mark the tour as seen', () => {
+        // The skip only defers the tour. Writing the seen flag here would mean a
+        // Nova visitor never gets it, even when they later land on the home page.
+        const timerBody = body.slice(body.indexOf('setTimeout('));
+        const timerEnd = timerBody.indexOf('}, 800)');
+        assert.ok(timerEnd !== -1);
+        assert.ok(!/setItem\(TOUR_STORAGE_KEY/.test(timerBody.slice(0, timerEnd)),
+            'the auto-show timer now writes the seen flag');
+    });
+});
