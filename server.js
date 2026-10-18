@@ -6,7 +6,7 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat } from '@polkadot/util';
 import { isOpenGovStatus } from './lib/gov-status.js';
-import { govSyncsForEvents, makeSyncRunner, isFreshRequest } from './lib/gov-refresh.js';
+import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
 import { deriveIndexStatus, describeIndexStatus } from './lib/index-status.js';
 import { isRpcUnavailableError } from './lib/rpc-errors.js';
@@ -6256,7 +6256,7 @@ app.get('/api/wallet/:address', async (req, res) => {
 // the startup pass and the per-block event trigger share it, so two runs of
 // the same sync never overlap, and a trigger that lands mid-run asks for one
 // more run instead of being dropped by the isSyncing guard.
-const govSyncRunner = makeSyncRunner({ onError: (name, e) => console.warn(`[gov-refresh] ${name} sync failed:`, e && e.message) });
+const govSyncRunner = makeSyncRunner({ minIntervalMs: GOV_MIN_INTERVAL_MS, onError: (name, e) => console.warn(`[gov-refresh] ${name} sync failed:`, e && e.message) });
 function syncTreasury() { return govSyncRunner.run('treasury', syncTreasuryPass); }
 function syncCouncil() { return govSyncRunner.run('council', syncCouncilPass); }
 function syncTechnicalCommittee() { return govSyncRunner.run('technicalCommittee', syncTechnicalCommitteePass); }

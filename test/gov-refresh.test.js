@@ -10,11 +10,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { GOV_TRIGGER_SECTIONS, govSyncsForEvents, makeSyncRunner, isFreshRequest } from '../lib/gov-refresh.js';
+import { GOV_TRIGGER_SECTIONS, GOV_MIN_INTERVAL_MS, govSyncsForEvents, makeSyncRunner as makeRunner, isFreshRequest } from '../lib/gov-refresh.js';
 import { CACHE_TIERS } from '../lib/api-reference.js';
 
 const serverSrc = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 const ev = (section, method = 'X') => ({ section, method });
+// The runner tests below that are about overlap and coalescing, not spacing,
+// run with no minimum gap; the gap has its own tests with a fake clock.
+const makeSyncRunner = (o = {}) => makeRunner({ minIntervalMs: 0, ...o });
 
 describe('which events start a governance refresh', () => {
     test('democracy, council, technical committee, elections and treasury are all triggers', () => {
@@ -48,6 +51,12 @@ describe('which events start a governance refresh', () => {
         assert.deepEqual(govSyncsForEvents([ev('Treasury', 'deposit')]), []);
         assert.ok(govSyncsForEvents([ev('treasury', 'Deposit'), ev('treasury', 'Proposed')]).includes('treasury'));
         assert.ok(govSyncsForEvents([ev('treasury', 'Awarded')]).includes('democracy'));
+    });
+
+    test('treasury.UpdatedInactive (fires after fee deposits, most blocks) is not a trigger', () => {
+        assert.deepEqual(govSyncsForEvents([ev('treasury', 'UpdatedInactive')]), []);
+        assert.deepEqual(govSyncsForEvents([ev('Treasury', 'updatedInactive'), ev('treasury', 'Deposit')]), []);
+        assert.ok(govSyncsForEvents([ev('treasury', 'UpdatedInactive'), ev('democracy', 'Started')]).includes('treasury'));
     });
 
     test('a block with no governance event starts nothing', () => {
@@ -124,6 +133,85 @@ describe('sync runner: no overlap, triggers coalesce', () => {
         const runner = makeSyncRunner({ onError: (n) => errors.push(n) });
         await runner.run('x', () => { throw new Error('boom'); });
         assert.deepEqual(errors, ['x']);
+    });
+});
+
+describe('sync runner: at least GOV_MIN_INTERVAL_MS between runs of one sync', () => {
+    const fakeClock = () => {
+        const c = { t: 1000000, slept: [] };
+        c.now = () => c.t;
+        c.sleep = async (ms) => { c.slept.push(ms); c.t += ms; };
+        return c;
+    };
+
+    test('the default gap is 20 s', () => {
+        assert.equal(GOV_MIN_INTERVAL_MS, 20000);
+        assert.match(serverSrc, /makeSyncRunner\(\{ minIntervalMs: GOV_MIN_INTERVAL_MS,/);
+    });
+
+    test('the first run starts at once; the next waits out the rest of the gap', async () => {
+        const c = fakeClock();
+        const runner = makeRunner({ now: c.now, sleep: c.sleep });
+        const starts = [];
+        const fn = async () => { starts.push(c.t); c.t += 3000; };
+        await runner.run('democracy', fn);
+        assert.deepEqual(c.slept, [], 'the first run waited');
+        c.t += 5000;                                   // 5 s after it finished
+        await runner.run('democracy', fn);
+        assert.deepEqual(c.slept, [15000]);
+        assert.equal(starts[1] - (starts[0] + 3000), 20000, 'gap from the end of one run to the start of the next');
+    });
+
+    test('a queued follow-up run waits the gap too, and triggers during the wait coalesce', async () => {
+        const c = fakeClock();
+        const runner = makeRunner({ now: c.now, sleep: c.sleep });
+        let calls = 0;
+        let release;
+        const gate = new Promise(r => { release = r; });
+        const fn = async () => { calls++; if (calls === 1) await gate; };
+        const first = runner.run('treasury', fn);
+        runner.run('treasury', fn);
+        runner.run('treasury', fn);
+        release();
+        await first;
+        assert.equal(calls, 2, 'one follow-up run for the triggers during the first');
+        assert.deepEqual(c.slept, [20000], 'the follow-up ran back to back');
+    });
+
+    test('a trigger while the runner waits out the gap does not add a run', async () => {
+        const c = fakeClock();
+        let wake;
+        const sleep = (ms) => { c.slept.push(ms); return new Promise(r => { wake = () => { c.t += ms; r(); }; }); };
+        const runner = makeRunner({ now: c.now, sleep });
+        let calls = 0;
+        const fn = async () => { calls++; };
+        await runner.run('council', fn);
+        const p = runner.run('council', fn);           // waits the gap
+        await new Promise(r => setImmediate(r));
+        assert.ok(runner.busy('council'));
+        runner.run('council', fn);                     // arrives during the wait
+        wake();
+        await p;
+        assert.equal(calls, 2, 'the waiting run already reads state after the trigger');
+    });
+
+    test('no wait once the gap has passed; other syncs never wait on this one', async () => {
+        const c = fakeClock();
+        const runner = makeRunner({ now: c.now, sleep: c.sleep });
+        await runner.run('democracy', async () => {});
+        await runner.run('council', async () => {});
+        assert.deepEqual(c.slept, []);
+        c.t += 25000;
+        await runner.run('democracy', async () => {});
+        assert.deepEqual(c.slept, []);
+    });
+
+    test('a failed run still counts for the gap', async () => {
+        const c = fakeClock();
+        const runner = makeRunner({ now: c.now, sleep: c.sleep, onError: () => {} });
+        await runner.run('x', async () => { throw new Error('rpc down'); });
+        await runner.run('x', async () => {});
+        assert.deepEqual(c.slept, [20000]);
     });
 });
 
