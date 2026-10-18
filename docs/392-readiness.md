@@ -66,8 +66,18 @@ and drop a wrapper).
 ### Signing (script.js)
 
 - The hand-declared `CheckMetadataHash` shape is removed (17.x knows it). Mode
-  stays Disabled (0): `lib/tx-submit.js` passes only `{ signer }`, so the
-  payload carries mode 0 and metadataHash None. Tested.
+  stays Disabled (0): the explorer never asks for mode 1, so the payload it
+  builds carries mode 0 and metadataHash None. Tested.
+- `lib/tx-submit.js` `signAndSendOptions` passes `withSignedTransaction: true`
+  and `allowCallDataAlteration: false`. A wallet may return the whole signed
+  transaction (Ledger metadata-hash flows do, with mode 1 and its own metadata
+  hash); without the flag @polkadot/api 17.0.2 throws on it
+  (`submittable/createClass.js:206`). With it the library requires the
+  returned transaction to be signed (`:225`), refuses one whose call data
+  differs from the call the explorer built (`:230`, `:265-269`; the default
+  would allow it, `:194`), and submits the wallet's bytes (`:182`, `:187`).
+  Tested against the real Submittable class with fake wallets: signature only,
+  signed transaction, and altered call data.
 - Signing stays on extrinsic v4, which v5 runtimes accept.
 - Dev-only endpoint override: `VITE_POLKADEX_WS`, read only by the Vite dev
   server (`import.meta.env.DEV`). A production build always uses
@@ -81,10 +91,18 @@ and drop a wrapper).
   its events), the new `getBlockTolerant` fetches the raw block and decodes each
   extrinsic alone against the block's own registry
   (`api.getBlockRegistry`). A failure becomes a marked stub (true blake2 hash,
-  signer when it is a signed v4) and a `scan_failures` row with indexer
-  `extrinsic_decode`. The block and its events are still indexed. Transport
-  errors keep the existing retry path. Nothing retries `extrinsic_decode`
-  automatically: it is an operator signal and must stay at zero.
+  signer when it is a signed v4) and its own `scan_failures` row with indexer
+  `extrinsic_decode:<index>` (one row per bad extrinsic, the index also in the
+  message). If every extrinsic decodes alone, the block gets one
+  `block_decode_recovered` row instead, so a fault elsewhere in the block is
+  still visible. Both rows carry the original whole-block error. The block and
+  its events are still indexed. If the fallback fetch itself fails, the error
+  recorded for the block keeps the original decode error first; transport
+  errors keep the existing retry path. Nothing retries these rows
+  automatically: they are an operator signal and must stay at zero. Counts are
+  on `/api/blocks` and `/api/events` as
+  `coverage.decodeFailures.extrinsicDecode` and
+  `coverage.decodeFailures.blockDecodeRecovered` (updated each chain tick).
 - `getBlockTimestamp` skips stubs.
 - Not changed: `/api/decode` and the block-detail endpoints still use the
   whole-block decode, so an undecodable extrinsic shows as an error there
@@ -146,21 +164,33 @@ Pass criteria:
    sqlite3 data/explorer.db "SELECT COUNT(*) FROM blocks WHERE number BETWEEN 1553000 AND 1554000;"
    ```
    returns 1001.
-2. Zero scan failures of any kind, including `extrinsic_decode`:
+2. Zero scan failures of any kind, including `extrinsic_decode:<index>` and
+   `block_decode_recovered`:
    ```
    sqlite3 data/explorer.db "SELECT indexer, COUNT(*) FROM scan_failures GROUP BY indexer;"
    ```
-   returns no rows.
-3. In the browser at http://localhost:3000 (dev server, testnet WS), one signed
-   balance transfer between two testnet accounts: finalized, success event,
-   and the explorer shows it with the same tx hash the wallet reports. Repeat
-   with each wallet people use (polkadot{.js}, Talisman, SubWallet, Nova in-app
-   browser): since @polkadot/api 12, a wallet that returns a `signedTransaction`
-   when the explorer did not ask for one (`withSignedTransaction` is off) gets
-   an error instead of being ignored, as 10.13.1 did.
-4. One council vote by a testnet council member: finalized, `council.Voted`
-   event, shown on the motion.
-5. Backend log has no "Unknown signed extensions" line, and no "[silenced]"
+   returns no rows, and `curl -s localhost:3001/api/blocks` shows
+   `"decodeFailures":{"extrinsicDecode":0,"blockDecodeRecovered":0}`.
+3. Wallets. In the browser at http://localhost:3000 (dev server, testnet WS),
+   with EACH of these four wallets:
+   - polkadot{.js} extension
+   - Talisman
+   - SubWallet
+   - Nova Wallet in-app browser (open the dev URL inside Nova; the phone must
+     reach the Mac, so use the Mac's LAN address instead of localhost)
+
+   do both of these:
+   - one balance transfer between two testnet accounts: finalized, success
+     event, and the explorer shows it with the same tx hash the wallet reports;
+   - one council vote from a testnet council member account held in that
+     wallet: finalized, `council.Voted` event, shown on the motion.
+
+   That is eight signed transactions; record wallet name and version, tx hash
+   and block for each. All eight must pass. A wallet that returns the whole
+   signed transaction is accepted (see Signing above); one that returns
+   altered call data is refused with an error, which counts as a FAIL for that
+   wallet, not a pass.
+4. Backend log has no "Unknown signed extensions" line, and no "[silenced]"
    announcement for "has multiple versions" (server.js silences that warning
    after announcing it once, so look for the announcement).
 
@@ -169,13 +199,22 @@ Then remove the throwaway instance: stop both processes, `cd ..` and
 
 ## Mainnet checklist
 
-- [ ] Fixtures fetched and `npm test` shows `# fail 0`, `# skipped 0`.
-- [ ] Testnet proof above passed (all five criteria).
+Mainnet deploy of this branch WAITS for the first two boxes. Until
+`node scripts/fetch-metadata.mjs` has written both fixtures and `npm test`
+then reports `# skipped 0`, the Polkadex-specific checks have not run and the
+branch is not cleared for mainnet, whatever else has passed.
+
+- [ ] On your Mac, on this branch: `node scripts/fetch-metadata.mjs`, then
+      `npm test` shows `# fail 0` and `# skipped 0`.
+- [ ] Testnet proof above passed (all four criteria, all eight wallet
+      transactions).
 - [ ] Deploy this build to mainnet while mainnet is still on 373. Check:
       signing one small transfer works, the indexer advances, `scan_failures`
-      has no new rows, `/api/version` shows the new commit.
+      has no new rows, `coverage.decodeFailures` is all zeros, `/api/version`
+      shows the new commit.
 - [ ] Watch across the 392 enactment block: the indexer continues past it with
-      no `extrinsic_decode` or `chain_index` failures, and a transfer signed
+      no `extrinsic_decode:*`, `block_decode_recovered` or `chain_index`
+      failures, and a transfer signed
       after enactment succeeds.
 - [ ] After enactment, spot-check one block from before and one from after the
       upgrade in `/api/decode/<block>`: both decode with their own runtime.
@@ -190,7 +229,9 @@ the sandbox), and `scripts/fetch-metadata.mjs` end to end against a local mock
 JSON-RPC server, with its output fed through the fixture suites.
 
 By reading only: behaviour against the real Polkadex nodes (the sandbox cannot
-reach them), the browser bundle signing with a real wallet extension, and the
+reach them), the browser bundle signing with a real wallet (the
+signedTransaction path is tested against the real library with fake wallets
+only), and the
 `.raw` and `getBlockRegistry` fallback path in `getBlockTolerant` against a live
 node (wiring is covered by source tests; the per-extrinsic decoder itself is
 unit-tested).
