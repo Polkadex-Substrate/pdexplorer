@@ -7,11 +7,11 @@ import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex, blake2AsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat, hexToU8a } from '@polkadot/util';
 import { installPolkadotFixes } from './lib/tx-extensions.js';
-import { decodeExtrinsicsTolerant, timestampFromExtrinsics } from './lib/extrinsic-decode.js';
+import { decodeExtrinsicsTolerant, timestampFromExtrinsics, recoverBlockDecode } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
-import { deriveIndexStatus, describeIndexStatus } from './lib/index-status.js';
+import { deriveIndexStatus, describeIndexStatus, coverageOf } from './lib/index-status.js';
 import { isRpcUnavailableError } from './lib/rpc-errors.js';
 import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/reward-dedup.js';
 import { attributeBatchRewards, isBatchDelimiter, isAttributableBatch } from './lib/reward-attribution.js';
@@ -3625,19 +3625,7 @@ app.get('/api/transactions/older', async (req, res) => {
 // a healthy index), while long-lived deployments served a fossilised 'Synced'
 // + months-old lastSync that no longer described anything. Both endpoints now
 // report the health of the indexer that actually populates their tables.
-// coverage: the indexer's own account of what it is missing (audit F-004 /
-// F-050). Sent on both feeds so a client can distinguish "up to date" from
-// "serving data with a known hole in it" without a manual measurement.
-function coverageOf(state) {
-    return {
-        knownGapBlocks: Number(state.knownGapBlocks) || 0,
-        // F-046: > 0 means some holes are no longer being retried this round.
-        gapsExhausted: Number(state.gapsExhausted) || 0,
-        retryableFailures: Number(state.retryableFailures) || 0,
-        permanentFailures: Number(state.permanentFailures) || 0,
-        detail: state.detail || null
-    };
-}
+// coverage: coverageOf in lib/index-status.js.
 app.get('/api/blocks', (req, res) => {
     try {
         const state = db.getSyncState('chain_index');
@@ -8203,34 +8191,34 @@ async function scanSingleBlock(blockNumber) {
 // Fallback for scanSingleBlock: fetch the block undecoded, then decode each
 // extrinsic on its own against the block's OWN registry (the runtime that
 // produced it). Undecodable extrinsics become marked stubs (true hash, signer
-// when readable) and each one is written to scan_failures under
-// 'extrinsic_decode' so it is visible, never silently skipped. Nothing retries
-// that indexer automatically; it is an operator signal (docs/392-readiness.md).
+// when readable). recoverBlockDecode (lib/extrinsic-decode.js) writes one
+// scan_failures row per bad extrinsic ('extrinsic_decode:<index>'), or one
+// 'block_decode_recovered' row when every extrinsic decodes alone, and keeps
+// the original error if this second fetch fails. Nothing retries those rows
+// automatically; they are an operator signal, counted on /api/blocks and
+// /api/events (coverage.decodeFailures) and in docs/392-readiness.md.
 async function getBlockTolerant(hash, blockNumber, cause) {
-    if (!isRpcReady()) throw new Error('rpc not ready (disconnected mid-fetch)');
     const hashHex = typeof hash === 'string' ? hash : hash.toHex();
-    const raw = await globalApi.rpc.chain.getBlock.raw(hashHex);
-    if (!raw || !raw.block) return null;
-    const { registry } = await globalApi.getBlockRegistry(hexToU8a(hashHex));
-    const header = registry.createType('Header', raw.block.header);
-    const ss58 = registry.chainSS58 != null ? registry.chainSS58 : 88;
-    const { extrinsics, failures } = decodeExtrinsicsTolerant(
-        raw.block.extrinsics || [],
-        hex => registry.createType('Extrinsic', hex),
-        { hashHex: hex => blake2AsHex(hexToU8a(hex)), encodeAddress: u8a => encodeAddress(u8a, ss58) }
-    );
-    if (!failures.length) {
-        // Whole-block decode failed but every extrinsic decodes alone: say so,
-        // because then the fault is elsewhere (header, digest) and worth a look.
-        console.warn(`[chain-index] block ${blockNumber}: whole-block decode failed (${shortErrorMessage(cause)}) but each extrinsic decoded individually`);
-    }
-    for (const f of failures) {
-        const fmt = f.format ? `v${f.format.version} ${f.format.kind}` : 'unknown format';
-        const msg = `extrinsic ${f.index} (${fmt}, ${f.hash}) undecodable: ${f.error}`;
-        console.warn(`[chain-index] block ${blockNumber}: ${msg}`);
-        try { db.recordScanFailure('extrinsic_decode', blockNumber, msg); } catch (e) { console.warn('[chain-index] could not record extrinsic_decode failure:', e && e.message); }
-    }
-    return { block: { header, extrinsics } };
+    return recoverBlockDecode({
+        blockNumber,
+        cause,
+        fetchAndDecode: async () => {
+            if (!isRpcReady()) throw new Error('rpc not ready (disconnected mid-fetch)');
+            const raw = await globalApi.rpc.chain.getBlock.raw(hashHex);
+            if (!raw || !raw.block) return null;
+            const { registry } = await globalApi.getBlockRegistry(hexToU8a(hashHex));
+            const header = registry.createType('Header', raw.block.header);
+            const ss58 = registry.chainSS58 != null ? registry.chainSS58 : 88;
+            const { extrinsics, failures } = decodeExtrinsicsTolerant(
+                raw.block.extrinsics || [],
+                hex => registry.createType('Extrinsic', hex),
+                { hashHex: hex => blake2AsHex(hexToU8a(hex)), encodeAddress: u8a => encodeAddress(u8a, ss58) }
+            );
+            return { header, extrinsics, failures };
+        },
+        record: (indexer, block, msg) => db.recordScanFailure(indexer, block, msg),
+        warn: (m) => console.warn(`[chain-index] ${m}`)
+    });
 }
 
 // Scan an inclusive numeric range, processing blocks in parallel batches.
@@ -9059,6 +9047,9 @@ async function syncChainIndex() {
         // the very measurement that is supposed to report it.
         const edgeGaps = db.getEdgeGaps(oldestScannedBlock, headSeen);
         const failCounts = db.countScanFailures('chain_index', SCAN_MAX_ATTEMPTS);
+        // Undecodable extrinsics / recovered blocks (lib/extrinsic-decode.js):
+        // never retried, so they are not in failCounts; shown on coverage.
+        const decodeFailures = db.countDecodeFailures();
 
         // Audit F-004 (round 2): the watermark is DERIVED, once, from the state
         // of the failure queue after this tick's repairs — never assigned from
@@ -9116,6 +9107,7 @@ async function syncChainIndex() {
             interiorGapBlocks,
             retryableFailures: failCounts.retrying,
             permanentFailures: failCounts.permanent,
+            decodeFailures,
             detail: describeIndexStatus({
                 knownGapBlocks,
                 retryableFailures: failCounts.retrying,

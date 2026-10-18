@@ -15,8 +15,10 @@ import { compactAddLength, hexToU8a, u8aConcat, u8aToHex } from '@polkadot/util'
 import substrateMetadata from '@polkadot/types-support/metadata/static-substrate';
 import { installPolkadotFixes } from '../lib/tx-extensions.js';
 import {
-    decodeExtrinsicsTolerant, undecodedExtrinsic, extrinsicFormat, signerBytesFromV4, timestampFromExtrinsics
+    decodeExtrinsicsTolerant, undecodedExtrinsic, extrinsicFormat, signerBytesFromV4, timestampFromExtrinsics,
+    recoverBlockDecode, extrinsicDecodeIndexer, EXTRINSIC_DECODE, BLOCK_DECODE_RECOVERED
 } from '../lib/extrinsic-decode.js';
+import { isRpcUnavailableError } from '../lib/rpc-errors.js';
 import { registryFromMetadata, buildSignedV4, buildGeneralV5, remarkCall, ALICE_PUBLIC } from './helpers/extrinsic-builders.js';
 import { stripComments } from './helpers/source.js';
 
@@ -81,6 +83,92 @@ describe('decodeExtrinsicsTolerant', () => {
     });
 });
 
+// What getBlockTolerant does once the whole-block decode has failed: one
+// scan_failures row per bad extrinsic (its own key, its index in the text),
+// one 'block_decode_recovered' row when every extrinsic decodes alone, and the
+// ORIGINAL error kept when the fallback fetch itself fails.
+describe('recoverBlockDecode', () => {
+    let registry, good4, good5, badCall4, garbage;
+    before(() => {
+        registry = registryFromMetadata(substrateMetadata);
+        const call = remarkCall(registry);
+        good4 = buildSignedV4(registry, { values, call });
+        good5 = buildGeneralV5(registry, { values, call });
+        badCall4 = buildSignedV4(registry, { values, call: new Uint8Array([0xfe, 0xfe, 0x00]) });
+        garbage = u8aToHex(compactAddLength(u8aConcat(new Uint8Array([0x46]), new Uint8Array(10).fill(9))));
+    });
+    const CAUSE = new Error('createType(SignedBlock):: Struct: failed on block: Vec<Extrinsic>');
+    const decodeAll = (list) => async () => ({
+        header: { number: 9 },
+        ...decodeExtrinsicsTolerant(list, hex => registry.createType('Extrinsic', hex), opts)
+    });
+    const recorder = () => {
+        const rows = [];
+        return { rows, record: (indexer, block, msg) => rows.push({ indexer, block, msg }) };
+    };
+
+    test('every extrinsic decodes alone: ONE block_decode_recovered row carrying the original error', async () => {
+        const r = recorder();
+        const out = await recoverBlockDecode({ blockNumber: 77, cause: CAUSE, fetchAndDecode: decodeAll([good4, good5]), record: r.record });
+        assert.equal(out.block.extrinsics.length, 2);
+        assert.equal(out.block.header.number, 9);
+        assert.equal(r.rows.length, 1);
+        assert.equal(r.rows[0].indexer, BLOCK_DECODE_RECOVERED);
+        assert.equal(r.rows[0].indexer, 'block_decode_recovered');
+        assert.equal(r.rows[0].block, 77);
+        assert.match(r.rows[0].msg, /Vec<Extrinsic>/);
+    });
+
+    test('two bad extrinsics in one block: two rows, one per extrinsic, each with its index', async () => {
+        const r = recorder();
+        const out = await recoverBlockDecode({ blockNumber: 78, cause: CAUSE, fetchAndDecode: decodeAll([good4, badCall4, good5, garbage]), record: r.record });
+        assert.equal(out.block.extrinsics.length, 4);
+        assert.deepEqual(r.rows.map(x => x.indexer), [extrinsicDecodeIndexer(1), extrinsicDecodeIndexer(3)]);
+        assert.deepEqual(r.rows.map(x => x.indexer), ['extrinsic_decode:1', 'extrinsic_decode:3']);
+        assert.ok(r.rows.every(x => x.block === 78));
+        assert.match(r.rows[0].msg, /^extrinsic 1 /);
+        assert.match(r.rows[1].msg, /^extrinsic 3 /);
+        assert.ok(r.rows.every(x => x.indexer.startsWith(EXTRINSIC_DECODE + ':')));
+        assert.ok(!r.rows.some(x => x.indexer === BLOCK_DECODE_RECOVERED), 'recovered is only for a block with no bad extrinsic');
+    });
+
+    test('the second fetch throws: the thrown error keeps the ORIGINAL decode error and the new one', async () => {
+        const r = recorder();
+        await assert.rejects(
+            recoverBlockDecode({ blockNumber: 79, cause: CAUSE, fetchAndDecode: async () => { throw new Error('Unable to retrieve header'); }, record: r.record }),
+            (err) => {
+                assert.match(err.message, /Vec<Extrinsic>/, 'original error lost');
+                assert.match(err.message, /Unable to retrieve header/);
+                assert.ok(err.message.indexOf('Vec<Extrinsic>') < err.message.indexOf('Unable to retrieve'), 'original first, so a 200-char reason keeps it');
+                assert.equal(isRpcUnavailableError(err), false);
+                return true;
+            });
+        assert.equal(r.rows.length, 0);
+    });
+
+    test('a transport failure on the second fetch is still classed as transport (attempt not counted)', async () => {
+        await assert.rejects(
+            recoverBlockDecode({ blockNumber: 80, cause: CAUSE, fetchAndDecode: async () => { throw new Error('rpc not ready (disconnected mid-fetch)'); }, record: () => {} }),
+            (err) => { assert.equal(isRpcUnavailableError(err), true); assert.match(err.message, /Vec<Extrinsic>/); return true; });
+    });
+
+    test('the node returns no block the second time: an error with the original, not a bare null', async () => {
+        await assert.rejects(
+            recoverBlockDecode({ blockNumber: 81, cause: CAUSE, fetchAndDecode: async () => null, record: () => {} }),
+            /Vec<Extrinsic>/);
+    });
+
+    test('a failing record() does not lose the block', async () => {
+        const warned = [];
+        const out = await recoverBlockDecode({
+            blockNumber: 82, cause: CAUSE, fetchAndDecode: decodeAll([badCall4]),
+            record: () => { throw new Error('database is locked'); }, warn: (m) => warned.push(m)
+        });
+        assert.equal(out.block.extrinsics.length, 1);
+        assert.ok(warned.some(m => /database is locked/.test(m)));
+    });
+});
+
 describe('server.js wiring', () => {
     const src = stripComments(readFileSync(new URL('../server.js', import.meta.url), 'utf8'));
     const scan = src.slice(src.indexOf('async function scanSingleBlock('), src.indexOf('async function scanChainRange('));
@@ -97,9 +185,22 @@ describe('server.js wiring', () => {
     });
 
     test('an undecodable extrinsic is recorded, not silently skipped', () => {
-        const fn = src.slice(src.indexOf('async function getBlockTolerant('), src.indexOf('async function getBlockTolerant(') + 3000);
-        assert.match(fn, /recordScanFailure\('extrinsic_decode'/);
+        const fn = src.slice(src.indexOf('async function getBlockTolerant('), src.indexOf('async function scanChainRange('));
+        assert.match(fn, /recoverBlockDecode\(/);
         assert.match(fn, /decodeExtrinsicsTolerant\(/);
+        assert.match(fn, /record:\s*\(indexer, block, msg\)\s*=>\s*db\.recordScanFailure\(indexer, block, msg\)/);
+        assert.doesNotMatch(fn, /recordScanFailure\('extrinsic_decode'/, 'one fixed key collapses several bad extrinsics into one row');
+    });
+
+    test('the chain tick persists the decode counts and /api/blocks + /api/events expose them', () => {
+        assert.match(src, /const decodeFailures = db\.countDecodeFailures\(\)/);
+        assert.match(src, /setSyncState\('chain_index', \{[\s\S]{0,1500}decodeFailures[,\s]/);
+        assert.match(src, /import \{[^}]*coverageOf[^}]*\} from '\.\/lib\/index-status\.js'/);
+        assert.doesNotMatch(src, /function coverageOf\(/, 'one coverageOf, the tested one in lib/index-status.js');
+        const blocks = src.slice(src.indexOf("app.get('/api/blocks'"), src.indexOf("app.get('/api/events'"));
+        const events = src.slice(src.indexOf("app.get('/api/events'"), src.indexOf("app.get('/api/events'") + 600);
+        assert.match(blocks, /coverage: coverageOf\(state\)/);
+        assert.match(events, /coverage: coverageOf\(state\)/);
     });
 
     test('getBlockTimestamp tolerates stubs', () => {

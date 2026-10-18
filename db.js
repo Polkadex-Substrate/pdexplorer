@@ -2658,6 +2658,25 @@ export function countScanFailures(indexer, maxAttempts = 10) {
     };
 }
 
+// Undecodable-extrinsic and recovered-block rows (lib/extrinsic-decode.js
+// recoverBlockDecode). extrinsicDecode counts rows keyed 'extrinsic_decode'
+// or 'extrinsic_decode:<index>' (one per bad extrinsic); the range keeps the
+// lookup on the (indexer, block) primary key (':' is 0x3a, ';' 0x3b).
+// blockDecodeRecovered counts blocks whose whole-block decode failed although
+// every extrinsic decoded alone. Neither is retried by any indexer.
+export function countDecodeFailures() {
+    const ext = db.prepare(
+        "SELECT COUNT(*) AS c FROM scan_failures WHERE indexer >= 'extrinsic_decode' AND indexer < 'extrinsic_decode;'"
+    ).get();
+    const rec = db.prepare(
+        "SELECT COUNT(*) AS c FROM scan_failures WHERE indexer = 'block_decode_recovered'"
+    ).get();
+    return {
+        extrinsicDecode: Number(ext && ext.c) || 0,
+        blockDecodeRecovered: Number(rec && rec.c) || 0
+    };
+}
+
 // --- one-time migration of legacy JSON caches ---
 function tableCount(table) {
     return db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c;
