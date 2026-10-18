@@ -6203,7 +6203,7 @@ async function fetchAccountDetails(address) {
                     </tr>
                     <tr>
                         <td style="padding: 12px 20px; font-weight: 600;">balance reserved</td>
-                        <!-- F-136: the `?? data.balanceFrozen` fallback that used to be
+                        <!-- F-136: the '?? data.balanceFrozen' fallback that used to be
                              here is GONE, and removing it was required, not tidying.
                              balanceFrozen used to be an alias of reserved; it now
                              carries the real frozen amount, which is a different
