@@ -56,3 +56,21 @@ export function assertOrder(assert, src, a, b, why) {
     assert.ok(ib !== -1, `not found in code (only in comments?): ${b}`);
     assert.ok(ia < ib, why);
 }
+
+// Lift a whole function declaration out of `src` so a test can run the real code
+// with stubs. The parameter list is skipped first: defaults like
+// `{ replace = false } = {}` hold braces that would end the match early.
+export function bodyOf(src, name) {
+    const start = src.indexOf(`function ${name}(`);
+    if (start === -1) throw new Error(`${name} not found`);
+    let i = src.indexOf('(', start), depth = 0;
+    for (; i < src.length; i++) {
+        if (src[i] === '(') depth++;
+        else if (src[i] === ')' && --depth === 0) break;
+    }
+    for (i = src.indexOf('{', i), depth = 0; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+    }
+    throw new Error(`unbalanced braces in ${name}`);
+}

@@ -63,6 +63,11 @@ Access notes:
 - GET /api/validator/:address — per-validator era history
 - GET /api/holders — top-balance accounts
 - GET /api/account/:address — account-level summary
+- GET /api/account/:address/history?list=transactions|events&before=<block>:<rowId>
+  - older pages of the indexed transactions or events of an address, 200 per
+  page, newest first, read from the index (no RPC). Start from index.next in
+  /api/account/:address, then follow the next of each page; next: null means
+  nothing older.
 - GET /api/network-info — network metrics (schema below)
 - GET /api/search/:query — LIVE-RPC block-number / block-hash / account lookup.
   Does NOT search the SQLite index and does NOT resolve extrinsic hashes — see
@@ -307,7 +312,8 @@ presents a session (that response contains the caller's own vote).
 
 Everything else sends NO Cache-Control header at all. That is an omission, not
 a permission — treat it as "do not reuse this response". Notably
-/api/account/:address, /api/staking-rewards/:address, /api/search/:query,
+/api/account/:address, /api/account/:address/history,
+/api/staking-rewards/:address, /api/search/:query,
 /api/block/:id, /api/extrinsic/*, /api/extrinsic-by-hash/:txHash (NOT matched
 by /api/extrinsic/* — it is a separate route), /api/validator/:address,
 /api/transactions/older, /api/proxies/:address, /api/multisigs/:address,

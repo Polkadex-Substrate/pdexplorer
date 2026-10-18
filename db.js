@@ -1349,18 +1349,34 @@ export function insertTransactions(list) {
 export function getRecentTransactions(limit) {
     return db.prepare(`SELECT ${TX_COLS} FROM transactions ORDER BY block DESC, timestamp DESC LIMIT ?`).all(limit);
 }
-export function getTransactionsByAddress(address, limit, altAddress = null) {
-    // Audit F-080: rows written before the writer normalised (and any imported
-    // by the old backfill) may carry a different SS58 prefix for the same
-    // AccountId. Callers pass the normalised form plus the raw one they were
-    // given, so an account's history is complete during and after the
-    // transition. Both are indexed columns, so the OR stays cheap.
-    if (altAddress && altAddress !== address) {
-        return db.prepare(`SELECT ${TX_COLS} FROM transactions
-             WHERE from_addr IN (?, ?) OR to_addr IN (?, ?)
-             ORDER BY block DESC LIMIT ?`).all(address, altAddress, address, altAddress, limit);
-    }
-    return db.prepare(`SELECT ${TX_COLS} FROM transactions WHERE from_addr = ? OR to_addr = ? ORDER BY block DESC LIMIT ?`).all(address, address, limit);
+// Keyset paging, newest first: before = { block, rowId } resumes strictly below that row; rowid breaks ties in a block.
+const PAGE_ORDER = 'ORDER BY block DESC, rowid DESC LIMIT ?';
+function olderThan(before) {
+    return before
+        ? { sql: ' AND (block < ? OR (block = ? AND rowid < ?))', args: [before.block, before.block, before.rowId] }
+        : { sql: '', args: [] };
+}
+// Audit F-080: rows written before the writer normalised (and any imported
+// by the old backfill) may carry a different SS58 prefix for the same
+// AccountId. Callers pass the normalised form plus the raw one they were
+// given, so an account's history is complete during and after the
+// transition. Both are indexed columns, so the OR stays cheap.
+function txAddressMatch(address, altAddress) {
+    return altAddress && altAddress !== address
+        ? { sql: '(from_addr IN (?, ?) OR to_addr IN (?, ?))', args: [address, altAddress, address, altAddress] }
+        : { sql: '(from_addr = ? OR to_addr = ?)', args: [address, address] };
+}
+// Each row also carries its event's extrinsicIndex and txHash (events.hash = block_hash-event_index), joined after the page is cut.
+export function getTransactionsByAddress(address, limit, altAddress = null, before = null) {
+    const match = txAddressMatch(address, altAddress), page = olderThan(before);
+    return db.prepare(`SELECT p.*, e.extrinsic_index AS extrinsicIndex, e.tx_hash AS txHash
+        FROM (SELECT ${TX_COLS}, rowid AS rowId FROM transactions WHERE ${match.sql}${page.sql} ${PAGE_ORDER}) p
+        LEFT JOIN events e ON e.hash = p.blockHash || '-' || p.eventIndex
+        ORDER BY p.block DESC, p.rowId DESC`).all(...match.args, ...page.args, limit);
+}
+export function countTransactionsByAddress(address, altAddress = null) {
+    const match = txAddressMatch(address, altAddress);
+    return db.prepare(`SELECT COUNT(*) AS n FROM transactions WHERE ${match.sql}`).get(...match.args).n;
 }
 export function countTransactions() {
     // O(1) via the trigger-maintained counter. The miss path is a CACHED scan,
@@ -1618,8 +1634,13 @@ export function insertEvents(list) {
 export function getRecentEvents(limit) {
     return db.prepare(`SELECT ${EVENT_COLS} FROM events ORDER BY block DESC, event_index DESC LIMIT ?`).all(limit).map(mapEventRow);
 }
-export function getEventsByAddress(address, limit) {
-    return db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE signer_address = ? ORDER BY block DESC LIMIT ?`).all(address, limit).map(mapEventRow);
+export function getEventsByAddress(address, limit, before = null) {
+    const page = olderThan(before);
+    return db.prepare(`SELECT ${EVENT_COLS}, rowid AS rowId FROM events WHERE signer_address = ?${page.sql} ${PAGE_ORDER}`)
+        .all(address, ...page.args, limit).map(mapEventRow);
+}
+export function countEventsByAddress(address) {
+    return db.prepare('SELECT COUNT(*) AS n FROM events WHERE signer_address = ?').get(address).n;
 }
 export function countEvents() {
     // O(1) via the trigger-maintained counter (see table_counts). The miss path

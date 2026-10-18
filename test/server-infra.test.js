@@ -583,8 +583,9 @@ describe('F-085 — the payload says which half is live', () => {
 
     test('a truncated list says so — for BOTH reasons it can be truncated', () => {
         // Otherwise a capped list reads as "this account has no older activity".
-        assert.match(route, /truncated: \(txs\.length >= 200\)/);
-        assert.match(route, /rowLimit: 200/);
+        assert.match(route, /truncated: \(txs\.length >= ACCOUNT_PAGE\)/);
+        assert.match(route, /rowLimit: ACCOUNT_PAGE/);
+        assert.match(serverSrc, /const ACCOUNT_PAGE = 200;/);
         // The row cap is only half of it: the lists are also bounded below by
         // the backfill floor (F-008). A review caught the first version testing
         // the cap alone.
