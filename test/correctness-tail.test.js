@@ -508,13 +508,15 @@ describe('F-064 — live rows carry what the chain said, or null', () => {
 
     test('every status column goes through statusBadge — no local ternary', () => {
         // The F-045 shape again: two copies of the same colour decision.
-        assert.ok(!/status === 'failed' \? 'var\(--error\)' : 'var\(--success\)'/.test(scriptSrc),
+        // The account Transfers columns live in lib/account-transfers.js, so scan it too.
+        const src = scriptSrc + '\n' + read('lib/account-transfers.js');
+        assert.ok(!/status === 'failed' \? 'var\(--error\)' : 'var\(--success\)'/.test(src),
             'a table has its own status ternary again; unknown will paint green there');
         // Only DISPATCH-status columns. There are other 'status' columns in
         // this file — rewards are claimed/unclaimed, threads are open/closed,
         // referenda have their own vocabulary — and they legitimately render
         // differently. Identify the dispatch ones by their filter options.
-        const columns = [...scriptSrc.matchAll(
+        const columns = [...src.matchAll(
             /key: 'status', label: '(?:Status|Result)',[\s\S]{0,600}?options: \[[^\]]*'failed'[^\]]*\][\s\S]{0,400}?format: row => ([^\n]+)/g
         )];
         assert.ok(columns.length >= 2,

@@ -32,6 +32,7 @@ import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
 import { startCollectiveLive, liveWhileConnected, freshPlan } from './lib/collective-live.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
+import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -6285,18 +6286,7 @@ async function fetchAccountDetails(address) {
             // Active accounts can accumulate hundreds-to-thousands of txs over
             // their lifetime; show-more first, page numbers above 200.
             pagination: { pageSize: 50, showMoreMax: 200 },
-            columns: [
-                { key: 'index', label: 'Index', format: transferIndexCell },
-                { key: 'block', label: 'Block', searchable: true, sort: (a, b) => (a.block || 0) - (b.block || 0), format: row => `<a href="/block/${stakingEscapeHtml(row.block)}" class="item-link">${stakingEscapeHtml(row.block)}</a>` },
-                { key: 'from', label: 'From', searchable: true, format: row => transferParty(row.from, data.account) },
-                { key: 'direction', label: ' ', filter: { type: 'select', options: ['in', 'out', 'self'], derive: row => transferDirection(row, data.account) },
-                  format: row => { const d = transferDirection(row, data.account); return d && `<span class="dir-pill ${d}">${d.toUpperCase()}</span>`; } },
-                { key: 'to', label: 'To', searchable: true, format: row => transferParty(row.to, data.account) },
-                { key: 'amount', label: 'Value', searchable: true, sort: (a, b) => (a.numericAmount || 0) - (b.numericAmount || 0), format: row => transferValueCell(row.amount) },
-                { key: 'timestamp', label: 'Time', sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-                  format: row => `<span title="${stakingEscapeHtml(timeAgo(row.timestamp))}">${stakingEscapeHtml(formatUtcDateTime(row.timestamp))}</span>` },
-                { key: 'status', label: 'Result', filter: { type: 'select', options: ['success', 'failed', 'unknown'] }, format: row => statusBadge(row.status, '', { icon: true }) }
-            ]
+            columns: transferColumns(data.account, { same: isSameAddress, short: stakingShortAddress, link: shortAddressLink, timeAgo, statusBadge })
         });
 
         const eventSections = Array.from(new Set((data.events || []).map(e => e.section).filter(Boolean))).sort();
@@ -6342,66 +6332,11 @@ async function fetchAccountDetails(address) {
         });
         for (const [list, table, noun] of [['transactions', txTable, 'transfers'], ['events', evTable, 'events']]) {
             mountAccountLoadOlder(document.getElementById(`account-tab-${list}`), { address: data.account, list, noun, table,
-                rows: data[list] || [], next: data.index?.next?.[list], total: data.index?.totals?.[list] });
+                rows: data[list] || [], next: data.index?.next?.[list], total: data.index?.totals?.[list], fetchJson: fetchApiJson });
         }
     } catch (e) {
         renderApiError(accountDetailsContainer, e, () => fetchAccountDetails(address));
     }
-}
-
-// Load older under an account table: appends /api/account/:address/history pages until next is null.
-function mountAccountLoadOlder(tab, { address, list, noun = list, table, rows, next, total }) {
-    if (!tab || !next) return;
-    tab.insertAdjacentHTML('beforeend', `<div style="display: flex; gap: 10px; justify-content: center; align-items: center; padding: 20px;">
-        <span class="js-older-count" style="color: var(--text-secondary); font-size: 13px;"></span><button type="button" class="glass js-older-btn" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--brand-primary); background: rgba(229,0,122,0.1); border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition-fast);">Load older</button>
-        <span class="js-older-error" style="color: var(--error); font-size: 13px;"></span></div>`);
-    const [count, button, error] = ['.js-older-count', '.js-older-btn', '.js-older-error'].map(s => tab.querySelector(s));
-    const showCount = () => { count.textContent = `Showing ${rows.length.toLocaleString()}` + (total != null ? ` of ${total.toLocaleString()} ${noun}` : ''); };
-    button.addEventListener('click', async () => {
-        button.disabled = true;
-        error.innerHTML = '';
-        try {
-            const page = await fetchApiJson(`/api/account/${encodeURIComponent(address)}/history?list=${encodeURIComponent(list)}&before=${encodeURIComponent(next)}`);
-            rows = rows.concat(page.rows);
-            next = page.next;
-            table.setData(rows);
-            showCount();
-            if (!next) button.style.display = 'none';
-        } catch (e) { error.innerHTML = stakingEscapeHtml(e.message); }
-        button.disabled = false;
-    });
-    showCount();
-}
-
-// Which way a transfer went for the viewed account: 'in', 'out', 'self' (both sides) or ''.
-function transferDirection(row, account) {
-    const out = isSameAddress(row.from, account), into = isSameAddress(row.to, account);
-    return out && into ? 'self' : out ? 'out' : into ? 'in' : '';
-}
-
-// From / To cell: the viewed account as plain text, any other address as a link.
-function transferParty(addr, account) {
-    return isSameAddress(addr, account) ? `<span class="mono" title="${stakingEscapeHtml(addr)}">${stakingEscapeHtml(stakingShortAddress(addr))}</span>` : shortAddressLink(addr);
-}
-
-// Index cell: Extrinsic #block-index to the transaction when the transfer has one, else Event #block-index to its block.
-function transferIndexCell(row) {
-    const ext = row.extrinsicIndex != null && row.txHash;
-    const [label, href] = ext ? [`Extrinsic #${row.block}-${row.extrinsicIndex}`, `/tx/${row.block}/${row.txHash}`] : [`Event #${row.block}-${row.eventIndex}`, `/block/${row.block}`];
-    return `<a href="${stakingEscapeHtml(href)}" class="item-link">${stakingEscapeHtml(label)}</a>`;
-}
-
-// Value cell for "1,341.7476 PDEX": integer part plain, ".fraction" muted, unit in the brand colour; other text as is.
-function transferValueCell(amount) {
-    const m = /^([\d,]+)(\.\d+)?\s*(.*)$/.exec(String(amount ?? ''));
-    if (!m) return stakingEscapeHtml(amount);
-    return `${stakingEscapeHtml(m[1])}<span style="color: var(--text-secondary);">${stakingEscapeHtml(m[2] || '')}</span> <span style="color: var(--brand-primary);">${stakingEscapeHtml(m[3])}</span>`;
-}
-
-// "YYYY-MM-DD HH:mm:ss (UTC)", or a dash when the time is unknown.
-function formatUtcDateTime(ts) {
-    const d = new Date(Number(ts));
-    return ts && Number.isFinite(d.getTime()) ? `${d.toISOString().slice(0, 19).replace('T', ' ')} (UTC)` : '—';
 }
 
 async function fetchBlockDetails(id) {

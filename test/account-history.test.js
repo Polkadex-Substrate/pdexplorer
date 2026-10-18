@@ -8,8 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as db from '../db.js';
 import { cursorPage, parseCursor } from '../lib/tx-paging.js';
-import { escapeHtml } from '../lib/html-escape.js';
-import { readRepo, stripComments, bodyOf } from './helpers/source.js';
+import { mountAccountLoadOlder } from '../lib/account-transfers.js';
 
 const ME = 'esMe', ALT = '5Me', OTHER = 'esOther';
 
@@ -104,9 +103,7 @@ describe('the cursor helpers', () => {
     });
 });
 
-const src = stripComments(readRepo('script.js', import.meta.url));
-
-// Run the real mountAccountLoadOlder with the DOM, the table and fetchApiJson stubbed.
+// Run mountAccountLoadOlder with the DOM, the table and fetchApiJson stubbed.
 function mount({ next = '9:1', total = 3, pages = [] } = {}) {
     const el = () => ({ textContent: '', innerHTML: '', disabled: false, style: {} });
     const ui = { count: el(), button: el(), error: el(), urls: [], disabledDuringFetch: [] };
@@ -121,9 +118,7 @@ function mount({ next = '9:1', total = 3, pages = [] } = {}) {
         if (page instanceof Error) throw page;
         return page;
     };
-    const mountAccountLoadOlder = new Function('fetchApiJson', 'stakingEscapeHtml',
-        `${bodyOf(src, 'mountAccountLoadOlder')} return mountAccountLoadOlder;`)(fetchApiJson, escapeHtml);
-    mountAccountLoadOlder(ui.tab, { address: 'es1 me', list: 'transactions', table: ui.table, rows: [{ hash: 'a' }], next, total });
+    mountAccountLoadOlder(ui.tab, { address: 'es1 me', list: 'transactions', table: ui.table, rows: [{ hash: 'a' }], next, total, fetchJson: fetchApiJson });
     return ui;
 }
 
