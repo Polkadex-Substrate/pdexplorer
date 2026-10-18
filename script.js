@@ -4290,7 +4290,7 @@ function navigateTo(target, { replace = false } = {}) {
         }
         catch (e) { /* same-origin / sandboxed iframes can throw; fall back below */ }
     }
-    routeTo(target || 'home');
+    routeTo(newPath.slice(1) || 'home');   // routeTo matches "account/x", not "/account/x"
 }
 
 // One-time wiring: clean-URL routing, popstate, click delegation, legacy
