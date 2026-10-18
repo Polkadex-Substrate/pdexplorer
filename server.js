@@ -6,6 +6,7 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat } from '@polkadot/util';
 import { isOpenGovStatus } from './lib/gov-status.js';
+import { govSyncsForEvents, makeSyncRunner, isFreshRequest } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
 import { deriveIndexStatus, describeIndexStatus } from './lib/index-status.js';
 import { isRpcUnavailableError } from './lib/rpc-errors.js';
@@ -4405,7 +4406,7 @@ app.get('/api/council', (req, res) => {
         // propose is in a block: no-store, so neither the browser nor
         // Cloudflare hands back the pre-transaction copy. There is no
         // in-process response cache to bypass; the KV row is the snapshot.
-        if (req.query && req.query.fresh) res.set('Cache-Control', 'no-store'); else cacheShort(res);
+        if (isFreshRequest(req.query)) res.set('Cache-Control', 'no-store'); else cacheShort(res);
         res.json(data);
     } catch (err) {
         console.error('API Error /api/council:', err);
@@ -4419,7 +4420,7 @@ app.get('/api/technical-committee', (req, res) => {
         data.motionHistory = db.getCollectiveMotions('technicalCommittee');
         data.history = governanceHistoryMeta();
         // Short tier for the same reason as /api/council: live vote tallies.
-        if (req.query && req.query.fresh) res.set('Cache-Control', 'no-store'); else cacheShort(res);
+        if (isFreshRequest(req.query)) res.set('Cache-Control', 'no-store'); else cacheShort(res);
         res.json(data);
     } catch (err) {
         console.error('API Error /api/technical-committee:', err);
@@ -4440,7 +4441,9 @@ app.get('/api/treasury', (req, res) => {
         };
         data.allProposals = db.getTreasuryProposals();
         data.history = governanceHistoryMeta();
-        cacheLong(res);
+        // Short tier with ?fresh=1 (no-store), as /api/council: the indexer
+        // now refreshes this snapshot on the block's own governance events.
+        if (isFreshRequest(req.query)) res.set('Cache-Control', 'no-store'); else cacheShort(res);
         res.json(data);
     } catch (err) {
         console.error('API Error /api/treasury:', err);
@@ -4452,7 +4455,9 @@ app.get('/api/democracy', (req, res) => {
     try {
         const meta = db.getKv('democracy_meta') || {};
         const state = db.getSyncState('democracy');
-        cacheLong(res);
+        // Short tier with ?fresh=1 (no-store), as /api/council: the indexer
+        // now refreshes this snapshot on the block's own governance events.
+        if (isFreshRequest(req.query)) res.set('Cache-Control', 'no-store'); else cacheShort(res);
         res.json({
             referendumCount: meta.referendumCount || 0,
             publicPropCount: meta.publicPropCount || 0,
@@ -6247,7 +6252,19 @@ app.get('/api/wallet/:address', async (req, res) => {
 });
 
 // --- BACKGROUND CRAWLERS ---
-async function syncTreasury() {
+// The governance syncs run through one runner (lib/gov-refresh.js): the timer,
+// the startup pass and the per-block event trigger share it, so two runs of
+// the same sync never overlap, and a trigger that lands mid-run asks for one
+// more run instead of being dropped by the isSyncing guard.
+const govSyncRunner = makeSyncRunner({ onError: (name, e) => console.warn(`[gov-refresh] ${name} sync failed:`, e && e.message) });
+function syncTreasury() { return govSyncRunner.run('treasury', syncTreasuryPass); }
+function syncCouncil() { return govSyncRunner.run('council', syncCouncilPass); }
+function syncTechnicalCommittee() { return govSyncRunner.run('technicalCommittee', syncTechnicalCommitteePass); }
+function syncDemocracy() { return govSyncRunner.run('democracy', syncDemocracyPass); }
+const GOV_SYNCS = { treasury: syncTreasury, council: syncCouncil, technicalCommittee: syncTechnicalCommittee, democracy: syncDemocracy };
+function runGovSync(name) { const fn = GOV_SYNCS[name]; if (fn) fn().catch(() => { /* the interval pass remains the safety net */ }); }
+
+async function syncTreasuryPass() {
     // isRpcReady() also covers !globalApi, plus catches the half-reconnected
     // case where globalApi exists but the WsProvider has dropped.
     if (!isRpcReady() || isSyncingTreasury) return;
@@ -6460,7 +6477,7 @@ async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
     return { motions, trusted: motionsTrusted };
 }
 
-async function syncCouncil() {
+async function syncCouncilPass() {
     // isRpcReady() also covers !globalApi, plus catches the half-reconnected
     // case where globalApi exists but the WsProvider has dropped.
     if (!isRpcReady() || isSyncingCouncil) return;
@@ -6617,7 +6634,7 @@ function upsertLiveCollectiveMotions(collective, motions) {
 // a prime member whose vote is the default for absentees. Same live-motion
 // reader, same F-052 reconcile, its own KV row and history.
 let isSyncingTechnicalCommittee = false;
-async function syncTechnicalCommittee() {
+async function syncTechnicalCommitteePass() {
     if (!isRpcReady() || isSyncingTechnicalCommittee) return;
     const q = globalApi.query.technicalCommittee;
     if (!q || !q.members || !q.proposals) {
@@ -7205,7 +7222,7 @@ async function syncGovernance() {
 
 // Indexes the democracy pallet: referenda (status + vote tally), active public
 // proposals, the queued external proposal, and launch-period progress.
-async function syncDemocracy() {
+async function syncDemocracyPass() {
     if (isSyncingDemocracy || !isRpcReady()) return;
     isSyncingDemocracy = true;
     try {
@@ -8614,20 +8631,19 @@ async function syncChainIndex() {
             const forward = await scanChainRange(headSeen + 1, head, BLOCKS_FORWARD_MAX);
             if (forward.blocks.length) db.insertBlocks(forward.blocks);
             if (forward.events.length) db.insertEvents(forward.events);
-            // Event-driven governance refresh. The council snapshot otherwise
-            // renews on a slow timer (COUNCIL_REFRESH_MS), which meant a new
-            // motion or a fresh vote took minutes to appear — painful for a
-            // 3-seat-threshold council watching a live vote. The forward pass
-            // runs every ~12s on new blocks only, so piggy-backing here makes
-            // motions appear within one block-tick of landing on-chain at
-            // near-zero extra cost (the events are already in hand).
-            if (forward.events.some(e => /^(council|councilCollective|generalCouncil)$/i.test(e.section || ''))) {
-                console.log('[chain-index] council event in fresh block — refreshing council snapshot now');
-                syncCouncil().catch(() => { /* the interval pass remains the safety net */ });
-            }
-            if (forward.events.some(e => /^technicalCommittee$/i.test(e.section || ''))) {
-                console.log('[chain-index] technical committee event in fresh block — refreshing its snapshot now');
-                syncTechnicalCommittee().catch(() => { /* the interval pass remains the safety net */ });
+            // Event-driven governance refresh. The snapshots otherwise renew on
+            // slow timers (COUNCIL_REFRESH_MS, TREASURY_REFRESH_MS,
+            // DEMOCRACY_REFRESH_MS), so a new motion, referendum or vote took
+            // minutes to appear. The forward pass runs every ~12s on new
+            // blocks only and already holds their events, so a block with a
+            // democracy, council, technical committee, elections or treasury
+            // event starts the affected syncs now. govSyncsForEvents names
+            // each sync once per pass; the runner never overlaps two runs of
+            // one sync (lib/gov-refresh.js).
+            const govSyncs = govSyncsForEvents(forward.events);
+            if (govSyncs.length) {
+                console.log(`[chain-index] governance event in fresh block - refreshing ${govSyncs.join(', ')} now`);
+                for (const name of govSyncs) runGovSync(name);
             }
             if (forward.failedNumbers && forward.failedNumbers.length) tickHadFailures = true;
 
