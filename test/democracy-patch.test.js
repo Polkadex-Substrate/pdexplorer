@@ -73,6 +73,21 @@ describe('overlay of live state on the REST snapshot', () => {
         assert.equal(tabled.publicProposals.length, 0);
     });
 
+    test('a row the server does not have yet, with no hash from the chain, is marked for a placeholder', () => {
+        const H = '0x' + 'cd'.repeat(32);
+        const ref3 = (proposal) => ({ refIndex: 3, status: 'Ongoing', endBlock: 1000, ayes: 0, nays: 0, turnout: 0, tallyKnown: 1, proposal });
+        const d = overlayDemocracy(rest(), live({ count: 4, refs: { 3: ref3(null) },
+            props: [{ index: 1, proposer: 'eBob' }, { index: 4, proposer: 'eCarol', proposal: null }] }), newRowCache());
+        assert.equal(d.referenda.find(r => r.refIndex === 3).proposalPending, 1);
+        assert.equal(d.referenda.find(r => r.refIndex === 2).proposalPending, undefined);
+        assert.equal(d.publicProposals.find(p => p.index === 4).proposalPending, 1);
+        assert.equal(d.publicProposals.find(p => p.index === 1).proposalPending, undefined);
+        const e = overlayDemocracy(rest(), live({ count: 4, refs: { 3: ref3(H) }, props: [{ index: 4, proposer: 'eCarol', proposal: H }] }), newRowCache());
+        assert.equal(e.referenda.find(r => r.refIndex === 3).proposal, H);
+        assert.equal(e.referenda.find(r => r.refIndex === 3).proposalPending, undefined);
+        assert.equal(e.publicProposals[0].proposalPending, undefined);
+    });
+
     test('null REST data stays null', () => {
         assert.equal(overlayDemocracy(null, live(), newRowCache()), null);
     });

@@ -5,7 +5,11 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createDemocracyView, DEMOCRACY_POLL_MS } from '../lib/democracy-view.js';
+
+const scriptSrc = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
+const fnBody = (sig) => { const at = scriptSrc.indexOf(sig); assert.ok(at !== -1, sig + ' not found'); return scriptSrc.slice(at, scriptSrc.indexOf('\n}', at)); };
 
 const PDEX = 10n ** 12n;
 const codec = (v) => ({ toString: () => String(v), toNumber: () => Number(v) });
@@ -13,12 +17,14 @@ const bal = (p) => codec((BigInt(p) * PDEX).toString());
 const ongoing = (ayes) => ({ isSome: true, isNone: false, unwrap: () => ({ isOngoing: true, asOngoing: { end: codec(900), threshold: codec('SimpleMajority'), proposal: codec('0xaa'), tally: { ayes: bal(ayes), nays: bal(0), turnout: bal(ayes) } } }) });
 const flush = () => new Promise(r => setTimeout(r, 10));
 
-function fakeWorld() {
+function fakeWorld(opts = {}) {
     const subs = [];
     const cbs = {};
+    const args = {};
+    let account = 'eAlice';
     let infoCb = null;
     const handlers = {};
-    const mk = (name) => (...a) => { cbs[name] = a[a.length - 1]; subs.push(name); return Promise.resolve(() => subs.splice(subs.indexOf(name), 1)); };
+    const mk = (name) => (...a) => { cbs[name] = a[a.length - 1]; args[name] = a.slice(0, -1); subs.push(name); return Promise.resolve(() => subs.splice(subs.indexOf(name), 1)); };
     const api = {
         isConnected: true,
         on: (ev, h) => { (handlers[ev] = handlers[ev] || []).push(h); },
@@ -28,6 +34,7 @@ function fakeWorld() {
             referendumInfoOf: { multi: (k, cb) => { infoCb = cb; subs.push('info'); return Promise.resolve(() => subs.splice(subs.indexOf('info'), 1)); } }
         } }
     };
+    let apiNow = opts.noApi ? null : api;
     const intervals = new Map(); const timeouts = new Map(); let seq = 0;
     const timers = {
         setInterval: (fn, ms) => { intervals.set(++seq, { fn, ms }); return seq; },
@@ -41,7 +48,7 @@ function fakeWorld() {
     const log = { full: 0, refresh: [], fetched: [] };
     let view;
     const deps = {
-        getApi: () => api, account: () => 'eAlice', toAddress: (a) => a,
+        getApi: () => apiNow, account: () => account, toAddress: (a) => a,
         getRest: () => rest, tab: () => 'referenda', extra: () => 'all', root: () => root,
         renderFull: () => { log.full++; const d = view.data(); for (const r of d.referenda) for (const p of ['tally', 'turnout', 'vote']) cells.set(`ref:${r.refIndex}:${p}`, { innerHTML: '' }); view.rendered(d); },
         refresh: (o) => log.refresh.push(o),
@@ -50,7 +57,7 @@ function fakeWorld() {
         fetch: (url, o) => { log.fetched.push(url); return Promise.resolve({ url, o }); }
     };
     view = createDemocracyView(deps);
-    return { api, view, subs, cbs, emitInfo: (l) => infoCb(l), timers, intervals, timeouts, cells, log, handlers, setRest: (r) => { rest = r; } };
+    return { api, view, subs, cbs, args, setApi: (a) => { apiNow = a; }, setAccount: (a) => { account = a; }, emitInfo: (l) => infoCb(l), timers, intervals, timeouts, cells, log, handlers, setRest: (r) => { rest = r; } };
 }
 
 describe('route entry and exit', () => {
@@ -95,6 +102,69 @@ describe('route entry and exit', () => {
         (w.handlers.disconnected || []).forEach(h => h());
         assert.equal(w.view.data().referenda[0].ayes, 1, 'frozen live tally shown over the poll');
         w.view.stop();
+    });
+});
+
+describe('late node link and wallet changes', () => {
+    test('page opened before the api: the feed starts when the api is ready, once', async () => {
+        const w = fakeWorld({ noApi: true });
+        w.view.start();
+        await flush();
+        assert.deepEqual(w.subs, [], 'no feed without an api');
+        assert.equal(w.intervals.size, 1, 'the REST poll runs meanwhile');
+        w.setApi(w.api);
+        w.view.start();                     // what adoptChainApi does
+        w.view.start();                     // and a second call is harmless
+        await flush();
+        assert.equal(w.subs.filter(s => s === 'count').length, 1);
+        assert.equal(w.intervals.size, 1, 'a second poll was started');
+        w.view.stop();
+        await flush();
+        assert.deepEqual(w.subs, []);
+    });
+
+    test('adoptChainApi starts the democracy feed only if the page is open', () => {
+        assert.match(fnBody('function adoptChainApi(api)'), /if \(democracyView\.active\(\)\) democracyView\.start\(\);/);
+    });
+
+    test('a wallet change restarts the feed on the new account; nothing when the page is closed', async () => {
+        const w = fakeWorld();
+        w.view.restart();
+        await flush();
+        assert.deepEqual(w.subs, [], 'restart opened a closed page');
+        w.view.start();
+        await flush();
+        assert.deepEqual(w.args.votingOf, ['eAlice']);
+        w.setAccount('eBob');
+        w.view.restart();
+        await flush();
+        assert.deepEqual(w.args.votingOf, ['eBob']);
+        assert.equal(w.subs.filter(s => s === 'count').length, 1, 'the old feed was left running');
+        assert.equal(w.intervals.size, 1);
+        w.setAccount('');
+        w.view.restart();
+        await flush();
+        assert.ok(!w.subs.includes('votingOf'), 'disconnected wallet still watched');
+        w.view.stop();
+    });
+
+    test('setStoredWallet restarts the democracy view when the wallet actually changes', () => {
+        const body = fnBody('function setStoredWallet(addr)');
+        assert.match(body, /const before = getStoredWallet\(\);/);
+        assert.match(body, /if \(getStoredWallet\(\) !== before\) democracyView\.restart\(\);/);
+    });
+
+    test('council catch-up refetches are cleared on leaving the page', () => {
+        const live = fnBody('function startCouncilLive()');
+        const all = live.split('setTimeout(').length - 1;
+        assert.ok(all >= 1);
+        assert.equal(live.split('councilCatchup[key] = setTimeout(').length - 1, all, 'a catch-up timer nobody can clear');
+        assert.match(fnBody('function stopCouncilPolling()'), /for \(const k in councilCatchup\) clearTimeout\(councilCatchup\[k\]\);/);
+    });
+
+    test('the detail modals show a placeholder for a proposal hash the server does not have yet', () => {
+        assert.equal(scriptSrc.split('formatGovHash(row.proposal, row.proposalPending)').length - 1, 2);
+        assert.match(fnBody('function formatGovHash(hash, pending)'), /pending \? 'not indexed yet'/);
     });
 });
 

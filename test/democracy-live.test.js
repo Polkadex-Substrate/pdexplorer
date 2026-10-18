@@ -98,9 +98,15 @@ describe('decoding', () => {
         assert.equal(decodeReferendum(1, null), null);
     });
 
-    test('a long proposal string is clipped like the server clips it', () => {
-        const r = decodeReferendum(1, ongoing({ end: 1, ayes: 0, nays: 0, turnout: 0, proposal: 'x'.repeat(400) }));
-        assert.equal(r.proposal.length, 66);
+    test('the proposal is its call hash, never a clipped piece of a Bounded call', () => {
+        const H = '0x' + 'ab'.repeat(32);
+        const dec = (p) => decodeReferendum(1, ongoing({ end: 1, ayes: 0, nays: 0, turnout: 0, proposal: p })).proposal;
+        assert.equal(dec(H), H);
+        assert.equal(dec(JSON.stringify({ legacy: { hash: H } })), H);
+        assert.equal(dec(JSON.stringify({ lookup: { hash: H, len: 120 } })), H);
+        assert.equal(dec(JSON.stringify({ inline: '0x' + '00'.repeat(40) })), null, 'inline call: no hash to show');
+        assert.equal(dec('x'.repeat(400)), null);
+        assert.equal(dec('0x' + 'ab'.repeat(40)), null, 'longer than a hash');
     });
 
     test('deposits: (seconders, balance) and the older (balance, seconders)', () => {

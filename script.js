@@ -734,6 +734,7 @@ function adoptChainApi(api) {
     fetchNetworkStats(globalApi);
     subscribeNewBlocks(globalApi);
     if (councilPollTimer) startCouncilLive();   // the Council page opened before the node link was up
+    if (democracyView.active()) democracyView.start();   // same for Democracy
 
     // F-063 review catch: anything that no-opped because globalApi was null
     // during the pre-handshake window has to be re-driven here, or it stays
@@ -4404,6 +4405,7 @@ let councilFreshCarry = {};
 // source of truth (motions opened meanwhile show, tallies come from the
 // poll). On reconnect a fresh set of subscriptions takes over again.
 let councilLive = null;   // the controller; created once per api
+let councilCatchup = {};  // key -> the 8 s catch-up refetch; cleared on leaving the page
 function startCouncilLive() {
     if (!globalApi) return;
     if (!councilLive) {
@@ -4414,7 +4416,7 @@ function startCouncilLive() {
                 renderCollectiveMotions(collectiveView(key));
                 // A motion opened or closed: the backend's history and proposer
                 // catch up within an indexer tick, so ask again shortly.
-                if (/^(hashes|members|prime|elections)$/.test(u.kind) && !u.initial) setTimeout(() => collectiveView(key).refresh({ fresh: true }), 8000);
+                if (/^(hashes|members|prime|elections)$/.test(u.kind) && !u.initial) { clearTimeout(councilCatchup[key]); councilCatchup[key] = setTimeout(() => collectiveView(key).refresh({ fresh: true }), 8000); }
             },
             onError: (e) => console.warn('[council-live]', e && e.message)
         }), {
@@ -4438,6 +4440,7 @@ function startCouncilPolling() {
 }
 function stopCouncilPolling() {
     stopCouncilLive();
+    for (const k in councilCatchup) clearTimeout(councilCatchup[k]); councilCatchup = {};
     if (councilPollTimer) { clearInterval(councilPollTimer); councilPollTimer = null; }
 }
 
@@ -7912,10 +7915,12 @@ function getStoredWallet() {
     } catch (e) { return ''; }
 }
 function setStoredWallet(addr) {
+    const before = getStoredWallet();
     try {
         if (addr) localStorage.setItem(WALLET_STORAGE_KEY, toPolkadexAddress(addr));
         else localStorage.removeItem(WALLET_STORAGE_KEY);
     } catch (e) { }
+    if (getStoredWallet() !== before) democracyView.restart();   // "You voted" follows the wallet
 }
 
 // "Last used" address — a SEPARATE memory that survives `disconnectWallet()`.
@@ -13110,8 +13115,8 @@ function formatGovAccountLink(address, displayName) {
     const label = (displayName && displayName !== 'Unknown') ? displayName : stakingShortAddress(address);
     return `<a href="/account/${encodeURIComponent(address)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(label)}</a>`;
 }
-function formatGovHash(hash) {
-    if (!hash) return '<span style="color:var(--text-muted);">—</span>';
+function formatGovHash(hash, pending) {
+    if (!hash) return `<span style="color:var(--text-muted);">${pending ? 'not indexed yet' : '&mdash;'}</span>`;
     return `<span class="address-cell" style="word-break:break-all;color:var(--brand-secondary);">${stakingEscapeHtml(hash)}</span>`;
 }
 
@@ -13202,7 +13207,7 @@ function renderReferendumDetail(row) {
             Public referendum on a runtime call. The proposal hash is the SCALE-encoded extrinsic the chain will dispatch if the referendum passes.
         </div>
         ${govDetailRow('Status', democracyStatusBadge(row.status))}
-        ${govDetailRow('Proposal hash', formatGovHash(row.proposal))}
+        ${govDetailRow('Proposal hash', formatGovHash(row.proposal, row.proposalPending))}
         ${govDetailRow('Tally', tally)}
         ${govDetailRow('Turnout', row.tallyKnown ? stakingFormatPDEX(row.turnout) + ' PDEX' : '<span style="color:var(--text-muted);">—</span>')}
         ${govDetailRow('Threshold', row.threshold ? `<code style="font-size:0.82rem;">${stakingEscapeHtml(row.threshold)}</code>` : '<span style="color:var(--text-muted);">—</span>')}
@@ -13217,7 +13222,7 @@ function renderPublicProposalDetail(row) {
         <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
             A public proposal pending tabling to a referendum. Anyone can "second" it to push it up the queue.
         </div>
-        ${govDetailRow('Proposal hash', formatGovHash(row.proposal))}
+        ${govDetailRow('Proposal hash', formatGovHash(row.proposal, row.proposalPending))}
         ${govDetailRow('Proposer', formatGovAccountLink(row.proposer, row.proposerName))}
         ${govDetailRow('Deposit', row.deposit == null ? '<span style="color:var(--text-muted);">—</span>' : stakingFormatPDEX(row.deposit) + ' PDEX')}
         ${govDetailRow('Seconds', row.seconds == null ? '<span style="color:var(--text-muted);">—</span>' : stakingFormatNumber(row.seconds))}`;
