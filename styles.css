@@ -201,6 +201,20 @@ h1, h2, h3 { font-weight: 600; }
     margin-left: auto;
 }
 .badge.small { font-size: 0.6rem; margin-left: 8px; }
+/* IN / OUT / SELF on account transfers: the colour as text on a faint tint of itself. */
+.dir-pill {
+    --pill: var(--text-secondary);
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--pill);
+    background: color-mix(in srgb, var(--pill) 15%, transparent);
+}
+.dir-pill.in { --pill: var(--brand-secondary); }
+.dir-pill.out { --pill: var(--brand-primary); }
 
 .sidebar-footer {
     /* Pinned-to-bottom price ticker. `margin-top:auto` is a belt-and-braces

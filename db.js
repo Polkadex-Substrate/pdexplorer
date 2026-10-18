@@ -1366,10 +1366,13 @@ function txAddressMatch(address, altAddress) {
         ? { sql: '(from_addr IN (?, ?) OR to_addr IN (?, ?))', args: [address, altAddress, address, altAddress] }
         : { sql: '(from_addr = ? OR to_addr = ?)', args: [address, address] };
 }
+// Each row also carries its event's extrinsicIndex and txHash (events.hash = block_hash-event_index), joined after the page is cut.
 export function getTransactionsByAddress(address, limit, altAddress = null, before = null) {
     const match = txAddressMatch(address, altAddress), page = olderThan(before);
-    return db.prepare(`SELECT ${TX_COLS}, rowid AS rowId FROM transactions WHERE ${match.sql}${page.sql} ${PAGE_ORDER}`)
-        .all(...match.args, ...page.args, limit);
+    return db.prepare(`SELECT p.*, e.extrinsic_index AS extrinsicIndex, e.tx_hash AS txHash
+        FROM (SELECT ${TX_COLS}, rowid AS rowId FROM transactions WHERE ${match.sql}${page.sql} ${PAGE_ORDER}) p
+        LEFT JOIN events e ON e.hash = p.blockHash || '-' || p.eventIndex
+        ORDER BY p.block DESC, p.rowId DESC`).all(...match.args, ...page.args, limit);
 }
 export function countTransactionsByAddress(address, altAddress = null) {
     const match = txAddressMatch(address, altAddress);

@@ -515,7 +515,7 @@ describe('F-064 — live rows carry what the chain said, or null', () => {
         // referenda have their own vocabulary — and they legitimately render
         // differently. Identify the dispatch ones by their filter options.
         const columns = [...scriptSrc.matchAll(
-            /key: 'status', label: 'Status',[\s\S]{0,600}?options: \[[^\]]*'failed'[^\]]*\][\s\S]{0,400}?format: row => ([^\n]+)/g
+            /key: 'status', label: '(?:Status|Result)',[\s\S]{0,600}?options: \[[^\]]*'failed'[^\]]*\][\s\S]{0,400}?format: row => ([^\n]+)/g
         )];
         assert.ok(columns.length >= 2,
             `expected at least 2 dispatch-status columns, found ${columns.length}`);

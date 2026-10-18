@@ -120,7 +120,7 @@ function commissionCell(row) {
 // the same two-copies-drift shape as F-045. One function, used by both tables.
 // `soft` renders the translucent-background variant the account-extrinsics
 // table already used, so adopting the shared helper there did not restyle it.
-function statusBadge(status, extraStyle = '', { soft = false } = {}) {
+function statusBadge(status, extraStyle = '', { soft = false, icon = false } = {}) {
     const st = String(status || 'unknown');
     const SOFT = {
         success: 'background: rgba(46, 204, 113, 0.2); color: #2ecc71;',
@@ -128,10 +128,11 @@ function statusBadge(status, extraStyle = '', { soft = false } = {}) {
         unknown: 'background: rgba(255, 255, 255, 0.08); color: var(--text-muted);'
     };
     const key = (st === 'success' || st === 'failed') ? st : 'unknown';
-    const style = soft
-        ? SOFT[key]
-        : `background: ${key === 'failed' ? 'var(--error)' : key === 'success' ? 'var(--success)' : 'var(--text-muted)'};`;
+    const solid = key === 'failed' ? 'var(--error)' : key === 'success' ? 'var(--success)' : 'var(--text-muted)';
     const label = st === 'success' ? 'Success' : st === 'failed' ? 'Failed' : st;
+    // `icon`: the same three-way decision as a check, cross or dash, for compact Result columns.
+    if (icon) return `<i class="bx ${{ success: 'bxs-check-circle', failed: 'bxs-x-circle', unknown: 'bx-minus' }[key]}" title="${stakingEscapeHtml(label)}" style="font-size: 18px; color: ${solid};${extraStyle}"></i>`;
+    const style = soft ? SOFT[key] : `background: ${solid};`;
     const title = key === 'unknown'
         ? ' title="Seen live; the dispatch result has not been read yet."'
         : '';
@@ -6176,6 +6177,7 @@ async function fetchAccountDetails(address) {
         const evEmptyMessage = data.status === 'Syncing'
             ? 'Crawling deep history (up to 30 days)… Please refresh in a minute.'
             : 'No recent events.';
+        const tabCount = list => (data.index?.totals?.[list] ?? (data[list] || []).length).toLocaleString();   // indexed total, else rows loaded
 
         let html = `
             <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -6232,8 +6234,8 @@ async function fetchAccountDetails(address) {
             
             <div style="margin-bottom: 20px;">
                 <div class="account-tabs" style="padding: 0 20px; margin-bottom: 15px;">
-                    <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transactions</button>
-                    <button type="button" class="account-tab account-tab-btn" data-account-tab="events">Events</button>
+                    <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transfers (${tabCount('transactions')})</button>
+                    <button type="button" class="account-tab account-tab-btn" data-account-tab="events">Events (${tabCount('events')})</button>
                 </div>
                 
                 <div id="account-tab-transactions">
@@ -6278,55 +6280,22 @@ async function fetchAccountDetails(address) {
             rows: data.transactions || [],
             defaultSort: { key: 'timestamp', dir: 'desc' },
             globalSearch: true,
-            summarySuffix: 'transactions',
+            summarySuffix: 'transfers',
             emptyMessage: txEmptyMessage,
             // Active accounts can accumulate hundreds-to-thousands of txs over
             // their lifetime; show-more first, page numbers above 200.
             pagination: { pageSize: 50, showMoreMax: 200 },
             columns: [
-                {
-                    key: 'hash', label: 'Txn Hash', searchable: true,
-                    sort: (a, b) => String(a.hash || '').localeCompare(String(b.hash || '')),
-                    format: row => {
-                        const short = stakingEscapeHtml((row.hash || '').substring(0, 25)) + '…';
-                        // The /api/account-details endpoint mixes real
-                        // extrinsics with event-derived rows whose "hash" is
-                        // 'event-<block>-<idx>'. Linking those to /tx/…
-                        // produced a 400 "Invalid hash format" — route
-                        // event-id rows to /block/ instead, where the event
-                        // actually lives.
-                        return (row.eventDerived || !looksLikeTxHash(row.hash))
-                            ? `<a href="/block/${row.block}" class="item-link" style="color: var(--brand-secondary);">${short}</a>`
-                            : `<a href="/tx/${row.block}/${row.hash}" class="item-link" style="color: var(--brand-secondary);">${short}</a>`;
-                    }
-                },
-                {
-                    key: 'amount', label: 'Method / Action', searchable: true,
-                    sort: (a, b) => String(a.amount || '').localeCompare(String(b.amount || '')),
-                    filter: { type: 'text', placeholder: 'Method…' },
-                    format: row => `${stakingEscapeHtml(row.amount || 'system')}<br><span style="color: var(--text-secondary); font-size: 11px;">call</span>`
-                },
-                {
-                    key: 'timestamp', label: 'Age',
-                    sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-                    format: row => stakingEscapeHtml(timeAgo(row.timestamp))
-                },
-                {
-                    key: 'timestampDate', label: 'Date',
-                    sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-                    format: row => row.timestamp ? stakingEscapeHtml(formatLocalDateTime(row.timestamp)) : '—'
-                },
-                {
-                    key: 'status', label: 'Status', searchable: true,
-                    sort: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
-                    // F-064 review catch: this ternary rendered anything that
-                    // was not exactly 'success' as a confident "Failed" — so an
-                    // unread dispatch result would have accused a perfectly good
-                    // extrinsic of reverting. The inverse of the green-unknown
-                    // bug in the other two tables, and worse.
-                    filter: { type: 'select', options: ['success', 'failed', 'unknown'] },
-                    format: row => statusBadge(row.status, '', { soft: true })
-                }
+                { key: 'index', label: 'Index', format: transferIndexCell },
+                { key: 'block', label: 'Block', searchable: true, sort: (a, b) => (a.block || 0) - (b.block || 0), format: row => `<a href="/block/${stakingEscapeHtml(row.block)}" class="item-link">${stakingEscapeHtml(row.block)}</a>` },
+                { key: 'from', label: 'From', searchable: true, format: row => transferParty(row.from, data.account) },
+                { key: 'direction', label: ' ', filter: { type: 'select', options: ['in', 'out', 'self'], derive: row => transferDirection(row, data.account) },
+                  format: row => { const d = transferDirection(row, data.account); return d && `<span class="dir-pill ${d}">${d.toUpperCase()}</span>`; } },
+                { key: 'to', label: 'To', searchable: true, format: row => transferParty(row.to, data.account) },
+                { key: 'amount', label: 'Value', searchable: true, sort: (a, b) => (a.numericAmount || 0) - (b.numericAmount || 0), format: row => transferValueCell(row.amount) },
+                { key: 'timestamp', label: 'Time', sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
+                  format: row => `<span title="${stakingEscapeHtml(timeAgo(row.timestamp))}">${stakingEscapeHtml(formatUtcDateTime(row.timestamp))}</span>` },
+                { key: 'status', label: 'Result', filter: { type: 'select', options: ['success', 'failed', 'unknown'] }, format: row => statusBadge(row.status, '', { icon: true }) }
             ]
         });
 
@@ -6371,8 +6340,8 @@ async function fetchAccountDetails(address) {
                 }
             ]
         });
-        for (const [list, table] of [['transactions', txTable], ['events', evTable]]) {
-            mountAccountLoadOlder(document.getElementById(`account-tab-${list}`), { address: data.account, list, table,
+        for (const [list, table, noun] of [['transactions', txTable, 'transfers'], ['events', evTable, 'events']]) {
+            mountAccountLoadOlder(document.getElementById(`account-tab-${list}`), { address: data.account, list, noun, table,
                 rows: data[list] || [], next: data.index?.next?.[list], total: data.index?.totals?.[list] });
         }
     } catch (e) {
@@ -6381,13 +6350,13 @@ async function fetchAccountDetails(address) {
 }
 
 // Load older under an account table: appends /api/account/:address/history pages until next is null.
-function mountAccountLoadOlder(tab, { address, list, table, rows, next, total }) {
+function mountAccountLoadOlder(tab, { address, list, noun = list, table, rows, next, total }) {
     if (!tab || !next) return;
     tab.insertAdjacentHTML('beforeend', `<div style="display: flex; gap: 10px; justify-content: center; align-items: center; padding: 20px;">
         <span class="js-older-count" style="color: var(--text-secondary); font-size: 13px;"></span><button type="button" class="glass js-older-btn" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--brand-primary); background: rgba(229,0,122,0.1); border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition-fast);">Load older</button>
         <span class="js-older-error" style="color: var(--error); font-size: 13px;"></span></div>`);
     const [count, button, error] = ['.js-older-count', '.js-older-btn', '.js-older-error'].map(s => tab.querySelector(s));
-    const showCount = () => { count.textContent = `Showing ${rows.length.toLocaleString()}` + (total != null ? ` of ${total.toLocaleString()} ${list}` : ''); };
+    const showCount = () => { count.textContent = `Showing ${rows.length.toLocaleString()}` + (total != null ? ` of ${total.toLocaleString()} ${noun}` : ''); };
     button.addEventListener('click', async () => {
         button.disabled = true;
         error.innerHTML = '';
@@ -6402,6 +6371,37 @@ function mountAccountLoadOlder(tab, { address, list, table, rows, next, total })
         button.disabled = false;
     });
     showCount();
+}
+
+// Which way a transfer went for the viewed account: 'in', 'out', 'self' (both sides) or ''.
+function transferDirection(row, account) {
+    const out = isSameAddress(row.from, account), into = isSameAddress(row.to, account);
+    return out && into ? 'self' : out ? 'out' : into ? 'in' : '';
+}
+
+// From / To cell: the viewed account as plain text, any other address as a link.
+function transferParty(addr, account) {
+    return isSameAddress(addr, account) ? `<span class="mono" title="${stakingEscapeHtml(addr)}">${stakingEscapeHtml(stakingShortAddress(addr))}</span>` : shortAddressLink(addr);
+}
+
+// Index cell: Extrinsic #block-index to the transaction when the transfer has one, else Event #block-index to its block.
+function transferIndexCell(row) {
+    const ext = row.extrinsicIndex != null && row.txHash;
+    const [label, href] = ext ? [`Extrinsic #${row.block}-${row.extrinsicIndex}`, `/tx/${row.block}/${row.txHash}`] : [`Event #${row.block}-${row.eventIndex}`, `/block/${row.block}`];
+    return `<a href="${stakingEscapeHtml(href)}" class="item-link">${stakingEscapeHtml(label)}</a>`;
+}
+
+// Value cell for "1,341.7476 PDEX": integer part plain, ".fraction" muted, unit in the brand colour; other text as is.
+function transferValueCell(amount) {
+    const m = /^([\d,]+)(\.\d+)?\s*(.*)$/.exec(String(amount ?? ''));
+    if (!m) return stakingEscapeHtml(amount);
+    return `${stakingEscapeHtml(m[1])}<span style="color: var(--text-secondary);">${stakingEscapeHtml(m[2] || '')}</span> <span style="color: var(--brand-primary);">${stakingEscapeHtml(m[3])}</span>`;
+}
+
+// "YYYY-MM-DD HH:mm:ss (UTC)", or a dash when the time is unknown.
+function formatUtcDateTime(ts) {
+    const d = new Date(Number(ts));
+    return ts && Number.isFinite(d.getTime()) ? `${d.toISOString().slice(0, 19).replace('T', ' ')} (UTC)` : '—';
 }
 
 async function fetchBlockDetails(id) {
