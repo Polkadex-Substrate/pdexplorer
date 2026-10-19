@@ -29,7 +29,9 @@ import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READ
 import { BUTTON_STAGE_TEXT, defaultThreshold, checkThreshold, motionState, overlayLiveMotions, pendingChipText, pendingSettled,
     motionPatchPlan } from './lib/tx-status.js';
 import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
-import { startCollectiveLive, liveWhileConnected, freshPlan } from './lib/collective-live.js';
+import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers } from './lib/collective-live.js';
+import { createDemocracyView } from './lib/democracy-view.js';
+import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
@@ -732,6 +734,7 @@ function adoptChainApi(api) {
     fetchNetworkStats(globalApi);
     subscribeNewBlocks(globalApi);
     if (councilPollTimer) startCouncilLive();   // the Council page opened before the node link was up
+    if (democracyView.active()) democracyView.start();   // same for Democracy
 
     // F-063 review catch: anything that no-opped because globalApi was null
     // during the pre-handshake window has to be re-driven here, or it stays
@@ -4402,6 +4405,7 @@ let councilFreshCarry = {};
 // source of truth (motions opened meanwhile show, tallies come from the
 // poll). On reconnect a fresh set of subscriptions takes over again.
 let councilLive = null;   // the controller; created once per api
+let councilCatchup = {};  // key -> the 8 s catch-up refetch; cleared on leaving the page
 function startCouncilLive() {
     if (!globalApi) return;
     if (!councilLive) {
@@ -4412,7 +4416,7 @@ function startCouncilLive() {
                 renderCollectiveMotions(collectiveView(key));
                 // A motion opened or closed: the backend's history and proposer
                 // catch up within an indexer tick, so ask again shortly.
-                if (u.kind === 'hashes' && !u.initial) setTimeout(() => collectiveView(key).refresh({ fresh: true }), 8000);
+                if (/^(hashes|members|prime|elections)$/.test(u.kind) && !u.initial) { clearTimeout(councilCatchup[key]); councilCatchup[key] = setTimeout(() => collectiveView(key).refresh({ fresh: true }), 8000); }
             },
             onError: (e) => console.warn('[council-live]', e && e.message)
         }), {
@@ -4436,11 +4440,12 @@ function startCouncilPolling() {
 }
 function stopCouncilPolling() {
     stopCouncilLive();
+    for (const k in councilCatchup) clearTimeout(councilCatchup[k]); councilCatchup = {};
     if (councilPollTimer) { clearInterval(councilPollTimer); councilPollTimer = null; }
 }
 
 function routeTo(target) {
-    stopCouncilPolling();
+    stopCouncilPolling(); democracyView.stop();
     if (!target) target = 'home';
 
     // Strip query string and hash fragment before doing the route lookup. The
@@ -7910,10 +7915,12 @@ function getStoredWallet() {
     } catch (e) { return ''; }
 }
 function setStoredWallet(addr) {
+    const before = getStoredWallet();
     try {
         if (addr) localStorage.setItem(WALLET_STORAGE_KEY, toPolkadexAddress(addr));
         else localStorage.removeItem(WALLET_STORAGE_KEY);
     } catch (e) { }
+    if (getStoredWallet() !== before) democracyView.restart();   // "You voted" follows the wallet
 }
 
 // "Last used" address — a SEPARATE memory that survives `disconnectWallet()`.
@@ -11066,6 +11073,12 @@ let democracyTurnoutPctChart = null;
 // Referenda still sees their filter applied.
 let democracyReferendaFilter = 'all';
 let democracyProposalsSortKey = 'index';
+// Live tallies, new and ended referenda, seconds and your own votes, straight
+// from the chain while the page is open (lib/democracy-view.js).
+const democracyView = createDemocracyView({ getApi: () => globalApi, account: () => getStoredWallet(), toAddress: toPolkadexAddress,
+    getRest: () => democracyData, tab: () => democracyTab, extra: () => democracyReferendaFilter + '|' + democracyProposalsSortKey,
+    root: () => document.getElementById('democracy-content'), renderFull: () => renderDemocracy(), refresh: (o) => fetchDemocracyData(o),
+    helpers: { pdex: stakingFormatPDEX, num: stakingFormatNumber, esc: stakingEscapeHtml } });
 
 // Map raw indexer status strings to a label + accent color for the corner
 // badge on the Democracy/Treasury/Council pages. An unrecognised value
@@ -11108,14 +11121,18 @@ function indexerStatusBadge(rawStatus, errorMessage) {
 function initDemocracyPage() {
     democracyTab = 'overview';
     fetchDemocracyData();
+    democracyView.start();
 }
 
-async function fetchDemocracyData() {
+// opts.quiet: a poll or a refetch after a transaction; keeps the page up
+// and patches it (democracyView.update) instead of redrawing it.
+async function fetchDemocracyData(opts = {}) {
     const root = document.getElementById('democracy-content');
     if (!root) return;
-    root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading democracy data…</div>';
+    const quiet = !!(opts.quiet && democracyData);
+    if (!quiet) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading democracy data...</div>';
     try {
-        const res = await fetch('/api/democracy');
+        const res = await democracyView.fetchRest(opts.fresh);
         // Use parseJsonResponse so an upstream HTML error page (Cloudflare
         // 502 / nginx 504 when the indexer is restarting) becomes a clean
         // "backend is unreachable" message instead of the raw "Unexpected
@@ -11123,11 +11140,13 @@ async function fetchDemocracyData() {
         const data = await parseJsonResponse(res);
         if (!res.ok || data.error) throw new Error(data.error || ('Request failed (' + res.status + ')'));
         democracyData = data;
+        if (quiet) return democracyView.update();
         renderDemocracy();
         // Deep-link: if we arrived from /calendar with ?ref=N or ?proposal=N,
         // open the matching detail modal now that data is loaded.
         tryOpenFromQueryString('democracy');
     } catch (e) {
+        if (quiet) return console.warn('[democracy] refresh failed:', e && e.message);
         root.innerHTML = `
             <div class="list-container glass" style="padding:40px;text-align:center;">
                 <h3 style="color:var(--error);margin-bottom:8px;">Couldn't load democracy data</h3>
@@ -11145,7 +11164,7 @@ async function fetchDemocracyData() {
 function renderDemocracy() {
     const root = document.getElementById('democracy-content');
     if (!root || !democracyData) return;
-    const d = democracyData;
+    const d = democracyView.data() || democracyData;
     const tabBtn = (key, label) => `<button class="account-tab${democracyTab === key ? ' active' : ''}" data-demtab="${key}">${label}</button>`;
     let body;
     if (democracyTab === 'referenda') body = renderDemocracyReferenda(d);
@@ -11192,6 +11211,7 @@ function renderDemocracy() {
         });
     });
     if (democracyTab === 'statistics') renderDemocracyCharts(d);
+    democracyView.rendered(d);
 }
 
 function renderDemocracyOverview(d) {
@@ -11253,7 +11273,6 @@ function mountDemocracyReferendaTable(refs) {
     const filtered = democracyReferendaFilter === 'all'
         ? refs
         : refs.filter(r => r.status === democracyReferendaFilter);
-    const dash = '<span style="color:var(--text-muted);">—</span>';
     // Map the raw backend status to a human-friendly label for empty-state
     // messaging ("No not-passed referenda" reads wrong).
     const friendlyStatus = {
@@ -11292,12 +11311,12 @@ function mountDemocracyReferendaTable(refs) {
             {
                 key: 'ayes', label: 'Ayes / Nays (PDEX)',
                 sort: (a, b) => (Number(a.ayes) || 0) - (Number(b.ayes) || 0),
-                format: row => row.tallyKnown ? `${stakingFormatPDEX(row.ayes)} / ${stakingFormatPDEX(row.nays)}` : dash
+                format: row => democracyView.cell('ref', row, 'tally')
             },
             {
                 key: 'turnout', label: 'Turnout',
                 sort: (a, b) => (Number(a.turnout) || 0) - (Number(b.turnout) || 0),
-                format: row => row.tallyKnown ? stakingFormatPDEX(row.turnout) : dash
+                format: row => democracyView.cell('ref', row, 'turnout')
             },
             {
                 key: 'endBlock', label: 'End Block',
@@ -11305,19 +11324,11 @@ function mountDemocracyReferendaTable(refs) {
                 format: row => stakingFormatNumber(row.endBlock)
             },
             {
-                // Voting actions — only meaningful while the referendum is
-                // Ongoing. For Passed/NotPassed rows we just render a dash so
-                // the column stays aligned. The buttons emit a small data
-                // payload; a global delegate (see wireReferendumVoteModal)
-                // opens the vote modal with the right side preselected.
+                // Voting actions, Ongoing rows only, with your own vote and the
+                // stage of one in flight (lib/democracy-patch.js). A global
+                // delegate (wireReferendumVoteModal) opens the vote modal.
                 key: '__vote', label: 'Vote',
-                format: row => {
-                    if (row.status !== 'Ongoing') return '<span style="color:var(--text-muted);">—</span>';
-                    return `<div style="display:flex;gap:4px;white-space:nowrap;">
-                        <button type="button" class="referendum-vote-trigger reward-filter-btn" data-ref-index="${row.refIndex}" data-side="aye" style="padding:4px 10px;font-size:0.78rem;color:var(--success);border-color:rgba(46,204,113,0.4);" title="Vote Aye">Aye</button>
-                        <button type="button" class="referendum-vote-trigger reward-filter-btn" data-ref-index="${row.refIndex}" data-side="nay" style="padding:4px 10px;font-size:0.78rem;color:#e74c3c;border-color:rgba(231,76,60,0.4);" title="Vote Nay">Nay</button>
-                    </div>`;
-                }
+                format: row => democracyView.cell('ref', row, 'vote')
             }
         ]
     });
@@ -11375,13 +11386,14 @@ function mountDemocracyProposalsTable(props) {
             {
                 key: 'deposit', label: 'Deposit',
                 sort: (a, b) => (Number(a.deposit) || 0) - (Number(b.deposit) || 0),
-                format: row => `${stakingFormatPDEX(row.deposit)} PDEX`
+                format: row => democracyView.cell('prop', row, 'deposit')
             },
             {
                 key: 'seconds', label: 'Seconds',
                 sort: (a, b) => (Number(a.seconds) || 0) - (Number(b.seconds) || 0),
-                format: row => stakingFormatNumber(row.seconds)
+                format: row => democracyView.cell('prop', row, 'seconds')
             },
+            { key: '__second', label: 'Second', format: row => democracyView.cell('prop', row, 'action') },
             {
                 key: 'discussion', label: 'Discussion',
                 format: row => `<a href="/discussions/proposal-${row.index}" class="item-link" style="color:var(--brand-secondary);">Discuss</a>`
@@ -11710,7 +11722,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
     const root = document.getElementById(view.rootId);
     if (!root || !data) return;
     const motions = overlayLiveMotions(Array.isArray(data.motions) ? data.motions : [], liveMotions(view.key));
-    const members = Array.isArray(data.members) ? data.members : [];
+    const members = overlayLiveMembers(Array.isArray(data.members) ? data.members : [], liveMotions(view.key), isSameAddress);
     // Keep voter lists the user opened open across live re-renders.
     const openDetails = new Set(Array.from(root.querySelectorAll('details[open][data-dkey]')).map(d => d.getAttribute('data-dkey')));
     const currentBlock = Number(data.currentBlock) || 0;
@@ -13103,8 +13115,8 @@ function formatGovAccountLink(address, displayName) {
     const label = (displayName && displayName !== 'Unknown') ? displayName : stakingShortAddress(address);
     return `<a href="/account/${encodeURIComponent(address)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(label)}</a>`;
 }
-function formatGovHash(hash) {
-    if (!hash) return '<span style="color:var(--text-muted);">—</span>';
+function formatGovHash(hash, pending) {
+    if (!hash) return `<span style="color:var(--text-muted);">${pending ? 'not indexed yet' : '&mdash;'}</span>`;
     return `<span class="address-cell" style="word-break:break-all;color:var(--brand-secondary);">${stakingEscapeHtml(hash)}</span>`;
 }
 
@@ -13195,7 +13207,7 @@ function renderReferendumDetail(row) {
             Public referendum on a runtime call. The proposal hash is the SCALE-encoded extrinsic the chain will dispatch if the referendum passes.
         </div>
         ${govDetailRow('Status', democracyStatusBadge(row.status))}
-        ${govDetailRow('Proposal hash', formatGovHash(row.proposal))}
+        ${govDetailRow('Proposal hash', formatGovHash(row.proposal, row.proposalPending))}
         ${govDetailRow('Tally', tally)}
         ${govDetailRow('Turnout', row.tallyKnown ? stakingFormatPDEX(row.turnout) + ' PDEX' : '<span style="color:var(--text-muted);">—</span>')}
         ${govDetailRow('Threshold', row.threshold ? `<code style="font-size:0.82rem;">${stakingEscapeHtml(row.threshold)}</code>` : '<span style="color:var(--text-muted);">—</span>')}
@@ -13210,7 +13222,7 @@ function renderPublicProposalDetail(row) {
         <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
             A public proposal pending tabling to a referendum. Anyone can "second" it to push it up the queue.
         </div>
-        ${govDetailRow('Proposal hash', formatGovHash(row.proposal))}
+        ${govDetailRow('Proposal hash', formatGovHash(row.proposal, row.proposalPending))}
         ${govDetailRow('Proposer', formatGovAccountLink(row.proposer, row.proposerName))}
         ${govDetailRow('Deposit', row.deposit == null ? '<span style="color:var(--text-muted);">—</span>' : stakingFormatPDEX(row.deposit) + ' PDEX')}
         ${govDetailRow('Seconds', row.seconds == null ? '<span style="color:var(--text-muted);">—</span>' : stakingFormatNumber(row.seconds))}`;
@@ -13404,12 +13416,10 @@ async function submitReferendumVote() {
         busyText: 'Signing…',
         idleText: 'Sign & Submit Vote',
         onError: showErr,
-        onSuccess: () => {
-            closeReferendumVoteModal();
-            // Refetch after a short delay so the chain has time to include
-            // and the indexer has time to pick up the new tally.
-            setTimeout(fetchDemocracyData, 2500);
-        }
+        // The row shows the stage; In block asks for a fresh copy, and the
+        // live feed has the new tally and your vote meanwhile.
+        onStage: democracyView.stage('ref:' + refIndex, aye ? 'aye' : 'nay'),
+        onSuccess: closeReferendumVoteModal
     });
 }
 
@@ -13444,6 +13454,15 @@ async function submitReferendumVote() {
         const refIndex = btn.getAttribute('data-ref-index');
         const side = btn.getAttribute('data-side');
         if (refIndex != null) openReferendumVoteModal(refIndex, side);
+    });
+    // Second buttons on the Public Proposals tab (lib/democracy-patch.js).
+    document.addEventListener('click', e => {
+        const b = e.target && e.target.closest ? e.target.closest('.democracy-second-btn') : null;
+        if (!b || b.disabled || !/^\d+$/.test(b.getAttribute('data-prop-index') || '')) return;
+        const idx = Number(b.getAttribute('data-prop-index')), seconds = Number(b.getAttribute('data-seconds')) || 0;
+        if (!confirm(`Second public proposal #${idx}? This locks a deposit equal to the proposer's until the proposal is tabled.`)) return;
+        submitSignedTx({ buildTx: api => buildSecondTx(api, idx, seconds), label: `Second public proposal #${idx}`,
+            action: { key: 'democracy.second', params: { n: idx } }, onStage: democracyView.stage('prop:' + idx, 'second') });
     });
 })();
 
@@ -13508,12 +13527,12 @@ async function submitReferendumVote() {
             const activeTab = document.querySelector('.council-page .account-tab.active');
             returnTab = activeTab ? activeTab.getAttribute('data-tab') : null;
         } else if (kind === 'referendum' && democracyData) {
-            const refs = Array.isArray(democracyData.referenda) ? democracyData.referenda : [];
+            const refs = (democracyView.data() || democracyData).referenda || [];   // live rows included
             row = refs.find(r => String(r.refIndex) === String(id));
             returnPage = 'democracy';
             returnTab = democracyTab;
         } else if (kind === 'public-proposal' && democracyData) {
-            const props = Array.isArray(democracyData.publicProposals) ? democracyData.publicProposals : [];
+            const props = (democracyView.data() || democracyData).publicProposals || [];
             row = props.find(p => String(p.index) === String(id));
             returnPage = 'democracy';
             returnTab = democracyTab;

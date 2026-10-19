@@ -239,3 +239,88 @@ describe('L7: keep asking for ?fresh=1 for two more polls', () => {
         assert.equal(CL.freshPlan(carry, '/api/council', false), false);
     });
 });
+
+// Live governance, part two: seats. A new member, a changed prime or an
+// election round used to show only after the next poll of a backend snapshot
+// that itself lagged the chain; the Aye/Nay buttons and "Your Role" follow
+// the seat, so a new member could not vote from the page for minutes.
+describe('members, prime and the elections pallet', () => {
+    function seatApi({ withElections = true, omitPrime = false } = {}) {
+        const f = fakeApi();
+        const cbs = {};
+        const subs = [];
+        const mk = (name) => (...args) => { cbs[name] = args[args.length - 1]; subs.push(name); return Promise.resolve(() => f.log.unsubbed.push(name)); };
+        f.api.query.council.members = mk('members');
+        if (!omitPrime) f.api.query.council.prime = mk('prime');
+        if (withElections) f.api.query.phragmenElection = { members: mk('e.members'), runnersUp: mk('e.runnersUp') };
+        return { ...f, cbs, subs };
+    }
+    const seat = (who, stake) => ({ who: codec(who), stake: codec(String(BigInt(stake) * 10n ** 12n)) });
+
+    test('members and prime are watched and land in the state', async () => {
+        const f = seatApi();
+        const kinds = [];
+        const live = startCollectiveLive(f.api, { collectives: [{ key: 'council', pallets: ['council'] }], toAddress: (a) => 'e' + a, onUpdate: (k, u) => kinds.push(u.kind) });
+        await tick();
+        f.cbs.members([codec('m1'), codec('m2')]);
+        f.cbs.prime({ isSome: true, unwrap: () => codec('m2') });
+        assert.deepEqual(live.state.council.members, ['em1', 'em2']);
+        assert.equal(live.state.council.prime, 'em2');
+        f.cbs.prime({ isSome: false, isNone: true });
+        assert.equal(live.state.council.prime, null);
+        assert.ok(kinds.includes('members') && kinds.includes('prime'));
+        live.stop();
+        await tick();
+        for (const s of ['members', 'prime', 'e.members', 'e.runnersUp']) assert.ok(f.log.unsubbed.includes(s), s + ' left running');
+    });
+
+    test('elections members and runners-up, both storage shapes', async () => {
+        const f = seatApi();
+        const live = startCollectiveLive(f.api, { collectives: [{ key: 'council', pallets: ['council'] }], onUpdate: () => {} });
+        await tick();
+        f.cbs['e.members']([seat('m1', 100)]);
+        f.cbs['e.runnersUp']([[codec('r1'), codec(String(5n * 10n ** 12n))]]);
+        assert.deepEqual(live.state.council.elections, { members: [{ who: 'm1', stake: 100 }], runnersUp: [{ who: 'r1', stake: 5 }] });
+        live.stop();
+    });
+
+    test('the technical committee gets members and prime but no elections', async () => {
+        const f = seatApi();
+        f.api.query.technicalCommittee = { ...f.api.query.council };
+        const live = startCollectiveLive(f.api, { collectives: [{ key: 'technicalCommittee', pallets: ['technicalCommittee'] }], onUpdate: () => {} });
+        await tick();
+        assert.ok(!f.subs.includes('e.members'));
+        live.stop();
+    });
+
+    test('no prime, no elections pallet: the rest still runs', async () => {
+        const f = seatApi({ withElections: false, omitPrime: true });
+        const live = startCollectiveLive(f.api, { collectives: [{ key: 'council', pallets: ['council'] }], onUpdate: () => {} });
+        await tick();
+        assert.deepEqual(f.subs, ['members']);
+        assert.equal(live.state.council.elections, undefined);
+        live.stop();
+    });
+
+    test('a seat subscription that throws is reported, motions still run', async () => {
+        const f = fakeApi();
+        f.api.query.council.members = () => { throw new Error('renamed'); };
+        const errors = [];
+        const live = startCollectiveLive(f.api, { collectives: [{ key: 'council', pallets: ['council'] }], onUpdate: () => {}, onError: (e) => errors.push(e.message) });
+        await tick();
+        f.emitProposals(['0xa']);
+        await tick();
+        assert.deepEqual(errors, ['renamed']);
+        assert.deepEqual(f.log.multi, [['0xa']]);
+        live.stop();
+    });
+
+    test('overlayLiveMembers: the live seat list wins, REST keeps stake and name', () => {
+        const restMembers = [{ address: 'eA', stake: 10, name: 'Alice' }, { address: 'eGone', stake: 1 }];
+        assert.equal(CL.overlayLiveMembers(restMembers, null), restMembers);
+        assert.equal(CL.overlayLiveMembers(restMembers, { members: null }), restMembers);
+        const out = CL.overlayLiveMembers(restMembers, { members: ['eA', 'eNew'] });
+        assert.deepEqual(out, [{ address: 'eA', stake: 10, name: 'Alice' }, { address: 'eNew' }]);
+        assert.deepEqual(CL.overlayLiveMembers(undefined, { members: ['eX'] }), [{ address: 'eX' }]);
+    });
+});
