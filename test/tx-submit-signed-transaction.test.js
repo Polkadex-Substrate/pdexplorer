@@ -26,8 +26,8 @@ import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { createSubmittable } from '@polkadot/api/submittable';
 import { toPromiseMethod } from '@polkadot/api/promise';
 import { Keyring } from '@polkadot/keyring';
-import { cryptoWaitReady } from '@polkadot/util-crypto';
-import { u8aToHex } from '@polkadot/util';
+import { blake2AsHex, cryptoWaitReady } from '@polkadot/util-crypto';
+import { hexToU8a, u8aToHex } from '@polkadot/util';
 import substrateMetadata from '@polkadot/types-support/metadata/static-substrate';
 import { installPolkadotFixes } from '../lib/tx-extensions.js';
 import { trackSignedTx, signAndSendOptions } from '../lib/tx-submit.js';
@@ -147,6 +147,16 @@ describe('the real @polkadot/api 17.0.2 Submittable with those options', () => {
         const back = registry.createType('Extrinsic', submitted[0]);
         assert.equal(back.isSigned, true);
         assert.equal(back.method.toHex(), remark('0x1234').toHex());
+    });
+
+    test('the tx hash the tracker reports is the hash of the bytes the wallet returned', async () => {
+        const { api } = fakeApi();
+        const w = signedTxSigner();
+        let reported = null;
+        const unsub = await submittableFor(api).signAndSend(pair.address, signAndSendOptions(w), (r) => { reported = r.txHash.toHex(); });
+        await flush();
+        unsub();
+        assert.equal(reported, blake2AsHex(hexToU8a(w.returned)));
     });
 
     test('a wallet that returns only a signature still works: the explorer-built tx is submitted', async () => {
