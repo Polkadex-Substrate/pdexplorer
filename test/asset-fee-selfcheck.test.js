@@ -116,10 +116,12 @@ describe('wiring', () => {
         assert.match(server, /assetFeeCheck: assetFeeCheck/);
     });
 
-    test('browser runs the check in adoptChainApi and uses console.warn on failure', () => {
-        const fn = client.indexOf('function adoptChainApi(api)');
-        const call = client.indexOf('checkAssetFeeExtension(api.registry)');
-        assert.ok(fn > 0 && call > fn && call - fn < 600);
-        assert.match(client, /else console\.warn\(line\)/);
+    test('browser runs the check from adoptChainApi and uses console.warn on failure', () => {
+        const helper = client.indexOf('function runAssetFeeSelfCheck(api)');
+        const adopt = client.indexOf('function adoptChainApi(api)');
+        assert.ok(helper > 0 && helper < adopt);
+        assert.match(client.slice(helper, adopt), /checkAssetFeeExtension\(api\.registry\)/);
+        assert.match(client.slice(helper, adopt), /else console\.warn\(line\)/);
+        assert.match(client.slice(adopt, adopt + 800), /runAssetFeeSelfCheck\(api\)/);
     });
 });

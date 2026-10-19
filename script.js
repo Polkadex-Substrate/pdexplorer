@@ -728,19 +728,21 @@ const WS_HANDSHAKE_BUDGET_MS = 6000;
 // the WS may arrive after init() has already moved on, and on a flaky link the
 // promise and the timeout can race closely enough that both paths run.
 let chainApiAdopted = false;
-function adoptChainApi(api) {
-    if (chainApiAdopted || !api) return;
-    chainApiAdopted = true;
-    globalApi = api;
-
-    // One-line self-check: the asset-fee extension the browser signs with must
-    // be the metadata-derived type, not Option<MultiLocation>. Warn loudly on
-    // mismatch; never block the page.
+// One-line self-check: the asset-fee extension the browser signs with must be
+// the metadata-derived type, not Option<MultiLocation>. console.warn on
+// mismatch; never blocks the page.
+function runAssetFeeSelfCheck(api) {
     try {
         const { level, line } = describeAssetFeeCheck(checkAssetFeeExtension(api.registry), 'browser');
         if (level === 'log') console.log(line);
         else console.warn(line);
     } catch (e) { console.warn('[tx-extensions] browser self-check could not run:', e && e.message ? e.message : e); }
+}
+
+function adoptChainApi(api) {
+    if (chainApiAdopted || !api) return;
+    chainApiAdopted = true;
+    globalApi = api;
 
     networkStatusText.innerText = "Polkadex Connected";
     networkStatusText.title = '';
@@ -750,6 +752,7 @@ function adoptChainApi(api) {
     // Chain-derived stat cards. These DO need the api.
     fetchNetworkStats(globalApi);
     subscribeNewBlocks(globalApi);
+    runAssetFeeSelfCheck(api);
     if (councilPollTimer) startCouncilLive();   // the Council page opened before the node link was up
     if (democracyView.active()) democracyView.start();   // same for Democracy
 

@@ -5,6 +5,13 @@
 //   node scripts/fetch-metadata.mjs --only 373      mainnet only
 //   node scripts/fetch-metadata.mjs --only 392      testnet only
 //   --mainnet <wss url>  --testnet <wss url>  --samples <n>  --out <dir>
+//   --blocks <n>    how many recent blocks to scan (default 400)
+//
+// For the 392 target the script scans the whole window for extrinsic format
+// versions and prints seenFormats ({"4": {...}, "5": {...}} with the
+// bare/signed/general split read from the version byte: 0x04, 0x84, 0x05,
+// 0x45). If no v5 extrinsic is found it exits non-zero WITHOUT writing the
+// file; widen the window with --blocks.
 //
 // Writes test/fixtures/metadata-373.json (mainnet, wss://rpc.polkadex.ee) and
 // test/fixtures/metadata-392.json (testnet, wss://polkadex-testnet.polkadex.ee).
@@ -20,6 +27,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { newFormatTally, tallyExtrinsic, v5MissingMessage } from '../lib/extrinsic-formats.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -34,7 +42,11 @@ const TARGETS = [
 ];
 const ONLY = opt('only', null);
 const SAMPLES = Number(opt('samples', '12'));
-const MAX_WALK = 400;
+const MAX_WALK = Number(opt('blocks', '400'));
+if (!Number.isInteger(MAX_WALK) || MAX_WALK < 1) {
+    console.error('--blocks must be a positive integer.');
+    process.exit(2);
+}
 const OUT = resolve(opt('out', join(ROOT, 'test', 'fixtures')));
 
 if (typeof WebSocket !== 'function') {
@@ -138,26 +150,38 @@ async function fetchTarget(t) {
         }
         console.log(`  metadata versions offered: ${versions.join(', ')}`);
 
-        // Real signed (0x84) and general (0x45) extrinsics from the same runtime.
+        // Real signed (0x84) and general (0x45) extrinsics from the same runtime,
+        // up to SAMPLES of each kind. A v5 target (392) scans the whole window
+        // so seenFormats counts every extrinsic; the others stop as soon as
+        // enough signed samples are in.
+        const wantV5 = t.expectSpec >= 392 || rv.specVersion >= 392;
         const extrinsics = [];
+        const have = { 'v4-signed': 0, 'v5-general': 0 };
+        const seenFormats = newFormatTally();
         let hash = blockHash, n = blockNumber, walked = 0;
-        const seenFormats = new Set();
-        while (extrinsics.length < SAMPLES && walked < MAX_WALK && n > 0) {
+        while (walked < MAX_WALK && n > 0) {
+            if (!wantV5 && have['v4-signed'] >= SAMPLES) break;
             const blk = await call('chain_getBlock', [hash]);
             const v = (await call('state_getRuntimeVersion', [hash])).specVersion;
             if (v !== rv.specVersion) break;
             blk.block.extrinsics.forEach((hex, index) => {
-                const f = formatByte(hex);
-                if ((f === 0x84 || f === 0x45) && extrinsics.length < SAMPLES) {
-                    extrinsics.push({ block: n, blockHash: hash, index, specVersion: v, format: f === 0x84 ? 'v4-signed' : 'v5-general', hex });
-                    seenFormats.add(f);
+                const { version, kind } = tallyExtrinsic(seenFormats, hex);
+                const label = version === 4 && kind === 'signed' ? 'v4-signed' : version === 5 && kind === 'general' ? 'v5-general' : null;
+                if (label && have[label] < SAMPLES) {
+                    have[label] += 1;
+                    extrinsics.push({ block: n, blockHash: hash, index, specVersion: v, format: label, hex });
                 }
             });
             hash = blk.block.header.parentHash;
             n -= 1;
             walked += 1;
         }
-        console.log(`  extrinsic samples: ${extrinsics.length} from ${walked} blocks (${[...seenFormats].map(f => '0x' + f.toString(16)).join(', ') || 'none'})`);
+        console.log(`  extrinsic samples: ${extrinsics.length} from ${walked} blocks (v4-signed ${have['v4-signed']}, v5-general ${have['v5-general']})`);
+        console.log(`  seenFormats=${JSON.stringify(seenFormats)}`);
+        if (wantV5) {
+            const missing = v5MissingMessage(seenFormats, { blocks: walked, spec: rv.specVersion, widen: MAX_WALK });
+            if (missing) throw new Error(missing);
+        }
 
         const out = {
             note: 'Written by scripts/fetch-metadata.mjs. Test fixture; regenerate rather than edit.',
