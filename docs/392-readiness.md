@@ -5,6 +5,11 @@ the testnet proof below must index past block 1,553,840. One explorer build must
 on both runtimes and across the upgrade block, and must decode every historical
 block with that block's own runtime (the explorer uses `api.at(blockHash)`).
 
+**Deadline: this build must be live and healthy on the mainnet explorer BEFORE
+the referendum enacts 392 on mainnet.** The old explorer (@polkadot/api 10.13.1)
+cannot decode blocks produced under 392. Rollback to the previous image is valid
+only before enactment; see "Rollback" below.
+
 ## What changed
 
 ### Library: @polkadot/api 10.13.1 to 17.0.2 (exact pins)
@@ -83,6 +88,27 @@ and drop a wrapper).
   server (`import.meta.env.DEV`). A production build always uses
   `wss://rpc.polkadex.ee`.
 
+### Start-up self-check (server and browser)
+
+After each `ApiPromise.create`, `checkAssetFeeExtension(api.registry)` (in
+`lib/tx-extensions.js`) compares what the api will actually encode with against
+the metadata: `registry.getSignedExtensionTypes().assetId` (the flat map the
+library keeps; the asset id is not keyed by extension name) and the
+`TAssetConversion` alias must both resolve to the metadata-derived type, not the
+library's built-in `Option<MultiLocation>`. One log line either way.
+
+- Server: `[tx-extensions] server self-check OK ...` via `console.log`; on a
+  mismatch `console.error` with `FAILED`, and `/api/version` carries
+  `assetFeeCheck: { ok, status }` (`null` before the api exists). Re-run on
+  every RPC reconnect. Look for it in the startup log and curl `/api/version`
+  after deploy: `ok` must be `true`.
+- Browser: same line via `console.log`; on a mismatch `console.warn`. Open the
+  console once after deploy and on the dev instance.
+- Statuses: `ok`, `absent` (runtime has no asset-fee extension, fine),
+  `mismatch`, `underivable` (listed in metadata, shape unreadable, library table
+  in use unverified), `error` (the check itself threw). Only `ok` and `absent`
+  are healthy. The check never blocks start-up.
+
 ### Indexing (server.js)
 
 - Same CheckMetadataHash removal at the backend `ApiPromise.create`.
@@ -139,7 +165,36 @@ Expected: `# fail 0` and `# skipped 0`. The fetch script is read-only JSON-RPC
 (no keys, nothing submitted). If mainnet has already moved past 373 it warns and
 records the real spec in the file.
 
-## Testnet proof procedure (before any mainnet step)
+For the 392 sample the script scans the recent blocks (400 by default) for
+extrinsic format versions and prints, for example:
+
+```
+seenFormats={"4":{"total":812,"bare":300,"signed":512,"general":0},"5":{"total":3,"bare":0,"signed":0,"general":3}}
+```
+
+The split is read from the version byte (0x04 bare v4, 0x84 signed v4, 0x05 bare
+v5, 0x45 general v5). If no v5 extrinsic is found the script exits non-zero with
+a message and does NOT write `metadata-392.json` (a file with no v5 sample would
+let the v5 checks skip silently). Widen the window with `--blocks 2000` (or more)
+and re-run. Testnet may simply have had no v5 traffic in the window; that is a
+reason to widen or to send one v5 transaction there, not to skip the check.
+
+## Gate to deploy this branch to the mainnet explorer
+
+Mainnet is still on 373 while this gate is worked. Everything in it can be done
+now, before any referendum outcome. All three must be true before the deploy:
+
+1. On your Mac, on this branch: `node scripts/fetch-metadata.mjs` (a v5 extrinsic
+   must be found in the 392 sample; widen with `--blocks N` if not), then
+   `npm test` shows `# fail 0` and `# skipped 0`. Until both fixtures exist the
+   Polkadex-specific checks have not run and the branch is not cleared, whatever
+   else has passed.
+2. Testnet dev-instance criteria (procedure below): the indexer is past block
+   1,553,840 with zero scan failures of any kind.
+3. Testnet, with the polkadot{.js} extension: one balance transfer and one
+   council vote, both finalized (details below).
+
+### Testnet dev-instance procedure
 
 Run a throwaway dev instance against testnet, from a separate checkout so its
 `data/` directory is its own. On your Mac:
@@ -157,7 +212,7 @@ In a second terminal, same directory:
 VITE_POLKADEX_WS=wss://polkadex-testnet.polkadex.ee npm run dev
 ```
 
-Pass criteria:
+Pass criteria for the deploy gate:
 
 1. The indexer walks from the head back past block 1,553,840 to 1,553,000: `/api/blocks` shows heights on both sides, and
    ```
@@ -171,62 +226,87 @@ Pass criteria:
    ```
    returns no rows, and `curl -s localhost:3001/api/blocks` shows
    `"decodeFailures":{"extrinsicDecode":0,"blockDecodeRecovered":0}`.
-3. Wallets. In the browser at http://localhost:3000 (dev server, testnet WS),
-   with EACH of these four wallets:
-   - polkadot{.js} extension
-   - Talisman
-   - SubWallet
-   - Nova Wallet in-app browser (open the dev URL inside Nova; the phone must
-     reach the Mac, so use the Mac's LAN address instead of localhost)
-
-   do both of these:
+3. Wallet, polkadot{.js} extension only, in the browser at http://localhost:3000
+   (dev server, testnet WS):
    - one balance transfer between two testnet accounts: finalized, success
      event, and the explorer shows it with the same tx hash the wallet reports;
    - one council vote from a testnet council member account held in that
      wallet: finalized, `council.Voted` event, shown on the motion.
 
-   That is eight signed transactions; record wallet name and version, tx hash
-   and block for each. All eight must pass. A wallet that returns the whole
-   signed transaction is accepted (see Signing above); one that returns
-   altered call data is refused with an error, which counts as a FAIL for that
-   wallet, not a pass.
-4. Backend log has no "Unknown signed extensions" line, and no "[silenced]"
-   announcement for "has multiple versions" (server.js silences that warning
-   after announcing it once, so look for the announcement).
+   Record wallet version, tx hash and block for each.
+4. The self-check passes: the backend log has `[tx-extensions] server
+   self-check OK`, `curl -s localhost:3001/api/version` shows
+   `"assetFeeCheck":{"ok":true,...}`, and the browser console shows `browser
+   self-check OK` with no warn. Also: no "Unknown signed extensions" line in the
+   backend log, and no "[silenced]" announcement for "has multiple versions"
+   (server.js silences that warning after announcing it once, so look for the
+   announcement).
 
-Then remove the throwaway instance: stop both processes, `cd ..` and
-`git worktree remove pdexplorer-392`.
+A wallet that returns the whole signed transaction is accepted (see Signing
+above); one that returns altered call data is refused with an error, which
+counts as a FAIL for that wallet, not a pass.
+
+Keep the dev instance running for the post-deploy checks below, then remove it:
+stop both processes, `cd ..` and `git worktree remove pdexplorer-392`.
 
 ## Mainnet checklist
 
-Mainnet deploy of this branch WAITS for the first two boxes. Until
-`node scripts/fetch-metadata.mjs` has written both fixtures and `npm test`
-then reports `# skipped 0`, the Polkadex-specific checks have not run and the
-branch is not cleared for mainnet, whatever else has passed.
+In order. The first four boxes are the deploy gate and must be done before the
+referendum enacts 392; the deploy box has the same deadline.
 
-- [ ] On your Mac, on this branch: `node scripts/fetch-metadata.mjs`, then
-      `npm test` shows `# fail 0` and `# skipped 0`.
-- [ ] Testnet proof above passed (all four criteria, all eight wallet
-      transactions).
-- [ ] Deploy this build to mainnet while mainnet is still on 373. Check:
-      signing one small transfer works, the indexer advances, `scan_failures`
-      has no new rows, `coverage.decodeFailures` is all zeros, `/api/version`
-      shows the new commit.
+- [ ] `node scripts/fetch-metadata.mjs` on this branch (v5 found in the 392
+      sample), then `npm test` shows `# fail 0` and `# skipped 0`.
+- [ ] Testnet dev instance: index past block 1,553,840 with zero scan failures.
+- [ ] Testnet, polkadot{.js} extension: one transfer and one council vote.
+- [ ] Self-check OK on the dev instance (server log, `/api/version`, browser
+      console).
+- [ ] **Deploy this build to mainnet while mainnet is still on 373, and have it
+      live and healthy before the referendum enacts 392.** Check: the
+      `[tx-extensions] server self-check OK` line and `/api/version` showing
+      `assetFeeCheck.ok: true` and the new commit, the indexer advances,
+      `scan_failures` has no new rows, `coverage.decodeFailures` is all zeros,
+      and `/api/health` is 200.
+- [ ] Post-deploy, testnet (dev instance, or the deployed build against testnet
+      if one exists): Talisman and SubWallet, each one transfer and one council
+      vote, same pass rules as above. These do not gate the deploy; a failure
+      is a fix-forward item for the wallet path, and the polkadot{.js} path
+      already passed.
+- [ ] Post-deploy, mainnet: Nova Wallet in-app browser, one balance transfer.
+      Nova signs only chains in its own list and drops Polkadex staking on 25
+      Oct, so it cannot be tested against testnet; this single mainnet transfer
+      is its check. Use a small amount and record the tx hash and block.
 - [ ] Watch across the 392 enactment block: the indexer continues past it with
       no `extrinsic_decode:*`, `block_decode_recovered` or `chain_index`
-      failures, and a transfer signed
-      after enactment succeeds.
+      failures, and a transfer signed after enactment succeeds.
 - [ ] After enactment, spot-check one block from before and one from after the
       upgrade in `/api/decode/<block>`: both decode with their own runtime.
-- [ ] Rollback plan: redeploy the previous image. The database schema is
-      unchanged by this work, so rollback needs no migration.
+
+## Rollback
+
+Rollback to the previous image is valid ONLY before mainnet enacts 392. The
+database schema is unchanged by this work, so that rollback needs no migration.
+
+After enactment it is NOT a rollback path: the previous image runs
+@polkadot/api 10.13.1, which cannot decode blocks produced under 392 (it
+predates extrinsic v5 and the new extension set, so it misreads or drops them).
+Once 392 is enacted the only path is fix forward on this branch. This is why the
+deploy deadline above matters: a defect found after enactment cannot be
+escaped by reverting.
+
+The new `scan_failures` indexer keys (`extrinsic_decode:<index>` and
+`block_decode_recovered`) are inert to the old code: it never writes or reads
+them, so a rollback before enactment leaves them as harmless rows. They stay
+in the table (they are an operator signal, not retried) and can be deleted by
+hand if wanted.
 
 ## Verified here vs by reading only
 
 Verified by running (Linux, Node 22.23): full `npm ci`, `npm test`,
 `npx vite build`, a backend boot (workers start, RPC unreachable as expected in
 the sandbox), and `scripts/fetch-metadata.mjs` end to end against a local mock
-JSON-RPC server, with its output fed through the fixture suites.
+JSON-RPC server, with its output fed through the fixture suites. The format scan and
+the "no v5 found" exit were run end to end against a local mock JSON-RPC server
+(v5 present, absent, and outside a narrow `--blocks` window).
 
 By reading only: behaviour against the real Polkadex nodes (the sandbox cannot
 reach them), the browser bundle signing with a real wallet (the
