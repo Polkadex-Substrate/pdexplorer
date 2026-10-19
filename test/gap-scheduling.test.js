@@ -251,7 +251,12 @@ describe('F-046 — the indexer actually uses this', () => {
             'exhaustedGapCount is imported but never called');
         assert.match(src, /^\s+gapsExhausted,$/m,
             'the count is computed but never persisted to the sync state');
-        assert.match(src, /gapsExhausted: Number\(state\.gapsExhausted\) \|\| 0/,
+        // coverageOf moved to lib/index-status.js (decode-failure counts); it
+        // must still serve the count, and server.js must still use it.
+        const lib = readRepo('lib/index-status.js', import.meta.url);
+        assert.match(lib, /gapsExhausted: Number\(s\.gapsExhausted\) \|\| 0/,
+            'the count is persisted but never served to clients');
+        assert.match(src, /coverage: coverageOf\(state\)/,
             'the count is persisted but never served to clients');
     });
 });
