@@ -1,6 +1,6 @@
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
-import { installPolkadotFixes } from './lib/tx-extensions.js';
+import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck } from './lib/tx-extensions.js';
 import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses,
          blake2AsHex, xxhashAsHex, keccakAsHex, signatureVerify } from '@polkadot/util-crypto';
 import { u8aToHex, hexToU8a, stringToU8a, isHex } from '@polkadot/util';
@@ -732,6 +732,15 @@ function adoptChainApi(api) {
     if (chainApiAdopted || !api) return;
     chainApiAdopted = true;
     globalApi = api;
+
+    // One-line self-check: the asset-fee extension the browser signs with must
+    // be the metadata-derived type, not Option<MultiLocation>. Warn loudly on
+    // mismatch; never block the page.
+    try {
+        const { level, line } = describeAssetFeeCheck(checkAssetFeeExtension(api.registry), 'browser');
+        if (level === 'log') console.log(line);
+        else console.warn(line);
+    } catch (e) { console.warn('[tx-extensions] browser self-check could not run:', e && e.message ? e.message : e); }
 
     networkStatusText.innerText = "Polkadex Connected";
     networkStatusText.title = '';

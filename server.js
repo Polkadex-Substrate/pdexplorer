@@ -6,7 +6,7 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex, blake2AsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat, hexToU8a } from '@polkadot/util';
-import { installPolkadotFixes } from './lib/tx-extensions.js';
+import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck } from './lib/tx-extensions.js';
 import { decodeExtrinsicsTolerant, timestampFromExtrinsics, recoverBlockDecode } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
@@ -2746,6 +2746,21 @@ app.get('/api/decode/:block', async (req, res) => {
     }
 });
 
+// Result of the start-up asset-fee extension self-check (lib/tx-extensions.js,
+// checkAssetFeeExtension), re-run on every RPC reconnect. null until the api
+// exists. Surfaced on /api/version so a mismatch is visible without logs.
+let assetFeeCheck = null;
+function runAssetFeeSelfCheck(api) {
+    try {
+        assetFeeCheck = checkAssetFeeExtension(api.registry);
+    } catch (err) {
+        assetFeeCheck = { ok: false, status: 'error', message: String(err && err.message ? err.message : err) };
+    }
+    const { level, line } = describeAssetFeeCheck(assetFeeCheck, 'server');
+    if (level === 'log') console.log(line);
+    else console.error(line);
+}
+
 // ---- GET /api/version -------------------------------------------------------
 // What is this process actually running? Baked in at image build time by
 // deploy.sh (see the ARG/ENV pair in Dockerfile.backend).
@@ -2777,7 +2792,13 @@ app.get('/api/version', (req, res) => {
         // here did) achieved nothing. Operators get the full detail on
         // /api/diag/* behind DIAG_TOKEN.
         specVersion: globalApi && globalApi.runtimeVersion ? globalApi.runtimeVersion.specVersion.toNumber() : null,
-        rpcConnected: !!(globalApi && globalApi.isConnected)
+        rpcConnected: !!(globalApi && globalApi.isConnected),
+        // Start-up self-check that the asset-fee extension types come from
+        // metadata. ok:false means the build would mis-encode or mis-decode
+        // asset-fee extrinsics; see the [tx-extensions] line in the log.
+        assetFeeCheck: assetFeeCheck
+            ? { ok: assetFeeCheck.ok, status: assetFeeCheck.status }
+            : null
     });
 });
 
@@ -10009,6 +10030,10 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
         return;
     }
     globalApi = newApi;
+    // One-line self-check: the asset-fee extension the api encodes with must be
+    // the metadata-derived type, not the library's Option<MultiLocation>. A
+    // mismatch is logged loudly and flagged on /api/version (assetFeeCheck).
+    runAssetFeeSelfCheck(newApi);
     // ApiPromise also emits these on top of WsProvider — useful when a single
     // request times out and the api lib decides to flag itself disconnected
     // before the underlying socket closes.
