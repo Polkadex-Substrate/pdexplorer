@@ -697,7 +697,6 @@ def mock_names_chain():
     return FakeChain(make_chain([(pub, "Di", None)]))
 
 
-@unittest.skipUnless(os.path.isfile(OLD_CSV), "results/2026-10-16-census.csv is git-ignored; present only after a local run")
 class RealReportTests(unittest.TestCase):
     def process(self, **kw):
         out = os.path.join(tempfile.mkdtemp(), "census.csv")
@@ -715,16 +714,6 @@ class RealReportTests(unittest.TestCase):
         self.assertIn("6.2.0 x151, 7.0.0 x34", text)
         self.assertIn("34 of 200 validators (17.0%)", text)
 
-    def test_matches_every_column_of_the_existing_csv_except_names(self):
-        rows, out, _ = self.process(want_names=False)
-        with open(OLD_CSV) as fh:
-            old = list(csv.DictReader(fh))
-        self.assertEqual(len(old), len(rows))
-        for o, n in zip(old, rows):
-            for col in nc.COLUMNS:
-                if col != "display_name":
-                    self.assertEqual(o[col], n[col], (o["stash"], col))
-
     def test_rpc_failure_still_writes_csv_and_says_so(self):
         rows, out, lines = self.process(rpc=FakeChain({}, fail=OSError("refused")))
         self.assertEqual(len(rows), 200)
@@ -741,6 +730,21 @@ class RealReportTests(unittest.TestCase):
         self.assertEqual([(r["stash"], r["display_name"]) for r in named],
                          [("esptrhJNi2mEW2a5qJuXU76h6JhLabry9ZXsnuBcwdE9H8u6n", "Di")])
         self.assertIn("Names: 1 of 200", "\n".join(lines))
+
+
+@unittest.skipUnless(os.path.isfile(OLD_CSV), "results/2026-10-16-census.csv is git-ignored; present only after a local run")
+class RealReportCsvTests(unittest.TestCase):
+    process = RealReportTests.process
+
+    def test_matches_every_column_of_the_existing_csv_except_names(self):
+        rows, out, _ = self.process(want_names=False)
+        with open(OLD_CSV) as fh:
+            old = list(csv.DictReader(fh))
+        self.assertEqual(len(old), len(rows))
+        for o, n in zip(old, rows):
+            for col in nc.COLUMNS:
+                if col != "display_name":
+                    self.assertEqual(o[col], n[col], (o["stash"], col))
 
     def test_diff_against_the_old_csv_shows_no_version_change(self):
         out = os.path.join(tempfile.mkdtemp(), "c.csv")

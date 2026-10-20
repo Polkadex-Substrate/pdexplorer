@@ -673,7 +673,7 @@ Crawl settings (environment variables):
                     is used if it does not answer; the chain must match mainnet genesis
   TIMEOUT           seconds for the DHT crawl, default 600
   DIAL_TIMEOUT      seconds per address, default 10
-  BOOTNODES         comma separated multiaddrs, default the four Polkadex bootnodes
+  BOOTNODES         comma separated multiaddrs, default the three Polkadex bootnodes
   NETWORK_BACKEND   libp2p (default) or litep2p; try litep2p if libp2p finds few records
   CACHE_DIR         default ~/.cache/validator-census (explorer built here once at
                     commit %s, cargo build --locked)
