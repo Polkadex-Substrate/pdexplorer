@@ -111,3 +111,6 @@ certbot/
 # NOTE: We DON'T exclude Dockerfile.* or docker-compose*.yml here — Docker
 # reads them out of the context, and excluding them can break `docker compose
 # build` depending on the invocation. They're tiny anyway.
+
+# Standalone operator tool (tools/node-census), not part of the image; the frontend build uses COPY . .
+tools/node-census/

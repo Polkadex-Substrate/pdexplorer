@@ -1,0 +1,5251 @@
+{
+"authorities": [
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "eskmYfBpvpdtwUWwv87CSfPPHpqNgMC7Za4KEYNuyucoXhQ8t",
+"has_dht_record": true,
+"peer_id": "12D3KooWGzKtFixVNSQ7UAaVVqEBF6KRJSfrhURGLWLbtCvfbU2t",
+"stash_ss58": "esoia6ocj8jC4Wq2mSeiCsXf1Z3eHqx7oHQ8hK8iPgHUYAmeC"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "eskn7F7BPaknm3QSPDdSF9eS1bWSrig7FDpzvFYVVTEqU1pqP",
+"has_dht_record": true,
+"peer_id": "12D3KooWDdJ1K56Ad34NdKVnLd7YvoH46sLweKSxZ2AgWHegeX4R",
+"stash_ss58": "esmHENB2AogqtgKn9fQgReC166RXHtFGQzNNzm1FAaFdpvWxh"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY)",
+"authority_ss58": "esknEkTX7cvmkiGiADCq9yEB4S4nWqbfd16dx7D3ytEq4M3VB",
+"has_dht_record": true,
+"peer_id": "12D3KooWBDw1CDJ3ymgNQMe9aE6RXHU6TrNuZhGraf2d54LH125a",
+"stash_ss58": "esox9dunpDkBrWT3WjcXwBPvi12zu6wjPYCGFMkQ7NVEZunED"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/18) (litep2p)",
+"authority_ss58": "esknLLtzFweiFTeRxQFA9jAd8c3h9uhhansjf9KowDoiVdvF4",
+"has_dht_record": true,
+"peer_id": "12D3KooWNQqjUmVoYFgrd1CYD5fsznLwqhoADh6Cq1pSrr7zF4ED",
+"stash_ss58": "esptrhJNi2mEW2a5qJuXU76h6JhLabry9ZXsnuBcwdE9H8u6n"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "eskp6tdjTTagwVXZTjGLzUnUytXo7Ny83kdxgPg6StMvvo4i7",
+"has_dht_record": true,
+"peer_id": "12D3KooWCr24gZu3HvYmdeo38PkLhD38zCMfCH7tsLkHJMHBUZrg",
+"stash_ss58": "eso37FtawMzb93N1nWwAvH2CJ1xkfdZhZ4JqnJd9nTQ7bFJp9"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/16)",
+"authority_ss58": "eskpg97SJamFJz9zirBjbd2e36VKdqKpqbjUjvtwoD5L1YRz9",
+"has_dht_record": true,
+"peer_id": "12D3KooWBhrvF9sz9N4gAR3FLVM5vCW83KKpM4miEiJbfpJuXbnY",
+"stash_ss58": "esqaB1umu3ucgwRmmPirFSLeGePPeAji5Q4B9BWMVkif8bpAU"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/31)",
+"authority_ss58": "eskrsazJ2TWHxyncXjRdyZ3RnR2o4dgsuDvsHFnhgEmu7rxuF",
+"has_dht_record": true,
+"peer_id": "12D3KooWLH4rVfHNmRiw86XDryMoYkmc5dejJRbrxihcpLeVnpB8",
+"stash_ss58": "esnzBJuebFtKvb6ctWizppA8bHC9VgpZXEVDK8y4zrGAYSs85"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 10)",
+"authority_ss58": "esksDm5ezKB9oCzcjQdepg3gSpkh6MczbWC9a2xvpT5quNXkT",
+"has_dht_record": true,
+"peer_id": "12D3KooWAX9npZwtt3EUkP8fbeQg7LXcpYVz7mpjr9q21UGKh2c9",
+"stash_ss58": "esoVwbXtf9s3EQ36bo4zkBuHzD7yusukybDiV1yhev4izQxjQ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (delicious-wine-5043)",
+"authority_ss58": "eskxWboQuwZ5RSeWJnEDj1Y7JipDNUKGdYpxGNTypkNknnaCf",
+"has_dht_record": true,
+"peer_id": "12D3KooWHqU52MHyScPYaZbARJW5A2fQsCoed5bqKHmda7DUaQaC",
+"stash_ss58": "esmMo3AVsmvz7QwdqU1JSsmwNJuxkh9ghZJD7H2BpB1vNFJt4"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (sudden-ducks-7325)",
+"authority_ss58": "eskxhin5h2Skdd7o3FgLRvoQN8bc3pyjC1EMSC8KmFzabsdMi",
+"has_dht_record": true,
+"peer_id": "12D3KooWQYgWbV9NPUb3dtkV5UDf2HDjbr3Uum45TEmibs2JoVHe",
+"stash_ss58": "esoahC6b5TsfsDY1EmiXc69eDagHnTc5Kp3FidHQn7n3XcLPL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator)",
+"authority_ss58": "eskzt4ChbMdWChaEmMuiYzmtki1jgeQHGLxHhUKT695nn2zF4",
+"has_dht_record": true,
+"peer_id": "12D3KooWGWtTS9sJ543LzYLSL3eet5L7aE4HZg1th1BhgB1uddnq",
+"stash_ss58": "esqD5TsdP2UPmxsBZWEP5iTb73ZPW5mf9RSXsEoP6kw8bXW2Z"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/08) (litep2p)",
+"authority_ss58": "eskzveXPy22mRndfA3Dv9tSm8bYEgdPgsCKRkiokcR8cQ8L53",
+"has_dht_record": true,
+"peer_id": "12D3KooWLQ7uuNhiDhCgdVMKyzEPx7eGVpgTv9ncChVDKuWpDFtp",
+"stash_ss58": "esrA7gHxjHYozPaX1eSdcRzpJ8fxCS6txhU8fhRJKFprw2vka"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-06 \ud83c\udf15)",
+"authority_ss58": "esm19jbfV4FWPMcUsTyVgmKHJJyaN599q78mhq7jzCFTj1uAE",
+"has_dht_record": true,
+"peer_id": "12D3KooWNJzjS53yeyY4br17FMyuHaKfjxXRuhmN29UWwmioSeF3",
+"stash_ss58": "eso5gXq3JLEFcG5RDZuUA3FEbjbXmheNsCszgz2YcXKQy4whM"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/65)",
+"authority_ss58": "esm4NhNErGh3g7Hbqk5AN4kHBPoNmGe1KjLD5hAJ9oQBN5M64",
+"has_dht_record": true,
+"peer_id": "12D3KooWPr2oygtoSn74EHUQJNs1AM4Upi2dWubTPoZLLgbRc8CF",
+"stash_ss58": "esrAJX2Rs9o3DbbPPRPoTCgYdFoqFRcq6Lfsx9PemLb8Jf4kq"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (lopsided-cry-7139)",
+"authority_ss58": "esm6wNFRLCQjSZqYYYVRmPfKvu5ypXDfuQJgg1X9kd8VjyJFk",
+"has_dht_record": true,
+"peer_id": "12D3KooWLShphTBCmaJ496cACyiCww9VbDvS4yMrzeBYmd5KPsz4",
+"stash_ss58": "esoN1uzeeisHh7aac8Se1feEXqMC8CWPVEq7UwdQiCkh8Ew1u"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/51)",
+"authority_ss58": "esm6wvD7Ar1JaVs8i7hzhRXVmS1truaRQK5gAi8TrwD7vtAwd",
+"has_dht_record": true,
+"peer_id": "12D3KooWFeG7ncQdrbFHsMz846N1F9c2M7fVpSJyxchxNgpYLCZd",
+"stash_ss58": "eskmrUbcqngFDCDbZAYvkfVYGEDFk96QKfMzQdhXVvPaMriXr"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/56)",
+"authority_ss58": "esmBKV2HrdYsHqimJu5Wmn83P5eFKearxEa4QHifE4PQNDQst",
+"has_dht_record": true,
+"peer_id": "12D3KooWSX9krRCQVNSDNHJ2EgnR4Ek1fZi8iZy194by9wYZ5UAq",
+"stash_ss58": "esq9maDcjmacDZoaM6Q6E2W23Tkd5w8nBsmFqzYP3ckuJJPGQ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/33)",
+"authority_ss58": "esmDskTjnKEGwE17ra16LP2FjZb3fygYbZQEKqqufFnS2qPXu",
+"has_dht_record": true,
+"peer_id": "12D3KooWEHsMTK63Zbx2GZ8zi2X3MogFT38dRAD7KunRZhFv4E7X",
+"stash_ss58": "esnSZHJuce4763mJkGRopjbNum3v3MbnZZqmbKfFLiQex6c67"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "esmGEupFCv6jxV5oAP6mpcMGqH5yPMVutfK7cV3nCU86m48vJ",
+"has_dht_record": true,
+"peer_id": "12D3KooWNtHmKdZduwJJekwGTxZpTyW41Vyw98CHFMHNGfbTaABu",
+"stash_ss58": "esqF9gPmVw6GwXYcMk2wRN8Bjp9kUfwNpshjKwYZ1QE1HdCwo"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 05)",
+"authority_ss58": "esmKkun6eiZPFxYidbwiojWU9WLhKVgucEfPqt543aWDRS9Wo",
+"has_dht_record": true,
+"peer_id": "12D3KooWCS4UTFnqjiXt2nWGPhaLay8mhfYSHuc9FnM4GhKR6ddF",
+"stash_ss58": "esoEEw7WovasMYzPyZ6Z2pD4REjCuHdEzbWmmysQjcPRncUyu"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/45)",
+"authority_ss58": "esmL9Qb2ohypqJAh7kq9uEMW5Fd21LjcmoUv4AP7mYpj5MBn6",
+"has_dht_record": true,
+"peer_id": "12D3KooWP1hbWnRtETywoqv7zeDWNCyDBp1aUNkb2MzvdpK9KuwN",
+"stash_ss58": "esqyUaVXf7SXCxqpsPy6Pq5VewL9bFpeBe6KmJGWgAn7L7yGS"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 08)",
+"authority_ss58": "esmMXNPtELVvCAenwBU3urfheSSvrCURNweCW8Y21P49GaL92",
+"has_dht_record": true,
+"peer_id": "12D3KooWLGewVn3NHGNL7zfxpzTJrEapTtxqaz6g6emX9mik93YW",
+"stash_ss58": "esmKBAoBiwkv6FyQcs9YXrJqQaVqrZSj9gJwthTuj4Pptt8H6"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 03)",
+"authority_ss58": "esmNBMDDgwxPLNFLMnnMnREjaH93SGhMRg71udkrFWqoiJjKJ",
+"has_dht_record": true,
+"peer_id": "12D3KooWEfN2p2r2qqir6jVE6ReKkVcBM9QqZxY6qf4oUtXyvUxL",
+"stash_ss58": "esqtQmmNuamMefjuvti8NLcFZ7K9tCE1jyfoPCfKdrpnY8Kx9"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/59)",
+"authority_ss58": "esmQuKdq6s5rmpxdvMp7wxKzJfFH6xUXGubJgBoRM3kZM98QP",
+"has_dht_record": true,
+"peer_id": "12D3KooWFCbkLADfbNjSXAw7tJSPxGTw52LYZaJj8m8sJPPvF77S",
+"stash_ss58": "esqoMgrdtsyJ7XiExhoKnriqDo1kJNirZ6aN5zsQ81gbnqH5W"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (titan) (litep2p)",
+"authority_ss58": "esmTU3WCGvkdkaZnBd381HUeyYeNEDRDasQVSZQ9CB9hxKQia",
+"has_dht_record": true,
+"peer_id": "12D3KooWEaddE9Wb8gyj3PFjf3LsgeLCtfrkmLNitUFdMVWp5XBk",
+"stash_ss58": "esod8sWVfTzVwAZo7ocgFvgd4eNKFmHmbWWKSxtZksY9nSqnV"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (unsightly-mask-1422)",
+"authority_ss58": "esmVTi59YeNTeWoK6K6QcpTP5D64vsYRzdeAEUBP1iB6EAzTN",
+"has_dht_record": true,
+"peer_id": "12D3KooWBEWF21GcFEBMNycUo3XF5UBYcMZs55ttLZZzsYg3FQEh",
+"stash_ss58": "esp5owoBwADxhZ24WPTeCoWqJgViz9Ug3fSXws6iCwUeQCbsi"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/02)",
+"authority_ss58": "esmYW84WnnoMyz9moazqTmoZNkFvyNd2kQebL64WLDyHVU7dJ",
+"has_dht_record": true,
+"peer_id": "12D3KooWHceCrafLve8EegMXCWnoPVskaiKT8RbDtJDX5ZzHUAvM",
+"stash_ss58": "esqiK9sbAWk5b5uWwF7S9HaaWNB5pNza4qFzCwD3dwZof6SgD"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (lowly-anger-6629)",
+"authority_ss58": "esmacVoGMfaLE9UFAVxKzaCHzLzKP3iCmEabF3fGhujb8M3hn",
+"has_dht_record": true,
+"peer_id": "12D3KooWRVHLk7TJ3jKxViq6vG7nkCxaXZsqRE8R1zKgqKo6uwth",
+"stash_ss58": "esnp3PnSJbV5J6Fh3ovPFBjWgG7w467viZq9VkqGbwDTQWNBK"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/3)",
+"authority_ss58": "esmaeAmBDCzUURuzRdkAeobp5HVAmS3Kn34f7z6vWuNw5nwNR",
+"has_dht_record": true,
+"peer_id": "12D3KooWQ5KEDPNZdwgsdCwRJebTdd6sGi7QH3DTsAG67GgL3nUW",
+"stash_ss58": "esqq7FGLVBnmFswSaBUi2nnbmS4dH2Hu4Aa5jke2XyoMCRHqH"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/36)",
+"authority_ss58": "esmb9kycUnFS1rpCvv83925xqya7Dm4Sz61XXQbvef1A2RsSz",
+"has_dht_record": true,
+"peer_id": "12D3KooWQhdPeVcgUcew6H5LJ5PdQewGQEq27a8tFvRYugdmCcnV",
+"stash_ss58": "esmEFEz9D1wYdfTDc4Yk5Q5f9Yt9Hj4yxrTvriB8nwJjsLKTb"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (titan02) (litep2p)",
+"authority_ss58": "esmbXphHK8tuNmhXfpkhjms4j7RTBP1fP6vxGAxGUNyFpm22s",
+"has_dht_record": true,
+"peer_id": "12D3KooWNCsMbGeBRYvCHNw8bxuGu2kwETXwTGjEeuhpLCPs98Vy",
+"stash_ss58": "esphboE7bGxu3dvM4yykCUhYwDS2J6UMvaFYFQC56MHLaGprp"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-04 \ud83c\udf15)",
+"authority_ss58": "esmdKRpmSk7z5mxg5hZox78D1oLTZBRjo7oR61EwpDB2P2hoH",
+"has_dht_record": true,
+"peer_id": "12D3KooWHuWvePLYM423EqvFgtQHXntE6EdMyD5pXJB6CCbAhs5X",
+"stash_ss58": "esqcjUzZ7E64oMMZY6e7iHfz6m9GD9CHwsW1keFXgd1sqFSrt"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/35)",
+"authority_ss58": "esmgGTsdXoVn4AXq3BA3RyGMq1ZtAV3kAadXRiFwzfm5PhNzz",
+"has_dht_record": true,
+"peer_id": "12D3KooWA5dPgNQrj8W9PJ5BdkTwMZrhAFZYcq8m1cLCXApyj1UN",
+"stash_ss58": "esoDbHuBxiBGKhCsAEdUZhU36UGjokWfiAYcgZtDhCRQzSqQg"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (cloudy-angle-5763)",
+"authority_ss58": "esmgb7Fo4u8xgynULZ2kXfHrN2fbBYCaBzko8zZzPJVDyHwdD",
+"has_dht_record": true,
+"peer_id": "12D3KooWKHBmq1QP1rm3yXBGpc7REf95AMFcmbtFLWbrPFB11aTh",
+"stash_ss58": "espyaEiFTApcA2iQA3EdwnKJhVzMj1iwwQ8YGSNReXrXMvYAL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (inconclusive-legs-2106)",
+"authority_ss58": "esmiqXWwcjiZdZ5SKwQj4L2Ex7HdyNtgucGpN1ij8N6DaN813",
+"has_dht_record": true,
+"peer_id": "12D3KooWAPDP65NRkf1sVyVHHqHWFvN69eQtNJwDJEC2QejTf7KC",
+"stash_ss58": "esnj2GRDVV8ByhGaVcMQkbbRQTefxVKuPhpB2T4YoZYSwaMuV"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/05) (litep2p)",
+"authority_ss58": "esmjJ8fDSJ1dUxXDJZC5N5KfCUGeJ6Bed8HzLkXF3p3TQjFU1",
+"has_dht_record": true,
+"peer_id": "12D3KooWSgW6AtCwLzftRggtUtGUKSQfFxyQLn8qtDmsTaDykuRn",
+"stash_ss58": "esqaFRxgVhDzZK4Y65xdwDyu6dTmFFM5AfPpxgQwhvsAfPCe5"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 08)",
+"authority_ss58": "esmmpePEqbhJshDmqE7FJD2RbmpvW2YKD3ZEC1jv9Wdk22Aev",
+"has_dht_record": true,
+"peer_id": "12D3KooWABdNMpVPnGuNcLkx5q1k3kd3Jzpe9YKNzFAGwFJ1dWGL",
+"stash_ss58": "eskn83taH1Xba3gKA7wkodnW3XtL3p9w9JWbEZy3jsqtwBUVQ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/62)",
+"authority_ss58": "esms83sifGGUfv3jC14EkqpPfrJHyPkaQibKgBjVobgg65mYk",
+"has_dht_record": true,
+"peer_id": "12D3KooWT3FRxad45LqPN9VPtMAMJjKsXTADh19gKCMNS8k2CRJN",
+"stash_ss58": "esqvNaMme4amTzNUb6RZyLBwmVuTqf7QC18KvgktPEAkN7UHg"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy05) (litep2p)",
+"authority_ss58": "esmsB32SvRsMvbuikbjzYpZwYhzH4owQsEK48RQDVn8VykYMF",
+"has_dht_record": true,
+"peer_id": "12D3KooWQVhhXRMwaMZmxeWdVebeJii2AFvA9k62YbaiCatAMkNW",
+"stash_ss58": "esogS2LkFoBDTAmthdykk7md3sYwBBxGZG5UJew44dHZHHWrP"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-07 \ud83c\udf15)",
+"authority_ss58": "esmsZYzZVdAcf9QSjdwmuCK3kTtZJLM2ZxpGu17CCRo4UEnKS",
+"has_dht_record": true,
+"peer_id": "12D3KooWGKbHjGKMFPhhxcPp9g62XKTYB3Q1hDm3ZmBYwQisGApZ",
+"stash_ss58": "esqtKb3vaV54tmyGgEF5vxxKi9FNcMBZ4rrcBbiTsF1LSco3b"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/8)",
+"authority_ss58": "esmuQccqtqhmxniH8drG3qmJcYW1zD66pVSYmx3rqLcqorECM",
+"has_dht_record": true,
+"peer_id": "12D3KooWBkmwXxpdGP7LgV2i3AyJtTna67tTQGZoV953pUWaX6Fz",
+"stash_ss58": "esmKdsjUpc5zE7Qg4ZPPZ1awZdc5jdBaGnwT9acLc1DaDDy8J"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 11)",
+"authority_ss58": "esmv7xftKxAA9mdT6QyEgPv22TeWaaYAHrYyV7Dnmsci2FtrS",
+"has_dht_record": true,
+"peer_id": "12D3KooWJVEADYC7CLbpbX3gLFb6pK9SYB6DxrZSeXTinrBZCr7G",
+"stash_ss58": "esrA6m6FS942JNXg49zej58Up8Xrt4EfFP6hfhs4WPYMWeoez"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 04)",
+"authority_ss58": "esmwcHwxWpywSidajNebCNfErsC93pgeTtzPFauVdm4zggVtm",
+"has_dht_record": true,
+"peer_id": "12D3KooWFt8U4VrTqG3HxENn1a7FD9p3M4eBV7v4Bizx19y3JuT6",
+"stash_ss58": "eskpzq7v8vyuAAexSjGYv2b5s49hhQdXzGdcUfdbxYK4LaYZM"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/14)",
+"authority_ss58": "esmxNV4RKJ13Sn1nTncC12cQWHfT52edTbEgAvatRtSKKhLEc",
+"has_dht_record": true,
+"peer_id": "12D3KooWD68DyV1zXf7NxiAcyU9G4V1pq4hwn4ozB2PFMjf7qdHF",
+"stash_ss58": "esmrxcbAP483rkfgtLtRN8FuhmH22eW8HkWFugEo4niLrFSSk"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/50)",
+"authority_ss58": "esmxdGQTVQ5KPCNNAHVDjBmEnpod3ZhLSQ7wW4fg5P5nXJrvR",
+"has_dht_record": true,
+"peer_id": "12D3KooWGmdSr1EAouQ1inAqtMLWfL7q5EjgUQ5eFAk8ygLmhHmL",
+"stash_ss58": "esoogR6gPqAmj839N3eF5CjxSfjrVS1S2xpLXazYWCGtG6Tnb"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (bumpy-pies-4252)",
+"authority_ss58": "esn19zyRzZTgHhpRV26RFo3dYFTGi4mPUaDKy9G74MUEu5ura",
+"has_dht_record": true,
+"peer_id": "12D3KooWEUJ2LBpzr6tYz21bjPXB5Ja19XJhBmTb4EL3tugRwvJp",
+"stash_ss58": "esorjdZhrYSnSZxrnKVh9UGruXAkC2b3dLdTf4w5nkGd63ccs"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/49)",
+"authority_ss58": "esn96F1ucUHSa2zhSDMmoLHEaFWKWhuCXKXLcS3qE6qi5bntW",
+"has_dht_record": true,
+"peer_id": "12D3KooWNeNCvhqZpvXkMo3H7vHHCdbFijCWSV7h5C49RMDnfkp4",
+"stash_ss58": "eskxUt8mWNSuegejuyni9ABYxbeWsTzEUR1sBTwuNYoAW7sQo"
+},
+{
+"addresses": [],
+"agent_version": null,
+"authority_ss58": "esnB45MV54FLP7A2hDFKCzwFJ6d7SReMsfCv3cEfyidwFiLzK",
+"has_dht_record": false,
+"peer_id": null,
+"stash_ss58": "esoJN6oXrvbyqGDGxYdFpMjE1ozAY2qAUSJi5bkpdcs2R8a8V"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/19)",
+"authority_ss58": "esnBnuV7BvNtZp6SuGTK1FSLhsJJCDxcVZyt6327GtyrK7Xp5",
+"has_dht_record": true,
+"peer_id": "12D3KooWQCEuxRvrGYLZschuLizXsiQCGtTwEa7so3A1LWL28KLu",
+"stash_ss58": "esob2spNyJm393NzPk7VDLAJdTmChKPgWrH83MvqinsetEWTn"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/63)",
+"authority_ss58": "esnG7gsoefDoxSvmidwgw4hEJ6m5MDta9auxRDtBjDgL2EKtm",
+"has_dht_record": true,
+"peer_id": "12D3KooWEQv5pyJS4Ljj4wrj8Amo8151JkCghtw9VYoggH94JUY4",
+"stash_ss58": "esq7dZQ2ad2FtAF7NNcf1qtev6fYq2hytT24M8vuJ4uHZGWZX"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/32)",
+"authority_ss58": "esnGbM4TFJqbEewcirvwQzGpj99kKj3E7gyZagXB4FwqFpqZE",
+"has_dht_record": true,
+"peer_id": "12D3KooWMuhXd7mTbs6agWfVWQm883RKLbefX1NXDMnmNi3z6Pop",
+"stash_ss58": "esodrNgwdDRcWytz8CdFoxfWBDf66BL7bks53f94AAi4ZwR55"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 06)",
+"authority_ss58": "esnGiM1LoDnD6t8pVRBx5UsMJ46oi6zWQgasi7y2rdGM7vznv",
+"has_dht_record": true,
+"peer_id": "12D3KooWBcZq3Ctkhpz6VxRgsQt3PxVCemfHKwoTQnXWYp3i1wXK",
+"stash_ss58": "espd2gnSd8tzNVcFTj37qgyiacVKDVsZNtBdUELwoZCgbiBSt"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/14) (litep2p)",
+"authority_ss58": "esnH1iaLUufGHbXya65GUPHGzghF1cBWkWnHncgHC37eN3EcK",
+"has_dht_record": true,
+"peer_id": "12D3KooWRpg6kdChrvfbZg3ykmvRtnE66AeQGSPc6tqve2HTV57w",
+"stash_ss58": "espHygULKojqie6L3y4ErSafMDS8AT7zpJ146rEVHGQb3QDxm"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/34)",
+"authority_ss58": "esnMYzcmqEevraTH5RxhUSZbYEhj8AJNzGS4UzYVTBxPAfp7r",
+"has_dht_record": true,
+"peer_id": "12D3KooWKFaBGQgARGwGRyJCJJG3K6bhCzc3QgXA1h4VhMHTwX7j",
+"stash_ss58": "esmWdksU8SUdfJ2uL4p4Jb7TDqxJbSGTYSrmXd5hCL1UnkfHm"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna \ud83c\udf15)",
+"authority_ss58": "esnMbnsMVXWdsNVuA6ZLp68TDfeYUz6U6AaXRCdEkZFpFPHCr",
+"has_dht_record": true,
+"peer_id": "12D3KooWKJsdNGtt9E5u9qQiUX6yvqudvigr8Uc74eMJ7BooCCrX",
+"stash_ss58": "esnpHCUii7PvrGr5d3r2LLSseXzbKteTAsxLGHhhptmL9m4uJ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy15) (litep2p)",
+"authority_ss58": "esnN9n5YqFs2tdgav7ZWm9KZYPatqJhpscNQgUvgyWrjUhU31",
+"has_dht_record": true,
+"peer_id": "12D3KooWQFtg9JRzoFC3dmpzJzWinub9mSEAEmxP9uRb8zbDNhzf",
+"stash_ss58": "esnVdFK1c69CewXkbBFpebzGw7EDjofsdDosoVC7UJBtPhQgy"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 02)",
+"authority_ss58": "esnQNK44jSYLDYp5oMMCfXUbu6r5WpUjUqdWZBCsoT3sYtUcM",
+"has_dht_record": true,
+"peer_id": "12D3KooWDAkCqaFnBTWoZgxxw512wSHki8wfMnJ6rvqA4WBuxVQn",
+"stash_ss58": "esnty4iL4q6Ewc2fKtZDB6BrDKjxKstrzKZzNu9SjrHXbgAH4"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (mean-pear-9643)",
+"authority_ss58": "esnQwYEjzfbBeuHFKg6VobNsvxFeAzHy1ubGS8xMvboqcgNyb",
+"has_dht_record": true,
+"peer_id": "12D3KooWMHupo7MCYMQZZjanMpfsGqiVQm6yuDTZx2WJzDVuCiGw",
+"stash_ss58": "esrRSkWVBnahP7BrmS43X96WB1m8aKRoaTZ7fHWqB32VtHfb5"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/7)",
+"authority_ss58": "esnSj6Rq18hajLVhwrEEQ6422rwNatY3SdkcG4E7sTgGJ1vz1",
+"has_dht_record": true,
+"peer_id": "12D3KooWPJ8SbzbmLMp9DgxU6LEuRpidZ9EcDJJTugiZAEhr11T2",
+"stash_ss58": "esnE3mEqS1v55spoF2zorguQZGGabsTcsFkDrRq3mDYKsx5Y2"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/80)",
+"authority_ss58": "esnYgHWYgpb38DiVvbCqdszMqWBp8riKjvRJA6CXLYUbXtQsc",
+"has_dht_record": true,
+"peer_id": "12D3KooWH567J2HCK6EbbP3PUKQpmpKN2xh7ojUvBtTGWiVpmwNn",
+"stash_ss58": "esqkzFdxdpEhThg6ma8KWnsfESLXXBJvnVs9hdiWBVeQUqNEC"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy15) (litep2p)",
+"authority_ss58": "esnYru2UwSs2rbnGiFWA8QEzNxgvuHK85fJvujs4b2uQJEatZ",
+"has_dht_record": true,
+"peer_id": "12D3KooWQFtg9JRzoFC3dmpzJzWinub9mSEAEmxP9uRb8zbDNhzf",
+"stash_ss58": "espDeG3jLVvH33W4LVQk1zVYKxt59kxAnnkmV46KfXHH3x1BR"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/11) (litep2p)",
+"authority_ss58": "esnYx49qBBaCZUcbqy2bXHbBygEeQmFZv6P9toLmUpxezodXw",
+"has_dht_record": true,
+"peer_id": "12D3KooWARsup9aTmrapEFxs27cADW4x3fifnM2wiFgr1h63k2T8",
+"stash_ss58": "eso8zQPcjHmz4jbiaRTx7xGjUHNhgebtBSiufoC2MwafGCZi7"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy04) (litep2p)",
+"authority_ss58": "esnbArCTf1ivoLaVotbPcXYt76GWz54JdPppSaJJZabCDfGbb",
+"has_dht_record": true,
+"peer_id": "12D3KooWHWrDM4TTgTwtu1bTUTgXudvzeaoVsE1wTUVPxKYMLSib",
+"stash_ss58": "esqnqZGuFKhT9xq1ip335rsbEdmUnmjA2t4VPCAXeBHJARbYd"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (capricious-chairs-4129)",
+"authority_ss58": "esncxWxUK1rDdSAaX9CP37z47nSrdnymboHXsFvMQp3j6SMzQ",
+"has_dht_record": true,
+"peer_id": "12D3KooWBkqdcWvdK65KVaJxUoU6zhqEFfNpgNLiQGEdsyDGDZec",
+"stash_ss58": "esqSYPGAgPFuM1hfqRd44wGrS3Ga3g5opqTX1Mtqa5TtcZKJ6"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/29)",
+"authority_ss58": "esnfZN83Sfm64A6s8eYSfU2z7bphmxxju8g77mUsVSLojqsWM",
+"has_dht_record": true,
+"peer_id": "12D3KooWNAhHdGCqZmevtEHSAEyeg7A9YKSxHP8EDiZdv4iimXy6",
+"stash_ss58": "esnMn3xe9ETAjvVuxMFPLA9ohQNfrkDRh61zURjuac4yf5Fvh"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/11)",
+"authority_ss58": "esngABKdx15fokqok7Yourry4X2vFY1Wi25CdT655r437DzAd",
+"has_dht_record": true,
+"peer_id": "12D3KooWDcYGguY5mMHNDjAApaYXj8MJvFgSVY1h7aYjDbAmNDdN",
+"stash_ss58": "esqZpY2wbQvmMnrf9CEr3LLKTS6W2cyWu65fiQEQdzVEo4NRX"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/13)",
+"authority_ss58": "esngd2DhdgSRdfEHSNab17WA2Pi9teeAqNVpaKv419RLZ1WLo",
+"has_dht_record": true,
+"peer_id": "12D3KooWJuou3B2zHPDnea4gf6184KvsmDcdsfX3dk3djHdpqbUX",
+"stash_ss58": "eskndQ7kZPPz1uuz6WwFEZyWJfQiZMHAju2LthWanE3r3SFsT"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/72)",
+"authority_ss58": "esnmumvGp7UjrGY7W5ksWxhu4LLgBfahE9FpGwCTGNJzQb2Tj",
+"has_dht_record": true,
+"peer_id": "12D3KooWDv64efV1JmtaULRmgiPxwuXJT7wU54eMBcz6Ntke5eLY",
+"stash_ss58": "esqqT2fiuJsGk3dEGybnHB7sWT2qnB4o1oJrHYEq1ysKP8bum"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/27)",
+"authority_ss58": "esnmwTKB8RFebwD3nMhMBNEDoszkRdDcZd1mKE6MLbopAxu4k",
+"has_dht_record": true,
+"peer_id": "12D3KooWRYCx4gkKnbge2HRHavXphzti4BsLZ4cK2NMyTvzTuoVv",
+"stash_ss58": "espvrqmTp27wfSeH1LSYMTGyc59cooK1ZrSpbgr9Sym9HewaF"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/26)",
+"authority_ss58": "esnohYzSFveMpgtAmHXDAYvUL6q3F9WzwGbabZZtRjiAZgYDL",
+"has_dht_record": true,
+"peer_id": "12D3KooWAdfD9MQr8sbW3QsUUXV2trNfoKnZHUgA6L9WnDfJbTWk",
+"stash_ss58": "espUjySuj7DY9GYLhgTR4i97eei2bLoXURoUiSi99jrdfAd4X"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/68)",
+"authority_ss58": "esnopVZ69QnEheLWtRTe7fy5CiN1SmDVJQMbBe66Stjazok8T",
+"has_dht_record": true,
+"peer_id": "12D3KooWFtUY7Q5A6Tfuho1wTE4oQ6pL676Ng3CN2yd3Ty6BMzv9",
+"stash_ss58": "esqiEZ2hF1TBBox4r8LdmG4g9x5BDJnCJ6dnzEuAwSeLQncmZ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-05 \ud83c\udf15)",
+"authority_ss58": "esnopedcW7Z2DLCcp5mowZK9bM3NbzUBuPtzsuWBFGDidqmEE",
+"has_dht_record": true,
+"peer_id": "12D3KooWA9HGNBBB7sZonf3581NLRo5Ye7iKzTCgZAiWgxqtfynQ",
+"stash_ss58": "eso8S7kbmoRTdtT29RxwfWG8roMVcT4nD3vcgjGYmQ7hGyRdT"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/10)",
+"authority_ss58": "esnrNv4d6AwxrLp38x3oq3FfdPTQpMH1UEGECFoahj8AcHDw9",
+"has_dht_record": true,
+"peer_id": "12D3KooWJj6fLgvsNvSTbRudWtHfhJAKB3yZYKVoBnh9ADRAC8td",
+"stash_ss58": "esnzc85Vz5LM3GTtKj9UMJKE3vw3iHBfhVRxja9ErMxup17tu"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (average-thought-0639)",
+"authority_ss58": "esns9oJkxLiFk7uxS9Vphbq8XxGvUKKY8iGQuskW58ayjw18q",
+"has_dht_record": true,
+"peer_id": "12D3KooWCbrS6GBnViKpj8bHqDwdXVUzN9HTW2TxtTY9on7JZJxd",
+"stash_ss58": "esqCTJ9iasySPNKi61keernpNkk1J42bJD5LP8rjGdVH89nCx"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/2)",
+"authority_ss58": "esntg1Xn4mrezbtoZ8DrJ1tWkhJ2qLK5M5YwmSZgEWtyjYTbq",
+"has_dht_record": true,
+"peer_id": "12D3KooWCceUHXTRHMTSFa8yeaPxznt6Jx4cgQPjkDbP87Gmk5bj",
+"stash_ss58": "esr74fyWtn3aGYSB5UzDvmAt8BcMMLU7t5p6WMc9zH2dZJ6VX"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/06) (litep2p)",
+"authority_ss58": "esntk53aUbJMdEL4piPhSndjfeVvcUoEq2haVhzZiV4AdZESV",
+"has_dht_record": true,
+"peer_id": "12D3KooWDmswsGDAsKySRMDqboS2L6shV2Shq1omD7mpyUSSe92y",
+"stash_ss58": "esmBwCS7qGu21iWeERj3FWBx3bHLzpaEkNnryEbHKYicZvkgC"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/46)",
+"authority_ss58": "esnuXkFCy81DpkHhsFMvb3yeMkeQVHEvta5V9PQsgS68ENhDw",
+"has_dht_record": true,
+"peer_id": "12D3KooWFiagVhV5NK6SwNM3QseQNCg8UNMYSbLVPBdF9EBMrk1f",
+"stash_ss58": "esorcAcpxXdcuMTkE48tKUp6Dyxg1VLbiDDidM2oVJcYmzhcE"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/47)",
+"authority_ss58": "esnupKQT2cDsMatFrw34X3RLgbVmkTRsjiR1FPwVWeuyK9ZKm",
+"has_dht_record": true,
+"peer_id": "12D3KooWR6tdevqjjB1bv93Vbr1DL9uBq2g1s63afczgmLbXgUpK",
+"stash_ss58": "espMACRmJz6y7LMTQWj4Q7rLyF5fneKucp5wvDtW52D6czj4s"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/39)",
+"authority_ss58": "esnwpG3STNyeD6jEtDn7Y31EMJdSY9W1wpgAyjvNxXg6R1tWv",
+"has_dht_record": true,
+"peer_id": "12D3KooWRCBxG7Euz9o9wjmvqf7hK4N4usTHTtdYoL7kfAvNw42K",
+"stash_ss58": "esoDb9wafHauwLceekh5LA2hPqkvgkSs7fg8CcEJ9w4KhFoJ1"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/16) (litep2p)",
+"authority_ss58": "esnxEtzDTGFa6sC3CNvePQMAgMjgux7c9XY1B75oJmk4iw8yE",
+"has_dht_record": true,
+"peer_id": "12D3KooWAJYcs7B3ecdY2SPkGmj7wfxc3WSpjcBPh2zL8SvJeN5X",
+"stash_ss58": "esnaiR7etjSXvPw8kBJP371GdLoXLc8Gsb6ae66N6wQYzvWmP"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/12)",
+"authority_ss58": "eso2mJm51BvENmdHugLXvNWs9hvhUb2xf24vpPF6Pjq6K9aZM",
+"has_dht_record": true,
+"peer_id": "12D3KooWDB595bijpb1PurTKRpk7oivySmxbHSQ5spEhnid9rM4R",
+"stash_ss58": "esq5ixDw5wSDbEKzGy1zVwnTisaJBVLEAu7h7K88h3pyN9oGZ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/53)",
+"authority_ss58": "eso32JoAj4ZxacS8vYDE9GCcEs5S3p3GWFMigSHa2yi982pnh",
+"has_dht_record": true,
+"peer_id": "12D3KooWQuLzQG9GAR54J9nPSzeiMUE3NE7kGQY8d26NrxU7fDmt",
+"stash_ss58": "eskmrvcYBSKXLTCbB35UrM9uizNzQN51Wgmr4CokegwSY9YLn"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Outlier Ventures)",
+"authority_ss58": "eso5wBzFa5BannNebZuZ6cL26HNofmS5PNT1YYw5wsE5fLqKX",
+"has_dht_record": true,
+"peer_id": "12D3KooWFrXvnsWKk5h3JnosQGiansb77RoftKcsaJ9oA32MKmu1",
+"stash_ss58": "espyKW1SRKA86eM8m1FiDq79tvizA54fQ7D3XtcKryMj3XLcu"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Skipped"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (titan01) (litep2p)",
+"authority_ss58": "eso8SnzJ287gffnXz3frFYfqURvkaxeDHnL32GAao3qiwYPqy",
+"has_dht_record": true,
+"peer_id": "12D3KooWPGo65zqFsfsN1QvHWue6tt3u51z16YTSH2DyzteMysoJ",
+"stash_ss58": "esrTpEJWwKuD1UKV1NKYptfsYjtWpMY4kttiCp19kPwWa1enT"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 16)",
+"authority_ss58": "esoAgxfAo1RCbFxvLmSL1PcrodCBT7ZaNpg5Duc7ytKydNBz1",
+"has_dht_record": true,
+"peer_id": "12D3KooWHmDb8LSHmCvEyPxAWB8YMzV3nNfJdzSNMvcAKzLCZEoP",
+"stash_ss58": "esngMuPwhBnEvLHa79VfUuDzy5QFTjp8cC8BFxK5s1jDrza8r"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Skipped"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (titan01) (litep2p)",
+"authority_ss58": "esoBEBo5ioeb7RofzTGB8sBsw9nhBXiZ4VQptCnNgDEk7acx6",
+"has_dht_record": true,
+"peer_id": "12D3KooWPGo65zqFsfsN1QvHWue6tt3u51z16YTSH2DyzteMysoJ",
+"stash_ss58": "esn8Py2JYgWp9JMXk3TBhUUoWgqCcetnqK29yVq2rCugTiSwr"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 09)",
+"authority_ss58": "esoDNnxxns5HZsEzisvizzhywxzGZEjsLfkAhwVFEgfWs61QP",
+"has_dht_record": true,
+"peer_id": "12D3KooWMzkkEMgJWRhGVLwDTUD9YU4UNogkhb8a1cTXzdYwjEzC",
+"stash_ss58": "esoKSvr4EBZeo2YWxaCVejknVdixtrSH4LWSRZHyp98kp6hTW"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/78)",
+"authority_ss58": "esoG9JpbdUcexZpS5seg8MtXNzkLpY8WYV6byA119gASf7BZX",
+"has_dht_record": true,
+"peer_id": "12D3KooWGDN4u6w8Q5U78ibbSs7Ec6DPFmFHxgEF1Jty5N39Z4ws",
+"stash_ss58": "esqCPGp9FmVVP2Kph2zHXkGTwuFY2KanTFwMka5Bjv4KRnxLh"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/42)",
+"authority_ss58": "esoGSaxHZ6htFSD4amoQ9nhPeKViUqYLkWnKaLnRqdZANhEEV",
+"has_dht_record": true,
+"peer_id": "12D3KooWKPMZyxTUc6BbkGPkrrGtvXedsPoScvCFTdKi1ZEEH9FD",
+"stash_ss58": "eskmajxhtrz9XBCL5Fj4hq1skcSKjntgRqQmuBqLfw3bqHDow"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "esoKNPGUGmauu8F7uzqHN7drqYBiXsT8jv4ks3DM37aYCpkqX",
+"has_dht_record": true,
+"peer_id": "12D3KooWQEn6UAKroib2p6RkyJEy7pF4gnudTtRnDifhcGpMhyCB",
+"stash_ss58": "esq5NS7FYMtNewttSMCJ7c4hNj68kToiSC9mVr6dLwfubcRyL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 12)",
+"authority_ss58": "esoMFYBtsC3ZXzHTifndXdXNzB2ERsKvs3dJBDyA9us7ua5bo",
+"has_dht_record": true,
+"peer_id": "12D3KooWJVmN7VWgUfet3XV7gLHx8yVKJViTiG93kUCzpKkqh8u1",
+"stash_ss58": "esq1x3TYibdQ1TpQFpEC77JzQQwwFoqS8L7YBrLFC1vPvyg4k"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/03)",
+"authority_ss58": "esoMLDo3u32A7WHEwa6utwyWc3gqSh8zn4f91xudMC4WdzdF6",
+"has_dht_record": true,
+"peer_id": "12D3KooWNSg68q9p38gtRLDwcoq9hTff7UyVHtiM3B9VVLHq3YdC",
+"stash_ss58": "esniMW88mJxYrJv4hFL1YZkYNcHBsevid1bBPtTDAdhFXUdcW"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/38)",
+"authority_ss58": "esoQ1ve2UExyt9y5ncmD7Efagf1RmZUXBcHm3YX7ubGQS3frL",
+"has_dht_record": true,
+"peer_id": "12D3KooWF8PtDGUCUfSzPpVU9auBCCjAvNNNUpnHUkEVh6DomchS",
+"stash_ss58": "esqo8NTDKSkmxFpBHrHu4xNjU3q2LzAitziJGR9bJU63t5hdb"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy03) (litep2p)",
+"authority_ss58": "esoQYCpAD6DzDCsSPVzhjLuefuW9ZH9X4DzcQ3xydpQQb6E4V",
+"has_dht_record": true,
+"peer_id": "12D3KooWGTxu2B9rHjUzRcMQVFFJf3K93CQ5xn6EagxGMM3CJZXr",
+"stash_ss58": "esmgN326qnJ17E6SH5hiAUWnEh9ruMgCE1GkX3dkiLxEGRTYo"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/73)",
+"authority_ss58": "esoUu1iuMf2mqL2QyUMDvjc2twZqMY6iWjgxHS6asS8Nzdn7a",
+"has_dht_record": true,
+"peer_id": "12D3KooWKsy6b6hhaySmF8UcDTpHFJ91JSwDnkwriwGtr8ZyoAF1",
+"stash_ss58": "esmYNWCNxTo7r5DgjAHfPEuDtjNgpXwvw2B9LB9x4ASk86L8R"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/43)",
+"authority_ss58": "esoVHN63GmecvRRNtH32sweTmdKx3rhM7o5ugNdtqY2cd9kYc",
+"has_dht_record": true,
+"peer_id": "12D3KooWAhS6ihAAFFHmDd9RKMFK8o8XDHtJN5fNPDt78L3Myouj",
+"stash_ss58": "espX8AVBq4Ka4VFn8C5xLZCTFS1MhQFGeS8MVuBLgBECz475S"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/Thea) (litep2p)",
+"authority_ss58": "esoVaf8GeGfyGc5jxLgg6TpAQdTY8g3V8SeVqtui5rKgP8XXm",
+"has_dht_record": true,
+"peer_id": "12D3KooWAP4eaVDe1ZPJXkqPFL96k2MMGPti9ENkbdZbnkN5kqWn",
+"stash_ss58": "esmVbVghG2vpiwF6zwmJ6ukyBRnzBhLVMKjeoRcSQAuJUX975"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "esoViG525hbe3BhRJt3rg2r48yRxTUQwGBFQo4hybbUSTzqVX",
+"has_dht_record": true,
+"peer_id": "12D3KooWKPLft96jwYWykosDyfX4KA2PstjXWytHXNW3bHTtLp2H",
+"stash_ss58": "esqJiMfrKrL99R4pHPPkyEHHAtTpJcDRsQFRHJMTzDtT299gu"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/09) (litep2p)",
+"authority_ss58": "esoY68bn5LfgFQJVAeYiC6qEsyhf2xUZac5cbuK5XgfHaQh18",
+"has_dht_record": true,
+"peer_id": "12D3KooWEJKimRNJzJyRk7nDse7g5FU9n2JoDYj6qSHhkLMX1yb5",
+"stash_ss58": "esmsGTDNRenEL7WSqBQJvSN32AuHhFmu5dhubN9rcAe3qSJUV"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/21)",
+"authority_ss58": "esoYKnpKiEnJL5rAzrUU2F34MEv6Q5j8mbwQTTesfnDNLbdAz",
+"has_dht_record": true,
+"peer_id": "12D3KooWSnfjjkQRnBKGkEtnoQycFuhTg1P27HU92yhQFJPdWWjp",
+"stash_ss58": "esomERLcJmgw4c1RQjCEun5a6ENQ5yV1zzaP4AsjdxzFc4jgD"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/10)",
+"authority_ss58": "esoaLFD6rkuXPCucW4KcLNqU6gJQ55sCBEE1YsUgCBonPJy7S",
+"has_dht_record": true,
+"peer_id": "12D3KooWPu4nvnYby9o9GJw5rzCyPenVM3Xf4reJqF7Vi7vEe9aX",
+"stash_ss58": "esm4L1U3ZtKacYN3ciNPf4euMAxvFUHrmFs3MQHBVyk7QaDyd"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 03)",
+"authority_ss58": "esocn8hC95F1JZWFbXSxiTpn7yJqNULnSvjBW4hb5ZcfhQpYD",
+"has_dht_record": true,
+"peer_id": "12D3KooWAHPBwHGymrH3kvx6Q6kXsDGp6fLmucUmDdYmmSH17pxD",
+"stash_ss58": "esoPrrSdt8P8attzm3DWLb7mkVbXUMkWF7vp3KoiKZRgsrPsL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/02) (litep2p)",
+"authority_ss58": "esodFtgBdH47Z7qkbjS5j29Yu5LNr6nPBUUDnGs3wVwEs9gAH",
+"has_dht_record": true,
+"peer_id": "12D3KooWG7tyUYgXP1NaxpTT9EcNPaTmwysEuYU9vPNf8ShknD63",
+"stash_ss58": "espkPKZniP7VY77dZUNbMeyCn5sjHWKGh3PMC6gn4usSbN5tg"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/18)",
+"authority_ss58": "esodqfQTXEoAmtHKX4RwKVpeuN6Y3byEri33uN2A38Aspoumw",
+"has_dht_record": true,
+"peer_id": "12D3KooWH995vzykfzHWqKrDXSSAjoZZk73e2cX2uCAmoDNd8qSE",
+"stash_ss58": "esnVFUdj7wJuUrvbfGqdtNF8QmGqR36ucxvxui8PUaWDiTXQk"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/25)",
+"authority_ss58": "esofkg6QnNhKjsXwQeXwu9UfHkHsmAfL2r3CadqeeTB6TzABf",
+"has_dht_record": true,
+"peer_id": "12D3KooWFcFqixknvMyAatS9WJaUmCWFABWgr4iAQTpaqULF3pWN",
+"stash_ss58": "esodbuQB4c68VECVzfQz1Yq89CghTZHVUUJgkhU3BtcSKWPft"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/40)",
+"authority_ss58": "esoisjeQehVypiWhDknj5Y9w74ktcoDw6zu1mbcupdxvMvSWU",
+"has_dht_record": true,
+"peer_id": "12D3KooWRjyxDqtSeZJS7NYek3cuuZM9oqiZx7stm8rmc9xrVznQ",
+"stash_ss58": "espA57b7G6iRBVQego6GX2QsCCz29Kzg8VMNANxCHyTJuXj7q"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/04)",
+"authority_ss58": "esokovBeMPaSZdakT4QYHR36q1gXFiTGZ49fVDvRUDq7wyVu1",
+"has_dht_record": true,
+"peer_id": "12D3KooWQcj3TH1rjykakNZtgnrH7b3CwfAjUDLB88eN9dwLnKgp",
+"stash_ss58": "esm1T29AgewxfSjNbSPT8ieY3daH6RufQBih7wZ8niu9YcZYU"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 11)",
+"authority_ss58": "esooC8rLL2GUqjAS6ZSF1xne5EMLcBzx2y1SH1jUupJCYXUyb",
+"has_dht_record": true,
+"peer_id": "12D3KooWKFscMc6cJxpLkq9xyTJdxgBNSXSHP9wiQdT4rLouk31k",
+"stash_ss58": "esqXVQ8qnAPB6m2wL5p4rY5oMcnXhc8XZUvtwRvpv1Fd4K7GQ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/07)",
+"authority_ss58": "esooFyVsGTzYD2zfKW3UTdewbkoWvY4st4vU2dBQGQKSiuXfb",
+"has_dht_record": true,
+"peer_id": "12D3KooWMwT46G5DGgeH87SicXFHfkN28uuPaayarr1zYS3Mg5bS",
+"stash_ss58": "esoGGHxtJgJrNvpKC53oqBgm6EqYycZwXJdP77LWuSKKB9feR"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (cumbersome-truck-5666)",
+"authority_ss58": "esooKdYyN3JNqfPryNfCzL9FeDYf9Ax4YFhkazy9Rtegt99T5",
+"has_dht_record": true,
+"peer_id": "12D3KooWMVe8agejHX7hW4QFvXkDCvt4E563gcyByTs8poVM7ZgA",
+"stash_ss58": "esqeh4LrUDLmcsUzxjnVamToqxgQdac96JH3Go7rmwM2sVhDD"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/76)",
+"authority_ss58": "esoquDkrcNS9JRHB7nHWfTVFFi3tPEHi3o1KFMzzkmBqWcvBr",
+"has_dht_record": true,
+"peer_id": "12D3KooWDp1D61BzK33Vbx8zruMqo5iXZY1rLcLAnM7itguXDvms",
+"stash_ss58": "esn1CosC1fZ6Yp9gzdE7zRJSm3stzgt9LayNik2vyc8L6a7zL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/70)",
+"authority_ss58": "esorEBzdj7FtJYeUFbWYP2XCVuSscTYf576Eb5gTztyiKePUx",
+"has_dht_record": true,
+"peer_id": "12D3KooWNNWHkJ5y5ha77Bts5kjFqKiw9Yn2gFhyjpCb3EmuvTqt",
+"stash_ss58": "esqw2CB4ofRWkHvBxqiytcivReXE7MEzH3EQMEt788Kbt7Qpm"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/64)",
+"authority_ss58": "esotjEThFupMLKvMg2ZVW2behaMJziwHoiJpYX67KtXNu9qYy",
+"has_dht_record": true,
+"peer_id": "12D3KooWEsMyF2zaDzQqTkSohBt27zcPY8FaJtjYdtiPpJGw6m2E",
+"stash_ss58": "esp8GThPiiiJYnfHVrxThVKjXF8PoiZawCDu12wAookTbPUAz"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (DomiNodes)",
+"authority_ss58": "esou6kx62c4UgNvusW2tXbECSzf8EqN8uormdASmPHyfv679N",
+"has_dht_record": true,
+"peer_id": "12D3KooWCT7eK4d9dCAcyLnH2aqHy56kHUpkcA6r7NVtBcZ2Yckz",
+"stash_ss58": "esqceb8LpimWP3mjHqyt5aF4DyVURPGb6qons4y41AGwA3Nez"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (entertaining-payment-2278)",
+"authority_ss58": "esouAJbhUkQgqAhKX7ua5b7wEVJ4WnUjX43GxE14ySBw5jJ8d",
+"has_dht_record": true,
+"peer_id": "12D3KooWMkoVKbofbSefTG8w4QieT9Er1hReKq9mJ5YHTii6qwtS",
+"stash_ss58": "esr9X6jPacnhpoDs7g6v43mgKFWNBedjf3nN7wxnvt5mAC5Vf"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (necessary-drug-0195)",
+"authority_ss58": "esouQDZYG5ce8um9r4coeHfRjGveiQBbSUxa6XejC6RrEi52s",
+"has_dht_record": true,
+"peer_id": "12D3KooWF7z11iNZgUiEyX2y55AW2CY289SGpukTtoRvkcueEVoX",
+"stash_ss58": "esmrnrgftWDmrUaKmFoKt7SpUzCFfJdi7JyRngECCbVEwbEk1"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/01) (litep2p)",
+"authority_ss58": "esowsXqg43s1hPRjHZkK4U7w35x69HQw5NWYxehHZQgSLNmL2",
+"has_dht_record": true,
+"peer_id": "12D3KooWENh4QpXzfaD8nonhTaSHreuRpKRTRtDTztGeJ7XxXgyw",
+"stash_ss58": "esoYAMWNghdgazwn2s5taMyhDuUxSGXtHFkairmZuBJVbMSR5"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy11) (litep2p)",
+"authority_ss58": "esox7URgebwSfm5iErEZqw6XVneX2hvtrMmBhXfvcfet4vhtH",
+"has_dht_record": true,
+"peer_id": "12D3KooWEYMd7dMGc53NNxFm6EFwQxHpWerT3Ltn68HoWfnmxres",
+"stash_ss58": "espoUEsPLLM8YbgQiyHeHiL4WPGxvdffNFBaDCujrfPPQM3aQ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (whole-oranges-4626)",
+"authority_ss58": "esozArkKF25jcWubhZQsmewGz4j6kB7424HTDBDt9hpqfsYDA",
+"has_dht_record": true,
+"peer_id": "12D3KooWR58sBhYaNYSeuaqekK8RdSmuuH3RQPaVbLrw3q5XR9ZV",
+"stash_ss58": "esmN5BAdvwZLNJ8bQa27HJBv6SuxmxW1EdtMEM5Pccrwewj7V"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "esozXzYpxVTdqgdFfEnN1qAosFyR6uLKGnwLf1UqMeQoqzZyf",
+"has_dht_record": true,
+"peer_id": "12D3KooWKPNYncnY5wLESVYRwPGiuowC9CFCMD24uNHGW3HGCE9u",
+"stash_ss58": "espw8NczupnvTmbz7yukCBSDfzQj41vK86xdpJ84fYW4k7Koj"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/23)",
+"authority_ss58": "esp2hmtAagfxmsB4Kjusai3Z7bfSAKkKfVJQVq6CYX8BEBk3x",
+"has_dht_record": true,
+"peer_id": "12D3KooWRA1HCw9n7ayznEudGszpvE3mSWJKkxtoa6EgBEb9Udci",
+"stash_ss58": "esr2pHD2HWL7XXL4KMsgw2YSLwHFqueqFiu2Yiy224q3ZVSj5"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/44)",
+"authority_ss58": "esp3DbH5VGANrRJuQ4c2vGMjobzg6YprYS2XXyvwQZjybuWzy",
+"has_dht_record": true,
+"peer_id": "12D3KooWR7dXLnAGRsf28kfT347N2cwmppyFUqZjLHv5TepnUXCG",
+"stash_ss58": "esrV1LoLHcAzR8jaN2ApHDoSyNiMke9xvw8sXF8PUq6RokVEH"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (roomy-family-2526)",
+"authority_ss58": "esp4qBjLysdXjxqLdHGmZxNSYvKhnsd3YUraP7w3xpX1j3SzK",
+"has_dht_record": true,
+"peer_id": "12D3KooWRLhWSYG1pqxWbodC31qRGBStczWdgJXcbJPZ9brnvbi4",
+"stash_ss58": "esq5bzaucah5jAK92k3dKn8JST6LDmEHM6EXaFfAqWpXmEu4P"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 15)",
+"authority_ss58": "esp5iqKehipxhjqMNopde1NZrDqjHz3j6UyhDrttMREpZVjzs",
+"has_dht_record": true,
+"peer_id": "12D3KooWKP1XrPENRe9EUvNtLxgmgeAfMhHsWi1QDf1PFqeuSEJU",
+"stash_ss58": "esntz571FCnhD5VA2VZc8rFLJH2XprnzWWdwhGjWT4byLDpgG"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/20)",
+"authority_ss58": "esp5qZJLgbthWxDn9N7uJNX1AZhGKN4EBncsXBtmr3HivCxLg",
+"has_dht_record": true,
+"peer_id": "12D3KooWJyzoRghUs1Zkw3zzwyjomVA3Rju3su12egFJyiU18KEU",
+"stash_ss58": "esqUure6RsfxfCpcP46ZzcsrkG7erffjptDuisaMrzKEFRX7p"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/48)",
+"authority_ss58": "espAekFGzLsGyXwm96ZknpGRsVD5AbD66fUckk9dAcmpzaZd7",
+"has_dht_record": true,
+"peer_id": "12D3KooWLPEwBm4uXXaQpzpXd2UsEqMcBnhmdeBdpVirJkcWcrbK",
+"stash_ss58": "esrU4CxYXE4jW3jUUuyefGCCjNCm3q7YwsgPYAriaGVX3uvzD"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (platon01) (litep2p)",
+"authority_ss58": "espApVSXqwsoT9WbXdSqLYHMWYz6Z2YYunyi3Nrj7BsLSwCgB",
+"has_dht_record": true,
+"peer_id": "12D3KooWQxCX127BL39LYdikLjULB7RZA6hqwFBm8JVYrLcmiuMA",
+"stash_ss58": "esnx3oRcwQxfmExANw8JxybsZW5fNhHjh4ms8knsUeUy8LZm4"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy15) (litep2p)",
+"authority_ss58": "espBLpdY7vkPm9oP9nveH4DXPGuHfhUHwsZa3ZGhfcpBGeu5A",
+"has_dht_record": true,
+"peer_id": "12D3KooWQFtg9JRzoFC3dmpzJzWinub9mSEAEmxP9uRb8zbDNhzf",
+"stash_ss58": "esngZYpNzQ2pX32uRtrw6WWrBKBeE43G3AF2DXAxqzMSPYrGY"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/74)",
+"authority_ss58": "espDMvDh3LNYakGX9PAWSxfw1FJeWUokZPyCiQSssbaUCoB6W",
+"has_dht_record": true,
+"peer_id": "12D3KooWCJ98QcR4gwqZN1QGMJEaTEJoSvatnyUcUWDPXcJ2Yo8S",
+"stash_ss58": "esnK2poyg9WezAj4gMvkZmzkxUEEdcATHBuErpHcm7BMiHb6j"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-08 \ud83c\udf15)",
+"authority_ss58": "espFZr2tVD6z7uLvdpnZgW17jaQ7Ngw2NfFEiHsSCwVGBmnEk",
+"has_dht_record": true,
+"peer_id": "12D3KooWLgncnyvp4yo5uAHs8er6z5kuaty9SVfSP1tMYZWGZ1vg",
+"stash_ss58": "esrX6zyhdT5sbgHJSxt5n5t4LyJaE8uYNBUe8jbQmCJJdRssP"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (embarrassed-owner-4192)",
+"authority_ss58": "espG4FYvAqA8cTAPRE5BauHwL7eDCgqHi7Kds5HpifYZH7GJN",
+"has_dht_record": true,
+"peer_id": "12D3KooWDpeDV55Z2Bnfn6R1f2AwM2dowRfuDKSLVjUSnXyvTUKq",
+"stash_ss58": "esqvfWqX86yTDKuZ7xDKquCeTSTFMPEzkQ7gr9VvjwxrkdeD2"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 13)",
+"authority_ss58": "espHyCsSv9Tbz5yffVDYxkxTB2MombgeYxJ63px7QLtC2JGTH",
+"has_dht_record": true,
+"peer_id": "12D3KooWRjBGS5ZCjum8m7viR5igFrfUAaynTjA76x9dK6xymNSv",
+"stash_ss58": "esnb8QxQsvxwHEQe1ju7XmVj1T3iEbeU7Ph4vLYXSSUJnK2xc"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/79)",
+"authority_ss58": "espHymwCSaUxmLPWRUCqTpTKyfMhjhawo31iPBQd31tWehwhQ",
+"has_dht_record": true,
+"peer_id": "12D3KooWGKTMXzZhGSrVj816th9wrXo3BSEAYJ57Kdnamb1gLWvj",
+"stash_ss58": "eso2xivfno2jTT15hq5DNjhCJEpDEaAQ6pF2zRzkFjQ2a7U7k"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "espMbwMJP8EEmvsioKRxkuundQ3S9X4kexFZrReHSyeDDcmiY",
+"has_dht_record": true,
+"peer_id": "12D3KooWGsRUpJaawVUoEF2xsNbUZw7c6DeqavvufT5Twz5rWGm9",
+"stash_ss58": "esow36ve5C7pR7zavEqMwn8MGhuYQp4ktCuBkYF4gZGLTsxUT"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "espSKGVt9zB2ARVneRWkyb8C9b6WoiUndTvKWwWCvhUP42BYW",
+"has_dht_record": true,
+"peer_id": "12D3KooWKW8navnh4JB4k93PF97zMuFiPFKvWKcC7oynjeig7HvL",
+"stash_ss58": "esoBFem9KWi8aREbHGTr7cJzweAcEWLoAo72hAUP4Uin8ZtXY"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/5)",
+"authority_ss58": "espT4AfSSJpRPE1hXod34LeYUy3nGdMSDzEnJwzVtGnXDvGvv",
+"has_dht_record": true,
+"peer_id": "12D3KooWHGBiM7Yh9MXqSNhngjm8NpTkwZGHqMemw9ULq79amVVH",
+"stash_ss58": "esodHaghRWCN8BMU3G6vBbmmtQ3VziuwRriXH6oTsqmY1jjYg"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (hysterical-paint-9588)",
+"authority_ss58": "espXsEXXAEvUxtq6ivz23SmwdmRFf6PEfHvpsytQg6JBuBzjq",
+"has_dht_record": true,
+"peer_id": "12D3KooWNpEtWwXcABFTxN4WYMWx5hc1hVgHU7hjQ9stH8dSCN9f",
+"stash_ss58": "esr5JgbrfNSGNbV84LCqyi8fHxZ2riYcEKg4kFngMibENwW3w"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/54)",
+"authority_ss58": "espXxY6rhwC4iMZaGEJBoo1BgAvC38D2ALmHpTuLBxCVfcBiH",
+"has_dht_record": true,
+"peer_id": "12D3KooWFa2E1imq6qT3MBWcVYqBk7shtniH4ynJJHecWpyw24eN",
+"stash_ss58": "esotNxr6Jh8xsA7DwnKkQ6amzLuQRgwH16yLHGjpHCpRMLRdM"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (satisfying-spot-0926)",
+"authority_ss58": "espag6qw612y4h9XJykJeHXeVZeCdtbu2pWcwhU5BmVxRdphf",
+"has_dht_record": true,
+"peer_id": "12D3KooWCA79wWqsNZR2zvUJuQdTkyzQRVs5JdzE9z1oocwWw1cH",
+"stash_ss58": "esrMFP7oEzuxB2zjWDYj1ZAz4pKdpu23ynJRgDYTXYB97DzbC"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "espd1VFMsSxteQ8pruga1JCa2sjXzcRi5zNSNzyWoNZWUbd7N",
+"has_dht_record": true,
+"peer_id": "12D3KooWLffCBssB5vkjWHRFBzSbm4TYgNtFiCe2KZALKqamykiD",
+"stash_ss58": "esnpFQBeraVbFsnvHLvFSnQ1fGHHCPeuwJuwWe6cGHcXzZM6k"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-01 \ud83c\udf15)",
+"authority_ss58": "espf6q6zKqN2n3qnCxCzvoHAGuHb4v68z5Gc2wi8njxXYv4nu",
+"has_dht_record": true,
+"peer_id": "12D3KooWEYG6XHjyb53VYmHkBGnqx8RH6F7BAj2cFtBVU6VPbG67",
+"stash_ss58": "esrUBnX7Juch7f2zY7M5UQpyLKRR5SEJY8kZDcUJwv7b9mUWt"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (PDEX-AI / 14)",
+"authority_ss58": "espfSnj7u9pGxz3tSs6fgkgtnvDK9Gi8Jzt99kFzmUwBVUJWm",
+"has_dht_record": true,
+"peer_id": "12D3KooWH9ZSMD9uzg98cQBrhsUvcC5TzvRFJ94YZ7oMvucgzCeo",
+"stash_ss58": "esnSVhMGm4im854oXbJykkNFY588DddHLf189cyFgVXijz84x"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (nostalgic-dirt-5730)",
+"authority_ss58": "esphdCTcTxpNzk7MvrjeZV7FeU9qV5DzhhPut2Frrh4sxDy8v",
+"has_dht_record": true,
+"peer_id": "12D3KooWQEdbojWhywRDnhYoZXcutNfFFtGmc63Zyqt1C2Xs7miq",
+"stash_ss58": "esmmfeAou8BTWyyCFBA99A5uGsVnxQEbxQAFZovxz2XCiyVBX"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/69)",
+"authority_ss58": "espkjCjV9qB2veBj5S1Wjz391nkkJcwtupvD74AnYT5dUfbiS",
+"has_dht_record": true,
+"peer_id": "12D3KooWKWj9eGcpYireaisUH3c6cVDa2m3KHSQkSU3nucZKTYN4",
+"stash_ss58": "esoaAyxjTAB5YLffGQNrpsZqkf9GYCvHa8dxdrjnHf3rZjWe4"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 14)",
+"authority_ss58": "espmAtihBBe9EjRLP8UQRT922SrCi4SUeAnHzJQprCqW572L9",
+"has_dht_record": true,
+"peer_id": "12D3KooWN5UJnbwwscLxPf1uVojaFBs33FxauRUCaXfAYPo8rq8D",
+"stash_ss58": "esq9pJ5pTbQD9UqTUP4nJasDB3hWJaa9PPDVi8sbUoULvR1Zt"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/57)",
+"authority_ss58": "espnuc753Am3tedLYxcVmJ2Yw9HPutoZzVp4PidaVykTeVcBn",
+"has_dht_record": true,
+"peer_id": "12D3KooWSgzBi9kQoFAjdhY5tKVoHiffzG3cyK33y6iVGTcsqNcR",
+"stash_ss58": "esm8sUYFWmZdnnteahDvopGjh2u7aBxwaPdhVPJ7jiT3vrDG9"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "espocLADCzuvBZKNE3E6poHMhkUJJVeSXfQa74bGPnwymoVgJ",
+"has_dht_record": true,
+"peer_id": "12D3KooWCr24gZu3HvYmdeo38PkLhD38zCMfCH7tsLkHJMHBUZrg",
+"stash_ss58": "esqPE9jGzAfdNtxedbbSV58LR5L8f9vuqMjE28Ex5gYN4shzx"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/12) (litep2p)",
+"authority_ss58": "espqcPh1WCrHLbjZsmeZSMYzubWT2nKqKxqvgBB9Huuj5heQ6",
+"has_dht_record": true,
+"peer_id": "12D3KooWBJPVEhdwcUFGn1C6SMnocTJm1o2EeNFPHQN87Y2o3AVP",
+"stash_ss58": "esmTMjxxZT8xHPyDwMh3TaCgFUCeQVMVUHUHX2exwgwCEArvc"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-03 \ud83c\udf15)",
+"authority_ss58": "esprLnxMcQ25Zf2Q8iPwQYaSw8cnQb68HfUmtNRiPeWQCxYrp",
+"has_dht_record": true,
+"peer_id": "12D3KooWPbWRTKnJ9daa825U4uehrkn2LFezpMZVoyAdPxcCgkPa",
+"stash_ss58": "esqm62CBv6HiZeDgNEUpFMZhdmzXDZNtfwCjKcQ4Jm2NJCwYG"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/41)",
+"authority_ss58": "esprSzzuLwGsN6LGbrhsoHztwrF4yS9ynKqViB5k49vq85mfp",
+"has_dht_record": true,
+"peer_id": "12D3KooWPBasbcMk5nCFK7Wq52wVTaVCXUtxA2shk1CU7ia67SLt",
+"stash_ss58": "esptnEfGnswoSZimfTHBqaCoWKdq5K3qL2BzDXjqhWjyievSh"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/67)",
+"authority_ss58": "esprbZ8t1R7fxT9WdAVYvZ4qPnYWRYEKkuotf9qUz3Npyj8AQ",
+"has_dht_record": true,
+"peer_id": "12D3KooWCA1uZfjvSP4g2e8mCm8tQFDGFTFyy19jGcDLfsPJZjeL",
+"stash_ss58": "esrExGXz9jQGGxb1SbpefeZDerq9S2Nz5gYZYCG8cVm4UdPXh"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "espwfZ8y7THiAEbdPRrUNCcnX8QWbTeFgrMEco9rMPw9kT7LA",
+"has_dht_record": true,
+"peer_id": "12D3KooWNPZ4grfyyxBseP8gm882MUxN2hoBdh7HJqfUtJbi3YK5",
+"stash_ss58": "esmbXJVeggZxp3FxvvPdWQr81TYETmfdjtHma7Yhh2fH56F29"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/75)",
+"authority_ss58": "espyZPrADXQLEN2vopLdcCgsiGQT3S4eZNp7uAERce69tnqrz",
+"has_dht_record": true,
+"peer_id": "12D3KooWCrBDVudQd3y11HsDMp4ApmoosWnNRafs86tsNFjyzDh6",
+"stash_ss58": "esnrTGUwPhXMxSayJt8aLbYynYZWKKMJtrp5fgWXN26wBHnDp"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-11 \ud83c\udf15)",
+"authority_ss58": "espybNdJF6vmsg9MUPX8Wtgwv6M1QBajPwALEYqb4A9AQp3RF",
+"has_dht_record": true,
+"peer_id": "12D3KooWANvgdah5qNRKiwRDztu4dU1yQf975YSF1NJpxqVL5tNp",
+"stash_ss58": "espXk1rc1CsDoK57emYhSe7SiV5zT6UJeLibpj1DfTTLHqCuM"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Skipped"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy06) (litep2p)",
+"authority_ss58": "espz5sFssRNkY9zoDNrLmSUYVnVU8Yv6myXbSdCNihW3sAtTZ",
+"has_dht_record": true,
+"peer_id": "12D3KooWCU31jfSj6KuTE7HA3jo3zccNPfDeBTEJR6paiRC6Pojc",
+"stash_ss58": "esodYFr6BFcAXNS4Xc9GmBVh6iukjctM7ZRDzFsTf1BNLNudL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Skipped"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/66)",
+"authority_ss58": "esq22CLPJYbuK4qkgiHK7i8vYa7zbgxJihWoimq7nVWNJ9Fjs",
+"has_dht_record": true,
+"peer_id": "12D3KooWJ27DdvbvQygwwmGSZfmJGYNh8bFcw3iH688BxkpdW5H5",
+"stash_ss58": "esn1VUxBtiYDXqGRduw7BV5zt5eyWEGScZWsmYLE4afyLtgGc"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/06)",
+"authority_ss58": "esq4mVhst4czPjBXPamNYoRa9J3MrgJvknrt5GSz6K5iFEPNU",
+"has_dht_record": true,
+"peer_id": "12D3KooWAvbghua6LdCwKXd1BSAat8UjjCbVeGvXVFDcffecW2FN",
+"stash_ss58": "esqP4vVhE2CyEeN42B4kYYG7huxTR2MkHvBXN4hCYhKcYGbJ2"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/28)",
+"authority_ss58": "esq7QKQFiPrSPic86czuyhdJWZkarJnsBjeYdven3PWtUTZc2",
+"has_dht_record": true,
+"peer_id": "12D3KooWAVHtmFpmP7MemNy17wtQsMeNsHwWmpBAY3w1FGHk55Xz",
+"stash_ss58": "esqkxa4Cpi1LCMaEiWx3i9A7eF6eAEyFXcrCBSFTks1WUUPpZ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/08)",
+"authority_ss58": "esqAsuiynZejkfz1kGwEAuDvTr2hDqKXPGAjemtYqwr4yMpm9",
+"has_dht_record": true,
+"peer_id": "12D3KooWL5NvF4EP98GWa5dfnJSjKWz1ao4BDxEqYVbQjaMaaduM",
+"stash_ss58": "eso3Bt6vTXZv6wmQ1s4Z2ffJzTaP1CVd9DU4u8t8VRKUFpAEL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/71)",
+"authority_ss58": "esqAyRLXBh5ZQZt4nVoGk2avVm93s3RChpyqgDvFQcQsM2wif",
+"has_dht_record": true,
+"peer_id": "12D3KooWCKGL85SWjNCSs9UmDNuQKikgkhkFpUQMVCxadr23aXaq",
+"stash_ss58": "eskxGRUyEZZAdv33kxoBQbojF2dxtkiCF7b9oyyYwi4ruRPB4"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/6)",
+"authority_ss58": "esqCYQneXYByC4Yn4RERa5JCXMy49H3Ks19CWPZ8hHKzRPKjt",
+"has_dht_record": true,
+"peer_id": "12D3KooWQPzYQQMeA1KrADmGr5ckyrz49Gd2wduGR2dAyiUzyL7u",
+"stash_ss58": "espD9XuwnGQVnDt8E7Biy657RqYBE9WqVeDqGn4Hihzez4WQL"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/17)",
+"authority_ss58": "esqCnesNv78ciwTv75GCqqY6GzUW6boQgQnEZKwyFL9ZYSB21",
+"has_dht_record": true,
+"peer_id": "12D3KooWPrXg5kuuC7juSWj3K5rq3E9hofAQYkarafA64zz6HdJs",
+"stash_ss58": "esoB5rNffAwwaZnZaVjC8Aa3mi979e4z51V2bj1NNtAwLWN3n"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy02) (litep2p)",
+"authority_ss58": "esqD6eJ74eBTyKttfiFvPEHtREhf8chQUNP9vbuAeo2x5pp8L",
+"has_dht_record": true,
+"peer_id": "12D3KooWAePZTHovhGLmpC49t63t7Ja1B39ZQj5TYpJPU8KZBVfb",
+"stash_ss58": "esqLVASjVL7rTcp1fuc48yTSXNYjfMixfvgDEVoA1ENxnmb11"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/12)",
+"authority_ss58": "esqFjAgrgepAzVrtnap52HctJG4wHEpfgNt1szthxVP5VaygW",
+"has_dht_record": true,
+"peer_id": "12D3KooWBdVPtiN7ez5GBrwikZdYvoYqAzb6bvoBzQc1Hvm6ok9u",
+"stash_ss58": "esm9HNaz9doY2gUigNWFTuZbNv8yPfTWPz8djqk3gZzHsveCA"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 06)",
+"authority_ss58": "esqGGfHyMkAymyCJghRJsEAG8GLErp8e7MYnkdMEnQe1P3eWx",
+"has_dht_record": true,
+"peer_id": "12D3KooWPnjvKf9wmiCmygYcjoxCMpg5ovCxsb4uGQNYdrFAML12",
+"stash_ss58": "esooL8VTEKFk7Vxob7yaQv6XgBb966j5RixK4tFGUozHiYkJo"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/60)",
+"authority_ss58": "esqLUgwi9imPk8FDANEsaV6aiqaup5gZo5jjkDqbMDg6rPEPB",
+"has_dht_record": true,
+"peer_id": "12D3KooWSPGyGwJnpMLS53NYSoozoBMrpHc87CHVwajU2Kfs1LCv",
+"stash_ss58": "esqfRMDyMbjCiLJCLZCpbjZsveFZCGCdtPMRR1Mice1dMf2ML"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (eatable-zoo-6622)",
+"authority_ss58": "esqMJyrbXdMFShdUwKYSJWvKBEnwLbkcEi8hw7YqZKGornaCZ",
+"has_dht_record": true,
+"peer_id": "12D3KooWDi1e3K1t8RzGhALpbvyLD3rtG76fqkS2Kdg3QFV4tSFX",
+"stash_ss58": "espLwBt33t9kvEBVbZXaeoJDQDQFCaQpZuHJNQpJQGLAXkcHe"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/61)",
+"authority_ss58": "esqRtv3VVekZqjp7tcnHLHqAHR9hqCHr5EPZxEVhhyibBxP2U",
+"has_dht_record": true,
+"peer_id": "12D3KooWCD9p9mtk3pyNJX5ju1K368YTnUfUhg6qWKGhykCYHhkT",
+"stash_ss58": "esmQ7ZyQr6wpPWmDBA6Xg1cwEuAr5M6rtasURoYuGvPikkTSX"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-02 \ud83c\udf15)",
+"authority_ss58": "esqRyisE3GS3j8bphrg6Ua3QbGNeVos7pkDB1PFR5t7GYVSux",
+"has_dht_record": true,
+"peer_id": "12D3KooWEFh1vhUejVM9UGry8qXR8CjP6g1uu8d2S5Zq7Zot4aF8",
+"stash_ss58": "esqUdhUbGHYAoL1EfUgkGMCzXT5MgAp9JP4oPP2mJaxPezXQp"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/55)",
+"authority_ss58": "esqSN5T5h6kNGrTixLw8rAuLmpf4t4zX2su4oapPhmqw9XmgH",
+"has_dht_record": true,
+"peer_id": "12D3KooWMA7c2qcU1naxTMLfZ885vqRnahmm2Pk5hLHm7s3Hnfjw",
+"stash_ss58": "esob8hF9JocCAmz4xmg9MhEtvP7TrDCj6eDBNqzH8iUsak786"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (orange-hammer-2394)",
+"authority_ss58": "esqZf7WGjA4Rzd6YBAPMxbR4rn2t1bgP65imoms8MzUw9fhLy",
+"has_dht_record": true,
+"peer_id": "12D3KooWAnSEZY4xYyG7aPamakqhcpLB2vVuc49D9RLLr17Fu6jY",
+"stash_ss58": "esmxqhmuHdEpcfeEcD5tvSGVebd9t1t6Je8q8WFT5k1HyGoJN"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (energetic-rabbits-5754)",
+"authority_ss58": "esqZg2cQ25Zrjj9WXWCMr9Y9avywjTfvdWSiBcBn85mLzN1zz",
+"has_dht_record": true,
+"peer_id": "12D3KooWACGxxajywfafFfBPoPVGs5ii8do7BDEoa3m2VNbomUaJ",
+"stash_ss58": "espfKs3omJ1j6vYLRyKHAuDwQRuKBRwTi51n5PxGYVbqj35bp"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (jobless-fruit-9176)",
+"authority_ss58": "esqZpMykPScnU6RkPtm57jHp9JpQFvpnVZaEiEwTF5UHc38XA",
+"has_dht_record": true,
+"peer_id": "12D3KooWBCQs6oE6qt37Lp256jbZ3LHKWmVwhHfDJSC23EQDcbPz",
+"stash_ss58": "esoVdWDdNJKi6b7UGdMMfR27kWkeQQymCChBRDxUFDfBUg2AA"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex)",
+"authority_ss58": "esqcRqDjoDo8EYppyUMm5kQwy3aEQZ8ByXhkJaUZixKGT1WW2",
+"has_dht_record": true,
+"peer_id": "12D3KooWRfawD6FqAc9EUq1BBj3ZriffaNk34YjfUbkoH2ZdTswY",
+"stash_ss58": "espyXEvs6bmbvuuX5N9uQLVApjNt7zVFdFnmZatfjDW2brkNS"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/77)",
+"authority_ss58": "esqfGmKmeWV1UvagvX2UzUhacnkSRJCHXC7RbRWJdH6mYKPwz",
+"has_dht_record": true,
+"peer_id": "12D3KooWJqNWjmMPwZ3jnagmwLFzj6PPqrBfuBjdd1w5AFHqrWeR",
+"stash_ss58": "espu5ajizj9ruWuwRd3nuzdQZzxbYRu9F7dShXguNbt4BAu5o"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "esqfYqDNpYqsKTBvUoHpeUE8A7CV9tqHHuNsCg5tNmL8gptM4",
+"has_dht_record": true,
+"peer_id": "12D3KooWA1bkA251mZSD3xS4QLdTsnSBMKJuCQ27P1Aza4Waea1p",
+"stash_ss58": "esoibHKjJML7Lf3SPJzquKpEhaeK4sHyYJjZ3P4fZ1Mkepga2"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (baby SHARK PDEX)",
+"authority_ss58": "esqhLCxifPYEctz2x6RDeaWRduG2mxzhtPfyuABc5kzyark36",
+"has_dht_record": true,
+"peer_id": "12D3KooWCSGWdNDqPxAXcAaZCXtvhtvZ4hACeZTstoy1gQBotAPe",
+"stash_ss58": "esm1iUPaDRXxp66QSHFKyE1Fkd8y6Yvx5wfF2B8YYiBWzF2uD"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/37)",
+"authority_ss58": "esqiPMYhMhiK9WA7JC3yACJdw2H4RQovJ8enRKw9199SXPcpp",
+"has_dht_record": true,
+"peer_id": "12D3KooWCniE8ccxux6m67d3PGEvRMse4DLHsJNSuKzHV2gu9uxQ",
+"stash_ss58": "esqPiT5Jvt2gBC41K5LsRkNQG9ZW2a8uoYF1tLNK6CD1kcpe7"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Master Validator/09)",
+"authority_ss58": "esqjwAVvptsmgKgRjTJTUKXgbwzr99vzRTBRNRsYCVMVW7zvH",
+"has_dht_record": true,
+"peer_id": "12D3KooWBvBeTR4P9Yz5Jib9wbCpCdxn5r35uoX5a3DbsVqnRmbc",
+"stash_ss58": "espiHpDGhq98EryC1CL5A2Lkx7PZbdZd13awntFSeBVW4HN68"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (large-blood-1558)",
+"authority_ss58": "esqk8uLy65rHLbHYp5h97tZdTGn5aPSCkyagxEqDjzS6EXq1F",
+"has_dht_record": true,
+"peer_id": "12D3KooWGDLmRSoVW2KB3TMAPnLTELio1zwHMuW5UFRf5kemvbZg",
+"stash_ss58": "esoG1XvR3Qz3vypAb4bHriPUJYMWFrc1mKxVZU9zsnbHdHLrt"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/17) (litep2p)",
+"authority_ss58": "esqoiQbqVhune1SNicFzaGXPKezoUPqTe8UdYsSLUQHjcbQ6B",
+"has_dht_record": true,
+"peer_id": "12D3KooWMZsPAhFaWa3NpmKw3uAaqDFX5Tvx7bod52Ehp41g82Fo",
+"stash_ss58": "esmfsQPKHxwQeejbYtu1LqptCKFLoS1oA8CxhnMivy1pkB3sS"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": null,
+"authority_ss58": "esqr3bBkw9pFcFeyS6S7St4GErBh9U8BAi4WLwEVjhKVGpSS6",
+"has_dht_record": true,
+"peer_id": "12D3KooWSKbX9E2txGmG23Eqv1x2KMbvwUFSVkDwS91rx1PC1eeK",
+"stash_ss58": "esmVfXj91c5jyvpbQCGhuUrmwgqctP4rD17Aqa2gfRq63MPJB"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (ETERNITY - 05)",
+"authority_ss58": "esqr8GfjkokkHc5qkDs13Fchm8nGRo9VS9V5YRWHMkbE1uYXq",
+"has_dht_record": true,
+"peer_id": "12D3KooWEg83BbSUh2JoTw365sUeV9dWBEYAYyYaNjSqCcgdBBE5",
+"stash_ss58": "espaLACWXFUaNhFc33k5FFTupt2qdNxDJVW4BUjv5LgPYkEkf"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/24)",
+"authority_ss58": "esqrPb261GojjWVVh33tfbrX4NohrfttNVq9xECJnQTtS9L3u",
+"has_dht_record": true,
+"peer_id": "12D3KooWHYGg78mwCoyRP65ZnXHn2sDPeKtEgA5c5YJCx9ApT5of",
+"stash_ss58": "espPe5tn1Dvg5JwgN76SQkHrDr6UjoQrcVsnpgKVGdtUio7fZ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/04) (litep2p)",
+"authority_ss58": "esqy4NrHdcRUXakm8izqCQEkuATKSW2jagbjf2MNHRakVs94D",
+"has_dht_record": true,
+"peer_id": "12D3KooWK9wWh1V1v8gwaxfUT14FDKTEVBrB5DuHGnh9DtK4qgG6",
+"stash_ss58": "esoSrmcuKXtgQa8zCDJh8FHgAAQJeKysHLTbxp81HfPvGHXiu"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy15) (litep2p)",
+"authority_ss58": "esqypSfXS3UzGdkfCXtsmNq12gqJGAiC77yUZ7V5wtd2cDicg",
+"has_dht_record": true,
+"peer_id": "12D3KooWQFtg9JRzoFC3dmpzJzWinub9mSEAEmxP9uRb8zbDNhzf",
+"stash_ss58": "esmEqmFWRnYrzkewPRzQBbvgCBSGFv3W6deoyMHWQUbEpStXC"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/9)",
+"authority_ss58": "esr22jbgnRb9qdEmD7jFvg1tjbeDrZsFG9xNHk2uDXX13T7p1",
+"has_dht_record": true,
+"peer_id": "12D3KooWGsN1RaxhyybyDjE9ptMdAbQZuvrnWJDWGHTk8hk57X5i",
+"stash_ss58": "esnjKpwuL3Vc2hrKFP5uNZ5KamgbMSPuQQZh4r7FSsnpHdEcc"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (buddy01) (litep2p)",
+"authority_ss58": "esr7HiSEYZwtaSL4dhLR6xUxXMckasdANwoybzxvVxeBZPzZq",
+"has_dht_record": true,
+"peer_id": "12D3KooWAKCcPznyKxtRGqkfjQ1JTxFxHEkq3LBKn7iUea4o9jLi",
+"stash_ss58": "esqydwmBa7iJo7q38cKTfkv9xDndR8WD9YzyHPKAk1R1cVycr"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (whispering-soap-4700)",
+"authority_ss58": "esr7sUdLUKpo75SiVkdavU1YTKPcmJvZD3FkvipCsWrWLMPFM",
+"has_dht_record": true,
+"peer_id": "12D3KooWBtwGtn6Af1SimgQCxKFtanEcJSbsrNLJLpQR37R4RsuD",
+"stash_ss58": "espX7LrxcdqovCLMw5PVMg3Kpua4rdRq9cC1HqnpQdBNdWk2u"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (different-store-0506)",
+"authority_ss58": "esrAFmwbM9pykhPgkQh7Pu4r5282TeJu7hp12FppaD5sxgmeP",
+"has_dht_record": true,
+"peer_id": "12D3KooWRxV53bCVjR531nHnXRcTogVBUVAH5EypSRKVA4jRVSnu",
+"stash_ss58": "esqzDRpZNLDzP6Yp8ApT31e2vv85ym84a8vQg3qiEutGJNQ1h"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/07) (litep2p)",
+"authority_ss58": "esrAg2VGDJhVbDp3nQn5pQqHTKuNWnAqtNxoxZuwES5HHoQEF",
+"has_dht_record": true,
+"peer_id": "12D3KooWHSDRnN6cK4m7ZnhvQU8iZ119QxYEYJ5KjBgTQc81qizB",
+"stash_ss58": "esm6kpftb9TGGQeYQQLgYzxHZ3HGSPXruF1m9WubRiwzxpEeu"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/58)",
+"authority_ss58": "esrCNtRMjjrV3MCReF9kSu6rDjE11BCsKrtEUSTC5asKVWQHr",
+"has_dht_record": true,
+"peer_id": "12D3KooWLmi87xX9ieCcjBAnttvQnVv4KugSvdQAnJM2yHnnUij3",
+"stash_ss58": "esqXQ3F3gdU1mUFU4JPi1P7YPnb7xE8hQVrNuKGTENn1xmzLe"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/10) (litep2p)",
+"authority_ss58": "esrCPDAcAZGmDGArEUfoqRJL5AFaVRDcYSrVDPwjT3igVYQ9p",
+"has_dht_record": true,
+"peer_id": "12D3KooWCiBG7EivMpdzuMVQcDoXaKxDrVNmgzHiY3cZbfXepHry",
+"stash_ss58": "esmGLvkjYJyp1a4rpRb35SW3qppRudkEGNzqbxB5wuJ54tDSB"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (Faraday/13) (litep2p)",
+"authority_ss58": "esrD4DdnsHPr9oPj3Spyb6GJzjTeLuYy2pUXkJZxSRHEpFCzZ",
+"has_dht_record": true,
+"peer_id": "12D3KooWNyS7vQke8EsT6ePvb8KHSon6XdqyutQtzVv7yNL1Lt2H",
+"stash_ss58": "esmGXtrEtQHkcYaMbJDYvK7HDke61AAzXNhpDNgJAfdgz5KFf"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Failed"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (alleged-neck-7808)",
+"authority_ss58": "esrHqapKJLViPL6Fx87cPMFF58UVYSyRaaKmCpgk1riSxXe4g",
+"has_dht_record": true,
+"peer_id": "12D3KooWS2WRRqtLwptSv6Bc6ZeTs4inukt3CBwJT3SLum2AYbcq",
+"stash_ss58": "esmBVNJMgbN1w6xYjv2tSGFw1bEbXLTakB76s77D9mzQKhVJ5"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/4)",
+"authority_ss58": "esrL8F76v9uw7ieGPvpBf6GFJc8CT9xMh4paP1WjbD75G8nv8",
+"has_dht_record": true,
+"peer_id": "12D3KooWCCWCNEvYZchnMtZC89fHSed9QbFsM3NxjEabr5i6FrjL",
+"stash_ss58": "esnYWy6uxx2Lt9U1CEuF4wm4sHZL5MF1B1VBWmfWCiB2FMowe"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/52)",
+"authority_ss58": "esrUB3mQRfbAN9PRZeUEkGXVHXiE5Swe9VDMpGHZbgKhi9kvQ",
+"has_dht_record": true,
+"peer_id": "12D3KooWHKxrdMg2achuk9Zw6D5idVccgnmuB2rzCMtqxrxheitR",
+"stash_ss58": "eso3Ny3eqHd9euGtMpbHLXiKSUsQV1guxwxCLYyiawXtf9yaZ"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (\ud83c\udf15 luna-10 \ud83c\udf15)",
+"authority_ss58": "esrV5mfgwBbRudrjeiCXVUdqGUBVYhGcZyvTXpYTNwSm7NKDE",
+"has_dht_record": true,
+"peer_id": "12D3KooWGANUMPvboktAbiCeJLYLjtm4PMSGMnXK5SUe5ch7WZUq",
+"stash_ss58": "esnume2JxEgG9CuAZ3TfWE7i6ZAdiXNj9bRZQJqv8vtAzqWSC"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+},
+{
+"dial_outcome": {
+"status": "Failed"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v6.2.0-c6855f1d3d2 (Staking Polkadex/30)",
+"authority_ss58": "esrWgSGpcuQGJH9Hnm5TkKgfSmaKJwifGfKvwMi8t8NAC36ZR",
+"has_dht_record": true,
+"peer_id": "12D3KooWDFZLuigat4w2oqFg8SWS9h1PsUKc3FJNzktt5WDKXQxE",
+"stash_ss58": "esnokZVHvcQoAwBcn2WnMw3ZHAKf9XywsZPsyFkFRVVMc7nAE"
+},
+{
+"addresses": [
+{
+"dial_outcome": {
+"status": "Success"
+},
+"result": {
+"status": "Ok"
+}
+}
+],
+"agent_version": "Polkadex Node/v7.0.0-57440d693fd (LEADNODE_ONLINE | 01) (litep2p)",
+"authority_ss58": "esrXQwne8wj8Lp5xPBUoW589yc6MwrP2CsWTVYQ8iPS1S9J7X",
+"has_dht_record": true,
+"peer_id": "12D3KooWEXRKozsuyyjxcWvyY89aEoza8v7xFtpthfTg7iDh1JEb",
+"stash_ss58": "esp35aoreCQGHSxZfJLir7xWAPL41M2cKgTDhrBuMzLcKtXqK"
+}
+]
+}
