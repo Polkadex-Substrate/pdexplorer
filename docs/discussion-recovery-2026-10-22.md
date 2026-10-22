@@ -1,5 +1,17 @@
 # Discussion board: "the old discussion is lost" (2026-10-22)
 
+## Resolution (read this first)
+
+**Nothing was lost. Do not run the restore steps below.**
+
+- **Data intact (confirmed on the box).** Thread `motion-0x27be...8033` holds both posts (ids 1 and 2) and `GET /api/discussions/<id>` on the box returns them.
+- **The page showed a stale copy of that response, not the database.** The thread was created at 19:11:13 UTC and its first post written at 19:12:58, so a copy of the thread fetched in between has no posts. `GET /api/discussions/:id` sent no `Cache-Control` header (`server.js`, route at `6ab51d8:5996`), and with no header a Cloudflare "Cache Everything" rule applies its own default TTL, so that empty copy could keep being served after the posts existed. The page then showed it as "No posts yet" with the thread "Open".
+- **The front end renders correctly.** `test/discussion-render.test.js` runs the real `fetchDiscussionThread` and `renderThread` from `script.js` against this payload (4000 and 3492 character posts, `editedAt` null and absent, signed in as the author, as someone else, and signed out). Both posts render on the deployed code too.
+- **Fix (branch `fix/discussion-posts-render`).** The route now sends `Cache-Control: no-store`, the browser fetches the thread with `cache: 'no-store'`, and a thread whose `postCount` is above zero never shows "No posts yet": an empty list or a post that fails to render shows an inline error and logs the reason to the console.
+- **Not verified:** whether the explorer's Cloudflare zone has a cache rule covering `/api/*`. After the fix is deployed, run this on your Mac twice: `curl -sI https://explorer.polkadex.ee/api/discussions/motion-0x27befa0fdbb72a238099f9c63668789ceaebbd3cdad7d471c177510bc5208033 | grep -i -E "cache-control|cf-cache-status"`. It must show `no-store` and never `cf-cache-status: HIT`. A HIT means a cache rule overrides the origin header and must be changed in Cloudflare.
+
+The rest of this file is the earlier investigation, kept for the record.
+
 Report: after deploying `6ab51d8` (merge of PR #16, post editing) to production, the old discussion was reported as lost.
 
 ## What the code says

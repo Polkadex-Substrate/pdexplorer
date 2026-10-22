@@ -5994,7 +5994,12 @@ app.get('/api/analytics/snapshot', (req, res) => {
     }
 });
 
+// no-store, not merely "no header": with no Cache-Control a "Cache Everything"
+// edge rule applies its own TTL, so a copy fetched before a post was made kept
+// serving an empty thread after the post existed (2026-10-22). Posts must be
+// read fresh by everyone, including the author who just wrote them.
 app.get('/api/discussions/:id', (req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
         const thread = db.getThread(req.params.id);
         if (!thread) return res.status(404).json({ error: 'Discussion thread not found.' });

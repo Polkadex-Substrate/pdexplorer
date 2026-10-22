@@ -151,7 +151,9 @@ describe('wiring', () => {
         assert.match(server, /applyEdit\(/);
     });
     test('script.js renders through the lib and stays under the line ceiling', () => {
-        assert.match(script, /renderPostHtml\(p,/);
+        // renderPostList (lib) renders each post through renderPostHtml.
+        assert.match(script, /renderPostList\(thread, posts,/);
+        assert.match(stripComments(readRepo('lib/discussion-edit.js', import.meta.url)), /list\.map\(p => renderPostHtml\(p,/);
         assert.match(script, /wireEditing\(root,/);
         assert.ok(readRepo('script.js', import.meta.url).split('\n').length < 15000);
     });
