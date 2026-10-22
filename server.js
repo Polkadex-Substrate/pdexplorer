@@ -20,6 +20,7 @@ import { checkUserText } from './lib/user-text.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
+import { applyEdit } from './lib/discussion-edit.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
@@ -5997,6 +5998,22 @@ app.get('/api/discussions/:id', (req, res) => {
         const thread = db.getThread(req.params.id);
         if (!thread) return res.status(404).json({ error: 'Discussion thread not found.' });
         res.json({ thread, posts: db.getPosts(thread.id) });
+    } catch (err) { serverError(res, err, req.path); }
+});
+
+// Authors edit their own posts. Logic lives in lib/discussion-edit.js so the
+// tests run the real code; this route only wires auth, the shared rate gate
+// and the response.
+app.patch('/api/discussions/:threadId/posts/:postId', (req, res) => {
+    try {
+        const r = applyEdit({
+            db, address: getAuthAddress(req), threadId: req.params.threadId, postId: req.params.postId, body: req.body,
+            same: (a, b) => normalizeAddress(a) === normalizeAddress(b),
+            gate: (address) => db.consumeRateLimit('discussion-edit', address, (hits) =>
+                checkWindow(hits, { windowMs: POST_COOLDOWN_MS, limit: 1 }))
+        });
+        if (r.headers) res.set(r.headers);
+        res.status(r.status).json(r.json);
     } catch (err) { serverError(res, err, req.path); }
 });
 

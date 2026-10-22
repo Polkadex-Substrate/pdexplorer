@@ -205,7 +205,7 @@ is CoinGecko (keyless public API).
 - GET /api/governance/latest — most-recent OPEN referendum / proposal
 - GET /api/governance/calendar — unified governance timeline
 - GET /api/discussions — discussion threads on governance items
-- GET /api/discussions/:id — single thread with posts
+- GET /api/discussions/:id - single thread with posts (each post carries editedAt)
 
 ## Public JSON API — email alerts
 
@@ -228,6 +228,7 @@ Wallet-signed nonce login; sessions are 192-bit random tokens with a 7-day TTL.
   { token, expiresIn } where expiresIn is milliseconds (7 days).
 - POST /api/auth/logout
 - POST /api/discussions/:id/posts — post to a discussion (requires session)
+- PATCH /api/discussions/:id/posts/:postId - edit your own post in an open thread (requires session)
 
 ## Schema: GET /api/network-info
 

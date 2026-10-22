@@ -440,6 +440,9 @@ const ADDITIVE_MIGRATIONS = [
     // Multi-provider price feed: tag each price_history row with the upstream
     // that produced it ('cmc' | 'ascendex' | ...).
     ['price_history', 'source', 'TEXT DEFAULT NULL'],
+    // Discussion board: set (epoch ms) when an author edits their own post.
+    // NULL means never edited.
+    ['discussion_posts', 'edited_at', 'INTEGER DEFAULT NULL'],
 ];
 
 // One-off statements that must run after SCHEMA + the ALTERs, in the same
@@ -1862,7 +1865,13 @@ export function createPost(p) {
     return Number(r.lastInsertRowid);
 }
 export function getPosts(threadId) {
-    return db.prepare('SELECT id, thread_id AS threadId, author, author_name AS authorName, content, created_at AS createdAt FROM discussion_posts WHERE thread_id = ? ORDER BY created_at ASC').all(threadId);
+    return db.prepare('SELECT id, thread_id AS threadId, author, author_name AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE thread_id = ? ORDER BY created_at ASC').all(threadId);
+}
+export function getPost(id) {
+    return db.prepare('SELECT id, thread_id AS threadId, author, author_name AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE id = ?').get(id) || null;
+}
+export function updatePostContent(id, content, editedAt) {
+    db.prepare('UPDATE discussion_posts SET content = ?, edited_at = ? WHERE id = ?').run(content, editedAt, id);
 }
 export function countThreads() {
     return db.prepare('SELECT COUNT(*) AS c FROM discussion_threads').get().c;
