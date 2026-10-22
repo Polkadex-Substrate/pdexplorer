@@ -77,7 +77,7 @@ describe('the route table itself (F-154)', () => {
 
     test('every route has a method, an /api-style path and a summary', () => {
         for (const r of allRoutes()) {
-            assert.match(r.method, /^(GET|POST|PUT|DELETE)$/, `bad method on ${r.path}`);
+            assert.match(r.method, /^(GET|POST|PUT|PATCH|DELETE)$/, `bad method on ${r.path}`);
             assert.match(r.path, /^\//, `path must be absolute: ${r.path}`);
             assert.ok(r.summary && r.summary.length > 3, `no summary for ${r.method} ${r.path}`);
         }

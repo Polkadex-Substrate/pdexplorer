@@ -789,7 +789,7 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 ### Discussions
 
 - `GET /api/discussions` — discussion threads attached to governance items
-- `GET /api/discussions/:id` — single thread with posts
+- `GET /api/discussions/:id` - single thread with posts (each post carries `editedAt`, null if never edited)
 
 ### Authenticated (wallet sign-in for discussion posts)
 
@@ -799,6 +799,7 @@ Wallet-signed nonce login. Sessions are 192-bit random tokens with a 7-day TTL (
 - `POST /api/auth/verify` — submit `{ address, signature }`; the nonce is **not** sent (the server looks up the open challenge for that address). Returns `{ token, expiresIn }`, `expiresIn` in ms
 - `POST /api/auth/logout`
 - `POST /api/discussions/:id/posts` — post to a discussion (rate-limited, requires session)
+- `PATCH /api/discussions/:id/posts/:postId` - edit your own post in an open thread (rate-limited, requires session); the post then carries `editedAt`
 
 ### Build provenance + liveness (public, `no-store`)
 
