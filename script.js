@@ -10983,7 +10983,7 @@ function renderThread(thread, posts) {
     });
     const postBtn = document.getElementById('discuss-post-btn');
     if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id));
-    wireEditing(root, { esc: stakingEscapeHtml, fetchFn: fetch, getSession: getDiscussSession, threadId: thread.id, posts,
+    wireEditing(root, { esc: stakingEscapeHtml, fetchFn: (input, init) => fetch(input, init), getSession: getDiscussSession, threadId: thread.id, posts,
         clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread(d.thread, d.posts || []) });
     wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
 }
