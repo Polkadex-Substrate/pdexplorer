@@ -2211,6 +2211,24 @@ h1, h2, h3 { font-weight: 600; }
     gap: 10px;
     margin-bottom: 6px;
 }
+/* Permalinked post (/discussions/<thread>?post=<id>, lib/discussion-links.js). */
+.discussion-post-linked {
+    background: rgba(230, 0, 122, 0.08);
+    box-shadow: inset 3px 0 0 var(--brand-primary);
+    animation: discussion-linked-fade 4s ease-out 1.5s forwards;
+}
+.discussion-post-linked:focus { outline: none; }
+@keyframes discussion-linked-fade { to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .discussion-post-linked { animation: none; } }
+.discussion-link-missing {
+    margin: 12px 24px 0;
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+.discussion-link-feedback:empty { display: none; }
 .discussion-post-body {
     color: var(--text-secondary);
     font-size: 0.88rem;

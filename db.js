@@ -1859,6 +1859,17 @@ export function closeThread(id, reason) {
     db.prepare("UPDATE discussion_threads SET status = 'closed', closed_at = ?, closed_reason = ? WHERE id = ? AND status != 'closed'")
         .run(Date.now(), reason ?? null, id);
 }
+// Undo an automatic close (lib/discussion-threads.js decides when). Returns
+// true when a row changed.
+export function reopenThread(id) {
+    const r = db.prepare("UPDATE discussion_threads SET status = 'open', closed_at = NULL, closed_reason = NULL WHERE id = ? AND status = 'closed'").run(id);
+    return Number(r.changes) > 0;
+}
+// Every ref_key of one kind, open or closed - what the chain must already know
+// about for a read of it to count as current.
+export function getThreadRefKeys(kind) {
+    return db.prepare('SELECT ref_key FROM discussion_threads WHERE kind = ?').all(kind).map(r => r.ref_key);
+}
 export function createPost(p) {
     const r = db.prepare('INSERT INTO discussion_posts(thread_id,author,author_name,content,created_at) VALUES(?,?,?,?,?)')
         .run(p.threadId, p.author, p.authorName ?? null, p.content, Date.now());

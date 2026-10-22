@@ -228,7 +228,11 @@ describe('F-052 — the council half, which is the one that can lose data', () =
         assert.match(fn, /let motionsTrusted = false/);
         assert.match(fn, /motionsTrusted = live\.trusted/);
         assert.match(fn, /if \(!motionsTrusted\)/, 'the reconcile is not gated');
-        assert.match(fn, /if \(motionsTrusted\) reconcileMotionThreads\(motions\)/,
+        // Thread reconciliation has the same empty-set hazard and shares the
+        // gate - now as an argument, so an untrusted tick can still create
+        // threads but never close one (lib/discussion-threads.js, tested in
+        // test/discussion-threads.test.js).
+        assert.match(fn, /motionReadTrusted\(\{ listTrusted: motionsTrusted/,
             'thread reconciliation has the same empty-set hazard and must share the gate');
     });
 });

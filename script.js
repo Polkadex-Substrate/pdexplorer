@@ -18,6 +18,7 @@ import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostHtml, wireEditing } from './lib/discussion-edit.js';
+import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { developersBodies } from './lib/developers-bodies.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
@@ -10815,7 +10816,7 @@ function getDiscussSession() {
 }
 
 function initDiscussionsPage(threadId) {
-    if (threadId) fetchDiscussionThread(threadId);
+    if (threadId) fetchDiscussionThread(threadId, true);   // true: honour a ?post= permalink once, on arrival
     else fetchDiscussionThreads();
 }
 
@@ -10916,7 +10917,7 @@ function renderThreadList(threads) {
     });
 }
 
-async function fetchDiscussionThread(id) {
+async function fetchDiscussionThread(id, focusLink = false) {
     const root = document.getElementById('discussions-content');
     if (!root) return;
     root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading discussion…</div>';
@@ -10925,6 +10926,7 @@ async function fetchDiscussionThread(id) {
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
         renderThread(data.thread, data.posts || []);
+        if (focusLink) focusLinkedPost(root, readLinkedPostId(window.location.search, window.location.hash), { document });
     } catch (e) {
         root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
     }
@@ -10936,7 +10938,7 @@ function renderThread(thread, posts) {
     const session = getDiscussSession();
     const postsHtml = posts.length
         ? posts.map(p => renderPostHtml(p, { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime,
-            editable: !!session && canEditPost(p, thread, session.address, isSameAddress) })).join('')
+            editable: !!session && canEditPost(p, thread, session.address, isSameAddress), actions: renderCopyLinkButton })).join('')
         : '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:0.86rem;">No posts yet — be the first to comment.</div>';
 
     let composer;
@@ -10965,7 +10967,7 @@ function renderThread(thread, posts) {
     root.innerHTML = `
         <div class="list-container glass">
             <div class="list-header">
-                <h2 style="display:flex;align-items:center;gap:10px;">${stakingEscapeHtml(thread.title || thread.id)} ${badge}</h2>
+                <h2 style="display:flex;align-items:center;gap:10px;">${stakingEscapeHtml(thread.title || thread.id)} ${badge} ${helpIcon('discussions', 'Posting, editing and linking to comments')}</h2>
                 <a href="/discussions" class="item-link" style="color:var(--text-secondary);font-size:0.8rem;">All discussions</a>
             </div>
             <div class="discussion-posts">${postsHtml}</div>
@@ -10984,6 +10986,7 @@ function renderThread(thread, posts) {
     if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id));
     wireEditing(root, { esc: stakingEscapeHtml, fetchFn: fetch, getSession: getDiscussSession, threadId: thread.id, posts,
         clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread(d.thread, d.posts || []) });
+    wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
 }
 
 // Locate an extension signer that can sign for the given address.

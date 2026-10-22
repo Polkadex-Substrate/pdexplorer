@@ -21,6 +21,7 @@ import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
 import { applyEdit } from './lib/discussion-edit.js';
+import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater } from './lib/discussion-threads.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
@@ -6048,30 +6049,24 @@ app.post('/api/discussions/:id/posts', async (req, res) => {
 });
 
 // Auto-create one discussion thread per active item and close threads whose
-// underlying proposal/motion has moved on (to voting, or concluded).
-function reconcileProposalThreads(publicProposals) {
-    const activeIds = new Set();
-    for (const p of (publicProposals || [])) {
-        const id = `proposal-${p.index}`;
-        activeIds.add(id);
-        db.createThreadIfMissing({ id, kind: 'proposal', refKey: String(p.index), title: `Public Proposal #${p.index}` });
-    }
-    for (const openId of db.getOpenThreadIds('proposal')) {
-        if (!activeIds.has(openId)) db.closeThread(openId, 'Proposal tabled and moved to a referendum (voting).');
-    }
+// underlying proposal/motion has moved on (to voting, or concluded). The rules,
+// and why a close needs a provably current read, are in
+// lib/discussion-threads.js. The kv row holds the block of the last trusted read
+// per kind, so a node that is behind it cannot close anything.
+const THREAD_HW_KEY = 'discussion:reconcile-block';
+function reconcileGovThreads(kind, items, trust, currentBlock) {
+    try {
+        const r = reconcileThreads(db, kind, items, { trusted: trust.trusted });
+        if (trust.trusted) {
+            const hw = db.getKv(THREAD_HW_KEY) || {};
+            db.setKv(THREAD_HW_KEY, { ...hw, [kind]: nextHighWater(hw[kind], currentBlock) });
+        } else {
+            console.warn(`Discussion threads (${kind}): not closing anything this tick - ${trust.reason}.`);
+        }
+        if (r.reopened.length || r.closed.length) console.log(`Discussion threads (${kind}): reopened ${r.reopened.join(',') || '-'}; closed ${r.closed.join(',') || '-'}.`);
+    } catch (e) { console.warn(`Discussion threads (${kind}): reconcile failed:`, e.message); }
 }
-
-function reconcileMotionThreads(motions) {
-    const activeIds = new Set();
-    for (const m of (motions || [])) {
-        const id = `motion-${m.hash}`;
-        activeIds.add(id);
-        db.createThreadIfMissing({ id, kind: 'motion', refKey: m.hash, title: m.title || 'Council Motion' });
-    }
-    for (const openId of db.getOpenThreadIds('motion')) {
-        if (!activeIds.has(openId)) db.closeThread(openId, 'Council motion concluded.');
-    }
-}
+function threadHighWater(kind) { return (db.getKv(THREAD_HW_KEY) || {})[kind] || 0; }
 
 app.get('/api/wallet/:address', async (req, res) => {
     // Audit F-083: this handler set NO Cache-Control at all, so the response
@@ -6594,10 +6589,12 @@ async function syncCouncilPass() {
         db.setKv('council', councilData);
         db.setSyncState('council', { lastSync: Date.now(), status: 'Synced' });
         // Same hazard as the F-052 reconcile, and it predates it:
-        // reconcileMotionThreads closes the discussion thread of every motion
+        // the thread reconcile closes the discussion thread of every motion
         // absent from `motions`, so an empty list from a swallowed error would
-        // close every open thread. Gate it on the same flag.
-        if (motionsTrusted) reconcileMotionThreads(motions);
+        // close every open thread. Gated on the same flag, plus the block check
+        // in lib/discussion-threads.js.
+        reconcileGovThreads('motion', motions.map(m => ({ id: `motion-${m.hash}`, refKey: m.hash, title: m.title || 'Council Motion' })),
+            motionReadTrusted({ listTrusted: motionsTrusted, currentBlock, highWater: threadHighWater('motion') }), currentBlock);
 
         // Keep the persistent motions history fresh with the live open motions.
         upsertLiveCollectiveMotions('council', motions);
@@ -7346,7 +7343,9 @@ async function syncDemocracyPass() {
             }
         }
 
-        reconcileProposalThreads(publicProposals);
+        reconcileGovThreads('proposal', publicProposals.map(p => ({ id: `proposal-${p.index}`, refKey: String(p.index), title: `Public Proposal #${p.index}` })),
+            proposalReadTrusted({ publicPropCount: propCountRaw ? publicPropCount : null, currentBlock,
+                highWater: threadHighWater('proposal'), knownRefKeys: db.getThreadRefKeys('proposal') }), currentBlock);
 
         db.setKv('democracy_meta', {
             referendumCount, publicPropCount, launchPeriod, currentBlock, totalIssuance,
