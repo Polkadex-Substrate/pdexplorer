@@ -20,8 +20,8 @@ import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 const SCRIPT = readRepo('script.js', import.meta.url);
 const SERVER = readRepo('server.js', import.meta.url);
 
-const AUTHOR = 'esoGuiQRmZqcKq4d1xyZZtbs9cBsdtTYmv1Fq7RZKtpbdJtrf';
-const OTHER = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
+const AUTHOR = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
+const OTHER = '5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty';
 const TID = 'motion-0x27befa0fdbb72a238099f9c63668789ceaebbd3cdad7d471c177510bc5208033';
 const LONG1 = 'POLKADEX TREASURY PROPOSAL 86\nCore team funding: (12 months), 1,234,567 PDEX; phase 1.\n'.repeat(60).slice(0, 4000);
 const LONG2 = 'Second post: colons, commas (parens) 42\n'.repeat(100).slice(0, 3492);
@@ -30,9 +30,9 @@ function payload({ posts = true, postCount = 2 } = {}) {
         thread: { id: TID, kind: 'motion', refKey: TID.slice(7), title: 'treasury.approveProposal', status: 'open',
             createdAt: 1792696273392, closedAt: null, closedReason: null, postCount },
         posts: posts ? [
-            { id: 1, threadId: TID, author: AUTHOR, authorName: 'Ajeesh | Polkadex | CEO', content: LONG1, createdAt: 1792696378000, editedAt: null },
+            { id: 1, threadId: TID, author: AUTHOR, authorName: 'Validator One', content: LONG1, createdAt: 1792696378000, editedAt: null },
             // editedAt absent, not null
-            { id: 2, threadId: TID, author: AUTHOR, authorName: 'Ajeesh | Polkadex | CEO', content: LONG2, createdAt: 1792696565000 }
+            { id: 2, threadId: TID, author: AUTHOR, authorName: 'Validator One', content: LONG2, createdAt: 1792696565000 }
         ] : []
     };
 }
