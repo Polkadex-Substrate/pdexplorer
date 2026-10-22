@@ -22,11 +22,12 @@ Report: after deploying `6ab51d8` (merge of PR #16, post editing) to production,
 
 - `lib/discussion-threads.js`: a close needs a read that is provably current. Its block must not be behind the last trusted read (stored in kv `discussion:reconcile-block`). For proposals, the node's `publicPropCount` must also cover every proposal we already hold a thread for. An untrusted read may create threads but never closes or reopens one.
 - Self-heal: if a thread was closed with the automatic reason but its item is active on chain again, it is reopened on the next trusted read. This repairs threads that production has already closed, with no manual DB edit. Threads closed for any other reason are left alone.
-- `test/discussion-threads.test.js` reproduces both failures. Before the fix, "proposal-7 must stay open: 'closed' !== 'open'" and "reopens on the next trusted read" both failed. After the fix, both pass.
+- `test/discussion-threads.test.js` has two kinds of test. The behavioural tests exercise the new module `lib/discussion-threads.js`, so they cannot run against the old code (the old logic lived in closures in `server.js`). The source-check test that asserts `server.js` uses the module fails at `e27c9de^` and passes after the fix.
+- Known behaviours: the first trusted read after a deploy can reopen a thread that a later trusted read closes again (a one-tick flap), and a council motion re-proposed with the same call hash reopens its old thread with its old posts (intended).
 
 ## Diagnose on the explorer box (read-only)
 
-Everything in this section only reads. It uses the host `sqlite3` (installed for `backup.sh`) with `-readonly`.
+The diagnostic section reads the database only; it writes scratch files under `/var/tmp`. It uses the host `sqlite3` (installed for `backup.sh`) with `-readonly`.
 
 **Step 1. Which database file is the backend actually using?** Run this on the explorer box, after `ssh explorer`:
 
@@ -49,6 +50,14 @@ sudo sqlite3 -readonly -header -column data/explorer.db "SELECT COUNT(*) AS post
 sudo sqlite3 -readonly -header -column data/explorer.db "SELECT name, seq FROM sqlite_sequence WHERE name = 'discussion_posts';"
 sudo sqlite3 -readonly -header -column data/explorer.db "SELECT t.id, t.status, datetime(t.closed_at/1000,'unixepoch') AS closed_utc, t.closed_reason, COUNT(p.id) AS posts FROM discussion_threads t LEFT JOIN discussion_posts p ON p.thread_id = t.id GROUP BY t.id ORDER BY t.closed_at DESC LIMIT 40;"
 ```
+
+**Step 2b. Decisive log check.** Run this on the explorer box (read-only):
+
+```
+sudo docker logs pdexplorer-backend 2>&1 | grep "Democracy indexer" | tail -n 50
+```
+
+A line such as `Democracy indexer: N referenda, 0 active proposals.` around the deploy time confirms the cause: a lagging node returned an empty proposal list and the old code closed every thread. If there is no such line, the cause is unconfirmed and the CEO should send this output.
 
 **Step 3. Compare with the newest backup taken before the deploy.** Run this on the explorer box. Pick the newest file in the listing whose timestamp is before the "backend started" time from step 1, and put its name in `BAK`:
 

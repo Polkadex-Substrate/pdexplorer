@@ -8,6 +8,11 @@
 // check that the read was current, and never reopened a thread afterwards. A
 // backend restart that lands on a lagging RPC node behind the load balancer
 // therefore locked live discussions for good, labelled "moved to a referendum".
+//
+// What fails where: the behavioural tests exercise the new module
+// lib/discussion-threads.js, so they cannot run against the old code (it lived
+// in closures in server.js). The server.js source-check test is the one that
+// fails at e27c9de^.
 import { test, describe, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
