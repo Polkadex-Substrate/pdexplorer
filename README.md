@@ -650,7 +650,8 @@ CDN.
 
 **Sends `no-store` explicitly:** `/api/wallet/:address`,
 `/api/identity/:address`, `GET /api/labels/:address` *when the caller presents a
-session*, `POST /api/rpc/call`, all of `/api/email/*`, `/api/version` and
+session*, `GET /api/discussions/:id` (since 2026-10-22: an edge copy taken before
+a post was written kept showing an empty thread), `POST /api/rpc/call`, all of `/api/email/*`, `/api/version` and
 `/api/health`. These are per-viewer or state-changing; an intermediary that
 stored one caller's copy would serve it to the next.
 
@@ -659,7 +660,7 @@ stored one caller's copy would serve it to the next.
 `/api/validator/:address`, `/api/search/:query`, `/api/account/:address`,
 `/api/account/:address/history`,
 `/api/staking-rewards/:address`, `/api/transactions/older`,
-`/api/proxies/:address`, `/api/multisigs/:address`, `/api/discussions/:id`,
+`/api/proxies/:address`, `/api/multisigs/:address`,
 every **other** `POST`/`DELETE` route (`POST /api/rpc/call` and the `/api/email/*`
 writes are the exceptions — they are in the `no-store` list above), and all of
 `/api/diag/*`. These are omissions, not
@@ -1065,7 +1066,8 @@ help:
 - `/api/account/:address`, `/api/account/:address/history`, `/api/wallet/:address`, `/api/staking-rewards/:address`
 - `/api/search/:query`, `/api/block/:id`, `/api/extrinsic/*`, `/api/validator/:address`
 - `/api/extrinsic-by-hash/:txHash` — **listed separately on purpose.** A rule written as `/api/extrinsic/*` does not match it: the path is `extrinsic-by-hash`, not a child of `extrinsic/`. It is also the single most expensive route we have (it scans up to 2000 blocks backwards from the head per call), so an edge rule that silently misses it is the one omission on this list that costs RPC budget as well as freshness
-- `/api/transactions/older`, `/api/proxies/:address`, `/api/multisigs/:address`, `/api/discussions/:id` — per-address or cursor-keyed, and all four send no `Cache-Control` at all
+- `/api/transactions/older`, `/api/proxies/:address`, `/api/multisigs/:address` - per-address or cursor-keyed, and all three send no `Cache-Control` at all
+- `/api/discussions/:id` - sends `no-store` at the origin; an edge rule must not override it, or readers see a thread as it was before its newest posts
 - every `/api/labels/*` route — the GET's payload contains the *caller's own* `viewerVote`, so caching one user's response would show their vote to everyone
 - everything under `/api/auth/*`, `/api/email/*`, `/api/discussions/*/posts`, plus `POST /api/rpc/call`
 - `/api/version`, `/api/health`, `/api/identity/:address`, and all of `/api/diag/*`

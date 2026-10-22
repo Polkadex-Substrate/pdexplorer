@@ -17,7 +17,7 @@ import { safeReturnPath } from './lib/safe-return.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
-import { canEdit as canEditPost, renderPostHtml, wireEditing } from './lib/discussion-edit.js';
+import { canEdit as canEditPost, renderPostList, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { developersBodies } from './lib/developers-bodies.js';
@@ -10922,7 +10922,8 @@ async function fetchDiscussionThread(id, focusLink = false) {
     if (!root) return;
     root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading discussion…</div>';
     try {
-        const res = await fetch('/api/discussions/' + encodeURIComponent(id));
+        // no-store: a cached copy from before a post was made showed "No posts yet" (2026-10-22).
+        const res = await fetch('/api/discussions/' + encodeURIComponent(id), { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
         renderThread(data.thread, data.posts || []);
@@ -10936,10 +10937,8 @@ function renderThread(thread, posts) {
     const root = document.getElementById('discussions-content');
     if (!root) return;
     const session = getDiscussSession();
-    const postsHtml = posts.length
-        ? posts.map(p => renderPostHtml(p, { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime,
-            editable: !!session && canEditPost(p, thread, session.address, isSameAddress), actions: renderCopyLinkButton })).join('')
-        : '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:0.86rem;">No posts yet — be the first to comment.</div>';
+    const postsHtml = renderPostList(thread, posts, { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime,
+        isEditable: p => !!session && canEditPost(p, thread, session.address, isSameAddress), actions: renderCopyLinkButton });
 
     let composer;
     if (thread.status === 'closed') {
