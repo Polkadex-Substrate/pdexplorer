@@ -16,6 +16,7 @@ import { resolveClientIp } from './lib/client-ip.js';
 import { planReorgSweep, hashesDiffer, heightsToVerify } from './lib/reorg.js';
 import { planTxPage, cursorPage, parseCursor, withoutRowId } from './lib/tx-paging.js';
 import { buildTxRowFromEventRow, eventTxId, rewardId } from './lib/tx-from-event.js';
+import { attachAccounts } from './lib/account-links.js';
 import { checkUserText } from './lib/user-text.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
@@ -529,6 +530,8 @@ const DISPLAY_NAME_OVERRIDES = new Map([
 // Known Polkadex mainnet treasury account — used as a fallback if the
 // pallet-id derivation is unavailable on the connected runtime.
 const TREASURY_ACCOUNT = process.env.TREASURY_ACCOUNT || 'esoEt6uZ9vs23yW8aqTACLf1tViGpSLZKnhPXt5Nq7vQwHGew';
+// How lib/account-links.js links an event to the accounts its data names, and the account treasury payouts come from.
+const ACCOUNT_LINK_RULES = { normalize: normalizeAddress, treasury: TREASURY_ACCOUNT };
 
 // Comma-separated list of WebSocket RPC endpoints. WsProvider will rotate
 // across them on failure and reconnect with exponential-ish backoff. Set
@@ -8184,6 +8187,7 @@ async function scanSingleBlock(blockNumber) {
             data: record.event.data.toHuman(), signerAddress, signerName, timestamp, status
         });
     }
+    attachAccounts(events, ACCOUNT_LINK_RULES);
     return { block, events, eventsIncomplete };
 }
 

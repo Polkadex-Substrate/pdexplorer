@@ -123,7 +123,7 @@ describe('F-139 — the migrator applies the DDL, other workers do not', () => {
         // the thing you changed, every HTTP worker will decide the schema is
         // current, skip your ALTER, and 500 on every query touching the new
         // column while the indexer looks perfectly healthy.
-        const EXPECTED = 'bcb541f401f45692';
+        const EXPECTED = '969e1cf53575f66f';
         assert.equal(db.schemaInitInfo().fingerprint, EXPECTED);
     });
 

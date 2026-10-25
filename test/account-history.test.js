@@ -90,6 +90,38 @@ describe('per-address pages reach the whole index, each row once', () => {
     });
 });
 
+describe('events an account signed or is named in, each once', () => {
+    // ME signs some, is named in others (event_accounts, lib/account-links.js), and both in a few
+    // (a spelling the signer rule missed); OTHER's events interleave the rowids.
+    const named = [];
+    BLOCKS.forEach((block, i) => {
+        const signer = i % 3 === 0 || i % 5 === 0 ? ME : OTHER;
+        const accounts = i % 3 === 1 || i % 5 === 0 ? [ME] : (i % 4 === 0 ? [OTHER] : []);
+        named.push({ hash: `nv-${i}`, block, eventIndex: i, section: 'balances', method: 'Deposit', signerAddress: signer, accounts });
+    });
+    const mine = e => e.signerAddress === ME || e.accounts.includes(ME);
+
+    before(() => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-account-named-'));
+        created.push(dir);
+        db.initDb(dir, true, { awaitMigrator: false });
+        db.insertEvents(named);
+    });
+
+    test('pages run newest first across both, page edges inside a block, no event twice', () => {
+        const { hashes, sizes } = walk(c => db.getEventsByAddress(ME, 4, c), 4);
+        assert.deepEqual(hashes, expected(named, mine));
+        assert.equal(new Set(hashes).size, hashes.length);
+        assert.deepEqual(sizes, [4, 4, 4, 4, 2]);
+    });
+
+    test('the count matches the pages', () => {
+        assert.equal(db.countEventsByAddress(ME), named.filter(mine).length);
+        assert.equal(db.countEventsByAddress(ME), 18);
+        assert.equal(db.countEventsByAddress('esNobody'), 0);
+    });
+});
+
 // Without a Cache-Control header the CDN kept an account page for an hour; both routes now use the
 // 10 s tier the indexer-fed feeds use, set only once the response is ready (errors stay no-store).
 describe('the account routes are cached for seconds, not an hour', () => {

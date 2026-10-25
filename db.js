@@ -127,6 +127,13 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_block ON events(block DESC);
 CREATE INDEX IF NOT EXISTS idx_events_signer ON events(signer_address);
+-- Accounts each event names in its data (lib/account-links.js), so an account page also lists events it did not sign.
+CREATE TABLE IF NOT EXISTS event_accounts (
+  address TEXT NOT NULL,
+  block INTEGER NOT NULL,
+  event_hash TEXT NOT NULL,
+  PRIMARY KEY (address, block, event_hash)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS validator_history (
   era INTEGER,
   address TEXT,
@@ -1586,9 +1593,12 @@ export function getBlockHashesRange(fromNumber, toNumber) {
 }
 
 // F-007 repair: delete every row at this height that does not carry the
-// canonical hash. Implementation + tests in lib/id-migration.js.
+// canonical hash. Implementation + tests in lib/id-migration.js. The links of
+// the deleted events go with them.
 export function deleteForkRows(blockNumber, canonicalHash) {
-    return deleteForkRowsImpl(db, blockNumber, canonicalHash);
+    const out = deleteForkRowsImpl(db, blockNumber, canonicalHash), n = Number(blockNumber);
+    if (!out.skipped) out.links = db.prepare('DELETE FROM event_accounts WHERE block = ? AND event_hash NOT IN (SELECT hash FROM events WHERE block = ?)').run(n, n).changes;
+    return out;
 }
 
 // F-008: transfer events (balances.Transfer, and treasury.Awarded payouts) for
@@ -1624,28 +1634,39 @@ function mapEventRow(r) {
     return { ...r, data };
 }
 const EVENT_COLS = 'hash, tx_hash AS txHash, block_hash AS blockHash, block, event_index AS eventIndex, extrinsic_index AS extrinsicIndex, section, method, data, signer_address AS signerAddress, signer_name AS signerName, timestamp, status';
+// Link rows for the accounts an event names (e.accounts, set by lib/account-links.js); returns how many were new.
+function linkEvent(stmt, e) {
+    let added = 0;
+    if (e.block != null) for (const a of e.accounts || []) added += stmt.run(a, e.block, e.hash).changes;
+    return added;
+}
+const LINK_SQL = 'INSERT OR IGNORE INTO event_accounts(address,block,event_hash) VALUES(?,?,?)';
 export function insertEvents(list) {
     if (!list || !list.length) return;
     runTx(() => {
         const stmt = db.prepare('INSERT OR IGNORE INTO events(hash,tx_hash,block_hash,block,event_index,extrinsic_index,section,method,data,signer_address,signer_name,timestamp,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
+        const link = db.prepare(LINK_SQL);
         for (const e of list) {
             if (!e || !e.hash) continue;
             stmt.run(e.hash, e.txHash ?? null, e.blockHash ?? null, e.block ?? null, e.eventIndex ?? null,
                 e.extrinsicIndex ?? null, e.section ?? null, e.method ?? null, JSON.stringify(e.data ?? null),
                 e.signerAddress ?? null, e.signerName ?? null, e.timestamp ?? null, e.status ?? null);
+            linkEvent(link, e);
         }
     });
 }
 export function getRecentEvents(limit) {
     return db.prepare(`SELECT ${EVENT_COLS} FROM events ORDER BY block DESC, event_index DESC LIMIT ?`).all(limit).map(mapEventRow);
 }
+// The events an account signed or is named in (event_accounts), each once.
+const EVENT_ADDRESS_MATCH = '(signer_address = ? OR hash IN (SELECT event_hash FROM event_accounts WHERE address = ?))';
 export function getEventsByAddress(address, limit, before = null) {
     const page = olderThan(before);
-    return db.prepare(`SELECT ${EVENT_COLS}, rowid AS rowId FROM events WHERE signer_address = ?${page.sql} ${PAGE_ORDER}`)
-        .all(address, ...page.args, limit).map(mapEventRow);
+    return db.prepare(`SELECT ${EVENT_COLS}, rowid AS rowId FROM events WHERE ${EVENT_ADDRESS_MATCH}${page.sql} ${PAGE_ORDER}`)
+        .all(address, address, ...page.args, limit).map(mapEventRow);
 }
 export function countEventsByAddress(address) {
-    return db.prepare('SELECT COUNT(*) AS n FROM events WHERE signer_address = ?').get(address).n;
+    return db.prepare(`SELECT COUNT(*) AS n FROM events WHERE ${EVENT_ADDRESS_MATCH}`).get(address, address).n;
 }
 export function countEvents() {
     // O(1) via the trigger-maintained counter (see table_counts). The miss path
