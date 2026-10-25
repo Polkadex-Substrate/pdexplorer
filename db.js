@@ -1655,6 +1655,22 @@ export function insertEvents(list) {
         }
     });
 }
+// Links for events already stored (the account-links backfill); returns how many were new.
+export function insertEventAccounts(list) {
+    if (!list || !list.length) return 0;
+    return runTx(() => {
+        const link = db.prepare(LINK_SQL);
+        return list.reduce((added, e) => added + (e && e.hash ? linkEvent(link, e) : 0), 0);
+    });
+}
+// Every stored event in a block range, for the account-links backfill.
+export function getEventRowsRange(fromBlock, toBlock) {
+    return db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE block >= ? AND block <= ?`).all(fromBlock, toBlock);
+}
+// Oldest and newest stored event block, { lo, hi } (nulls when empty); one subquery each so both are index seeks.
+export function getEventBlockSpan() {
+    return db.prepare('SELECT (SELECT MIN(block) FROM events) AS lo, (SELECT MAX(block) FROM events) AS hi').get();
+}
 export function getRecentEvents(limit) {
     return db.prepare(`SELECT ${EVENT_COLS} FROM events ORDER BY block DESC, event_index DESC LIMIT ?`).all(limit).map(mapEventRow);
 }

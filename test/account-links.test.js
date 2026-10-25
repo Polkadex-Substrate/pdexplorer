@@ -1,4 +1,5 @@
-// Which accounts an event names (lib/account-links.js), and the rules that keep fees and staking payouts out.
+// Which accounts an event names (lib/account-links.js), the rules that keep fees and staking payouts out,
+// and the backfill that gives events stored before this build their links and payout rows.
 // Event shapes (sections, methods, fields, phases) follow mainnet events: a treasury payout, a vote and an
 // approval through a multisig, a staking payout and legacy array data. Blocks, amounts and accounts are synthetic.
 
@@ -9,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { decodeAddress, encodeAddress } from '@polkadot/util-crypto';
 import * as db from '../db.js';
-import { addressStrings, attachAccounts } from '../lib/account-links.js';
+import { addressStrings, attachAccounts, backfillAccountLinks, LINKS_STATE } from '../lib/account-links.js';
 import { readRepo, stripComments, bodyOf, assertOrder } from './helpers/source.js';
 
 const addr = n => encodeAddress(new Uint8Array(32).fill(n), 88);
@@ -155,12 +156,76 @@ describe('the links of a reorged block', () => {
     });
 });
 
-// Each new event carries its links whichever indexer path stores it.
+// Each new event carries its links whichever indexer path stores it, and the backfill runs on the indexer until it is done.
 describe('server.js wiring', () => {
     const server = stripComments(readRepo('server.js', import.meta.url));
 
     test('scanSingleBlock links every event it builds, so every insertEvents caller stores links', () => {
         assertOrder(assert, bodyOf(server, 'scanSingleBlock'), 'events.push({', 'attachAccounts(events, ACCOUNT_LINK_RULES);', 'links are attached after the events are built');
         assert.match(server, /const ACCOUNT_LINK_RULES = \{ normalize: normalizeAddress, treasury: TREASURY_ACCOUNT \};/);
+    });
+
+    test('the backfill ticks on the indexer and stops its timer once done', () => {
+        assert.match(bodyOf(server, 'startIndexerLoops'), /const accountLinksTimer = setInterval\(\(\) => \{ if \(syncAccountLinks\(\)\) clearInterval\(accountLinksTimer\); \}, ACCOUNT_LINKS_INTERVAL_MS\);/);
+        assert.match(bodyOf(server, 'syncAccountLinks'), /backfillAccountLinks\(db, \{ rules: ACCOUNT_LINK_RULES, chunk: ACCOUNT_LINKS_CHUNK \}\)/);
+    });
+});
+
+// Stored events as a build without links left them: no event_accounts rows, no payout transfer rows.
+const storedHistory = () => {
+    const events = [
+        ...signedExtrinsic(100, OWNER_A, [['multisig.NewMultisig', { approving: OWNER_A, multisig: MULTISIG, callHash: HASH }]]),
+        ev(250, null, 'System', 'balances.Deposit', { who: MULTISIG, amount: '1,000,000,000,000,000' }),
+        ev(250, null, 'System', 'treasury.Awarded', { proposalIndex: '12', award: '1,000,000,000,000,000', account: MULTISIG }),
+        ev(250, null, 'System', 'balances.Withdraw', { who: TREASURY, amount: '1,000,000,000,000,000' }),
+        ...signedExtrinsic(400, OWNER_B, [['balances.Transfer', { from: MULTISIG, to: OTHER, amount: '250,000,000,000,000' }]])
+    ].map(e => ({ ...e, timestamp: 1_700_000_000_000 + e.block, status: 'success' }));
+    db.insertEvents(events);
+    return events;
+};
+
+describe('backfillAccountLinks walks stored events newest first, resumably and idempotently', () => {
+    test('chunk by chunk to the oldest block, then done; the links match what the live path stores', () => {
+        freshDb();
+        const events = storedHistory();
+        assert.equal(db.countEventsByAddress(MULTISIG), 0, 'nothing names the multisig before the backfill');
+        const states = [];
+        for (let st; (st = backfillAccountLinks(db, { rules: RULES, chunk: 100 })); ) states.push(st);
+        assert.deepEqual(states.map(s => [s.cursor, s.complete]), [[300, false], [200, false], [100, false], [99, true]]);
+        assert.equal(db.getSyncState(LINKS_STATE).complete, true);
+        assert.equal(backfillAccountLinks(db, { rules: RULES, chunk: 100 }), null, 'a finished walk does nothing');
+        const expected = attachAccounts(events.map(e => ({ ...e })), RULES).filter(e => e.accounts.includes(MULTISIG)).map(e => e.hash).sort();
+        assert.deepEqual(db.getEventsByAddress(MULTISIG, 50).map(e => e.hash).sort(), expected);
+        assert.equal(states.at(-1).links, 6, 'the multisig four times, the treasury and the transfer recipient once each');
+        assert.equal(states.at(-1).payouts, 1);
+    });
+
+    test('the payout becomes a transfer: IN for the beneficiary, OUT for the treasury', () => {
+        const [toMultisig] = db.getTransactionsByAddress(MULTISIG, 50).filter(t => t.method === 'treasury.Awarded');
+        assert.equal(toMultisig.from, TREASURY);
+        assert.equal(toMultisig.to, MULTISIG);
+        assert.equal(toMultisig.numericAmount, 1000);
+        assert.equal(toMultisig.value, 'Treasury proposal #12');
+        assert.equal(toMultisig.extrinsicIndex, null, 'no extrinsic: the Index cell links to the block');
+        assert.deepEqual(db.getTransactionsByAddress(TREASURY, 50).map(t => t.hash), [toMultisig.hash]);
+    });
+
+    test('a run cut short resumes at its cursor, and a re-run from scratch adds nothing', () => {
+        freshDb();
+        storedHistory();
+        backfillAccountLinks(db, { rules: RULES, chunk: 200 });
+        assert.equal(db.getSyncState(LINKS_STATE).cursor, 200);
+        for (; backfillAccountLinks(db, { rules: RULES, chunk: 200 }); );
+        const done = db.getSyncState(LINKS_STATE);
+        db.setSyncState(LINKS_STATE, {});
+        for (; backfillAccountLinks(db, { rules: RULES, chunk: 1000 }); );
+        assert.equal(db.getSyncState(LINKS_STATE).links, 0, 'every link already existed');
+        assert.equal(db.getSyncState(LINKS_STATE).payouts, 0, 'the payout row already existed');
+        assert.equal(done.links, 6);
+    });
+
+    test('an empty events table is done at once', () => {
+        freshDb();
+        assert.equal(backfillAccountLinks(db, { rules: RULES, chunk: 100 }).complete, true);
     });
 });
