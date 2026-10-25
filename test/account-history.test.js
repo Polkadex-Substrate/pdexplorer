@@ -9,6 +9,8 @@ import path from 'node:path';
 import * as db from '../db.js';
 import { cursorPage, parseCursor } from '../lib/tx-paging.js';
 import { mountAccountLoadOlder } from '../lib/account-transfers.js';
+import { CACHE_TIERS } from '../lib/api-reference.js';
+import { readRepo, stripComments } from './helpers/source.js';
 
 const ME = 'esMe', ALT = '5Me', OTHER = 'esOther';
 
@@ -85,6 +87,27 @@ describe('per-address pages reach the whole index, each row once', () => {
         assert.deepEqual(hashes, expected(evAll, e => e.signerAddress === ME));
         assert.deepEqual(sizes, [5, 5, 5, 5, 3]);
         assert.equal(db.countEventsByAddress(ME), 23);
+    });
+});
+
+// Without a Cache-Control header the CDN kept an account page for an hour; both routes now use the
+// 10 s tier the indexer-fed feeds use, set only once the response is ready (errors stay no-store).
+describe('the account routes are cached for seconds, not an hour', () => {
+    const server = stripComments(readRepo('server.js', import.meta.url));
+    const route = p => { const i = server.indexOf(`app.get('${p}'`); assert.ok(i !== -1, p); return server.slice(i, server.indexOf('\n});', i)); };
+
+    for (const p of ['/api/account/:address', '/api/account/:address/history']) {
+        test(`${p} sets cacheShort right before it responds`, () => {
+            const body = route(p);
+            assert.match(body, /cacheShort\(res\);\s*res\.json\(/);
+            assert.ok(!/cacheMedium\(res\)|cacheLong\(res\)|no-store/.test(body), 'another tier in the handler');
+        });
+    }
+
+    test('cacheShort is the 10-second tier, and the developers table lists both routes there', () => {
+        assert.match(server, /function cacheShort\(res\)\s*\{ res\.set\('Cache-Control', 'public, max-age=5, s-maxage=10, stale-while-revalidate=30'\); \}/);
+        const tier = CACHE_TIERS.find(t => t.name === 'Short');
+        assert.ok(tier.routes.includes('/api/account/:address') && tier.routes.includes('/api/account/:address/history'));
     });
 });
 

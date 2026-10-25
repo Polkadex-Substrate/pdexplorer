@@ -4113,6 +4113,7 @@ app.get('/api/account/:address', async (req, res) => {
         // nobody has to guess which half a field came from.
         const chainState = db.getSyncState('chain_index') || {};
         const blocksState = db.getSyncState('blocks') || {};
+        cacheShort(res);
         res.json({
             account: address, display: name,
             balanceTotal: free + reserved, balanceFree: free,
@@ -4172,7 +4173,9 @@ app.get('/api/account/:address/history', (req, res) => {
         return res.status(400).json({ error: 'before must be the <block>:<rowId> cursor from next.' });
     }
     try {
-        res.json({ list, ...cursorPage(ACCOUNT_LISTS[list](acct, cursor), ACCOUNT_PAGE) });
+        const page = cursorPage(ACCOUNT_LISTS[list](acct, cursor), ACCOUNT_PAGE);
+        cacheShort(res);
+        res.json({ list, ...page });
     } catch (err) { serverError(res, err, req.path); }
 });
 
