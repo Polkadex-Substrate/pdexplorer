@@ -8456,7 +8456,7 @@ function deriveTransactionsFromLocalEvents(lo, hi) {
     // spelling as live-indexed ones. A review caught that only the live writer
     // normalised, while this path produces the bulk of the table.
     const rows = db.getTransferEventRowsRange(lo, hi)
-        .map(ev => buildTxRowFromEventRow(ev, normalizeAddress))
+        .map(ev => buildTxRowFromEventRow(ev, normalizeAddress, TREASURY_ACCOUNT))
         .filter(Boolean);
     if (rows.length) db.insertTransactions(rows);
     return rows.length;
@@ -8655,6 +8655,8 @@ async function syncChainIndex() {
             const forward = await scanChainRange(headSeen + 1, head, BLOCKS_FORWARD_MAX);
             if (forward.blocks.length) db.insertBlocks(forward.blocks);
             if (forward.events.length) db.insertEvents(forward.events);
+            // Transfer rows from the events just stored, treasury payouts included (the RPC transfer scanner builds balances.Transfer only).
+            if (forward.events.length) deriveTransactionsFromLocalEvents(headSeen + 1, head);
             // Event-driven governance refresh. The snapshots otherwise renew on
             // slow timers (COUNCIL_REFRESH_MS, TREASURY_REFRESH_MS,
             // DEMOCRACY_REFRESH_MS), so a new motion, referendum or vote took

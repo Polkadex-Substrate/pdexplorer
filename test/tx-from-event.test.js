@@ -9,7 +9,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    parseAmountToPdex, parseTransfer, buildTxRowFromEventRow, eventTxId, rewardId, formatAmountDisplay
+    parseAmountToPdex, parseTransfer, parseAward, buildTxRowFromEventRow, eventTxId, rewardId, formatAmountDisplay, AWARD_METHOD
 } from '../lib/tx-from-event.js';
 
 const HASH = '0x9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
@@ -112,5 +112,38 @@ describe('buildTxRowFromEventRow', () => {
     });
     test('missing status defaults to success (matches live writer)', () => {
         assert.equal(buildTxRowFromEventRow({ ...ev, status: null }).status, 'success');
+    });
+    test('a stored row of another kind is not a transfer, even with three fields', () => {
+        assert.equal(buildTxRowFromEventRow({ ...ev, section: 'balances', method: 'ReserveRepatriated' }), null);
+        assert.equal(buildTxRowFromEventRow({ ...ev, section: 'balances', method: 'Transfer' }).method, 'balances.Transfer');
+    });
+});
+
+// A treasury payout has no extrinsic and no balances.Transfer: the account pages show it as a
+// transfer from the treasury account, read from its treasury.Awarded event.
+describe('treasury payouts as transfer rows', () => {
+    const award = {
+        block: 250, eventIndex: 4, section: 'treasury', method: 'Awarded',
+        data: JSON.stringify({ proposalIndex: '12', award: '1,000,000,000,000,000', account: '5Beneficiary' }),
+        timestamp: 1_700_000_000_000, blockHash: HASH, status: 'success'
+    };
+
+    test('parseAward reads named fields and the legacy array', () => {
+        assert.deepEqual(parseAward(award.data), { proposal: '12', to: '5Beneficiary', amountPdex: 1000 });
+        assert.deepEqual(parseAward(JSON.stringify(['1,012', '1,000,000,000,000', '5B'])), { proposal: '1012', to: '5B', amountPdex: 1 });
+        for (const bad of ['{bad', 'null', JSON.stringify({ proposalIndex: '1', award: '1' }), JSON.stringify(['1', 'x', '5B'])]) {
+            assert.equal(parseAward(bad), null, bad);
+        }
+    });
+
+    test('the row goes from the treasury to the beneficiary, labelled with its proposal', () => {
+        const row = buildTxRowFromEventRow(award, a => a.toLowerCase(), '5Treasury');
+        assert.equal(row.hash, `event-${HASH}-4`, 'the same id scheme, so every writer agrees');
+        assert.deepEqual([row.from, row.to, row.method, row.value], ['5treasury', '5beneficiary', AWARD_METHOD, 'Treasury proposal #12']);
+        assert.deepEqual([row.amount, row.numericAmount, row.block, row.eventIndex], ['1,000 PDEX', 1000, 250, 4]);
+    });
+
+    test('without the treasury account there is no payout row', () => {
+        assert.equal(buildTxRowFromEventRow(award, null, null), null);
     });
 });

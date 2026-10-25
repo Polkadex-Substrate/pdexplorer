@@ -1349,8 +1349,10 @@ export function insertTransactions(list) {
     });
     return added;
 }
+// Treasury payouts are rows here for the account pages; the chain-wide list and charts stay balances.Transfer.
+const TRANSFERS_ONLY = "method IS NOT 'treasury.Awarded'";
 export function getRecentTransactions(limit) {
-    return db.prepare(`SELECT ${TX_COLS} FROM transactions ORDER BY block DESC, timestamp DESC LIMIT ?`).all(limit);
+    return db.prepare(`SELECT ${TX_COLS} FROM transactions WHERE ${TRANSFERS_ONLY} ORDER BY block DESC, timestamp DESC LIMIT ?`).all(limit);
 }
 // Keyset paging, newest first: before = { block, rowId } resumes strictly below that row; rowid breaks ties in a block.
 const PAGE_ORDER = 'ORDER BY block DESC, rowid DESC LIMIT ?';
@@ -1442,7 +1444,7 @@ export function getDailyAnalytics(sinceTs) {
                COUNT(*) AS txCount,
                COALESCE(SUM(numeric_amount), 0) AS txVolume
         FROM transactions
-        WHERE timestamp >= ?
+        WHERE timestamp >= ? AND ${TRANSFERS_ONLY}
         GROUP BY day
         ORDER BY day ASC
     `).all(since);
@@ -1465,10 +1467,10 @@ export function getDailyAnalytics(sinceTs) {
     const addrRows = db.prepare(`
         SELECT day, COUNT(DISTINCT addr) AS activeAddresses FROM (
             SELECT CAST(timestamp / 86400000 AS INTEGER) AS day, from_addr AS addr
-            FROM transactions WHERE timestamp >= ? AND from_addr IS NOT NULL AND from_addr <> 'System'
+            FROM transactions WHERE timestamp >= ? AND from_addr IS NOT NULL AND from_addr <> 'System' AND ${TRANSFERS_ONLY}
             UNION
             SELECT CAST(timestamp / 86400000 AS INTEGER) AS day, to_addr AS addr
-            FROM transactions WHERE timestamp >= ? AND to_addr IS NOT NULL AND to_addr <> ''
+            FROM transactions WHERE timestamp >= ? AND to_addr IS NOT NULL AND to_addr <> '' AND ${TRANSFERS_ONLY}
         )
         GROUP BY day
         ORDER BY day ASC
@@ -1589,14 +1591,14 @@ export function deleteForkRows(blockNumber, canonicalHash) {
     return deleteForkRowsImpl(db, blockNumber, canonicalHash);
 }
 
-// F-008: transfer events for a block range, feeding the transactions
-// backfill. Same row shape the operator backfill script reads, so
-// lib/tx-from-event.js's buildTxRowFromEventRow consumes both.
+// F-008: transfer events (balances.Transfer, and treasury.Awarded payouts) for
+// a block range, feeding the transactions backfill. Same row shape the operator
+// backfill script reads, so lib/tx-from-event.js's buildTxRowFromEventRow consumes both.
 export function getTransferEventRowsRange(fromBlock, toBlock) {
     return db.prepare(`
-        SELECT block, event_index AS eventIndex, data, timestamp, block_hash AS blockHash, status
+        SELECT block, event_index AS eventIndex, section, method, data, timestamp, block_hash AS blockHash, status
           FROM events
-         WHERE section = 'balances' AND method = 'Transfer'
+         WHERE ((section = 'balances' AND method = 'Transfer') OR (section = 'treasury' AND method = 'Awarded'))
            AND block >= ? AND block <= ?
     `).all(fromBlock, toBlock);
 }

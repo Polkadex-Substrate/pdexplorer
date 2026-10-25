@@ -104,3 +104,44 @@ describe('the account transfers cells', () => {
         assert.ok(col('amount').sort({ numericAmount: 1 }, { numericAmount: 2 }) < 0);
     });
 });
+
+describe('a treasury payout on the Transfers tab', () => {
+    const payout = { hash: 'event-0xp-4', block: 250, eventIndex: 4, extrinsicIndex: null, txHash: '', from: OTHER, to: ME_42,
+        method: 'treasury.Awarded', value: 'Treasury proposal #12', amount: '1,000 PDEX', numericAmount: 1000, timestamp: Date.UTC(2026, 0, 2) };
+
+    test('IN for the beneficiary, OUT for the treasury; Index names the proposal and links the block', () => {
+        assert.equal(transferDirection(payout, ME, DEPS.same), 'in');
+        assert.equal(transferDirection(payout, OTHER, DEPS.same), 'out');
+        assert.equal(transferIndexCell(payout), '<a href="/block/250" class="item-link">Treasury proposal #12</a>');
+        assert.equal(transferIndexCell({ ...payout, value: '<b>' }), '<a href="/block/250" class="item-link">&lt;b&gt;</a>');
+    });
+
+    test('it is in the account list and count, and out of the chain-wide list and charts', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-account-payouts-'));
+        created.push(dir);
+        db.initDb(dir, true, { awaitMigrator: false });
+        db.insertTransactions([{ ...payout, to: ME }, { hash: 'event-0xt-1', from: ME, to: OTHER, block: 251, method: 'balances.Transfer', amount: '5 PDEX', numericAmount: 5, timestamp: payout.timestamp }]);
+        assert.deepEqual(db.getTransactionsByAddress(ME, 10).map(r => r.hash), ['event-0xt-1', 'event-0xp-4']);
+        assert.equal(db.countTransactionsByAddress(ME), 2);
+        assert.deepEqual(db.getTransactionsByAddress(OTHER, 10).map(r => r.hash), ['event-0xt-1', 'event-0xp-4'], 'the treasury sees it too');
+        assert.deepEqual(db.getRecentTransactions(10).map(r => r.hash), ['event-0xt-1'], '/api/transactions stays balances.Transfer');
+        const series = db.getDailyAnalytics(0);
+        assert.deepEqual([series.txCount[0].value, series.txVolume[0].value, series.activeAddresses[0].value], [1, 5, 2]);
+    });
+});
+
+describe('payout rows reach the index from every path that stores events', () => {
+    const server = stripComments(readRepo('server.js', import.meta.url));
+
+    test('the forward pass derives transfer rows, payouts included, from the events it just stored', () => {
+        const at = server.indexOf('const forward = await scanChainRange(');
+        const pass = server.slice(at, server.indexOf('govSyncsForEvents(forward.events)', at));
+        const store = pass.indexOf('db.insertEvents(forward.events)'), derive = pass.indexOf('deriveTransactionsFromLocalEvents(headSeen + 1, head)');
+        assert.ok(store !== -1 && derive > store, 'derive after the events are stored');
+        assert.match(bodyOf(server, 'deriveTransactionsFromLocalEvents'), /buildTxRowFromEventRow\(ev, normalizeAddress, TREASURY_ACCOUNT\)/);
+    });
+
+    test('the local derivation reads payouts as well as transfers', () => {
+        assert.match(bodyOf(readRepo('db.js', import.meta.url), 'getTransferEventRowsRange'), /\(section = 'treasury' AND method = 'Awarded'\)/);
+    });
+});
