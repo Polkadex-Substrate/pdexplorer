@@ -253,6 +253,14 @@ for (const { file, label, expectV5 } of FIXTURES) {
             sources.push({ tag: 'state_getMetadata', hex: fx.metadata });
             for (const [v, hex] of Object.entries(fx.metadataAtVersion || {})) if (hex) sources.push({ tag: `metadata_at_version(${v})`, hex });
         }
+        if (expectV5) {
+            // Without the v16 source no Polkadex metadata lists v5, and the
+            // General round trip below would never run for this runtime.
+            test('the fixture carries metadata v16 (the only version that can list extrinsic v5)', () => {
+                assert.ok(fx.metadataAtVersion && fx.metadataAtVersion['16'],
+                    `metadataVersions ${JSON.stringify(fx.metadataVersions)}; re-run scripts/fetch-metadata.mjs and check its "metadata v16" line`);
+            });
+        }
         for (const src of sources) {
             describe(src.tag, () => {
                 let registry;
@@ -289,8 +297,22 @@ for (const { file, label, expectV5 } of FIXTURES) {
                 });
                 test('general v5 (only where the runtime declares extrinsic v5)', (t) => {
                     const versions = [...registry.metadata.extrinsic.versions].map(Number);
-                    if (expectV5 && src.tag !== 'state_getMetadata') assert.ok(versions.includes(5), `392 metadata lists versions ${versions}`);
-                    if (!versions.includes(5)) return t.skip(`metadata lists extrinsic versions ${versions}`);
+                    // Metadata v14 and v15 have room for ONE extrinsic version and
+                    // report 4 even on a runtime that accepts v5 (checked against
+                    // the substrate v15 and v16 metadata in @polkadot/types-support:
+                    // same runtime, [4] and [4, 5]). Only v16 can list 5. So the
+                    // v5 expectation applies to the v16 source alone, and a source
+                    // that lists [4] is the expected shape, asserted and PASSED,
+                    // not skipped: the gate is "# skipped 0".
+                    const m = /^metadata_at_version\((\d+)\)$/.exec(src.tag);
+                    const sourceVersion = m ? Number(m[1]) : 14;
+                    const runtimeHasV5 = expectV5 || fx.specVersion >= 392;
+                    if (runtimeHasV5 && sourceVersion >= 16) assert.ok(versions.includes(5), `spec ${fx.specVersion} v${sourceVersion} metadata lists versions ${versions}`);
+                    if (!versions.includes(5)) {
+                        assert.deepEqual(versions, [4], `metadata v${sourceVersion} lists extrinsic versions ${versions}`);
+                        t.diagnostic(`metadata v${sourceVersion} lists extrinsic versions [4]; v5 round trip runs on the v16 source`);
+                        return;
+                    }
                     assertGeneralRoundTrip(registry, null);
                     const a = sampleAssetId(registry);
                     if (a !== null) assertGeneralRoundTrip(registry, a);
