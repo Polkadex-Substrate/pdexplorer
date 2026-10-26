@@ -23,7 +23,7 @@ import { composerHtml, wireComposer } from './lib/discussion-composer.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { isGovDetailRoute, govItemPath, legacyGovRedirect } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
-import { fanStage } from './lib/gov-actions.js';
+import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { developersBodies } from './lib/developers-bodies.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
@@ -11028,8 +11028,8 @@ const govDetailPage = createGovDetailPage({ root: () => document.getElementById(
     // The Actions panel runs the Democracy and Council pages' own functions (lib/gov-actions.js).
     same: (a, b) => isSameAddress(a, b),
     actions: { vote: (i, side) => openReferendumVoteModal(i, side), second: (i, seconds) => secondPublicProposal(i, seconds),
-        motionVote: async (hash, i, aye, key) => { await ensureCollectiveData(key); return councilMotionVote(hash, i, aye, key); },
-        motionClose: async (hash, i, key) => { await ensureCollectiveData(key); return councilMotionClose(hash, i, key); } },
+        motionVote: async (hash, i, aye, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionVote(hash, i, aye, key); },
+        motionClose: async (hash, i, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionClose(hash, i, key); } },
     loadThread: (id, el, o) => fetchDiscussionThread(id, o.focus, el, { embedded: true }), setSeo: (o) => updateSeoMeta('governance-details', { canonicalPath: window.location.pathname, ...o }),
     getApi: () => globalApi, toAddress: toPolkadexAddress, account: () => getStoredWallet(), location: () => window.location, env: { navigator, document },
     visible: () => document.visibilityState === 'visible', scrollTo: (el) => el && el.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
@@ -12083,10 +12083,13 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
 // waiting (never included in time) and resent (Retracted) clear the chip and
 // re-enable the buttons; only a real failure leaves an error on the card.
 const MOTION_STAGE_CLEARS = new Set(['cancelled', 'stalled', 'unconfirmed', 'waiting', 'resent']);
-// A governance item page votes or closes before the Council page was opened.
+// A governance item page votes or closes: the seat check and the motion lookup
+// run on a fresh read, not on the snapshot the Council page loaded earlier.
 async function ensureCollectiveData(key) {
     const view = collectiveView(key);
-    if (!view.getData()) await view.refresh();
+    if (await refreshCollectiveForSubmit(view)) return true;
+    showTxNotice(`Could not read the current ${view.label.toLowerCase()} state, so nothing was submitted. Try again in a moment.`);
+    return false;
 }
 function motionStage(view, hash, kind) {
     return (stage, m) => {

@@ -6,7 +6,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { govActionModel, renderGovActions, govItemKey, decodeAccountBalance, fanStage } from '../lib/gov-actions.js';
+import { govActionModel, renderGovActions, govItemKey, decodeAccountBalance, fanStage, refreshCollectiveForSubmit, SECOND_FEE_MARGIN_PDEX } from '../lib/gov-actions.js';
 import { createGovDetailPage, renderGovDetailSummary } from '../lib/gov-detail-view.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
@@ -71,7 +71,17 @@ describe('availability matrix', () => {
         assert.equal(govActionModel(prop({ status: 'Tabled' }), { account: MEMBER }).reason, 'Seconding has closed: this proposal is tabled as a referendum.');
         const short = govActionModel(prop(), { account: MEMBER, balance: { free: 500, transferable: 40 } });
         assert.deepEqual(enabled(short), []);
-        assert.equal(short.reason, 'Seconding reserves 100 PDEX; this account has 40 PDEX available.');
+        assert.equal(short.reason, 'Seconding reserves 100 PDEX, and the account must keep about 0.05 PDEX for the network fee: 100.05 PDEX in all. This account has 40 PDEX available.');
+    });
+    test('public proposal: the balance check counts the existential deposit and the fee, not the deposit alone', () => {
+        assert.equal(SECOND_FEE_MARGIN_PDEX, 0.05);
+        const at = (transferable, ed) => govActionModel(prop(), { account: MEMBER, balance: { free: transferable, transferable }, existentialDeposit: ed });
+        const tight = at(100.5, 1);
+        assert.deepEqual(enabled(tight), [], 'covers the deposit but would drop below the minimum balance');
+        assert.equal(tight.reason, 'Seconding reserves 100 PDEX, and the account must keep 1 PDEX (the minimum balance) plus about 0.05 PDEX for the network fee: 101.05 PDEX in all. This account has 100.5 PDEX available.');
+        assert.deepEqual(enabled(at(101.05, 1)), ['second'], 'deposit + minimum balance + fee is enough');
+        assert.deepEqual(enabled(at(100.02, undefined)), [], 'minimum balance unknown: the fee margin still counts');
+        assert.deepEqual(enabled(at(100.05, undefined)), ['second']);
     });
     test('external proposal: no user action, Council and Technical Committee only', () => {
         for (const ctx of [{}, { account: MEMBER }]) {
@@ -216,7 +226,7 @@ function fakeEl() {
     };
     return e;
 }
-function world({ body, api = null, account = MEMBER, actions } = {}) {
+function world({ body, api = null, account = MEMBER, actions, timers } = {}) {
     const root = fakeEl();
     const calls = { fetch: [], actions: [] };
     let current = body;
@@ -225,7 +235,7 @@ function world({ body, api = null, account = MEMBER, actions } = {}) {
     const log = (name) => (...args) => { calls.actions.push([name, ...args]); return actions && actions[name] ? actions[name](...args) : undefined; };
     const page = createGovDetailPage({
         root: () => root, h, fetchFn, visible: () => true,
-        timers: { setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1, clearTimeout: () => {} },
+        timers: timers || { setInterval: () => 1, clearInterval: () => {}, setTimeout: () => 1, clearTimeout: () => {} },
         setSeo: () => {}, getApi: () => api, toAddress: (a) => a, account: () => who, same: (a, b) => a === b,
         location: () => ({ search: '', hash: '', origin: 'https://explorer.example' }), env: {},
         actions: { vote: log('vote'), second: log('second'), motionVote: log('motionVote'), motionClose: log('motionClose') }
@@ -353,11 +363,136 @@ describe('the item page follows the transaction', () => {
         w.page.open('democracy/proposal/5');
         await flush(); await flush();
         assert.equal(w.button('second').disabled, true);
-        assert.match(w.summary().innerHTML, /Seconding reserves 100 PDEX; this account has 10 PDEX available\./);
+        assert.match(w.summary().innerHTML, /Seconding reserves 100 PDEX, and the account must keep about 0\.05 PDEX for the network fee: 100\.05 PDEX in all\. This account has 10 PDEX available\./);
         w.setAccount(OTHER);
         w.page.accountChanged();
         assert.deepEqual(subs, [MEMBER, OTHER]);
         assert.equal(w.button('second').disabled, false);
+    });
+});
+
+describe('review fixes', () => {
+    // A timer stub that records what was scheduled, to run by hand.
+    const manualTimers = () => {
+        const t = { timeouts: [], setInterval: () => 1, clearInterval: () => {}, clearTimeout: () => {} };
+        t.setTimeout = (fn, ms) => { t.timeouts.push({ fn, ms }); return t.timeouts.length; };
+        return t;
+    };
+    test('M1: leaving the page mid-Second and coming back does not offer Second again', async () => {
+        const w = world({ body: prop() });
+        w.page.open('democracy/proposal/5');
+        await flush(); await flush();
+        w.page.stage('prop:5', 'second')('signing', {});
+        assert.equal(w.button('second').disabled, true);
+        w.page.stop();                                  // navigated away
+        w.page.open('democracy/proposal/5');            // and back
+        await flush(); await flush();
+        assert.equal(w.button('second').disabled, true, 'still in flight: no second deposit');
+        assert.equal(w.page.act('second'), false);
+        assert.match(w.summary().innerHTML, /Your second is being recorded/);
+        w.page.stage('prop:5', 'second')('inBlock', {});
+        await flush();
+        assert.equal(w.button('second').disabled, false, 'settled in block: usable again');
+        assert.equal(w.calls.actions.length, 0);
+    });
+    test('M1: a click with the wallet still open survives leaving the page; a stage reported while away settles it', async () => {
+        let release;
+        const w = world({ body: prop(), actions: { second: () => new Promise(r => { release = r; }) } });
+        w.page.open('democracy/proposal/5');
+        await flush(); await flush();
+        w.button('second').click();
+        w.page.stop();
+        w.page.open('democracy/proposal/5');
+        await flush(); await flush();
+        assert.equal(w.button('second').disabled, true, 'the wallet prompt is still open');
+        assert.equal(w.page.act('second'), false);
+        w.page.stage('prop:5', 'second')('signing', {});
+        w.page.stop();
+        w.page.stage('prop:5', 'second')('inBlock', {});   // lands while the page is closed
+        release();
+        await flush();
+        w.page.open('democracy/proposal/5');
+        await flush(); await flush();
+        assert.equal(w.button('second').disabled, false);
+        assert.equal(w.calls.actions.length, 1);
+    });
+    test('M1: a failure re-enables Second and its message is dropped on leaving', async () => {
+        const w = world({ body: prop() });
+        w.page.open('democracy/proposal/5');
+        await flush(); await flush();
+        w.page.stage('prop:5', 'second')('failed', { text: 'Not enough PDEX.' });
+        assert.equal(w.button('second').disabled, false);
+        assert.match(w.summary().innerHTML, /Not enough PDEX\./);
+        w.page.stop();
+        w.page.open('democracy/proposal/5');
+        await flush(); await flush();
+        assert.ok(!/Not enough PDEX\./.test(w.summary().innerHTML));
+    });
+    test('L1: a live voting record with another index (same call re-proposed) is not drawn; the page refetches', async () => {
+        let deliver = null;
+        const timers = manualTimers();
+        const api = { query: { council: {
+            proposals() {}, members(cb) { cb([MEMBER, OTHER, THIRD]); return Promise.resolve(() => {}); },
+            voting: Object.assign((hash, cb) => { deliver = cb; return Promise.resolve(() => {}); }, { multi() {} })
+        } } };
+        const w = world({ body: motion(), api, timers });
+        w.page.open('council/motion/8');
+        await flush(); await flush();
+        deliver({ isNone: false, isSome: true, unwrap: () => ({ index: 9, threshold: 2, end: 1400, ayes: [MEMBER, OTHER], nays: [] }) });
+        assert.equal(w.page.current().ayes, 0, 'motion #9\'s tally is not drawn over #8');
+        assert.deepEqual(w.page.current().ayeVoters, []);
+        assert.ok(!/Voted Aye/.test(w.summary().innerHTML));
+        assert.equal(timers.timeouts.length, 1);
+        const before = w.calls.fetch.length;
+        timers.timeouts[0].fn();
+        await flush();
+        assert.equal(w.calls.fetch.length, before + 1);
+        assert.match(w.calls.fetch.at(-1), /\?fresh=1$/);
+        deliver({ isNone: false, isSome: true, unwrap: () => ({ index: 8, threshold: 2, end: 1300, ayes: [OTHER], nays: [] }) });
+        assert.equal(w.page.current().ayes, 1, 'the matching record is still drawn');
+    });
+    test('L2: a referendum that ends live closes its actions at once, and a behind poll does not reopen them', async () => {
+        let deliver = null;
+        const timers = manualTimers();
+        const api = { query: { democracy: { referendumInfoOf(i, cb) { deliver = cb; return Promise.resolve(() => {}); } } } };
+        const w = world({ body: ref(), api, timers });
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        assert.equal(w.button('aye').disabled, false);
+        deliver({ isNone: false, isSome: true, unwrap: () => ({ isOngoing: false, isFinished: true, asFinished: { approved: { isTrue: true }, end: 1200 } }) });
+        assert.equal(w.page.current().status, 'Passed');
+        assert.equal(w.button('aye').disabled, true, 'disabled before the refetch');
+        assert.match(w.summary().innerHTML, /Voting has closed: this referendum is passed\./);
+        assert.equal(timers.timeouts.at(-1).ms, 8000, 'and the refetch is still scheduled');
+        timers.timeouts.at(-1).fn();                     // the server still says Ongoing
+        await flush(); await flush();
+        assert.equal(w.page.current().status, 'Passed');
+        assert.equal(w.button('aye').disabled, true);
+        w.setBody(ref({ status: 'NotPassed' }));         // the server's verdict wins once it has one
+        timers.timeouts.at(-1).fn();
+        await flush(); await flush();
+        assert.equal(w.page.current().status, 'NotPassed');
+    });
+    test('L3: the page reads the existential deposit from the chain for the Second check', async () => {
+        const api = { consts: { balances: { existentialDeposit: { toString: () => '1000000000000' } } },
+            query: { democracy: { depositOf() { return Promise.resolve(() => {}); } },
+                system: { account(who, cb) { cb({ data: { free: '100500000000000', frozen: '0' } }); return Promise.resolve(() => {}); } } } };
+        const w = world({ body: prop(), api });
+        w.page.open('democracy/proposal/5');
+        await flush(); await flush();
+        assert.equal(w.button('second').disabled, true);
+        assert.match(w.summary().innerHTML, /must keep 1 PDEX \(the minimum balance\) plus about 0\.05 PDEX for the network fee: 101\.05 PDEX in all\. This account has 100\.5 PDEX available\./);
+    });
+    test('M2: refreshCollectiveForSubmit reads fresh and reports whether new data arrived', async () => {
+        let data = { members: [] };
+        const asked = [];
+        const ok = { getData: () => data, refresh: async (o) => { asked.push(o); data = { members: [{ address: MEMBER }] }; } };
+        assert.equal(await refreshCollectiveForSubmit(ok), true);
+        assert.deepEqual(asked, [{ fresh: true }], 'a fresh read even when data is already loaded');
+        const stale = { getData: () => data, refresh: async () => {} };   // fetchCouncilData failing keeps the old object
+        assert.equal(await refreshCollectiveForSubmit(stale), false);
+        assert.equal(await refreshCollectiveForSubmit({ getData: () => data, refresh: async () => { throw new Error('x'); } }), false);
+        assert.equal(await refreshCollectiveForSubmit({ getData: () => null, refresh: async () => {} }), false);
     });
 });
 
@@ -403,6 +538,14 @@ describe('script.js wiring', () => {
             const src = stripComments(readRepo(f, import.meta.url));
             assert.ok(!/signAndSend|submitSignedTx|signer|web3Enable|injectedWeb3|\.tx\[|api\.tx/.test(src), `${f} must not sign`);
         }
+    });
+    test('M2: an item page\'s motion vote or close re-reads the collective fresh first, and refuses if that fails', () => {
+        const ensure = bodyOf(script, 'ensureCollectiveData');
+        assert.match(ensure, /if \(await refreshCollectiveForSubmit\(view\)\) return true;/);
+        assert.match(ensure, /showTxNotice\(/);
+        assert.ok(!/if \(!view\.getData\(\)\)/.test(ensure), 'not only when nothing is loaded');
+        assert.match(govInit, /motionVote: async \(hash, i, aye, key\) => \{ if \(!\(await ensureCollectiveData\(key\)\)\) return; return councilMotionVote/);
+        assert.match(govInit, /motionClose: async \(hash, i, key\) => \{ if \(!\(await ensureCollectiveData\(key\)\)\) return; return councilMotionClose/);
     });
     test('a wallet change reaches the item page', () => {
         assert.match(bodyOf(script, 'setStoredWallet'), /if \(getStoredWallet\(\) !== before\) govDetailPage\.accountChanged\(\);/);
