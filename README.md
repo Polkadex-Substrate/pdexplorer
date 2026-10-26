@@ -794,7 +794,7 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 ### Discussions
 
 - `GET /api/discussions` — discussion threads attached to governance items
-- `GET /api/discussions/:id` - single thread with posts (each post carries `editedAt`, null if never edited)
+- `GET /api/discussions/:id` - single thread with posts (each post carries `editedAt`, null if never edited). `content` is the raw text as written, which may contain Markdown; the explorer renders a safe subset of it in the browser (`lib/discussion-markdown.js`), and API consumers get the raw text unchanged
 
 ### Authenticated (wallet sign-in for discussion posts)
 
@@ -803,7 +803,7 @@ Wallet-signed nonce login. Sessions are 192-bit random tokens with a 7-day TTL (
 - `POST /api/auth/challenge` — request a sign-in nonce
 - `POST /api/auth/verify` — submit `{ address, signature }`; the nonce is **not** sent (the server looks up the open challenge for that address). Returns `{ token, expiresIn }`, `expiresIn` in ms
 - `POST /api/auth/logout`
-- `POST /api/discussions/:id/posts` — post to a discussion (rate-limited, requires session)
+- `POST /api/discussions/:id/posts` - post to a discussion (rate-limited, requires session). `{ content }` is stored as written, Markdown included; the 4,000-character limit counts the raw text
 - `PATCH /api/discussions/:id/posts/:postId` - edit your own post in an open thread (rate-limited, requires session); the post then carries `editedAt`
 
 ### Build provenance + liveness (public, `no-store`)

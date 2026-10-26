@@ -2850,6 +2850,7 @@ const SITEMAP_STATIC_ROUTES = [
     { path: '/help/transaction-status',       changefreq: 'monthly', priority: '0.6' },
     { path: '/help/treasury',                 changefreq: 'monthly', priority: '0.5' },
     { path: '/help/discussions',              changefreq: 'monthly', priority: '0.5' },
+    { path: '/help/discussion-formatting',    changefreq: 'monthly', priority: '0.5' },
     { path: '/help/governance-item-pages',    changefreq: 'monthly', priority: '0.5' },
     { path: '/help/analytics',                changefreq: 'monthly', priority: '0.5' },
     { path: '/help/watchlist',                changefreq: 'monthly', priority: '0.5' },
