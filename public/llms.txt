@@ -204,6 +204,11 @@ is CoinGecko (keyless public API).
 - GET /api/democracy — referenda and public proposals
 - GET /api/governance/latest — most-recent OPEN referendum / proposal
 - GET /api/governance/calendar — unified governance timeline
+- GET /api/democracy/referendum/:index - one referendum (page: /democracy/referendum/<n>): status, decoded call, tally, timeline, thread
+- GET /api/democracy/proposal/:index - one public proposal (page: /democracy/proposal/<n>)
+- GET /api/democracy/external/:hash - one external proposal by proposal hash (page: /democracy/external/<hash>)
+- GET /api/council/motion/:id - one council motion by hash or index (page: /council/motion/<n>)
+- GET /api/technical-committee/motion/:id - one Technical Committee motion (page: /council/tc-motion/<n>)
 - GET /api/discussions — discussion threads on governance items
 - GET /api/discussions/:id - single thread with posts (each post carries editedAt)
 

@@ -25,6 +25,7 @@ import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater
     externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash } from './lib/discussion-threads.js';
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind } from './lib/discussion-lifecycle.js';
+import { registerGovDetailRoutes } from './lib/gov-detail-api.js';
 import { blake2AsHex } from '@polkadot/util-crypto';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
@@ -2849,6 +2850,7 @@ const SITEMAP_STATIC_ROUTES = [
     { path: '/help/transaction-status',       changefreq: 'monthly', priority: '0.6' },
     { path: '/help/treasury',                 changefreq: 'monthly', priority: '0.5' },
     { path: '/help/discussions',              changefreq: 'monthly', priority: '0.5' },
+    { path: '/help/governance-item-pages',    changefreq: 'monthly', priority: '0.5' },
     { path: '/help/analytics',                changefreq: 'monthly', priority: '0.5' },
     { path: '/help/watchlist',                changefreq: 'monthly', priority: '0.5' },
     { path: '/help/community-labels',         changefreq: 'monthly', priority: '0.5' },
@@ -4492,6 +4494,148 @@ app.get('/api/democracy', (req, res) => {
     }
 });
 
+// --- Governance item pages: /democracy/referendum/<n> and friends ---------
+// The handlers and their sources are in lib/gov-detail-api.js; this is the
+// chain side they read through. Every method answers null (or { absent })
+// instead of throwing, so a flaky node degrades a page to its stored history.
+const GOV_DETAIL_ARG_MAX = 1000;
+const govCallCache = new Map();   // proposal hash -> decoded call (hits kept; misses retried after 10 min)
+const govHistCache = new Map();   // "<kind>:<id>:<block>" -> historical read (archive state never changes)
+function govDescribeCall(c) {
+    const meta = (c.meta && c.meta.args) || [];
+    return {
+        section: String(c.section), method: String(c.method),
+        args: Array.from(c.args || []).map((a, i) => {
+            let value;
+            try { const h = a.toHuman(); value = typeof h === 'string' ? h : JSON.stringify(h); } catch (e) { try { value = String(a); } catch (_) { value = '[unprintable]'; } }
+            if (value.length > GOV_DETAIL_ARG_MAX) value = value.slice(0, GOV_DETAIL_ARG_MAX) + '...(truncated)';
+            return { name: meta[i] ? String(meta[i].name) : 'arg' + i, type: meta[i] ? String(meta[i].type) : null, value };
+        })
+    };
+}
+function govReadRefInfo(opt) {
+    if (!opt || opt.isNone) return { state: 'none' };
+    const r = opt.unwrap();
+    if (r.isOngoing) {
+        const s = r.asOngoing;
+        const bounded = s.proposal || s.proposalHash || null;
+        return { state: 'ongoing', end: s.end.toNumber(), threshold: s.threshold ? s.threshold.toString() : null,
+            delay: s.delay ? s.delay.toNumber() : null, ayes: balanceToPDEX(s.tally.ayes), nays: balanceToPDEX(s.tally.nays),
+            turnout: balanceToPDEX(s.tally.turnout), bounded, proposalHash: proposalHashOf(bounded, blake2AsHex) };
+    }
+    if (r.isFinished) { const f = r.asFinished; return { state: 'finished', approved: f.approved.isTrue, end: f.end.toNumber() }; }
+    return { state: 'none' };
+}
+function govCollectivePallet(collective) {
+    if (collective === 'technicalCommittee') return globalApi.query.technicalCommittee ? 'technicalCommittee' : null;
+    const snap = db.getKv('council') || {};
+    return snap.collectivePallet || ['council', 'councilCollective', 'generalCouncil'].find(n => globalApi.query[n] && globalApi.query[n].proposalOf) || null;
+}
+async function govHist(key, read) {
+    if (govHistCache.has(key)) return govHistCache.get(key);
+    const v = await read();
+    if (v) { if (govHistCache.size > 500) govHistCache.clear(); govHistCache.set(key, v); }
+    return v;
+}
+const govChain = {
+    ready: () => isRpcReady(),
+    async currentBlock() { return (await globalApi.query.system.number()).toNumber(); },
+    consts() {
+        const d = globalApi.consts.democracy;
+        if (!d) return null;
+        const n = (x) => (x === undefined || x === null ? null : Number(x.toString()));
+        const babe = globalApi.consts.babe;
+        const blockMs = babe && babe.expectedBlockTime ? n(babe.expectedBlockTime) : null;
+        return { votingPeriod: n(d.votingPeriod), enactmentPeriod: n(d.enactmentPeriod), launchPeriod: n(d.launchPeriod), blockMs };
+    },
+    async referendum(index) {
+        const dem = globalApi.query.democracy;
+        return dem && dem.referendumInfoOf ? govReadRefInfo(await dem.referendumInfoOf(index)) : null;
+    },
+    async referendumAt(index, block) {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.referendumInfoOf) return null;
+        return govHist(`ref:${index}:${block}`, async () => {
+            try { return govReadRefInfo(await dem.referendumInfoOf.at(await getBlockHashCached(block), index)); }
+            catch (e) { return null; }   // pruned state: not an archive node
+        });
+    },
+    // A bounded call (inline, or a Legacy / Lookup hash with a noted
+    // preimage), or a bare proposal hash looked up in the preimage pallet.
+    async decodeCall(bounded, hash) {
+        const b = bounded ? boundedParts(bounded) : null;
+        const key = (b && b.hash) || (b && b.bytes ? blake2AsHex(b.bytes) : null) || hash;
+        const hit = key ? govCallCache.get(key) : null;
+        if (hit && (hit.call || Date.now() - hit.at < 10 * 60 * 1000)) return hit;
+        let bytes = b && b.kind === 'inline' ? b.bytes : null;
+        const ph = (b && b.hash) || hash || null;
+        const pre = globalApi.query.preimage;
+        if (!bytes && ph && pre && pre.preimageFor) {
+            let len = b && b.len !== null && b.len !== undefined ? b.len : null;
+            if (len === null && pre.statusFor) {
+                const st = await pre.statusFor(ph);
+                if (st && st.isSome) {
+                    const j = st.unwrap().toJSON() || {};
+                    const v = j.unrequested || j.requested || j.Unrequested || j.Requested || {};
+                    if (v.len !== undefined && v.len !== null) len = Number(v.len);
+                }
+            }
+            if (len !== null) { const opt = await pre.preimageFor([ph, len]); if (opt && opt.isSome) bytes = opt.unwrap(); }
+        }
+        let out;
+        if (bytes) out = { call: govDescribeCall(globalApi.registry.createType('Call', bytes)), at: Date.now() };
+        else out = { call: null, note: 'The preimage of this call is not noted on chain, so its contents cannot be shown.', at: Date.now() };
+        if (key) { if (govCallCache.size > 200) govCallCache.clear(); govCallCache.set(key, out); }
+        return out;
+    },
+    async publicProp(index) {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.publicProps) return null;
+        for (const e of await dem.publicProps()) {
+            if (Number(e[0].toString()) === Number(index)) return { bounded: e[1], proposalHash: proposalHashOf(e[1], blake2AsHex), proposer: String(e[e.length - 1]) };
+        }
+        return { absent: true };
+    },
+    async deposit(index) {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.depositOf) return null;
+        const opt = await dem.depositOf(index);
+        if (!opt || !opt.isSome) return null;
+        const t = opt.unwrap();
+        const listFirst = Array.isArray(t[0]) || (t[0] && typeof t[0].map === 'function' && !t[0].toBn);
+        const list = listFirst ? t[0] : t[1];
+        return { seconders: Array.from(list || []).map(a => String(a)), deposit: balanceToPDEX(listFirst ? t[1] : t[0]) };
+    },
+    async nextExternal() {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.nextExternal) return null;
+        const opt = await dem.nextExternal();
+        if (!opt || !opt.isSome) return { absent: true };
+        const ext = opt.unwrap();
+        return { bounded: ext[0] || null, proposalHash: proposalHashOf(ext[0], blake2AsHex), threshold: ext[1] ? ext[1].toString() : null };
+    },
+    async motionAt(collective, hash, block) {
+        const pallet = govCollectivePallet(collective);
+        const q = pallet ? globalApi.query[pallet] : null;
+        if (!q || !q.proposalOf || !q.voting) return null;
+        return govHist(`motion:${collective}:${hash}:${block}`, async () => {
+            try {
+                const bh = await getBlockHashCached(block);
+                const [callOpt, votingOpt] = await Promise.all([q.proposalOf.at(bh, hash), q.voting.at(bh, hash)]);
+                const call = callOpt && callOpt.isSome ? govDescribeCall(callOpt.unwrap()) : null;
+                let voting = null;
+                if (votingOpt && votingOpt.isSome) {
+                    const v = votingOpt.unwrap();
+                    voting = { index: v.index.toNumber(), threshold: v.threshold.toNumber(), ayes: v.ayes.map(a => a.toString()), nays: v.nays.map(a => a.toString()), end: v.end.toNumber() };
+                }
+                return call || voting ? { call, voting } : null;
+            } catch (e) { return null; }
+        });
+    },
+    name: (address) => getIdentity(globalApi, address)
+};
+registerGovDetailRoutes(app, { db, chain: govChain, cacheShort, isFresh: isFreshRequest, serverError });
+
 // isOpenGovStatus is imported from ./lib/gov-status.js (audit F-003 — one
 // case-insensitive predicate shared by banner, calendar, and email so the
 // indexer's casing can't drift from the consumers' comparison again).
@@ -4611,7 +4755,7 @@ app.get('/api/governance/calendar', async (req, res) => {
                 endBlock: r.endBlock || null,
                 endTime: blockToTime(r.endBlock),
                 isActive,
-                link: '/democracy?ref=' + r.refIndex
+                link: '/democracy/referendum/' + r.refIndex
             });
         }
 
@@ -4670,7 +4814,7 @@ app.get('/api/governance/calendar', async (req, res) => {
                 endBlock: m.resolvedBlock || null,
                 endTime: m.resolvedAt || blockToTime(m.resolvedBlock),
                 isActive,
-                link: (isTc ? '/council?tcmotion=' : '/council?motion=') + m.motionIndex
+                link: (isTc ? '/council/tc-motion/' : '/council/motion/') + m.motionIndex
             });
         }
 
@@ -7806,7 +7950,7 @@ async function dispatchResolvedReferenda(referenda) {
             prefMatches: (p) => p.governance && p.governance.referendumResult,
             makeEmail: ({ subscriber }) => {
                 const unsub = unsubscribeUrlFor(subscriber);
-                const href = `${emailSiteOrigin()}/democracy?ref=${r.refIndex}`;
+                const href = `${emailSiteOrigin()}/democracy/referendum/${r.refIndex}`;
                 const tally = (r.ayes != null && r.nays != null && r.tallyKnown)
                     ? `Final tally: ${Number(r.ayes).toLocaleString('en-US')} aye / ${Number(r.nays).toLocaleString('en-US')} nay.`
                     : null;
@@ -7872,7 +8016,7 @@ async function dispatchNewCouncilMotions() {
         prefMatches: (p) => p.governance && p.governance.councilMotion,
         makeEmail: (m, subscriber) => {
             const unsub = unsubscribeUrlFor(subscriber);
-            const href = `${emailSiteOrigin()}/council?motion=${m.motionIndex}`;
+            const href = `${emailSiteOrigin()}/council/motion/${m.motionIndex}`;
             const call = m.section && m.method ? `${m.section}.${m.method}` : 'a runtime call';
             const tmpl = emailLayout({
                 title:   `New council motion — #${m.motionIndex}`,
@@ -8017,7 +8161,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
             prefMatches: (p) => p.governance && p.governance.newReferendum,
             makeEmail: ({ subscriber }) => {
                 const unsub = unsubscribeUrlFor(subscriber);
-                const href  = `${emailSiteOrigin()}/democracy?ref=${r.refIndex}`;
+                const href  = `${emailSiteOrigin()}/democracy/referendum/${r.refIndex}`;
                 const tmpl  = emailLayout({
                     title:   `New referendum tabled — #${r.refIndex}`,
                     intro:   `A new referendum (#${r.refIndex}) is now open for voting on Polkadex.`,
@@ -8039,7 +8183,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
             prefMatches: (pp) => pp.governance && pp.governance.newProposal,
             makeEmail: ({ subscriber }) => {
                 const unsub = unsubscribeUrlFor(subscriber);
-                const href  = `${emailSiteOrigin()}/democracy?proposal=${p.index}`;
+                const href  = `${emailSiteOrigin()}/democracy/proposal/${p.index}`;
                 const tmpl  = emailLayout({
                     title:   `New public proposal — #${p.index}`,
                     intro:   `A new public proposal (#${p.index}) has been tabled. Seconders can endorse it to move it toward a referendum.`,
@@ -8088,7 +8232,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
                 prefMatches: (p) => p.governance && p.governance.closingReminder,
                 makeEmail: ({ subscriber }) => {
                     const unsub = unsubscribeUrlFor(subscriber);
-                    const href  = `${emailSiteOrigin()}/democracy?ref=${r.refIndex}`;
+                    const href  = `${emailSiteOrigin()}/democracy/referendum/${r.refIndex}`;
                     const hoursLeft = Math.round(msLeft / 3600_000);
                     const tmpl  = emailLayout({
                         title:   `Referendum #${r.refIndex} closes in ~${hoursLeft} hours`,

@@ -1828,6 +1828,16 @@ export function upsertDemocracyReferendum(r) {
 export function getDemocracyReferenda() {
     return db.prepare('SELECT ref_index AS refIndex, status, end_block AS endBlock, ayes, nays, turnout, tally_known AS tallyKnown, proposal, threshold FROM democracy_referenda ORDER BY ref_index DESC').all();
 }
+export function getDemocracyReferendum(index) {
+    return db.prepare('SELECT ref_index AS refIndex, status, end_block AS endBlock, ayes, nays, turnout, tally_known AS tallyKnown, proposal, threshold FROM democracy_referenda WHERE ref_index = ?').get(Number(index)) || null;
+}
+// A referendum's enactment at one block, as the event indexer saw it: the
+// scheduler dispatching (current democracy) or democracy.Executed (older).
+// Uses the block index; false when that block's events are not indexed.
+export function hasGovEnactmentEvent(block) {
+    return !!db.prepare(`SELECT 1 FROM events WHERE block = ? AND ((section = 'democracy' AND method = 'Executed')
+        OR (section = 'scheduler' AND method = 'Dispatched')) LIMIT 1`).get(Number(block));
+}
 export function countDemocracyReferenda() {
     return db.prepare('SELECT COUNT(*) AS c FROM democracy_referenda').get().c;
 }

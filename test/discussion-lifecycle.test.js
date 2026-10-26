@@ -247,16 +247,19 @@ describe('rendering', () => {
         assert.equal(renderLifecycleLinks(undefined, escapeHtml), '');
     });
     test('Democracy page Discuss links', () => {
-        assert.ok(referendumDiscussCell({ refIndex: 4, status: 'Ongoing' }).includes('href="/discussions/referendum-4"'));
-        assert.ok(referendumDiscussCell({ refIndex: 2, status: 'Passed', threadId: 'referendum-2' }).includes('href="/discussions/referendum-2"'));
+        // Since the item pages (2026-10-26) Discuss opens the referendum's page at its embedded board.
+        assert.ok(referendumDiscussCell({ refIndex: 4, status: 'Ongoing' }).includes('href="/democracy/referendum/4#discussion"'));
+        assert.ok(referendumDiscussCell({ refIndex: 2, status: 'Passed', threadId: 'referendum-2' }).includes('href="/democracy/referendum/2#discussion"'));
         assert.ok(!referendumDiscussCell({ refIndex: 1, status: 'NotPassed' }).includes('href'), 'finished before threads existed: no dead link');
         assert.equal(referendumDiscussCell({ refIndex: 'x' }), '');
         const e = externalSummaryHtml({ threshold: '<b>SimpleMajority</b>', proposalHash: H1 }, escapeHtml);
-        assert.ok(e.startsWith('Queued (&lt;b&gt;SimpleMajority&lt;/b&gt;)'));
-        assert.ok(e.includes(`href="/discussions/external-${H1}"`) && e.includes('>Discuss</a>'));
+        assert.ok(e.includes('>Queued (&lt;b&gt;SimpleMajority&lt;/b&gt;)</a>'));
+        assert.ok(e.includes(`href="/democracy/external/${H1}"`), 'the external proposal links to its page');
+        assert.ok(e.includes(`href="/democracy/external/${H1}#discussion"`) && e.includes('>Discuss</a>'));
         assert.ok(!externalSummaryHtml({ threshold: 'SimpleMajority', proposal: '{"lookup":{"hash":"0x' }, escapeHtml).includes('href'), 'no hash (an older snapshot): no link');
         assert.equal(externalSummaryHtml(null, escapeHtml), 'None');
         assert.equal(discussLinkHtml(''), '');
+        assert.ok(discussLinkHtml('proposal-3').includes('href="/discussions/proposal-3"'), 'default: the thread page');
     });
     test('thread kinds: labels, filter options, API filter', () => {
         assert.deepEqual(kindFilterOptions().map(o => o.value), ['proposal', 'motion', 'external', 'referendum']);
