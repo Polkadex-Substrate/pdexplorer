@@ -19,6 +19,7 @@ import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
+import { composerHtml, wireComposer } from './lib/discussion-composer.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { isGovDetailRoute, govItemPath, legacyGovRedirect } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
@@ -10890,7 +10891,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
     } else {
         composer = `<div class="discussion-composer">
             <div style="color:var(--text-secondary);font-size:0.78rem;margin-bottom:8px;">Posting as <span style="color:var(--brand-secondary);">${stakingShortAddress(session.address)}</span></div>
-            <textarea id="discuss-post-input" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000"></textarea>
+            ${composerHtml('<textarea id="discuss-post-input" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000" aria-label="Write a post"></textarea>')}
             <div style="display:flex;justify-content:flex-end;margin-top:8px;">
                 <button id="discuss-post-btn" class="staking-download-btn" style="background:var(--brand-primary);color:#fff;border-color:var(--brand-primary);"><i class='bx bx-send'></i> Post</button>
             </div>
@@ -10922,6 +10923,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
     });
     const postBtn = root.querySelector('#discuss-post-btn');
     if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id, root, opts));
+    wireComposer(root.querySelector('.discussion-composer .md-composer'));
     wireEditing(root, { esc: stakingEscapeHtml, fetchFn: (input, init) => fetch(input, init), getSession: getDiscussSession, threadId: thread.id, posts,
         clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread({ links: thread.links, ...d.thread }, d.posts || [], root, opts) });
     wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
