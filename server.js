@@ -25,7 +25,7 @@ import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater
     externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash } from './lib/discussion-threads.js';
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind } from './lib/discussion-lifecycle.js';
-import { registerGovDetailRoutes } from './lib/gov-detail-api.js';
+import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { blake2AsHex } from '@polkadot/util-crypto';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
@@ -4547,13 +4547,13 @@ async function govHist(key, read) {
     return v;
 }
 // The scheduler name pallet-democracy gives a referendum's enactment task:
-// blake2_256(("democrac", index)) with the index as a little-endian u32. The
-// dispatch event carries it as `id`, which is how an enactment is matched to
+// the padded SCALE encoding of ("democrac", index u32 LE), NOT a hash (see
+// democracyEnactmentTaskIds in lib/gov-detail-api.js for the pallet behaviour).
+// The dispatch event carries it as `id`, which is how an enactment is matched to
 // ITS referendum (a different task dispatching in that block proves nothing).
+// Returns the padded and the unpadded (older scheduler era) forms.
 function govEnactmentTaskId(index) {
-    const idx = new Uint8Array(4);
-    new DataView(idx.buffer).setUint32(0, Number(index), true);
-    return blake2AsHex(u8aConcat(stringToU8a('democrac'), idx), 256);
+    return democracyEnactmentTaskIds(index);
 }
 const govChain = {
     ready: () => isRpcReady(),

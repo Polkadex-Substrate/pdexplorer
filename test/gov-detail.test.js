@@ -11,13 +11,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
+import { blake2AsHex } from '@polkadot/util-crypto';
 import * as db from '../db.js';
 import {
     parseGovRoute, isGovDetailRoute, govItemPath, govApiPath, govThreadId, itemPathForThread, legacyGovRedirect,
     ayeNaySplit, turnoutPercent, weightedVotes, approvalState, motionProgress, etaText, humanDuration,
     nextLaunchBlock, referendumTimeline, motionTimeline, launchedReferendum
 } from '../lib/gov-detail.js';
-import { registerGovDetailRoutes, referendumDetail, proposalDetail, externalDetail, motionDetail, enactmentEventMatches } from '../lib/gov-detail-api.js';
+import { registerGovDetailRoutes, referendumDetail, proposalDetail, externalDetail, motionDetail, enactmentEventMatches, democracyEnactmentTaskIds } from '../lib/gov-detail-api.js';
 import {
     renderGovDetailSummary, renderNotFound, govRowLinkHtml, wireGovRowClicks, barSvg, createGovDetailPage, GOV_ROW_CLASS, GOV_DETAIL_POLL_MS
 } from '../lib/gov-detail-view.js';
@@ -911,8 +912,53 @@ describe('review fixes: server', () => {
         assert.deepEqual(await govHist('k', read), { state: 'ongoing' });
         assert.equal(reads, 2, 'a hit is kept');
     });
-    test('the enactment task id is derived from the democracy scheduler name', () => {
+    test('the enactment task id is the padded democracy name, not a hash', () => {
         const server = stripComments(readRepo('server.js', import.meta.url));
-        assert.match(bodyOf(server, 'govEnactmentTaskId'), /setUint32\(0, Number\(index\), true\)[\s\S]*blake2AsHex\(u8aConcat\(stringToU8a\('democrac'\), idx\), 256\)/);
+        const body = bodyOf(server, 'govEnactmentTaskId');
+        assert.match(body, /democracyEnactmentTaskIds\(index\)/);
+        assert.doesNotMatch(body, /blake2/);
+    });
+});
+
+describe('democracy enactment task id (pallet-democracy encode_into, not a hash)', () => {
+    const pad = '0'.repeat(40);
+    test('index 0, 5 and 300 (multi-byte little-endian): padded form then unpadded form', () => {
+        assert.deepEqual(democracyEnactmentTaskIds(0), ['0x64656d6f63726163' + '00000000' + pad, '0x64656d6f6372616300000000']);
+        assert.deepEqual(democracyEnactmentTaskIds(5), ['0x64656d6f6372616305000000' + pad, '0x64656d6f6372616305000000']);
+        // 300 = 0x012c, little-endian u32 = 2c 01 00 00
+        assert.deepEqual(democracyEnactmentTaskIds(300), ['0x64656d6f637261632c010000' + pad, '0x64656d6f637261632c010000']);
+        assert.deepEqual(democracyEnactmentTaskIds('5'), democracyEnactmentTaskIds(5));
+        assert.equal(democracyEnactmentTaskIds(5)[0].length, 2 + 64, 'padded id is 32 bytes');
+        assert.equal(democracyEnactmentTaskIds(5)[1].length, 2 + 24, 'unpadded id is 12 bytes');
+    });
+    test('an index that is not a u32 gives no id', () => {
+        for (const bad of [-1, 1.5, NaN, 'x', 2 ** 32, undefined, null]) assert.deepEqual(democracyEnactmentTaskIds(bad), []);
+        assert.equal(democracyEnactmentTaskIds(2 ** 32 - 1)[1], '0x64656d6f63726163ffffffff');
+    });
+    const dispatched = (id) => ({ section: 'scheduler', method: 'Dispatched', data: [['1', '0'], id, { Ok: null }] });
+    test('scheduler.Dispatched matches the padded and the unpadded id, case-insensitively', () => {
+        for (const index of [0, 5, 300]) {
+            const [padded, unpadded] = democracyEnactmentTaskIds(index);
+            const ids = democracyEnactmentTaskIds(index);
+            assert.equal(enactmentEventMatches(dispatched(padded), index, ids), true, `padded ${index}`);
+            assert.equal(enactmentEventMatches(dispatched(unpadded), index, ids), true, `unpadded ${index}`);
+            assert.equal(enactmentEventMatches(dispatched('0x' + padded.slice(2).toUpperCase()), index, ids), true, `upper ${index}`);
+            assert.equal(enactmentEventMatches({ section: 'scheduler', method: 'Dispatched', data: { id: unpadded.toUpperCase().replace('0X', '0x') } }, index, ids), true, `object ${index}`);
+        }
+    });
+    test('another referendum\'s id never matches; the old blake2 formula never matches', () => {
+        const ids5 = democracyEnactmentTaskIds(5);
+        assert.equal(enactmentEventMatches(dispatched(democracyEnactmentTaskIds(6)[0]), 5, ids5), false);
+        assert.equal(enactmentEventMatches(dispatched(democracyEnactmentTaskIds(6)[1]), 5, ids5), false);
+        assert.equal(enactmentEventMatches(dispatched(democracyEnactmentTaskIds(300)[0]), 5, ids5), false);
+        assert.equal(enactmentEventMatches(dispatched(blake2AsHex(new Uint8Array([100, 101, 109, 111, 99, 114, 97, 99, 5, 0, 0, 0]), 256)), 5, ids5), false);
+    });
+    test('a null id never matches, and an empty id list matches nothing', () => {
+        const ids5 = democracyEnactmentTaskIds(5);
+        assert.equal(enactmentEventMatches(dispatched(null), 5, ids5), false);
+        assert.equal(enactmentEventMatches({ section: 'scheduler', method: 'Dispatched', data: { id: null } }, 5, ids5), false);
+        assert.equal(enactmentEventMatches({ section: 'scheduler', method: 'Dispatched', data: [['1', '0']] }, 5, ids5), false);
+        assert.equal(enactmentEventMatches(dispatched(ids5[0]), 5, []), false);
+        assert.equal(enactmentEventMatches(dispatched(null), 5, [null]), false);
     });
 });
