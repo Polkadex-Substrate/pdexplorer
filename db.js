@@ -128,11 +128,14 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_block ON events(block DESC);
 CREATE INDEX IF NOT EXISTS idx_events_signer ON events(signer_address);
 -- Accounts each event names in its data (lib/account-links.js), so an account page also lists events it did not sign.
+-- Keyed by the event's rowid, the paging tie-break, so a page of named events is read in key order; the hash
+-- confirms the row on read.
 CREATE TABLE IF NOT EXISTS event_accounts (
   address TEXT NOT NULL,
   block INTEGER NOT NULL,
+  event_rowid INTEGER NOT NULL,
   event_hash TEXT NOT NULL,
-  PRIMARY KEY (address, block, event_hash)
+  PRIMARY KEY (address, block, event_rowid)
 ) WITHOUT ROWID;
 -- A reorg repair clears the links of one height; created with the table, so it is never a build on a full one.
 CREATE INDEX IF NOT EXISTS idx_event_accounts_block ON event_accounts(block);
@@ -1081,25 +1084,29 @@ export function initDb(dataDir, seedCounts = false, opts = {}) {
         //     are now different states.
         const FRESH_INDEX_MAX_ROWS = 200000;
         const indexState = { checkedAt: Date.now(), indexes: {} };
+        // What stays slow while an index is missing, for the warning below.
+        const SLOW_WITHOUT = { idx_events_signer_block: 'a page of account events sorts every event the account signed' };
         for (const [table, idx, col] of [
             ['transactions', 'idx_tx_timestamp', 'timestamp'],
-            ['blocks', 'idx_blocks_timestamp', 'timestamp']
+            ['blocks', 'idx_blocks_timestamp', 'timestamp'],
+            ['events', 'idx_events_signer_block', 'signer_address, block']
         ]) {
             try {
                 const exists = db.prepare(
                     "SELECT 1 FROM sqlite_master WHERE type='index' AND name = ?").get(idx);
                 if (exists) { indexState.indexes[idx] = { state: 'present', table }; continue; }
-                const n = db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c;
+                // Counted up to the limit only: a full COUNT(*) of a large table would be the slow boot this avoids.
+                const n = db.prepare(`SELECT COUNT(*) AS c FROM (SELECT 1 FROM ${table} LIMIT ${FRESH_INDEX_MAX_ROWS + 1})`).get().c;
                 if (n <= FRESH_INDEX_MAX_ROWS) {
                     db.exec(`CREATE INDEX IF NOT EXISTS ${idx} ON ${table}(${col})`);
                     console.log(`[db] created ${idx} (${n} rows — fresh install, instant)`);
                     indexState.indexes[idx] = { state: 'created', table, rows: n };
                 } else {
-                    console.warn(`[db] ${idx} is MISSING and ${table} has ${n} rows — too large to build at boot. ` +
+                    console.warn(`[db] ${idx} is MISSING and ${table} has over ${FRESH_INDEX_MAX_ROWS} rows — too large to build at boot. ` +
                         'Run `node --experimental-sqlite migrate-add-indexes.mjs` out-of-band; ' +
-                        'timestamp range queries are full scans until you do.');
+                        `${SLOW_WITHOUT[idx] || 'timestamp range queries are full scans'} until you do.`);
                     indexState.indexes[idx] = {
-                        state: 'missing_too_large', table, rows: n,
+                        state: 'missing_too_large', table, rows: `>${FRESH_INDEX_MAX_ROWS}`,
                         remedy: 'node --experimental-sqlite migrate-add-indexes.mjs'
                     };
                 }
@@ -1364,10 +1371,11 @@ export function getRecentTransactions(limit) {
     return db.prepare(`SELECT ${TX_COLS} FROM transactions WHERE ${TRANSFERS_ONLY} ORDER BY block DESC, timestamp DESC LIMIT ?`).all(limit);
 }
 // Keyset paging, newest first: before = { block, rowId } resumes strictly below that row; rowid breaks ties in a block.
+// Phrased as a block range, so an index with block right after its equality columns seeks straight to the cursor.
 const PAGE_ORDER = 'ORDER BY block DESC, rowid DESC LIMIT ?';
-function olderThan(before) {
+function olderThan(before, block = 'block', rowid = 'rowid') {
     return before
-        ? { sql: ' AND (block < ? OR (block = ? AND rowid < ?))', args: [before.block, before.block, before.rowId] }
+        ? { sql: ` AND ${block} <= ? AND (${block} < ? OR ${rowid} < ?)`, args: [before.block, before.block, before.rowId] }
         : { sql: '', args: [] };
 }
 // Audit F-080: rows written before the writer normalised (and any imported
@@ -1636,38 +1644,40 @@ function mapEventRow(r) {
     return { ...r, data };
 }
 const EVENT_COLS = 'hash, tx_hash AS txHash, block_hash AS blockHash, block, event_index AS eventIndex, extrinsic_index AS extrinsicIndex, section, method, data, signer_address AS signerAddress, signer_name AS signerName, timestamp, status';
+const EVENT_COLS_E = EVENT_COLS.split(', ').map(c => `e.${c}`).join(', ');   // the same columns from events joined as e
 // Link rows for the accounts an event names (e.accounts, set by lib/account-links.js); returns how many were new.
-function linkEvent(stmt, e) {
+function linkEvent(stmt, e, rowid) {
     let added = 0;
-    if (e.block != null) for (const a of e.accounts || []) added += stmt.run(a, e.block, e.hash).changes;
+    if (e.block != null && rowid != null) for (const a of e.accounts || []) added += stmt.run(a, e.block, rowid, e.hash).changes;
     return added;
 }
-const LINK_SQL = 'INSERT OR IGNORE INTO event_accounts(address,block,event_hash) VALUES(?,?,?)';
+const LINK_SQL = 'INSERT OR IGNORE INTO event_accounts(address,block,event_rowid,event_hash) VALUES(?,?,?,?)';
 export function insertEvents(list) {
     if (!list || !list.length) return;
     runTx(() => {
         const stmt = db.prepare('INSERT OR IGNORE INTO events(hash,tx_hash,block_hash,block,event_index,extrinsic_index,section,method,data,signer_address,signer_name,timestamp,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
-        const link = db.prepare(LINK_SQL);
+        const link = db.prepare(LINK_SQL), stored = db.prepare('SELECT rowid FROM events WHERE hash = ?');
         for (const e of list) {
             if (!e || !e.hash) continue;
-            stmt.run(e.hash, e.txHash ?? null, e.blockHash ?? null, e.block ?? null, e.eventIndex ?? null,
+            const r = stmt.run(e.hash, e.txHash ?? null, e.blockHash ?? null, e.block ?? null, e.eventIndex ?? null,
                 e.extrinsicIndex ?? null, e.section ?? null, e.method ?? null, JSON.stringify(e.data ?? null),
                 e.signerAddress ?? null, e.signerName ?? null, e.timestamp ?? null, e.status ?? null);
-            linkEvent(link, e);
+            // An event already stored keeps its rowid, so its links are keyed by that one.
+            if (e.accounts?.length) linkEvent(link, e, r.changes ? r.lastInsertRowid : stored.get(e.hash)?.rowid);
         }
     });
 }
-// Links for events already stored (the account-links backfill); returns how many were new.
+// Links for events already stored (the account-links backfill, rows with rowId); returns how many were new.
 export function insertEventAccounts(list) {
     if (!list || !list.length) return 0;
     return runTx(() => {
         const link = db.prepare(LINK_SQL);
-        return list.reduce((added, e) => added + (e && e.hash ? linkEvent(link, e) : 0), 0);
+        return list.reduce((added, e) => added + (e && e.hash ? linkEvent(link, e, e.rowId) : 0), 0);
     });
 }
-// Every stored event in a block range, for the account-links backfill.
+// Every stored event in a block range, with its rowid, for the account-links backfill.
 export function getEventRowsRange(fromBlock, toBlock) {
-    return db.prepare(`SELECT ${EVENT_COLS} FROM events WHERE block >= ? AND block <= ?`).all(fromBlock, toBlock);
+    return db.prepare(`SELECT ${EVENT_COLS}, rowid AS rowId FROM events WHERE block >= ? AND block <= ?`).all(fromBlock, toBlock);
 }
 // Oldest and newest stored event block, { lo, hi } (nulls when empty); one subquery each so both are index seeks.
 export function getEventBlockSpan() {
@@ -1676,15 +1686,28 @@ export function getEventBlockSpan() {
 export function getRecentEvents(limit) {
     return db.prepare(`SELECT ${EVENT_COLS} FROM events ORDER BY block DESC, event_index DESC LIMIT ?`).all(limit).map(mapEventRow);
 }
-// The events an account signed or is named in (event_accounts), each once.
-const EVENT_ADDRESS_MATCH = '(signer_address = ? OR hash IN (SELECT event_hash FROM event_accounts WHERE address = ?))';
-export function getEventsByAddress(address, limit, before = null) {
-    const page = olderThan(before);
-    return db.prepare(`SELECT ${EVENT_COLS}, rowid AS rowId FROM events WHERE ${EVENT_ADDRESS_MATCH}${page.sql} ${PAGE_ORDER}`)
-        .all(address, address, ...page.args, limit).map(mapEventRow);
+// An account's events: the ones it signed, plus the ones naming it (event_accounts). lib/account-links.js never
+// links the signer, so the two sets are disjoint: each branch reads one page in index order, the outer query merges.
+export function accountEventsQuery(address, limit, before = null) {
+    const signed = olderThan(before), named = olderThan(before, 'l.block', 'l.event_rowid');
+    return {
+        sql: `SELECT * FROM (SELECT ${EVENT_COLS}, rowid AS rowId FROM events WHERE signer_address = ?${signed.sql} ${PAGE_ORDER})
+            UNION ALL
+            SELECT * FROM (SELECT ${EVENT_COLS_E}, e.rowid AS rowId
+                FROM event_accounts l JOIN events e ON e.rowid = l.event_rowid AND e.hash = l.event_hash
+                WHERE l.address = ?${named.sql} ORDER BY l.block DESC, l.event_rowid DESC LIMIT ?)
+            ORDER BY block DESC, rowId DESC LIMIT ?`,
+        args: [address, ...signed.args, limit, address, ...named.args, limit, limit]
+    };
 }
+export function getEventsByAddress(address, limit, before = null) {
+    const q = accountEventsQuery(address, limit, before);
+    return db.prepare(q.sql).all(...q.args).map(mapEventRow);
+}
+// Two index counts; the sets are disjoint for the same reason.
 export function countEventsByAddress(address) {
-    return db.prepare(`SELECT COUNT(*) AS n FROM events WHERE ${EVENT_ADDRESS_MATCH}`).get(address, address).n;
+    return db.prepare('SELECT (SELECT COUNT(*) FROM events WHERE signer_address = ?) + (SELECT COUNT(*) FROM event_accounts WHERE address = ?) AS n')
+        .get(address, address).n;
 }
 export function countEvents() {
     // O(1) via the trigger-maintained counter (see table_counts). The miss path

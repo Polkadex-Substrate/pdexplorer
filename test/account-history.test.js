@@ -10,7 +10,7 @@ import * as db from '../db.js';
 import { cursorPage, parseCursor } from '../lib/tx-paging.js';
 import { mountAccountLoadOlder } from '../lib/account-transfers.js';
 import { CACHE_TIERS } from '../lib/api-reference.js';
-import { readRepo, stripComments } from './helpers/source.js';
+import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 
 const ME = 'esMe', ALT = '5Me', OTHER = 'esOther';
 
@@ -91,20 +91,21 @@ describe('per-address pages reach the whole index, each row once', () => {
 });
 
 describe('events an account signed or is named in, each once', () => {
-    // ME signs some, is named in others (event_accounts, lib/account-links.js), and both in a few
-    // (a spelling the signer rule missed); OTHER's events interleave the rowids.
+    // ME signs some and is named in others (event_accounts, lib/account-links.js, which never links the
+    // signer, so the two never overlap); OTHER's events interleave the rowids.
     const named = [];
     BLOCKS.forEach((block, i) => {
-        const signer = i % 3 === 0 || i % 5 === 0 ? ME : OTHER;
-        const accounts = i % 3 === 1 || i % 5 === 0 ? [ME] : (i % 4 === 0 ? [OTHER] : []);
+        const signer = i % 3 === 0 ? ME : OTHER;
+        const accounts = i % 3 === 1 ? [ME] : (i % 4 === 0 ? ['esThird'] : []);
         named.push({ hash: `nv-${i}`, block, eventIndex: i, section: 'balances', method: 'Deposit', signerAddress: signer, accounts });
     });
     const mine = e => e.signerAddress === ME || e.accounts.includes(ME);
+    let h;
 
     before(() => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-account-named-'));
         created.push(dir);
-        db.initDb(dir, true, { awaitMigrator: false });
+        h = db.initDb(dir, true, { awaitMigrator: false });
         db.insertEvents(named);
     });
 
@@ -112,13 +113,34 @@ describe('events an account signed or is named in, each once', () => {
         const { hashes, sizes } = walk(c => db.getEventsByAddress(ME, 4, c), 4);
         assert.deepEqual(hashes, expected(named, mine));
         assert.equal(new Set(hashes).size, hashes.length);
-        assert.deepEqual(sizes, [4, 4, 4, 4, 2]);
+        assert.deepEqual(sizes, [4, 4, 4, 4, 0]);
     });
 
     test('the count matches the pages', () => {
         assert.equal(db.countEventsByAddress(ME), named.filter(mine).length);
-        assert.equal(db.countEventsByAddress(ME), 18);
+        assert.equal(db.countEventsByAddress(ME), 16);
         assert.equal(db.countEventsByAddress('esNobody'), 0);
+    });
+
+    // Each branch reads its page straight off an index, the signed events by idx_events_signer_block and the
+    // named ones by the event_accounts key; only the rows they return (two pages at most) are merged and sorted.
+    test('neither branch sorts or scans, on the first page or below a cursor', () => {
+        for (const before of [null, { block: 104, rowId: 9 }]) {
+            const q = db.accountEventsQuery(ME, 4, before);
+            const plan = h.prepare(`EXPLAIN QUERY PLAN ${q.sql}`).all(...q.args);
+            const inside = id => plan.filter(r => r.parent === id).flatMap(r => [r.detail, ...inside(r.id)]);
+            const [signed, named] = plan.filter(r => r.detail.startsWith('CO-ROUTINE')).map(r => inside(r.id).join(' | '));
+            const seek = before ? ' AND block<?' : '';   // below a cursor, both branches seek to it
+            assert.equal(signed, `SEARCH events USING INDEX idx_events_signer_block (signer_address=?${seek})`);
+            assert.equal(named, `SEARCH l USING PRIMARY KEY (address=?${seek}) | SEARCH e USING INTEGER PRIMARY KEY (rowid=?)`);
+            assert.ok(!plan.some(r => /^SCAN (events|event_accounts|l|e)\b/.test(r.detail)), 'a full table scan');
+        }
+    });
+
+    test('the count is two index counts, no scan and no OR', () => {
+        const sql = /'(SELECT \(SELECT COUNT[^']+)'/.exec(bodyOf(readRepo('db.js', import.meta.url), 'countEventsByAddress'))[1];
+        const plan = h.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(ME, ME).map(r => r.detail).filter(d => /^(SEARCH|SCAN) (events|event_accounts)\b/.test(d));
+        assert.deepEqual(plan, ['SEARCH events USING COVERING INDEX idx_events_signer_block (signer_address=?)', 'SEARCH event_accounts USING PRIMARY KEY (address=?)']);
     });
 });
 

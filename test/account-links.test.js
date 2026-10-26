@@ -166,6 +166,36 @@ describe('the links of a reorged block', () => {
     });
 });
 
+describe('an account page lists each event once', () => {
+    test('an event the account signed and is named in comes back once, and counts once', () => {
+        freshDb();
+        const [e] = attachAccounts([ev(60, 1, OWNER_A, 'multisig.NewMultisig', { approving: OWNER_A, multisig: MULTISIG, callHash: HASH })], RULES);
+        db.insertEvents([e]);
+        assert.deepEqual(db.getEventsByAddress(OWNER_A, 10).map(r => r.hash), [e.hash]);
+        assert.equal(db.countEventsByAddress(OWNER_A), 1);
+        assert.deepEqual(db.getEventsByAddress(MULTISIG, 10).map(r => r.hash), [e.hash], 'named, not signed');
+        assert.equal(db.countEventsByAddress(MULTISIG), 1);
+    });
+
+    test('an event stored before its links gets them under the rowid it already has', () => {
+        freshDb();
+        const e = ev(61, null, 'System', 'balances.Deposit', { who: MULTISIG, amount: '1,000,000,000,000' });
+        db.insertEvents([{ ...e }, ev(62, null, 'System', 'balances.Deposit', { who: OTHER, amount: '1' })]);
+        db.insertEvents(attachAccounts([e], RULES));
+        assert.deepEqual(db.getEventsByAddress(MULTISIG, 10).map(r => [r.hash, r.block]), [[e.hash, 61]]);
+        assert.equal(db.countEventsByAddress(MULTISIG), 1);
+    });
+
+    test('a link whose rowid now holds another event does not show that event', () => {
+        const h = freshDb();
+        const [a] = attachAccounts([ev(70, null, 'System', 'balances.Deposit', { who: MULTISIG, amount: '1' })], RULES);
+        db.insertEvents([a]);
+        h.prepare('DELETE FROM events WHERE hash = ?').run(a.hash);   // a delete that left its link behind
+        db.insertEvents([ev(71, null, 'System', 'balances.Deposit', { who: OTHER, amount: '1' })]);   // takes the freed rowid
+        assert.deepEqual(db.getEventsByAddress(MULTISIG, 10), []);
+    });
+});
+
 // Each new event carries its links whichever indexer path stores it, and the backfill runs on the indexer until it is done.
 describe('server.js wiring', () => {
     const server = stripComments(readRepo('server.js', import.meta.url));
