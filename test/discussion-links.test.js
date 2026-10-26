@@ -184,7 +184,7 @@ describe('script.js wiring', () => {
         assert.match(fn, /if \(focusLink\) focusLinkedPost\(root, readLinkedPostId\(window\.location\.search, window\.location\.hash\)/);
         assert.match(script, /if \(threadId\) fetchDiscussionThread\(threadId, true\)/);
         // Re-renders after sign-in must not jump back to the linked post.
-        assert.match(script, /if \(ok\) fetchDiscussionThread\(thread\.id\);/);
+        assert.match(script, /if \(ok\) fetchDiscussionThread\(thread\.id, false, root, opts\);/);
     });
     test('routeTo strips the query, so /discussions/<id>?post=N still routes to the thread', () => {
         assert.match(script, /const qIdx = target\.indexOf\('\?'\);\s*\n\s*if \(qIdx >= 0\) target = target\.substring\(0, qIdx\);/);

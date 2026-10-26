@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { decodeAddress } from '@polkadot/util-crypto';
 import * as edit from '../lib/discussion-edit.js';
 import * as links from '../lib/discussion-links.js';
+import * as lifecycle from '../lib/discussion-lifecycle.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 
@@ -47,7 +48,7 @@ async function openThread(body, signedInAs) {
     const fetches = [];
     const errors = [];
     const env = {
-        ...edit, ...links, canEditPost: edit.canEdit,
+        ...edit, ...links, ...lifecycle, canEditPost: edit.canEdit,
         document: { getElementById: id => (id === 'discussions-content' ? root : null) },
         window: { location: { search: '', hash: '', origin: 'https://explorer.polkadex.ee' } },
         localStorage: { getItem: k => store.get(k) ?? null, removeItem: k => store.delete(k) },

@@ -638,7 +638,7 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 | Tier | Used by | Header |
 |---|---|---|
-| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
+| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, the governance item endpoints (`/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id`; no-store for `?fresh=1` and 404), `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
 | **Medium** | `/api/validators`, `/api/network-info`, `/api/holders`, `/api/price-latest`, `/api/staking-rewards-status`, `/api/discussions`, `/api/analytics/*`, `/api/labels/:address` (anonymous only), `/api/consts/*` + `/api/runtime` at head | `public, max-age=30, s-maxage=60, stale-while-revalidate=120` |
 | **Long** | `/api/price-history`, `/api/treasury`, `/api/democracy`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and any inspection route pinned to a past block with `?at=` | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
 
@@ -772,6 +772,10 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 - `GET /api/democracy` — referenda + public proposals
 - `GET /api/governance/latest` — most-recent OPEN referendum / proposal (drives homepage banner; only ongoing events)
 - `GET /api/governance/calendar` — unified timeline across referenda + motions + treasury for `/calendar`
+- `GET /api/democracy/referendum/:index` - one referendum for its page `/democracy/referendum/<n>`: status, decoded call, conviction-weighted tally, electorate, threshold, lifecycle timeline, discussion thread and lifecycle links; finished ones resolve from stored history, unknown ones are 404
+- `GET /api/democracy/proposal/:index` - one public proposal (`/democracy/proposal/<n>`): proposer, seconds and seconders, deposit, decoded call, next launch, the referendum it became
+- `GET /api/democracy/external/:hash` - the external proposal with that proposal hash (`/democracy/external/<hash>`): threshold, decoded call, launch block, the motion that queued it
+- `GET /api/council/motion/:id` and `GET /api/technical-committee/motion/:id` - one motion by call hash or index (`/council/motion/<n>`, `/council/tc-motion/<n>`): call, voters, members' votes, threshold, outcome, timeline
 
 ### Email alerts (governance + network events)
 
@@ -1045,7 +1049,7 @@ topology where indexer stalls show up as request latency.
 
 | Tier | Headers | Endpoints |
 | --- | --- | --- |
-| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/technical-committee`, `/api/governance/latest`, `/api/state/*` |
+| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/technical-committee`, `/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id` (404s are no-store), `/api/governance/latest`, `/api/state/*` |
 | `cacheMedium` | `max-age=30, s-maxage=60, stale-while-revalidate=120` | `/api/network-info`, `/api/validators`, `/api/holders`, `/api/price-latest`, `/api/discussions`, `/api/staking-rewards-status`, `/api/analytics/*`, `GET /api/labels/:address` (anonymous callers only) |
 | `cacheLong` | `max-age=300, s-maxage=600, stale-while-revalidate=3600` | `/api/treasury`, `/api/democracy`, `/api/price-history`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and inspection routes pinned to a past block with `?at=` |
 

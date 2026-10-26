@@ -288,7 +288,7 @@ describe('wiring (source contracts — server.js cannot be imported)', () => {
         assert.match(src, /app\.get\('\/api\/technical-committee'/);
         assert.match(src, /setInterval\(syncTechnicalCommittee, COUNCIL_REFRESH_MS\)/);
         assert.match(src, /db\.getCollectiveMotions\('technicalCommittee'\)\.map/);
-        assert.match(src, /'\/council\?tcmotion='/);
+        assert.match(src, /'\/council\/tc-motion\/'/, 'calendar links open the motion\'s own page (lib/gov-detail.js)');
     });
 
     test('council motion emails are keyed by index, not the repeatable hash', () => {
