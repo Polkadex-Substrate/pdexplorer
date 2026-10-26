@@ -247,7 +247,9 @@ Pass:
   versions offered: 14, 15` (or more), `wrote .../test/fixtures/metadata-373.json`.
 - `[testnet] <your endpoint>`, then `spec 392`, `metadata versions offered:`
   a list that includes 16, a `seenFormats=` line whose `"5"` entry has
-  `"general"` above 0, `wrote .../test/fixtures/metadata-392.json`.
+  `"total"` above 0 (the inherents every 392 block carries are bare v5, 0x05,
+  so `"bare"` is above 0 and `"general"` is normally 0: nothing on Polkadex
+  emits General), `wrote .../test/fixtures/metadata-392.json`.
 - Last line `Done. Now run: npm test`.
 
 Fail: any `FAILED:` line, or `fixture(s) not written`. "no v5 extrinsic" means
@@ -331,7 +333,7 @@ sqlite3 data/explorer.db "SELECT COUNT(*) FROM blocks WHERE number BETWEEN 15528
 sqlite3 data/explorer.db "SELECT indexer, COUNT(*) FROM scan_failures GROUP BY indexer;"
 curl -s localhost:3001/api/blocks | grep -o '"decodeFailures":{[^}]*}'
 curl -s localhost:3001/api/version
-node -e 'const f=require("./test/fixtures/metadata-392.json");f.extrinsics.filter(x=>x.format==="v5-general").slice(0,3).forEach(x=>console.log(x.block,x.index))'
+node -e 'const f=require("./test/fixtures/metadata-392.json");f.extrinsics.filter(x=>x.format.startsWith("v5-")).slice(0,3).forEach(x=>console.log(x.block,x.index,x.format))'
 ```
 
 Pass:
@@ -344,9 +346,10 @@ Pass:
 3. `"decodeFailures":{"extrinsicDecode":0,"blockDecodeRecovered":0}`.
 4. `/api/version` shows `"specVersion":392`, `"rpcConnected":true` and
    `"assetFeeCheck":{"ok":true,"status":"ok","specVersion":392}`.
-5. The last command prints up to three `block index` pairs of real v5 General
-   extrinsics from that chain (from the step A fixture). For each, with its
-   two numbers in place of B and I:
+5. The last command prints up to three `block index format` lines of real v5
+   extrinsics from that chain (from the step A fixture; `v5-bare` inherents
+   are what 392 blocks carry, `v5-general` appears only if someone sent one).
+   For each, with its first two numbers in place of B and I:
    `curl -s "localhost:3001/api/decode/B?index=I"` must show a `"section"`,
    a `"method"`, `"isSigned":false` and a `"hash"`, and no `"error"`.
 
@@ -413,8 +416,9 @@ Pass:
    `main` head), `"dirty":false`, `"specVersion":373`, `"rpcConnected":true`,
    `"assetFeeCheck":{"ok":true,"status":"ok","specVersion":373}`.
 2. `health 200`.
-3. The log grep shows `[tx-extensions] server self-check OK (ok, spec 373)`
-   and nothing else.
+3. The log grep shows `[tx-extensions] server self-check OK (ok, spec 373)`,
+   one line per worker process (the backend runs an indexer plus HTTP workers,
+   so several identical lines), and nothing else.
 4. `"decodeFailures":{"extrinsicDecode":0,"blockDecodeRecovered":0}`.
 5. `diff` prints nothing (no new scan_failures rows).
 6. `verify-deploy.sh` ends without a FAIL line.
@@ -422,7 +426,10 @@ Pass:
    shows the head advancing in the same minute.
 
 Then, in a browser: https://explorer.polkadex.ee, open the console once, it
-must show `browser self-check OK`. If any check fails before enactment, roll
+must show `browser self-check OK`. The browser runs this check once per page
+load, so a tab that was open across the enactment is not re-checked: after the
+upgrade, tell users to reload the page (acceptable; the check is a diagnostic
+and signing does not depend on it). If any check fails before enactment, roll
 back (see "Rollback").
 
 ### E. Enactment day (no rollback after enactment)
@@ -449,8 +456,8 @@ sudo docker logs --since 30m pdexplorer-backend 2>&1 | grep -E "Runtime version 
 sudo sqlite3 -readonly data/explorer.db "SELECT indexer, COUNT(*) FROM scan_failures GROUP BY indexer;"
 ```
 
-Expected: one `Runtime version updated to spec=392` line, `server self-check
-OK (ok, spec 392)`, no other line; the scan_failures counts equal the D4
+Expected: a `Runtime version updated to spec=392` line and `server self-check
+OK (ok, spec 392)` (each once per worker process), no other line; the scan_failures counts equal the D4
 "after" file (no `extrinsic_decode:*`, `block_decode_recovered` or new
 `chain_index` rows).
 
@@ -458,8 +465,12 @@ On your Mac, find mainnet's upgrade block U and spot-check both sides:
 
 ```
 cd ~/Projects/Polkadex/pdexplorer-wt-api5
-node scripts/find-upgrade-block.mjs --ws wss://rpc.polkadex.ee
+node scripts/find-upgrade-block.mjs --ws wss://rpc2.polkadex.ee
 ```
+
+This one uses the archive node `rpc2` directly, not the `rpc.polkadex.ee` load
+balancer: the search reads state at old block heights, and the balancer may
+send a request to a node that cannot serve it.
 
 On the explorer box, with U and U plus one in place of 13300000 and 13300001:
 
@@ -472,6 +483,21 @@ Both must decode (a block number and extrinsics, no `"error"`). Finally, one
 transfer signed on https://explorer.polkadex.ee after enactment, polkadot{.js}
 extension: finalized, shown with the wallet's tx hash.
 
+If the new build deploys AFTER enactment (late): the old explorer cannot decode
+392 blocks, so it fails each whole 392 block, stores nothing for it and queues
+a `chain_index` row in `scan_failures`. Rows that burn their retries are
+re-armed every 6 hours (`SCAN_AMNESTY_MS`, `server.js`), so once the new build
+is live the backlog retries itself and fills in with no manual step; blocks
+that were never stored have no stub rows, so no delete is needed for them
+(the delete step below is only for blocks the NEW build stored with a bad
+decode). To confirm after the deploy, on the explorer box:
+`sudo sqlite3 -readonly /opt/pdexplorer/data/explorer.db "SELECT COUNT(*) FROM scan_failures WHERE indexer='chain_index';"`
+falls over the following hours to the "before" file's number (a row may wait
+up to 6 hours for the next re-arm; to skip the wait, run the `--rearm` command
+from step 4 below with `--from`/`--to` for the affected range), the `/api/blocks` `decodeFailures` stay zero, and
+the front page head advances. If the count does not fall, send
+`sudo docker logs --since 1h pdexplorer-backend 2>&1 | grep -E "amnesty|chain_index" | tail -30`.
+
 Fix forward (the only path after enactment):
 
 1. Do not redeploy the old image: it cannot read 392 blocks.
@@ -483,12 +509,31 @@ Fix forward (the only path after enactment):
    Send both.
 3. The fix lands on a branch from `main` with a test built from that
    extrinsic's bytes, goes through review and the same D1 to D4 path.
-4. After it is live, queue the affected blocks for a re-scan, on the explorer
-   box: `cd /opt/pdexplorer` then
-   `sudo docker compose exec backend node --experimental-sqlite tools/requeue-scan-range.mjs --indexer chain_index --blocks B1,B2 --rearm`
-   (the block list from step 2). Whether a re-scan replaces a stored stub was
-   not verified here; check one affected extrinsic page afterwards, then
-   delete its `extrinsic_decode:*` row by hand.
+4. After it is live, re-scan the affected blocks. A re-scan does NOT replace
+   what is already stored: events and transactions are written with
+   `INSERT OR IGNORE` (`db.js` `insertEvents`, `insertTransactions`), so the
+   stub rows from the failed decode stay and the corrected rows are ignored;
+   only `blocks` is written with `REPLACE`. So the stored rows of the affected
+   blocks must be deleted first. Delete triggers exist on both tables
+   (`trg_events_count_ad`, `trg_tx_count_ad`, `db.js`), so the O(1) counters in
+   `table_counts` stay exact and nothing needs recomputing. The block list B1,B2
+   is the one from step 2. All on the explorer box:
+
+   a. Backup first (must report success): `cd /opt/pdexplorer` then
+      `sudo bash backup.sh`
+   b. Read-only check of what would be deleted (write the counts down):
+      `sudo sqlite3 -readonly data/explorer.db "SELECT 'events', COUNT(*) FROM events WHERE block IN (B1,B2) UNION ALL SELECT 'transactions', COUNT(*) FROM transactions WHERE block IN (B1,B2);"`
+      and the counters before: `sudo sqlite3 -readonly data/explorer.db "SELECT name, n FROM table_counts;"`
+   c. Stop the writer so nothing re-inserts mid-delete, then delete:
+      `sudo docker compose stop backend`
+      `sudo sqlite3 data/explorer.db "DELETE FROM events WHERE block IN (B1,B2); DELETE FROM transactions WHERE block IN (B1,B2);"`
+   d. Check the counters fell by exactly the counts from b:
+      `sudo sqlite3 -readonly data/explorer.db "SELECT name, n FROM table_counts;"`
+   e. Start and queue the re-scan:
+      `sudo docker compose start backend`
+      `sudo docker compose exec backend node --experimental-sqlite tools/requeue-scan-range.mjs --indexer chain_index --blocks B1,B2 --rearm`
+   f. Check one affected extrinsic page, then delete its `extrinsic_decode:*`
+      row by hand.
 5. Signing broken but reading fine: wallets still sign in their own apps;
    fix `lib/tx-submit.js` the same way. A crash-looping backend: send
    `sudo docker logs --tail 200 pdexplorer-backend`.
@@ -504,7 +549,7 @@ now, before any referendum outcome. All three must be true before the deploy:
    both fixtures exist the Polkadex-specific checks have not run and the branch
    is not cleared, whatever else has passed.
 2. Run sheet C1 to C4 on a 392 chain: the indexer covers both sides of the
-   upgrade block with zero scan failures, v5 General extrinsics decode, and the
+   upgrade block with zero scan failures, v5 extrinsics decode, and the
    self-check is OK on spec 392.
 3. Run sheet C5: one balance transfer and one council vote with the
    polkadot{.js} extension, both finalized.

@@ -27,7 +27,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newFormatTally, tallyExtrinsic, v5MissingMessage } from '../lib/extrinsic-formats.js';
+import { newFormatTally, tallyExtrinsic, sampleLabel, v5MissingMessage } from '../lib/extrinsic-formats.js';
 import { rpcClient } from '../lib/json-rpc-client.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -123,13 +123,13 @@ async function fetchTarget(t) {
         }
         console.log(`  metadata versions offered: ${versions.join(', ')}`);
 
-        // Real signed (0x84) and general (0x45) extrinsics from the same runtime,
-        // up to SAMPLES of each kind. A v5 target (392) scans the whole window
+        // Real signed (0x84), bare v5 (0x05, the inherents) and general (0x45)
+        // extrinsics from the same runtime, up to SAMPLES of each kind. A v5 target (392) scans the whole window
         // so seenFormats counts every extrinsic; the others stop as soon as
         // enough signed samples are in.
         const wantV5 = t.expectSpec >= 392 || rv.specVersion >= 392;
         const extrinsics = [];
-        const have = { 'v4-signed': 0, 'v5-general': 0 };
+        const have = { 'v4-signed': 0, 'v5-general': 0, 'v5-bare': 0 };
         const seenFormats = newFormatTally();
         let hash = blockHash, n = blockNumber, walked = 0;
         while (walked < MAX_WALK && n > 0) {
@@ -139,7 +139,7 @@ async function fetchTarget(t) {
             if (v !== rv.specVersion) break;
             blk.block.extrinsics.forEach((hex, index) => {
                 const { version, kind } = tallyExtrinsic(seenFormats, hex);
-                const label = version === 4 && kind === 'signed' ? 'v4-signed' : version === 5 && kind === 'general' ? 'v5-general' : null;
+                const label = sampleLabel({ version, kind });
                 if (label && have[label] < SAMPLES) {
                     have[label] += 1;
                     extrinsics.push({ block: n, blockHash: hash, index, specVersion: v, format: label, hex });
@@ -149,7 +149,7 @@ async function fetchTarget(t) {
             n -= 1;
             walked += 1;
         }
-        console.log(`  extrinsic samples: ${extrinsics.length} from ${walked} blocks (v4-signed ${have['v4-signed']}, v5-general ${have['v5-general']})`);
+        console.log(`  extrinsic samples: ${extrinsics.length} from ${walked} blocks (v4-signed ${have['v4-signed']}, v5-bare ${have['v5-bare']}, v5-general ${have['v5-general']})`);
         console.log(`  seenFormats=${JSON.stringify(seenFormats)}`);
         if (wantV5) {
             const missing = v5MissingMessage(seenFormats, { blocks: walked, spec: rv.specVersion, widen: MAX_WALK });

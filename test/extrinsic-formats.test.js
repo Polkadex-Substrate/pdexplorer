@@ -3,7 +3,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { classifyExtrinsic, newFormatTally, tallyExtrinsic, v5MissingMessage } from '../lib/extrinsic-formats.js';
+import { classifyExtrinsic, newFormatTally, tallyExtrinsic, sampleLabel, v5MissingMessage } from '../lib/extrinsic-formats.js';
 import { stripComments } from './helpers/source.js';
 
 // Compact length prefix then the version byte; the rest is padding.
@@ -21,6 +21,27 @@ describe('classifyExtrinsic', () => {
         assert.equal(classifyExtrinsic('0x' + '2d01' + '45' + '00'.repeat(8)).byte, 0x45);       // two-byte mode
         assert.equal(classifyExtrinsic('0x' + '02000100' + '84' + '00'.repeat(8)).byte, 0x84);   // four-byte mode
         assert.equal(classifyExtrinsic('0x' + '03' + '01000000' + '84' + '00'.repeat(8)).byte, 0x84);  // big-integer mode, 4 length bytes
+    });
+});
+
+describe('sampleLabel', () => {
+    test('keeps bare v5 (the 392 inherents), general v5 and signed v4; drops the rest', () => {
+        const label = b => sampleLabel(classifyExtrinsic(ext(b)));
+        assert.equal(label(0x05), 'v5-bare');
+        assert.equal(label(0x45), 'v5-general');
+        assert.equal(label(0x84), 'v4-signed');
+        assert.equal(label(0x04), null);
+    });
+
+    test('a block of only bare v5 inherents passes the v5 verdict and yields samples', () => {
+        const t = newFormatTally();
+        const kept = [0x05, 0x05, 0x84].map(b => {
+            const hex = ext(b);
+            return sampleLabel(tallyExtrinsic(t, hex));
+        });
+        assert.deepEqual(kept, ['v5-bare', 'v5-bare', 'v4-signed']);
+        assert.equal(t[5].general, 0);
+        assert.equal(v5MissingMessage(t, { blocks: 1, spec: 392, widen: 400 }), null);
     });
 });
 
@@ -58,6 +79,8 @@ describe('scripts/fetch-metadata.mjs wiring', () => {
         assert.match(src, /opt\('blocks'/);
         assert.match(src, /seenFormats=/);
         assert.match(src, /v5MissingMessage/);
+        assert.match(src, /sampleLabel\(/);
+        assert.match(src, /'v5-bare': 0/);
         assert.match(src, /process\.exit\(1\)/);
     });
 });
