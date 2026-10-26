@@ -1838,6 +1838,16 @@ export function hasGovEnactmentEvent(block) {
     return !!db.prepare(`SELECT 1 FROM events WHERE block = ? AND ((section = 'democracy' AND method = 'Executed')
         OR (section = 'scheduler' AND method = 'Dispatched')) LIMIT 1`).get(Number(block));
 }
+// The same events with their payload, so a caller can tell WHICH task ran:
+// any scheduler.Dispatched at that block proves nothing about one referendum.
+export function getGovEnactmentEvents(block) {
+    return db.prepare(`SELECT section, method, data FROM events WHERE block = ? AND ((section = 'democracy' AND method = 'Executed')
+        OR (section = 'scheduler' AND method = 'Dispatched'))`).all(Number(block)).map(r => {
+        let data = null;
+        try { data = JSON.parse(r.data); } catch (_) { /* keep null */ }
+        return { section: r.section, method: r.method, data };
+    });
+}
 export function countDemocracyReferenda() {
     return db.prepare('SELECT COUNT(*) AS c FROM democracy_referenda').get().c;
 }
@@ -2222,12 +2232,28 @@ export function insertCollectiveMotionEvent(collective, e) {
 // Every motion of one collective, newest first, with status / tally / resolved
 // block attributed from the event table. Same shape the API has always served.
 export function getCollectiveMotions(collective) {
+    return collectiveMotionRows(collective, null);
+}
+// One hash's motions (every proposal of that call), same shape and the same
+// attribution as getCollectiveMotions, without loading the whole collective.
+// Events are attributed per hash, so the result equals that hash's slice of the
+// full list.
+export function getCollectiveMotionsByHash(collective, hash) {
+    return collectiveMotionRows(collective, String(hash).toLowerCase());
+}
+// The call hash of the motion with this index, or null.
+export function getCollectiveMotionHashByIndex(collective, motionIndex) {
+    const r = db.prepare('SELECT hash FROM collective_motions WHERE collective = ? AND motion_index = ? LIMIT 1').get(collective, Number(motionIndex));
+    return r ? String(r.hash) : null;
+}
+function collectiveMotionRows(collective, lowerHash) {
+    const byHash = lowerHash !== null;
     const motions = db.prepare(`SELECT motion_index AS motionIndex, hash, proposer, proposer_name AS proposerName,
             section, method, threshold, proposed_block AS proposedBlock, proposed_event_index AS proposedEventIndex,
             proposed_at AS proposedAt, live_ayes AS liveAyes, live_nays AS liveNays, left_storage_at AS leftStorageAt
-        FROM collective_motions WHERE collective = ?`).all(collective).map(r => ({ ...r }));
+        FROM collective_motions WHERE collective = ?${byHash ? ' AND LOWER(hash) = ?' : ''}`).all(...(byHash ? [collective, lowerHash] : [collective])).map(r => ({ ...r }));
     const events = db.prepare(`SELECT hash, block, event_index AS eventIndex, kind, ayes, nays, at
-        FROM collective_motion_events WHERE collective = ?`).all(collective).map(r => ({ ...r }));
+        FROM collective_motion_events WHERE collective = ?${byHash ? ' AND LOWER(hash) = ?' : ''}`).all(...(byHash ? [collective, lowerHash] : [collective])).map(r => ({ ...r }));
     return attributeMotionEvents(motions, events)
         .sort((a, b) => Number(b.motionIndex) - Number(a.motionIndex))
         .map(m => ({

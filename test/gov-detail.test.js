@@ -17,7 +17,7 @@ import {
     ayeNaySplit, turnoutPercent, weightedVotes, approvalState, motionProgress, etaText, humanDuration,
     nextLaunchBlock, referendumTimeline, motionTimeline, launchedReferendum
 } from '../lib/gov-detail.js';
-import { registerGovDetailRoutes } from '../lib/gov-detail-api.js';
+import { registerGovDetailRoutes, referendumDetail, proposalDetail, externalDetail, motionDetail, enactmentEventMatches } from '../lib/gov-detail-api.js';
 import {
     renderGovDetailSummary, renderNotFound, govRowLinkHtml, wireGovRowClicks, barSvg, createGovDetailPage, GOV_ROW_CLASS, GOV_DETAIL_POLL_MS
 } from '../lib/gov-detail-view.js';
@@ -165,7 +165,7 @@ describe('time and timelines', () => {
         const failed = referendumTimeline({ status: 'NotPassed', end: 1200, votingPeriod: 200, launchPeriod: 100, currentBlock: 2000 });
         assert.ok(!failed.some(s => s.key === 'enact'), 'a failed referendum is never enacted');
         const unconfirmed = referendumTimeline({ status: 'Passed', end: 1200, votingPeriod: 200, launchPeriod: 100, delay: 50, currentBlock: 2000 });
-        assert.equal(unconfirmed[3].label, 'Enactment due');
+        assert.equal(unconfirmed[3].label, 'Enactment block reached');
         assert.match(unconfirmed[3].note, /not confirmed/);
         assert.match(referendumTimeline({ status: 'Passed', end: 1200, currentBlock: 2000 }).pop().note, /archive/);
     });
@@ -664,7 +664,7 @@ describe('wiring', () => {
         assert.ok(!/data-kind="(referendum|public-proposal|motion)"/.test(script), 'no row still opens the old modal');
     });
     test('server: routes registered with the short tier and ?fresh=1; calendar and emails link to the pages', () => {
-        assert.match(server, /registerGovDetailRoutes\(app, \{ db, chain: govChain, cacheShort, isFresh: isFreshRequest, serverError \}\)/);
+        assert.match(server, /registerGovDetailRoutes\(app, \{ db, chain: govChain, cacheShort, isFresh: isFreshRequest, serverError, enactmentTaskId: govEnactmentTaskId \}\)/);
         assert.match(server, /link: '\/democracy\/referendum\/' \+ r\.refIndex/);
         assert.match(server, /\$\{emailSiteOrigin\(\)\}\/council\/motion\/\$\{m\.motionIndex\}/);
         assert.ok(!/democracy\?ref=|council\?motion=/.test(server), 'no new link uses the old query form');
@@ -672,5 +672,247 @@ describe('wiring', () => {
     });
     test('script.js stays under its ceiling', () => {
         assert.ok(readRepo('script.js', import.meta.url).split('\n').length < 15000);
+    });
+});
+
+// ---- review fixes (Fable review of 7bafc9a) -----------------------------------------
+
+describe('review fixes: motions', () => {
+    const wholeCollectiveForbidden = new Proxy(db, { get(t, k) { if (k === 'getCollectiveMotions') return () => { throw new Error('the whole collective must not be loaded'); }; return t[k]; } });
+    test('M1: an open re-proposal with the same hash does not take over an index request', async () => {
+        const original = db.getKv('council');
+        db.setKv('council', { ...original, motions: [...original.motions, { hash: M1, index: 10, section: 'treasury', method: 'approveProposal', args: [], threshold: 3, ayes: [ALICE], nays: [], end: 1400 }] });
+        try {
+            const deps = { db: wholeCollectiveForbidden, chain: fakeChain() };
+            const seven = await motionDetail('council', '7', deps, { fresh: true });
+            assert.equal(seven.status, 200);
+            assert.equal(seven.body.index, 7, 'motion /7 is #7, not the open #10 with the same hash');
+            assert.equal(seven.body.status, 'executed');
+            assert.deepEqual([seven.body.ayes, seven.body.nays], [3, 1]);
+            const ten = await motionDetail('council', '10', deps, { fresh: true });
+            assert.equal(ten.body.index, 10);
+            assert.equal(ten.body.status, 'proposed');
+            const byHash = await motionDetail('council', M1, deps, { fresh: true });
+            assert.equal(byHash.body.index, 10, 'a hash still lands on the open motion');
+        } finally { db.setKv('council', original); }
+    });
+    test('LOW: one hash\'s motions are one query, equal to that hash\'s slice of the full list', () => {
+        const full = db.getCollectiveMotions('council').filter(m => m.hash === M1);
+        assert.ok(full.length >= 2);
+        assert.deepEqual(db.getCollectiveMotionsByHash('council', M1), full);
+        assert.deepEqual(db.getCollectiveMotionsByHash('council', M1.toUpperCase().replace('0X', '0x')), full, 'hash case does not matter');
+        assert.deepEqual(db.getCollectiveMotionsByHash('council', '0x' + 'ee'.repeat(32)), []);
+        assert.equal(db.getCollectiveMotionHashByIndex('council', 7), M1);
+        assert.equal(db.getCollectiveMotionHashByIndex('council', 4242), null);
+        assert.equal(db.getCollectiveMotionHashByIndex('technicalCommittee', 7), null, 'collectives are separate');
+    });
+});
+
+describe('review fixes: unknown ids cost no RPC, and stay unknown for a minute', () => {
+    function countingChain() {
+        const calls = [];
+        const c = fakeChain();
+        for (const k of ['consts', 'currentBlock', 'referendum', 'publicProp', 'nextExternal', 'deposit', 'decodeCall', 'referendumAt']) {
+            const f = c[k];
+            c[k] = async (...a) => { calls.push(k); return f(...a); };
+        }
+        return { c, calls };
+    }
+    test('M2: referendum - an unknown id makes one existence read and nothing else; then none for 60 s', async () => {
+        const { c, calls } = countingChain();
+        let t = 1000000;
+        const deps = { db, chain: c, now: () => t };
+        const r1 = await referendumDetail('90', deps);
+        assert.equal(r1.status, 404);
+        assert.deepEqual(calls, ['referendum'], 'no consts or head reads for an id that does not exist');
+        calls.length = 0;
+        t += 59000;
+        assert.equal((await referendumDetail('90', deps)).status, 404);
+        assert.deepEqual(calls, [], 'remembered: no RPC');
+        t += 2000;
+        assert.equal((await referendumDetail('90', deps)).status, 404);
+        assert.deepEqual(calls, ['referendum'], 'after 60 s it is asked again');
+    });
+    test('M2: a far-future index never reaches the node; ?fresh skips the memory and finds an item created since', async () => {
+        const { c, calls } = countingChain();
+        const deps = { db, chain: c, now: () => 5000000 };
+        assert.equal((await referendumDetail('100000', deps)).status, 404);
+        assert.deepEqual(calls, []);
+        assert.equal((await referendumDetail('50', deps)).status, 404);
+        c.referendum = async () => ({ state: 'ongoing', end: 1300, threshold: 'SimpleMajority', delay: 10, ayes: 1, nays: 0, turnout: 1, bounded: null, proposalHash: H2 });
+        assert.equal((await referendumDetail('50', deps)).status, 404, 'still remembered');
+        const fresh = await referendumDetail('50', deps, { fresh: true });
+        assert.equal(fresh.status, 200, 'an item created a block ago is found with ?fresh=1');
+        assert.equal(fresh.body.status, 'Ongoing');
+    });
+    test('M2: a stored referendum is answered without an existence probe (one live read, shared)', async () => {
+        const { c, calls } = countingChain();
+        const r = await referendumDetail('1', { db, chain: c }, { fresh: true });
+        assert.equal(r.status, 200);
+        assert.equal(calls.filter(x => x === 'referendum').length, 1, 'the live read is made once, not once to check and once to use');
+    });
+    test('M2: proposals and external proposals likewise', async () => {
+        const { c, calls } = countingChain();
+        let t = 1;
+        const deps = { db, chain: c, now: () => t };
+        assert.equal((await proposalDetail('77', deps)).status, 404);
+        assert.deepEqual(calls, ['publicProp']);
+        calls.length = 0;
+        assert.equal((await proposalDetail('77', deps)).status, 404);
+        assert.equal((await proposalDetail('100000', deps)).status, 404);
+        assert.deepEqual(calls, []);
+        const unknown = '0x' + '98'.repeat(32);
+        assert.equal((await externalDetail(unknown, deps)).status, 404);
+        assert.deepEqual(calls, ['nextExternal']);
+        calls.length = 0;
+        assert.equal((await externalDetail(unknown, deps)).status, 404);
+        assert.deepEqual(calls, []);
+        assert.equal((await externalDetail(H2, deps)).status, 200, 'a stored thread is known without the probe');
+        assert.equal(calls.filter(x => x === 'nextExternal').length, 1);
+    });
+    test('M2: motions - the 404 is remembered too, and is still no-store over HTTP', async () => {
+        const deps = { db, chain: fakeChain(), now: () => 1 };
+        assert.equal((await motionDetail('council', '4242', deps)).status, 404);
+        deps.db = { getKv() { throw new Error('not read again'); } };
+        assert.equal((await motionDetail('council', '4242', deps)).status, 404, 'served from memory');
+        const r = await get('/api/council/motion/4242');
+        assert.equal(r.status, 404);
+        assert.equal(r.cache, 'no-store');
+    });
+});
+
+describe('review fixes: "Enacted" needs this referendum\'s own dispatch', () => {
+    const TASK = '0x' + 'ab'.repeat(32);
+    const finishedChain = () => fakeChain({
+        referendum: async () => ({ state: 'finished', approved: true, end: 1000 }),
+        referendumAt: async () => ({ state: 'ongoing', end: 1000, threshold: 'SuperMajorityApprove', delay: 31, ayes: 31, nays: 9, turnout: 26, bounded: null, proposalHash: H2 })
+    });
+    const enactStep = async (taskId) => (await referendumDetail('1', { db, chain: finishedChain(), enactmentTaskId: taskId }, { fresh: true })).body.timeline.find(s => s.key === 'enact');
+    test('another task dispatching in the enactment block is not enough', async () => {
+        db.insertEvents([{ hash: 'ev-other-task', block: 1031, eventIndex: 3, section: 'scheduler', method: 'Dispatched', data: { task: ['1031', '0'], id: '0x' + 'cd'.repeat(32), result: { Ok: null } } }]);
+        const step = await enactStep(() => TASK);
+        assert.equal(step.label, 'Enactment block reached');
+        assert.match(step.note, /not confirmed/);
+        assert.equal((await enactStep(null)).label, 'Enactment block reached', 'no task id to match: not claimed');
+    });
+    test('the referendum\'s own task id, as an object or array payload, confirms it', async () => {
+        db.insertEvents([{ hash: 'ev-own-task', block: 1031, eventIndex: 4, section: 'scheduler', method: 'Dispatched', data: { task: ['1031', '1'], id: TASK.toUpperCase().replace('0X', '0x'), result: { Ok: null } } }]);
+        const step = await enactStep(() => TASK);
+        assert.equal(step.label, 'Enacted');
+        assert.equal(step.block, 1031);
+    });
+    test('matching rules: democracy.Executed by index, scheduler.Dispatched by id', () => {
+        assert.equal(enactmentEventMatches({ section: 'democracy', method: 'Executed', data: { refIndex: '1,234', result: { Ok: null } } }, 1234, null), true);
+        assert.equal(enactmentEventMatches({ section: 'democracy', method: 'Executed', data: ['5', { Ok: null }] }, 5, null), true);
+        assert.equal(enactmentEventMatches({ section: 'democracy', method: 'Executed', data: ['6', { Ok: null }] }, 5, null), false);
+        assert.equal(enactmentEventMatches({ section: 'scheduler', method: 'Dispatched', data: [['1', '0'], TASK, { Ok: null }] }, 5, TASK), true);
+        assert.equal(enactmentEventMatches({ section: 'scheduler', method: 'Dispatched', data: [['1', '0'], null, { Ok: null }] }, 5, TASK), false);
+        assert.equal(enactmentEventMatches({ section: 'scheduler', method: 'Dispatched', data: { id: TASK } }, 5, null), false);
+        assert.equal(enactmentEventMatches({ section: 'balances', method: 'Transfer', data: { id: TASK } }, 5, TASK), false);
+        assert.equal(enactmentEventMatches(null, 5, TASK), false);
+    });
+});
+
+describe('review fixes: the page', () => {
+    const liveApi = (hold) => ({ query: { democracy: {
+        referendumInfoOf(i, cb) { hold.deliver = cb; return Promise.resolve(() => {}); },
+        votingOf() { return Promise.resolve(() => {}); }, depositOf() { return Promise.resolve(() => {}); }
+    } } });
+    const info = (ayes, nays, turnout) => ({ isNone: false, isSome: true, unwrap: () => ({ isOngoing: true, asOngoing: { end: 1200, threshold: 'SimpleMajority', tally: { ayes, nays, turnout } } }) });
+    test('M3: with a live subscription delivering, the 30 s poll does not overwrite the live tally', async () => {
+        const hold = {};
+        const w = pageWorld({ api: liveApi(hold) });
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        hold.deliver(info('900000000000000', '100000000000000', '500000000000000'));
+        const summary = w.root.querySelector('[data-gd-summary]');
+        assert.ok(summary.innerHTML.includes('90% aye / 10% nay'));
+        w.setBody(refPayload({ tally: { ayes: 1, nays: 3, turnout: 4, known: true } }));   // a cached, older server answer
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.ok(summary.innerHTML.includes('90% aye / 10% nay'), 'the live tally survives the poll');
+        assert.ok(!summary.innerHTML.includes('25% aye'));
+        assert.deepEqual(w.page.current().tally, { ayes: 900, nays: 100, turnout: 500, known: true });
+    });
+    test('M3: before any live delivery the poll still refreshes the page; a status change takes the server\'s data', async () => {
+        const hold = {};
+        const w = pageWorld({ api: liveApi(hold) });
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        w.setBody(refPayload({ tally: { ayes: 1, nays: 3, turnout: 4, known: true } }));
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.ok(w.root.querySelector('[data-gd-summary]').innerHTML.includes('25% aye / 75% nay'), 'nothing live yet: the poll is the freshest');
+        hold.deliver(info('900000000000000', '100000000000000', '500000000000000'));
+        w.setBody(refPayload({ status: 'Passed', tally: { ayes: 30, nays: 10, turnout: 25, known: true } }));
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.equal(w.page.current().status, 'Passed');
+        assert.deepEqual(w.page.current().tally, { ayes: 30, nays: 10, turnout: 25, known: true }, 'status changed: the server\'s final numbers');
+    });
+    test('M3: a live council vote also survives the poll (voters and members)', async () => {
+        let deliver = null;
+        const api = { query: { council: { proposals() {}, voting: Object.assign((hash, cb) => { deliver = cb; return Promise.resolve(() => {}); }, { multi() {} }) } } };
+        const body = { kind: 'motion', collective: 'council', id: M1, hash: M1, index: 8, title: 'Council Motion #8', status: 'proposed', call: null, callNote: 'x',
+            ayes: 0, nays: 0, threshold: 2, seats: 3, ayeVoters: [], nayVoters: [], members: [{ address: ALICE, name: 'Alice', vote: null }, { address: BOB, name: 'Bob', vote: null }],
+            related: [], timeline: [], threadId: `motion-${M1}`, thread: null, sources: { chain: true } };
+        const w = pageWorld({ body, api });
+        w.page.open('council/motion/8');
+        await flush(); await flush();
+        deliver({ isNone: false, isSome: true, unwrap: () => ({ index: 8, threshold: 2, end: 1300, ayes: [ALICE], nays: [BOB] }) });
+        w.intervals[0].fn();
+        await flush(); await flush();
+        const d = w.page.current();
+        assert.deepEqual([d.ayes, d.nays], [1, 1]);
+        assert.deepEqual(d.members.map(m => m.vote), ['aye', 'nay']);
+        assert.equal(d.ayeVoters.length, 1);
+    });
+    test('LOW: the status badge is escaped', () => {
+        const html = renderGovDetailSummary(refPayload({ status: '<img src=x onerror=alert(1)>' }), h);
+        assert.ok(!html.includes('<img src=x'));
+        assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+    });
+    test('LOW: the canonical path is the index form, for a motion opened by hash too', async () => {
+        const w = pageWorld();
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        assert.equal(w.calls.seo[0].canonicalPath, '/democracy/referendum/2');
+        const body = { kind: 'motion', collective: 'technicalCommittee', id: M1, hash: M1, index: 8, title: 'Technical Committee Motion #8', status: 'executed', call: null, callNote: 'x',
+            ayes: 2, nays: 0, threshold: 2, seats: 3, ayeVoters: null, nayVoters: null, members: null, related: [], timeline: [], threadId: null, thread: null, sources: { chain: true } };
+        const m = pageWorld({ body });
+        m.page.open(`council/tc-motion/${M1}`);
+        await flush(); await flush();
+        assert.equal(m.calls.seo[0].canonicalPath, '/council/tc-motion/8');
+        const script = stripComments(readRepo('script.js', import.meta.url));
+        assert.match(script, /setSeo: \(o\) => updateSeoMeta\('governance-details', \{ canonicalPath: window\.location\.pathname, \.\.\.o \}\)/, 'the page\'s own path is only the default');
+    });
+});
+
+describe('review fixes: server', () => {
+    test('LOW: pruned archive reads are cached as misses for 10 minutes, hits for good', async () => {
+        const src = readRepo('server.js', import.meta.url);
+        const body = bodyOf(src, 'govHist');
+        const clock = { now: 1000 };
+        const make = new Function('govHistCache', 'GOV_HIST_MISS_MS', 'Date', `return async ${body}`);
+        const cache = new Map();
+        const govHist = make(cache, 10 * 60 * 1000, { now: () => clock.now });
+        let reads = 0, answer = null;
+        const read = async () => { reads++; return answer; };
+        assert.equal(await govHist('k', read), null);
+        assert.equal(await govHist('k', read), null);
+        assert.equal(reads, 1, 'a pruned read is not repeated on every page view');
+        clock.now += 9 * 60 * 1000;
+        await govHist('k', read);
+        assert.equal(reads, 1);
+        clock.now += 2 * 60 * 1000;
+        answer = { state: 'ongoing' };
+        assert.deepEqual(await govHist('k', read), { state: 'ongoing' });
+        assert.equal(reads, 2, 'after 10 minutes it is asked again');
+        assert.deepEqual(await govHist('k', read), { state: 'ongoing' });
+        assert.equal(reads, 2, 'a hit is kept');
+    });
+    test('the enactment task id is derived from the democracy scheduler name', () => {
+        const server = stripComments(readRepo('server.js', import.meta.url));
+        assert.match(bodyOf(server, 'govEnactmentTaskId'), /setUint32\(0, Number\(index\), true\)[\s\S]*blake2AsHex\(u8aConcat\(stringToU8a\('democrac'\), idx\), 256\)/);
     });
 });

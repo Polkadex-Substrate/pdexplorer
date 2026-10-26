@@ -4500,7 +4500,8 @@ app.get('/api/democracy', (req, res) => {
 // instead of throwing, so a flaky node degrades a page to its stored history.
 const GOV_DETAIL_ARG_MAX = 1000;
 const govCallCache = new Map();   // proposal hash -> decoded call (hits kept; misses retried after 10 min)
-const govHistCache = new Map();   // "<kind>:<id>:<block>" -> historical read (archive state never changes)
+const govHistCache = new Map();   // "<kind>:<id>:<block>" -> historical read (archive state never changes) or { miss, at } (pruned state: retried after 10 min)
+const GOV_HIST_MISS_MS = 10 * 60 * 1000;
 function govDescribeCall(c) {
     const meta = (c.meta && c.meta.args) || [];
     return {
@@ -4532,10 +4533,27 @@ function govCollectivePallet(collective) {
     return snap.collectivePallet || ['council', 'councilCollective', 'generalCouncil'].find(n => globalApi.query[n] && globalApi.query[n].proposalOf) || null;
 }
 async function govHist(key, read) {
-    if (govHistCache.has(key)) return govHistCache.get(key);
+    const hit = govHistCache.get(key);
+    if (hit) {
+        if (!hit.miss) return hit;
+        // A pruned (or failed) read: not asked again for a while, so a page of
+        // an old item on a non-archive node costs one RPC attempt, not one per view.
+        if (Date.now() - hit.at < GOV_HIST_MISS_MS) return null;
+        govHistCache.delete(key);
+    }
     const v = await read();
-    if (v) { if (govHistCache.size > 500) govHistCache.clear(); govHistCache.set(key, v); }
+    if (govHistCache.size > 500) govHistCache.clear();
+    govHistCache.set(key, v || { miss: true, at: Date.now() });
     return v;
+}
+// The scheduler name pallet-democracy gives a referendum's enactment task:
+// blake2_256(("democrac", index)) with the index as a little-endian u32. The
+// dispatch event carries it as `id`, which is how an enactment is matched to
+// ITS referendum (a different task dispatching in that block proves nothing).
+function govEnactmentTaskId(index) {
+    const idx = new Uint8Array(4);
+    new DataView(idx.buffer).setUint32(0, Number(index), true);
+    return blake2AsHex(u8aConcat(stringToU8a('democrac'), idx), 256);
 }
 const govChain = {
     ready: () => isRpcReady(),
@@ -4634,7 +4652,7 @@ const govChain = {
     },
     name: (address) => getIdentity(globalApi, address)
 };
-registerGovDetailRoutes(app, { db, chain: govChain, cacheShort, isFresh: isFreshRequest, serverError });
+registerGovDetailRoutes(app, { db, chain: govChain, cacheShort, isFresh: isFreshRequest, serverError, enactmentTaskId: govEnactmentTaskId });
 
 // isOpenGovStatus is imported from ./lib/gov-status.js (audit F-003 — one
 // case-insensitive predicate shared by banner, calendar, and email so the
