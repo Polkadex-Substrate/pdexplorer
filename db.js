@@ -1890,11 +1890,14 @@ export function getThreadsByProposalHash(hash) {
 // Council motion threads about an external-proposal call whose proposal hash
 // is not known yet (the motion concluded before the hash was recorded): the
 // backfill in server.js recovers it from the block that proposed the motion.
+// A motion whose call was never decoded (section NULL) is included too: the
+// backfill reads its call and isExternalProposeCall decides.
 export function getMotionThreadsMissingProposalHash() {
     return db.prepare(`SELECT t.id, t.ref_key AS hash, m.collective, MAX(m.proposed_block) AS proposedBlock,
             (SELECT MIN(e.block) FROM collective_motion_events e WHERE e.collective = m.collective AND e.hash = t.ref_key) AS resolvedBlock
         FROM discussion_threads t JOIN collective_motions m ON m.hash = t.ref_key
-        WHERE t.kind = 'motion' AND t.proposal_hash IS NULL AND m.section = 'democracy' AND m.method LIKE 'externalPropose%'
+        WHERE t.kind = 'motion' AND t.proposal_hash IS NULL
+            AND ((m.section = 'democracy' AND m.method LIKE 'externalPropose%') OR m.section IS NULL)
         GROUP BY t.id, t.ref_key, m.collective`).all();
 }
 // Every ref_key of one kind, open or closed - what the chain must already know

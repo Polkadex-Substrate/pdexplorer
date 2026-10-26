@@ -22,7 +22,7 @@ import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
 import { applyEdit } from './lib/discussion-edit.js';
 import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater, reconcileReferendumThreads, referendumReadTrusted,
-    externalReadTrusted, externalLaunchedReason, findCallByHash } from './lib/discussion-threads.js';
+    externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash } from './lib/discussion-threads.js';
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind } from './lib/discussion-lifecycle.js';
 import { blake2AsHex } from '@polkadot/util-crypto';
@@ -6123,43 +6123,48 @@ async function describeProposalCall(bounded, hash) {
 // among them): recover its call from the block that proposed it, state first,
 // then the block body, so the motion thread can link forward. At most three
 // tries per thread; the attempts live in kv so restarts do not reset them.
+// Only a definite miss is a try (lib/discussion-threads.js
+// recoverMotionProposalHash): an RPC outage or a failed read leaves the
+// attempts untouched and stops this pass.
 const MOTION_HASH_ATTEMPTS_KEY = 'discussion:motion-hash-attempts';
 async function backfillMotionProposalHashes() {
+    if (!isRpcReady()) return;
     let rows = [];
     try { rows = db.getMotionThreadsMissingProposalHash(); } catch (e) { return; }
     const attempts = db.getKv(MOTION_HASH_ATTEMPTS_KEY) || {};
     const todo = rows.filter(r => (attempts[r.id] || 0) < 3).slice(0, 5);
     if (!todo.length) return;
+    let changed = false;
     for (const row of todo) {
-        let hash = null;
-        try {
-            const stateAt = async (blockNumber) => {
-                const q = globalApi.query[row.collective];
-                if (!q || !q.proposalOf || !(Number(blockNumber) > 0)) return null;
-                try {
-                    const opt = await q.proposalOf.at(await getBlockHashCached(Number(blockNumber)), row.hash);
-                    return opt && opt.isSome ? opt.unwrap() : null;
-                } catch (e) { return null; }   // state pruned (not an archive node)
-            };
-            const hasProposed = row.proposedBlock !== null && Number(row.proposedBlock) > 0;
-            // The block that proposed it (state, then body), or the state just
-            // before the block that resolved it.
-            let call = hasProposed ? await stateAt(row.proposedBlock) : null;
-            if (!call && hasProposed) {
-                const block = await getBlockCached(await getBlockHashCached(Number(row.proposedBlock)));
-                call = findCallByHash(((block && block.block && block.block.extrinsics) || []).map(x => x.method), row.hash);
-            }
-            if (!call && row.resolvedBlock !== null) call = await stateAt(Number(row.resolvedBlock) - 1);
-            if (call && isExternalProposeCall(call.section, call.method)) hash = proposalHashOf(call.args[0], blake2AsHex);
-        } catch (e) { hash = null; }
-        if (hash && db.setThreadProposalHash(row.id, hash)) {
+        const stateAt = async (blockNumber) => {
+            const q = globalApi.query[row.collective];
+            if (!q || !q.proposalOf || !(Number(blockNumber) > 0)) return null;
+            try {
+                const opt = await q.proposalOf.at(await getBlockHashCached(Number(blockNumber)), row.hash);
+                return opt && opt.isSome ? opt.unwrap() : null;
+            } catch (e) { return null; }   // state pruned (not an archive node)
+        };
+        // Throws when the RPC is down or the block cannot be read: that is
+        // 'unavailable', not a miss.
+        const blockCalls = async (blockNumber) => {
+            const block = await getBlockCached(await getBlockHashCached(Number(blockNumber)));
+            if (!block || !block.block) throw new Error('block not available');
+            return (block.block.extrinsics || []).map(x => x.method);
+        };
+        let r;
+        try { r = await recoverMotionProposalHash(row, { stateAt, blockCalls, hashOf: (call) => proposalHashOf(call.args[0], blake2AsHex) }); }
+        catch (e) { r = { outcome: 'unavailable' }; }
+        if (r.outcome === 'unavailable') break;
+        if (r.outcome === 'found' && db.setThreadProposalHash(row.id, r.hash)) {
             delete attempts[row.id];
-            console.log(`Discussion threads: ${row.id} linked to external proposal ${hash}.`);
-        } else {
+            changed = true;
+            console.log(`Discussion threads: ${row.id} linked to external proposal ${r.hash}.`);
+        } else if (r.outcome === 'miss') {
             attempts[row.id] = (attempts[row.id] || 0) + 1;
+            changed = true;
         }
     }
-    db.setKv(MOTION_HASH_ATTEMPTS_KEY, attempts);
+    if (changed) db.setKv(MOTION_HASH_ATTEMPTS_KEY, attempts);
 }
 
 app.get('/api/wallet/:address', async (req, res) => {
@@ -7454,7 +7459,7 @@ async function syncDemocracyPass() {
         // reconcile below moves its own mark).
         const demHighWater = Math.max(threadHighWater('proposal'), threadHighWater('external'), threadHighWater('referendum'));
         const refTrust = referendumReadTrusted({ referendumCount, currentBlock, highWater: demHighWater, knownRefKeys: db.getThreadRefKeys('referendum') });
-        const extTrust = externalReadTrusted({ currentBlock, highWater: demHighWater });
+        const extTrust = refTrust.trusted ? externalReadTrusted({ currentBlock, highWater: demHighWater }) : refTrust;
         reconcileGovThreads('proposal', publicProposals.map(p => ({ id: `proposal-${p.index}`, refKey: String(p.index), title: `Public Proposal #${p.index}`, proposalHash: propHashes[Number(p.index)] || null })),
             proposalReadTrusted({ publicPropCount: propCountRaw ? publicPropCount : null, currentBlock,
                 highWater: threadHighWater('proposal'), knownRefKeys: db.getThreadRefKeys('proposal') }), currentBlock);

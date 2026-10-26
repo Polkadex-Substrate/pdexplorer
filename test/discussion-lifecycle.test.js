@@ -17,7 +17,7 @@ import { blake2AsHex } from '@polkadot/util-crypto';
 import * as db from '../db.js';
 import {
     reconcileThreads, reconcileReferendumThreads, referendumReadTrusted, externalReadTrusted,
-    externalLaunchedReason, isAutoCloseReason, findCallByHash, AUTO_CLOSE_REASON, REFERENDUM_CLOSE_REASON
+    externalLaunchedReason, isAutoCloseReason, findCallByHash, recoverMotionProposalHash, AUTO_CLOSE_REASON, REFERENDUM_CLOSE_REASON
 } from '../lib/discussion-threads.js';
 import {
     proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle,
@@ -292,5 +292,66 @@ describe('wiring in server.js and script.js', () => {
         assert.match(bodyOf(script, 'renderDemocracyOverview'), /externalSummaryHtml\(ext, stakingEscapeHtml\)/);
         assert.match(bodyOf(script, 'mountDemocracyReferendaTable'), /referendumDiscussCell\(row\)/);
         assert.match(script, /filter: \{ type: 'select', options: kindFilterOptions\(\) \}/);
+    });
+});
+
+// Review of cd5842b (2026-10-26): the backfill counted a try even when the RPC
+// was down, the external reconcile ignored an untrusted referendum read, and
+// motions whose call was never decoded were never backfilled.
+describe('review fixes: motion hash backfill, external trust, undecoded motions', () => {
+    const call = (section, method, args, hash) => ({ section, method, args, hash: { toHex: () => hash } });
+    const external = call('democracy', 'externalProposeMajority', [JSON.stringify({ lookup: { hash: H1, len: 40 } })], MOTION);
+    const hashOf = (c) => proposalHashOf(c.args[0], blake2AsHex);
+    const row = (extra = {}) => ({ id: `motion-${MOTION}`, hash: MOTION, collective: 'council', proposedBlock: 100, resolvedBlock: 200, ...extra });
+    const io = (o = {}) => ({ stateAt: async () => null, blockCalls: async () => [], hashOf, ...o });
+
+    test('RPC down while reading the block body: unavailable, not a try', async () => {
+        const r = await recoverMotionProposalHash(row(), io({ blockCalls: async () => { throw new Error('rpc not ready (disconnected mid-fetch)'); } }));
+        assert.deepEqual(r, { outcome: 'unavailable' });
+    });
+    test('a state read that throws (not swallowed) is unavailable too; a non-array body is unavailable', async () => {
+        assert.deepEqual(await recoverMotionProposalHash(row(), io({ stateAt: async () => { throw new Error('boom'); } })), { outcome: 'unavailable' });
+        assert.deepEqual(await recoverMotionProposalHash(row(), io({ blockCalls: async () => null })), { outcome: 'unavailable' });
+    });
+    test('the body WAS read and the call is not in it: a miss (one try)', async () => {
+        const r = await recoverMotionProposalHash(row(), io({ blockCalls: async () => [call('timestamp', 'set', [1], '0x' + '66'.repeat(32))] }));
+        assert.deepEqual(r, { outcome: 'miss' });
+    });
+    test('found in state, in the body, or in the state before the resolving block', async () => {
+        assert.deepEqual(await recoverMotionProposalHash(row(), io({ stateAt: async (b) => (b === 100 ? external : null) })), { outcome: 'found', hash: H1 });
+        const propose = call('council', 'propose', [3, external, 120], '0x' + '33'.repeat(32));
+        assert.deepEqual(await recoverMotionProposalHash(row(), io({ blockCalls: async () => [propose] })), { outcome: 'found', hash: H1 });
+        const seen = [];
+        const r = await recoverMotionProposalHash(row(), io({ stateAt: async (b) => { seen.push(b); return b === 199 ? external : null; } }));
+        assert.deepEqual(r, { outcome: 'found', hash: H1 });
+        assert.deepEqual(seen, [100, 199]);
+    });
+    test('a decoded call that is not an external proposal is a miss; no proposing block is a miss', async () => {
+        const other = call('treasury', 'approveProposal', [5], MOTION);
+        assert.deepEqual(await recoverMotionProposalHash(row(), io({ stateAt: async () => other })), { outcome: 'miss' });
+        assert.deepEqual(await recoverMotionProposalHash(row({ proposedBlock: null, resolvedBlock: null }), io()), { outcome: 'miss' });
+    });
+    test('server.js counts only a miss, stops the pass on unavailable, and skips the pass while the RPC is down', () => {
+        const server = stripComments(readRepo('server.js', import.meta.url));
+        const fn = bodyOf(server, 'backfillMotionProposalHashes');
+        assert.match(fn, /if \(!isRpcReady\(\)\) return;/);
+        assert.match(fn, /if \(r\.outcome === 'unavailable'\) break;/);
+        assert.match(fn, /else if \(r\.outcome === 'miss'\) \{\s*attempts\[row\.id\] = \(attempts\[row\.id\] \|\| 0\) \+ 1;/);
+        assert.equal((fn.match(/attempts\[row\.id\] = /g) || []).length, 1, 'exactly one place increments the tries');
+        assert.match(fn, /if \(!block \|\| !block\.block\) throw new Error/, 'a missing block is unavailable, not an empty body');
+    });
+    test('the external reconcile is not trusted when the referendum read is not', () => {
+        const pass = bodyOf(stripComments(readRepo('server.js', import.meta.url)), 'syncDemocracyPass');
+        assert.match(pass, /const extTrust = refTrust\.trusted \? externalReadTrusted\(\{ currentBlock, highWater: demHighWater \}\) : refTrust;/);
+    });
+    test('motions whose call was never decoded (section NULL) are backfilled; other calls are not', () => {
+        const U = '0x' + 'ab'.repeat(32), T = '0x' + 'cd'.repeat(32);
+        db.createThreadIfMissing({ id: `motion-${U}`, kind: 'motion', refKey: U, title: 'Council Motion' });
+        db.upsertCollectiveMotion('council', { hash: U, motionIndex: 150, proposedBlock: 13400000 });
+        db.createThreadIfMissing({ id: `motion-${T}`, kind: 'motion', refKey: T, title: 'treasury.approveProposal' });
+        db.upsertCollectiveMotion('council', { hash: T, motionIndex: 151, section: 'treasury', method: 'approveProposal', proposedBlock: 13400001 });
+        const ids = db.getMotionThreadsMissingProposalHash().map(m => m.id);
+        assert.ok(ids.includes(`motion-${U}`), 'undecoded motion is a candidate');
+        assert.ok(!ids.includes(`motion-${T}`), 'a decoded non-external call is not');
     });
 });
