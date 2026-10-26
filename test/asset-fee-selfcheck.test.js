@@ -6,9 +6,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
+import { TypeRegistry, GenericExtrinsic, Metadata } from '@polkadot/types';
 import substrateMetadata from '@polkadot/types-support/metadata/static-substrate';
-import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck } from '../lib/tx-extensions.js';
+import polkadotMetadata from '@polkadot/types-support/metadata/static-polkadot';
+import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck, apiSpecVersion, assetFeeCheckIsStale } from '../lib/tx-extensions.js';
 import { registryFromMetadata } from './helpers/extrinsic-builders.js';
 import { stripComments } from './helpers/source.js';
 
@@ -113,7 +114,17 @@ describe('wiring', () => {
         const call = server.indexOf('runAssetFeeSelfCheck(newApi);');
         assert.ok(assign > 0 && call > assign && call - assign < 120, 'check must follow the assignment');
         assert.match(server, /console\.error\(line\)/);
-        assert.match(server, /assetFeeCheck: assetFeeCheck/);
+        assert.match(server, /assetFeeCheck\.specVersion = apiSpecVersion\(api\)/);
+    });
+
+    test('server re-runs the check after a runtime upgrade, from /api/version and /api/health', () => {
+        const cur = server.indexOf('function currentAssetFeeCheck()');
+        assert.ok(cur > 0);
+        assert.match(server.slice(cur, cur + 300), /assetFeeCheckIsStale\(globalApi, assetFeeCheck\)\) runAssetFeeSelfCheck\(globalApi\)/);
+        const version = server.indexOf("app.get('/api/version'");
+        const health = server.indexOf("app.get('/api/health'");
+        assert.match(server.slice(version, version + 2500), /const c = currentAssetFeeCheck\(\);\s*return c \? \{ ok: c\.ok, status: c\.status, specVersion: c\.specVersion \} : null;/);
+        assert.match(server.slice(health, health + 200), /currentAssetFeeCheck\(\)/);
     });
 
     test('browser runs the check from adoptChainApi and uses console.warn on failure', () => {
@@ -123,5 +134,49 @@ describe('wiring', () => {
         assert.match(client.slice(helper, adopt), /checkAssetFeeExtension\(api\.registry\)/);
         assert.match(client.slice(helper, adopt), /else console\.warn\(line\)/);
         assert.match(client.slice(adopt, adopt + 800), /runAssetFeeSelfCheck\(api\)/);
+    });
+});
+
+describe('re-check after a runtime upgrade', () => {
+    const api = (spec) => ({ runtimeVersion: spec === undefined ? undefined : { specVersion: { toString: () => String(spec) } } });
+
+    test('apiSpecVersion reads the codec, null when unknown or junk', () => {
+        assert.equal(apiSpecVersion(api(373)), 373);
+        assert.equal(apiSpecVersion(api(undefined)), null);
+        assert.equal(apiSpecVersion(null), null);
+        assert.equal(apiSpecVersion(api('x')), null);
+        assert.equal(apiSpecVersion({ get runtimeVersion() { throw new Error('not ready'); } }), null);
+    });
+
+    test('stale only when the api moved to another spec', () => {
+        assert.equal(assetFeeCheckIsStale(api(373), { ok: true, specVersion: 373 }), false);
+        assert.equal(assetFeeCheckIsStale(api(392), { ok: true, specVersion: 373 }), true);
+        assert.equal(assetFeeCheckIsStale(api(392), null), false, 'no result yet: the connect path runs it');
+        assert.equal(assetFeeCheckIsStale(api(undefined), { ok: true, specVersion: 373 }), false);
+        assert.equal(assetFeeCheckIsStale(api(392), { ok: true, specVersion: null }), true, 'a result without a spec is re-run once the spec is known');
+    });
+
+    test('the log line names the spec it describes', () => {
+        assert.match(describeAssetFeeCheck({ ok: true, status: 'ok', message: 'm', specVersion: 392 }, 'server').line,
+            /^\[tx-extensions\] server self-check OK \(ok, spec 392\): m$/);
+    });
+
+    test('an in-place metadata swap (what the api does at enactment) is re-checked against the new metadata', () => {
+        // Polkadot relay metadata (plain ChargeTransactionPayment: status absent)
+        // swapped in place for Substrate's (ChargeAssetTxPayment: status ok),
+        // the same registry object, as @polkadot/api 17 does on an upgrade
+        // (api/base/Init.js _subscribeUpdates -> _initRegistry -> setMetadata).
+        const registry = registryFromMetadata(polkadotMetadata);
+        const live = { runtimeVersion: { specVersion: { toString: () => '373' } }, registry };
+        let last = { ...checkAssetFeeExtension(registry), specVersion: apiSpecVersion(live) };
+        assert.equal(last.status, 'absent');
+        live.runtimeVersion = { specVersion: { toString: () => '392' } };
+        registry.setMetadata(new Metadata(registry, substrateMetadata));
+        assert.equal(assetFeeCheckIsStale(live, last), true);
+        last = { ...checkAssetFeeExtension(live.registry), specVersion: apiSpecVersion(live) };
+        assert.equal(last.status, 'ok', last.message);
+        assert.match(last.expected, /^Lookup\d+$/);
+        assert.equal(last.specVersion, 392);
+        assert.equal(assetFeeCheckIsStale(live, last), false);
     });
 });

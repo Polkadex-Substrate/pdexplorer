@@ -6,7 +6,7 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex, blake2AsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat, hexToU8a } from '@polkadot/util';
-import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck } from './lib/tx-extensions.js';
+import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck, apiSpecVersion, assetFeeCheckIsStale } from './lib/tx-extensions.js';
 import { decodeExtrinsicsTolerant, timestampFromExtrinsics, recoverBlockDecode } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
@@ -2747,8 +2747,11 @@ app.get('/api/decode/:block', async (req, res) => {
 });
 
 // Result of the start-up asset-fee extension self-check (lib/tx-extensions.js,
-// checkAssetFeeExtension), re-run on every RPC reconnect. null until the api
-// exists. Surfaced on /api/version so a mismatch is visible without logs.
+// checkAssetFeeExtension), re-run on every RPC reconnect AND whenever the
+// api's runtime spec differs from the one it was computed on: a runtime
+// upgrade (392 enactment) swaps the metadata in place without a reconnect.
+// null until the api exists. Surfaced on /api/version (with the spec it
+// describes) so a mismatch is visible without logs.
 let assetFeeCheck = null;
 function runAssetFeeSelfCheck(api) {
     try {
@@ -2756,9 +2759,16 @@ function runAssetFeeSelfCheck(api) {
     } catch (err) {
         assetFeeCheck = { ok: false, status: 'error', message: String(err && err.message ? err.message : err) };
     }
+    assetFeeCheck.specVersion = apiSpecVersion(api);
     const { level, line } = describeAssetFeeCheck(assetFeeCheck, 'server');
     if (level === 'log') console.log(line);
     else console.error(line);
+}
+// Called from /api/version and /api/health, so the first request after an
+// upgrade re-runs the check and logs its line.
+function currentAssetFeeCheck() {
+    if (globalApi && assetFeeCheckIsStale(globalApi, assetFeeCheck)) runAssetFeeSelfCheck(globalApi);
+    return assetFeeCheck;
 }
 
 // ---- GET /api/version -------------------------------------------------------
@@ -2796,9 +2806,10 @@ app.get('/api/version', (req, res) => {
         // Start-up self-check that the asset-fee extension types come from
         // metadata. ok:false means the build would mis-encode or mis-decode
         // asset-fee extrinsics; see the [tx-extensions] line in the log.
-        assetFeeCheck: assetFeeCheck
-            ? { ok: assetFeeCheck.ok, status: assetFeeCheck.status }
-            : null
+        assetFeeCheck: (() => {
+            const c = currentAssetFeeCheck();
+            return c ? { ok: c.ok, status: c.status, specVersion: c.specVersion } : null;
+        })()
     });
 });
 
@@ -3183,6 +3194,7 @@ app.get('/developers', (req, res) => {
 // look. Deliberately no pid, no URLs, no version — this is public.
 app.get('/api/health', (req, res) => {
     res.set('Cache-Control', 'no-store');
+    try { currentAssetFeeCheck(); } catch (_) { /* the check never blocks health */ }
 
     const chainState = db.getSyncState('chain_index') || {};
     const headState = db.getKv('chain_head_state') || null;
