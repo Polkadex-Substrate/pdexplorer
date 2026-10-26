@@ -139,8 +139,10 @@ after(() => {
 const freshDb = () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-account-links-'));
     created.push(dir);
-    db.initDb(dir, true, { awaitMigrator: false });
+    return db.initDb(dir, true, { awaitMigrator: false });
 };
+// EXPLAIN QUERY PLAN details of one statement on a database handle.
+const planOf = (h, sql, args = []) => h.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args).map(r => r.detail);
 
 describe('the links of a reorged block', () => {
     test('a reorg repair drops the links of the fork events it deletes', () => {
@@ -153,6 +155,14 @@ describe('the links of a reorged block', () => {
         assert.equal(db.deleteForkRows(7, CANON).links, 1);
         assert.equal(db.countEventsByAddress(OTHER), 0);
         assert.equal(db.countEventsByAddress(OWNER_A), 1);
+    });
+
+    test('the cleanup reaches the height through idx_event_accounts_block, never a scan of every link', () => {
+        const h = freshDb();
+        const sql = /DELETE FROM event_accounts WHERE [^']+/.exec(bodyOf(readRepo('db.js', import.meta.url), 'deleteForkRows'))[0];
+        const plan = planOf(h, sql, [7, 7]);
+        assert.ok(plan.some(d => /^SEARCH event_accounts USING (COVERING )?INDEX idx_event_accounts_block \(block=\?\)$/.test(d)), plan.join(' | '));
+        assert.ok(!plan.some(d => /SCAN event_accounts/.test(d)), plan.join(' | '));
     });
 });
 

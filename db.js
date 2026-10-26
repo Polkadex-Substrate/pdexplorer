@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS event_accounts (
   event_hash TEXT NOT NULL,
   PRIMARY KEY (address, block, event_hash)
 ) WITHOUT ROWID;
+-- A reorg repair clears the links of one height; created with the table, so it is never a build on a full one.
+CREATE INDEX IF NOT EXISTS idx_event_accounts_block ON event_accounts(block);
 CREATE TABLE IF NOT EXISTS validator_history (
   era INTEGER,
   address TEXT,
