@@ -443,6 +443,11 @@ const ADDITIVE_MIGRATIONS = [
     // Discussion board: set (epoch ms) when an author edits their own post.
     // NULL means never edited.
     ['discussion_posts', 'edited_at', 'INTEGER DEFAULT NULL'],
+    // Discussion board: the democracy proposal hash a thread is about, the key
+    // that links a motion, an external proposal, a public proposal and a
+    // referendum about the same call (lib/discussion-lifecycle.js). NULL when
+    // unknown or not applicable.
+    ['discussion_threads', 'proposal_hash', 'TEXT DEFAULT NULL'],
 ];
 
 // One-off statements that must run after SCHEMA + the ALTERs, in the same
@@ -1833,6 +1838,7 @@ function mapThread(r) {
     return {
         id: r.id, kind: r.kind, refKey: r.ref_key, title: r.title, status: r.status,
         createdAt: r.created_at, closedAt: r.closed_at, closedReason: r.closed_reason,
+        proposalHash: r.proposal_hash ?? null,
         postCount: db.prepare('SELECT COUNT(*) AS c FROM discussion_posts WHERE thread_id = ?').get(r.id).c
     };
 }
@@ -1864,6 +1870,32 @@ export function closeThread(id, reason) {
 export function reopenThread(id) {
     const r = db.prepare("UPDATE discussion_threads SET status = 'open', closed_at = NULL, closed_reason = NULL WHERE id = ? AND status = 'closed'").run(id);
     return Number(r.changes) > 0;
+}
+// Set once: an index or call hash names one call for good. Returns true when
+// a row changed.
+export function setThreadProposalHash(id, hash) {
+    if (!hash) return false;
+    const r = db.prepare('UPDATE discussion_threads SET proposal_hash = ? WHERE id = ? AND proposal_hash IS NULL').run(String(hash).toLowerCase(), id);
+    return Number(r.changes) > 0;
+}
+export function setThreadTitle(id, title) {
+    if (!title) return false;
+    const r = db.prepare('UPDATE discussion_threads SET title = ? WHERE id = ? AND (title IS NULL OR title != ?)').run(title, id, title);
+    return Number(r.changes) > 0;
+}
+export function getThreadsByProposalHash(hash) {
+    if (!hash) return [];
+    return db.prepare('SELECT * FROM discussion_threads WHERE proposal_hash = ? ORDER BY created_at ASC LIMIT 50').all(String(hash).toLowerCase()).map(mapThread);
+}
+// Council motion threads about an external-proposal call whose proposal hash
+// is not known yet (the motion concluded before the hash was recorded): the
+// backfill in server.js recovers it from the block that proposed the motion.
+export function getMotionThreadsMissingProposalHash() {
+    return db.prepare(`SELECT t.id, t.ref_key AS hash, m.collective, MAX(m.proposed_block) AS proposedBlock,
+            (SELECT MIN(e.block) FROM collective_motion_events e WHERE e.collective = m.collective AND e.hash = t.ref_key) AS resolvedBlock
+        FROM discussion_threads t JOIN collective_motions m ON m.hash = t.ref_key
+        WHERE t.kind = 'motion' AND t.proposal_hash IS NULL AND m.section = 'democracy' AND m.method LIKE 'externalPropose%'
+        GROUP BY t.id, t.ref_key, m.collective`).all();
 }
 // Every ref_key of one kind, open or closed - what the chain must already know
 // about for a read of it to count as current.

@@ -144,7 +144,7 @@ describe('the deploy itself does not lose discussion rows', () => {
     });
 
     test('no code path deletes or drops discussion tables', () => {
-        for (const f of ['db.js', 'server.js', 'lib/discussion-threads.js', 'lib/discussion-edit.js', 'lib/discussion-links.js']) {
+        for (const f of ['db.js', 'server.js', 'lib/discussion-threads.js', 'lib/discussion-edit.js', 'lib/discussion-links.js', 'lib/discussion-lifecycle.js']) {
             if (!fs.existsSync(new URL(`../${f}`, import.meta.url))) continue;
             const src = stripComments(readRepo(f, import.meta.url));
             assert.doesNotMatch(src, /DELETE\s+FROM\s+discussion_|DROP\s+TABLE[^;]*discussion_|UPDATE\s+discussion_posts\s+SET\s+content\s*=\s*''/i, f);
@@ -162,7 +162,8 @@ describe('server.js is wired to the guarded reconcile', () => {
         assert.match(server, /import \{[^}]*reconcileThreads[^}]*\} from '\.\/lib\/discussion-threads\.js'/);
         assert.match(server, /proposalReadTrusted\(/);
         assert.match(server, /motionReadTrusted\(/);
-        assert.match(server, /reconcileThreads\(db, kind, items, \{ trusted: trust\.trusted \}\)/);
+        assert.match(server, /reconcileThreads\(db, kind, items, \{ trusted: trust\.trusted(, closeReason)? \}\)/);
+        assert.match(server, /reconcileReferendumThreads\(db, items, \{ trusted: trust\.trusted \}\)/);
         assert.match(server, /reconcileGovThreads\('proposal'/);
         assert.match(server, /reconcileGovThreads\('motion'/);
         assert.doesNotMatch(server, /if \(motionsTrusted\) reconcile/, 'the motion call must always run so it can create and self-heal');

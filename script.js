@@ -19,6 +19,7 @@ import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
+import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { developersBodies } from './lib/developers-bodies.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
@@ -10871,7 +10872,7 @@ function renderThreadList(threads) {
         defaultSort: { key: 'status', dir: 'asc' },  // 'closed' < 'open' alphabetically, but a stable secondary by title gives a deterministic order
         globalSearch: true,
         summarySuffix: 'threads',
-        emptyMessage: 'No threads yet — one is created automatically when a proposal or motion appears on-chain.',
+        emptyMessage: 'No threads yet. One is created automatically for each public proposal, council motion, external proposal and referendum.',
         // Threads accumulate one-per-on-chain-proposal-or-motion over time;
         // paginate so the page stays usable as governance history grows.
         pagination: { pageSize: 50, showMoreMax: 200 },
@@ -10885,13 +10886,8 @@ function renderThreadList(threads) {
             {
                 key: 'kind', label: 'Kind', searchable: true,
                 sort: (a, b) => String(a.kind || '').localeCompare(String(b.kind || '')),
-                filter: { type: 'select', options: [
-                    { value: 'proposal', label: 'Public Proposal' },
-                    { value: 'motion',   label: 'Council Motion' }
-                ] },
-                format: row => row.kind === 'motion'
-                    ? '<span style="color:var(--text-secondary);">Council Motion</span>'
-                    : '<span style="color:var(--text-secondary);">Public Proposal</span>'
+                filter: { type: 'select', options: kindFilterOptions() },
+                format: row => `<span style="color:var(--text-secondary);">${stakingEscapeHtml(kindLabel(row.kind))}</span>`
             },
             {
                 key: 'status', label: 'Status',
@@ -10969,6 +10965,7 @@ function renderThread(thread, posts) {
                 <h2 style="display:flex;align-items:center;gap:10px;">${stakingEscapeHtml(thread.title || thread.id)} ${badge} ${helpIcon('discussions', 'Posting, editing and linking to comments')}</h2>
                 <a href="/discussions" class="item-link" style="color:var(--text-secondary);font-size:0.8rem;">All discussions</a>
             </div>
+            ${renderLifecycleLinks(thread.links, stakingEscapeHtml)}
             <div class="discussion-posts">${postsHtml}</div>
             ${composer}
         </div>`;
@@ -10984,7 +10981,7 @@ function renderThread(thread, posts) {
     const postBtn = document.getElementById('discuss-post-btn');
     if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id));
     wireEditing(root, { esc: stakingEscapeHtml, fetchFn: (input, init) => fetch(input, init), getSession: getDiscussSession, threadId: thread.id, posts,
-        clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread(d.thread, d.posts || []) });
+        clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread({ links: thread.links, ...d.thread }, d.posts || []) });
     wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
 }
 
@@ -11234,7 +11231,7 @@ function renderDemocracyOverview(d) {
             <div class="wallet-stat"><span>Launch period length</span><strong>${stakingFormatNumber(lp)} blocks</strong></div>
             <div class="wallet-stat"><span>Next referendum launch in</span><strong>~${remDays}d ${remHrs}h &middot; ${stakingFormatNumber(remaining)} blocks</strong></div>
             <div class="wallet-stat"><span>Current block</span><strong>${stakingFormatNumber(d.currentBlock)}</strong></div>
-            <div class="wallet-stat"><span>External proposal</span><strong>${ext ? 'Queued' + (ext.threshold ? ' (' + stakingEscapeHtml(ext.threshold) + ')' : '') : 'None'}</strong></div>
+            <div class="wallet-stat"><span>External proposal</span><strong>${externalSummaryHtml(ext, stakingEscapeHtml)}</strong></div>
         </div>`;
 }
 
@@ -11328,7 +11325,8 @@ function mountDemocracyReferendaTable(refs) {
                 // delegate (wireReferendumVoteModal) opens the vote modal.
                 key: '__vote', label: 'Vote',
                 format: row => democracyView.cell('ref', row, 'vote')
-            }
+            },
+            { key: 'discussion', label: 'Discussion', format: row => referendumDiscussCell(row) }
         ]
     });
 }
