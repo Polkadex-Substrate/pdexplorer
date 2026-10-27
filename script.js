@@ -19,8 +19,14 @@ import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
+import { composerHtml, wireComposer } from './lib/discussion-composer.js';
+import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
+import { isGovDetailRoute, govItemPath, legacyGovRedirect } from './lib/gov-detail.js';
+import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
+import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { developersBodies } from './lib/developers-bodies.js';
+import { ogCardFor, ogImageUrl } from './lib/og-route.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
 // server-rendered DEVELOPERS_HTML in server.js for hard loads and crawlers).
 // Both build their endpoint lists from this one table, so the two documents
@@ -1356,7 +1362,7 @@ async function pollGovernanceLatest() {
             renderGovernanceBanner('referendum', data.latestReferendum);
             if (!firstPoll && (!prev.latestReferendum || data.latestReferendum.refIndex > prev.latestReferendum.refIndex)) {
                 showGovernanceToast('New Polkadex referendum tabled: #' + data.latestReferendum.refIndex,
-                    '/democracy?ref=' + data.latestReferendum.refIndex);
+                    '/democracy/referendum/' + data.latestReferendum.refIndex);
             }
         } else {
             removeGovernanceBanner('referendum');
@@ -1366,7 +1372,7 @@ async function pollGovernanceLatest() {
             renderGovernanceBanner('proposal', data.latestProposal);
             if (!firstPoll && (!prev.latestProposal || data.latestProposal.index > prev.latestProposal.index)) {
                 showGovernanceToast('New public proposal tabled: #' + data.latestProposal.index,
-                    '/democracy?proposal=' + data.latestProposal.index);
+                    '/democracy/proposal/' + data.latestProposal.index);
             }
         } else {
             removeGovernanceBanner('proposal');
@@ -1402,8 +1408,8 @@ function renderGovernanceBanner(kind, payload) {
         ? (payload.isActive ? 'Voting is open' : 'Recently tabled')
         : 'Awaiting seconding';
     const href = kind === 'referendum'
-        ? '/democracy?ref=' + payload.refIndex
-        : '/democracy?proposal=' + payload.index;
+        ? '/democracy/referendum/' + payload.refIndex
+        : '/democracy/proposal/' + payload.index;
     const idx = kind === 'referendum' ? payload.refIndex : payload.index;
 
     const html = `
@@ -3453,6 +3459,8 @@ const ROUTE_SEO = {
                             description: 'Polkadex Council members, runners-up, election term progress, and every council motion — past and present — with proposer, threshold, tally, and the call it dispatches.' },
     'treasury':           { title: 'Treasury Proposals — Polkadex Mainnet Explorer',
                             description: 'Polkadex Treasury balance, lifetime award totals, and every spending proposal — open, approved, or historical. Submit a new proposal directly from your connected wallet.' },
+    'governance-details': { title: 'Governance Item - Polkadex Mainnet Explorer',
+                            description: 'A Polkadex referendum, proposal or council motion: its call, votes, lifecycle and discussion.' },
     'discussions':        { title: 'Governance Discussions — Polkadex Mainnet Explorer',
                             description: 'Off-chain debate threads attached to every Polkadex referendum, council motion, and treasury proposal. Wallet-signature sign-in; no email or password required.' },
     'analytics':          { title: 'Network Analytics — Polkadex Mainnet Explorer',
@@ -3562,10 +3570,18 @@ function updateSeoMeta(mainTarget, { title, description, canonicalPath, noindex 
     setMetaContent('property', 'og:description', finalDesc);
     setMetaContent('property', 'og:url', canonical);
     setMetaContent('property', 'og:type', mainTarget === 'home' ? 'website' : 'article');
+    // Section card, picked from the address bar exactly as nginx picked the
+    // shell for a crawler (lib/og-route.js), so a copied link previews the same.
+    const ogCard = ogCardFor(window.location.pathname);
+    setMetaContent('property', 'og:image', ogImageUrl(ogCard));
+    setMetaContent('property', 'og:image:secure_url', ogImageUrl(ogCard));
+    setMetaContent('property', 'og:image:alt', ogCard.alt);
 
     // Twitter
     setMetaContent('name', 'twitter:title', finalTitle);
     setMetaContent('name', 'twitter:description', finalDesc);
+    setMetaContent('name', 'twitter:image', ogImageUrl(ogCard));
+    setMetaContent('name', 'twitter:image:alt', ogCard.alt);
 
     // Clear any route-scoped JSON-LD by default; routes that own one (e.g.
     // /wallet) re-inject after this call returns.
@@ -4447,8 +4463,11 @@ function stopCouncilPolling() {
 }
 
 function routeTo(target) {
-    stopCouncilPolling(); democracyView.stop();
+    stopCouncilPolling(); democracyView.stop(); govDetailPage.stop();
     if (!target) target = 'home';
+    // /democracy?ref=N and friends (emails, calendar, bookmarks) -> the item's own page.
+    const legacyGov = legacyGovRedirect(target.split(/[?#]/)[0], window.location.search);
+    if (legacyGov) { try { history.replaceState(null, '', '/' + legacyGov); } catch (e) { /* sandboxed */ } target = legacyGov; }
 
     // Strip query string and hash fragment before doing the route lookup. The
     // page sections are matched by `data-page="<route>"` (e.g. "treasury"),
@@ -4506,6 +4525,9 @@ function routeTo(target) {
         mainTarget = 'wallet';
         walletEntryIntent = 'stake';
         canonicalOverride = '/wallet';
+    } else if (isGovDetailRoute(target)) {
+        mainTarget = 'governance-details';   // lib/gov-detail.js: /democracy/referendum/<n>, /council/motion/<hash>, ...
+        detailId = target;
     } else if (target.startsWith('discussions/')) {
         mainTarget = 'discussions';
         detailId = target.substring('discussions/'.length);
@@ -4596,6 +4618,8 @@ function routeTo(target) {
                 initDonatePage();
             } else if (mainTarget === 'discussions') {
                 initDiscussionsPage(detailId);
+            } else if (mainTarget === 'governance-details') {
+                govDetailPage.open(detailId);
             } else if (mainTarget === 'analytics') {
                 fetchAnalyticsData();
             } else if (mainTarget === 'watchlist') {
@@ -6017,43 +6041,17 @@ function renderDevelopersPage() {
     `;
 }
 
-// Open the relevant governance detail modal when arriving at /democracy,
-// /treasury, or /council with a query string identifying a specific item.
-// Called by each governance page's fetch handler AFTER its data is loaded,
-// so the lookup can succeed. returnPage='calendar' means the modal's close
-// button will navigate the user back to /calendar via the existing
-// closeGovernanceDetailModal logic.
-//
-// Supported query params:
-//   /democracy?ref=N        → opens referendum #N
-//   /democracy?proposal=N   → opens public proposal #N
-//   /treasury?proposal=N    → opens treasury proposal #N
-//   /council?motion=N       → opens council motion #N
+// Open the treasury detail modal when arriving at /treasury?proposal=N.
+// Called by the treasury fetch handler AFTER its data is loaded, so the lookup
+// can succeed. (/democracy?ref=N, ?proposal=N and /council?motion=N now
+// redirect to the item's own page: legacyGovRedirect in routeTo.)
 function tryOpenFromQueryString(page) {
     let params;
     try { params = new URLSearchParams(window.location.search || ''); }
     catch (_) { return; }
-
-    if (page === 'democracy' && typeof democracyData === 'object' && democracyData) {
-        const refIdx = params.get('ref');
-        if (refIdx != null && refIdx !== '') {
-            const referenda = Array.isArray(democracyData.referenda) ? democracyData.referenda : [];
-            const row = referenda.find(r => String(r.refIndex) === String(refIdx));
-            if (row) {
-                openGovernanceDetailModal({ kind: 'referendum', row, returnPage: 'history-back' });
-                return;
-            }
-        }
-        const propIdx = params.get('proposal');
-        if (propIdx != null && propIdx !== '') {
-            const props = Array.isArray(democracyData.publicProposals) ? democracyData.publicProposals : [];
-            const row = props.find(p => String(p.index) === String(propIdx));
-            if (row) {
-                openGovernanceDetailModal({ kind: 'public-proposal', row, returnPage: 'history-back' });
-                return;
-            }
-        }
-    } else if (page === 'treasury' && typeof treasuryData === 'object' && treasuryData) {
+    // Democracy and council items have their own pages now (lib/gov-detail.js);
+    // routeTo redirects their old ?ref= / ?proposal= / ?motion= links.
+    if (page === 'treasury' && typeof treasuryData === 'object' && treasuryData) {
         const propIdx = params.get('proposal');
         if (propIdx != null && propIdx !== '') {
             const props = Array.isArray(treasuryData.allProposals) ? treasuryData.allProposals : [];
@@ -6063,50 +6061,7 @@ function tryOpenFromQueryString(page) {
                 return;
             }
         }
-    } else if ((page === 'council' || page === 'council-tc')) {
-        // /council?motion=N (council) and /council?tcmotion=N (technical
-        // committee). Open motions carry `index`, history rows `motionIndex`;
-        // it used to search open motions by motionIndex only, so a link to any
-        // resolved motion (every calendar and email link, in practice) opened
-        // nothing.
-        const key = page === 'council-tc' ? 'technicalCommittee' : 'council';
-        const wanted = params.get(key === 'council' ? 'motion' : 'tcmotion');
-        if (wanted != null && wanted !== '') {
-            const row = findCollectiveMotion(key, wanted);
-            if (row) {
-                if (key === 'technicalCommittee') {
-                    const tabBtn = document.querySelector('.council-page .account-tab[data-tab="council-tc"]');
-                    if (tabBtn) tabBtn.click();
-                }
-                // Consume the parameter: the council page re-fetches every 30s
-                // and calls this again, which would re-open the modal (and
-                // re-click the tab) on every poll while it is open. Same history
-                // entry, so the modal's history-back still leaves the page.
-                try {
-                    params.delete(key === 'council' ? 'motion' : 'tcmotion');
-                    const qs = params.toString();
-                    history.replaceState(history.state, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
-                } catch (_) { /* cosmetic */ }
-                openGovernanceDetailModal({ kind: 'motion', row, returnPage: 'history-back' });
-                return;
-            }
-        }
     }
-}
-
-// One motion of one collective by INDEX, open or resolved, tagged with its
-// collective so the detail modal can title it. Never by hash: two motions can
-// share one.
-function findCollectiveMotion(collectiveKey, index) {
-    const data = collectiveView(collectiveKey).getData();
-    if (!data) return null;
-    const want = String(index);
-    const open = (Array.isArray(data.motions) ? data.motions : []).find(m => String(m.index) === want);
-    const hist = (Array.isArray(data.motionHistory) ? data.motionHistory : []).find(m => String(m.motionIndex) === want);
-    if (!open && !hist) return null;
-    // Prefer the history row's crawled fields (proposer, blocks) and the open
-    // row's live tally when both exist.
-    return { ...(hist || {}), ...(open ? { motionIndex: open.index, ayes: open.ayes ? open.ayes.length : undefined, nays: open.nays ? open.nays.length : undefined, threshold: open.threshold, section: open.section || (hist && hist.section), method: open.method || (hist && hist.method), hash: open.hash, status: (hist && hist.status) || 'proposed' } : {}), __collective: collectiveKey };
 }
 
 // Audit F-015: every string and key MUST be HTML-escaped. This tree renders
@@ -7923,6 +7878,7 @@ function setStoredWallet(addr) {
         else localStorage.removeItem(WALLET_STORAGE_KEY);
     } catch (e) { }
     if (getStoredWallet() !== before) democracyView.restart();   // "You voted" follows the wallet
+    if (getStoredWallet() !== before) govDetailPage.accountChanged();   // and so does an item page's Actions panel
 }
 
 // "Last used" address — a SEPARATE memory that survives `disconnectWallet()`.
@@ -10871,7 +10827,7 @@ function renderThreadList(threads) {
         defaultSort: { key: 'status', dir: 'asc' },  // 'closed' < 'open' alphabetically, but a stable secondary by title gives a deterministic order
         globalSearch: true,
         summarySuffix: 'threads',
-        emptyMessage: 'No threads yet — one is created automatically when a proposal or motion appears on-chain.',
+        emptyMessage: 'No threads yet. One is created automatically for each public proposal, council motion, external proposal and referendum.',
         // Threads accumulate one-per-on-chain-proposal-or-motion over time;
         // paginate so the page stays usable as governance history grows.
         pagination: { pageSize: 50, showMoreMax: 200 },
@@ -10885,13 +10841,8 @@ function renderThreadList(threads) {
             {
                 key: 'kind', label: 'Kind', searchable: true,
                 sort: (a, b) => String(a.kind || '').localeCompare(String(b.kind || '')),
-                filter: { type: 'select', options: [
-                    { value: 'proposal', label: 'Public Proposal' },
-                    { value: 'motion',   label: 'Council Motion' }
-                ] },
-                format: row => row.kind === 'motion'
-                    ? '<span style="color:var(--text-secondary);">Council Motion</span>'
-                    : '<span style="color:var(--text-secondary);">Public Proposal</span>'
+                filter: { type: 'select', options: kindFilterOptions() },
+                format: row => `<span style="color:var(--text-secondary);">${stakingEscapeHtml(kindLabel(row.kind))}</span>`
             },
             {
                 key: 'status', label: 'Status',
@@ -10917,8 +10868,8 @@ function renderThreadList(threads) {
     });
 }
 
-async function fetchDiscussionThread(id, focusLink = false) {
-    const root = document.getElementById('discussions-content');
+// root/opts: the governance item pages embed the same view (opts.embedded).
+async function fetchDiscussionThread(id, focusLink = false, root = document.getElementById('discussions-content'), opts = {}) {
     if (!root) return;
     root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading discussion…</div>';
     try {
@@ -10926,15 +10877,14 @@ async function fetchDiscussionThread(id, focusLink = false) {
         const res = await fetch('/api/discussions/' + encodeURIComponent(id), { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
-        renderThread(data.thread, data.posts || []);
+        renderThread(data.thread, data.posts || [], root, opts);
         if (focusLink) focusLinkedPost(root, readLinkedPostId(window.location.search, window.location.hash), { document });
     } catch (e) {
         root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
     }
 }
 
-function renderThread(thread, posts) {
-    const root = document.getElementById('discussions-content');
+function renderThread(thread, posts, root = document.getElementById('discussions-content'), opts = {}) {
     if (!root) return;
     const session = getDiscussSession();
     const postsHtml = renderPostList(thread, posts, { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime,
@@ -10952,7 +10902,7 @@ function renderThread(thread, posts) {
     } else {
         composer = `<div class="discussion-composer">
             <div style="color:var(--text-secondary);font-size:0.78rem;margin-bottom:8px;">Posting as <span style="color:var(--brand-secondary);">${stakingShortAddress(session.address)}</span></div>
-            <textarea id="discuss-post-input" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000"></textarea>
+            ${composerHtml('<textarea id="discuss-post-input" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000" aria-label="Write a post"></textarea>')}
             <div style="display:flex;justify-content:flex-end;margin-top:8px;">
                 <button id="discuss-post-btn" class="staking-download-btn" style="background:var(--brand-primary);color:#fff;border-color:var(--brand-primary);"><i class='bx bx-send'></i> Post</button>
             </div>
@@ -10966,25 +10916,27 @@ function renderThread(thread, posts) {
     root.innerHTML = `
         <div class="list-container glass">
             <div class="list-header">
-                <h2 style="display:flex;align-items:center;gap:10px;">${stakingEscapeHtml(thread.title || thread.id)} ${badge} ${helpIcon('discussions', 'Posting, editing and linking to comments')}</h2>
-                <a href="/discussions" class="item-link" style="color:var(--text-secondary);font-size:0.8rem;">All discussions</a>
+                <h2 style="display:flex;align-items:center;gap:10px;">${opts.embedded ? 'Discussion' : stakingEscapeHtml(thread.title || thread.id)} ${badge} ${helpIcon('discussions', 'Posting, editing and linking to comments')}</h2>
+                <a href="/discussions${opts.embedded ? '/' + encodeURIComponent(thread.id) : ''}" class="item-link" style="color:var(--text-secondary);font-size:0.8rem;">${opts.embedded ? 'Open as a thread page' : 'All discussions'}</a>
             </div>
+            ${opts.embedded ? '' : renderLifecycleLinks(thread.links, stakingEscapeHtml)}
             <div class="discussion-posts">${postsHtml}</div>
             ${composer}
         </div>`;
 
-    const signinBtn = document.getElementById('discuss-signin-btn');
+    const signinBtn = root.querySelector('#discuss-signin-btn');
     if (signinBtn) signinBtn.addEventListener('click', async () => {
         signinBtn.disabled = true;
         signinBtn.innerHTML = "<i class='bx bx-loader-alt'></i> Check your wallet…";
         const ok = await discussSignIn();
-        if (ok) fetchDiscussionThread(thread.id);
+        if (ok) fetchDiscussionThread(thread.id, false, root, opts);
         else { signinBtn.disabled = false; signinBtn.innerHTML = "<i class='bx bx-log-in'></i> Sign in with wallet"; }
     });
-    const postBtn = document.getElementById('discuss-post-btn');
-    if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id));
+    const postBtn = root.querySelector('#discuss-post-btn');
+    if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id, root, opts));
+    wireComposer(root.querySelector('.discussion-composer .md-composer'));
     wireEditing(root, { esc: stakingEscapeHtml, fetchFn: (input, init) => fetch(input, init), getSession: getDiscussSession, threadId: thread.id, posts,
-        clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread(d.thread, d.posts || []) });
+        clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread({ links: thread.links, ...d.thread }, d.posts || [], root, opts) });
     wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
 }
 
@@ -11033,16 +10985,16 @@ async function discussSignIn() {
     }
 }
 
-async function submitDiscussionPost(threadId) {
-    const input = document.getElementById('discuss-post-input');
-    const errEl = document.getElementById('discuss-post-error');
-    const btn = document.getElementById('discuss-post-btn');
+async function submitDiscussionPost(threadId, root = document.getElementById('discussions-content'), opts = {}) {
+    const input = root && root.querySelector('#discuss-post-input');
+    const errEl = root && root.querySelector('#discuss-post-error');
+    const btn = root && root.querySelector('#discuss-post-btn');
     if (!input) return;
     const content = input.value.trim();
     const showErr = msg => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
     if (!content) { showErr('Write something before posting.'); return; }
     const session = getDiscussSession();
-    if (!session) { showErr('Your session has expired — please sign in again.'); fetchDiscussionThread(threadId); return; }
+    if (!session) { showErr('Your session has expired. Please sign in again.'); fetchDiscussionThread(threadId, false, root, opts); return; }
     if (btn) btn.disabled = true;
     if (errEl) errEl.style.display = 'none';
     try {
@@ -11054,7 +11006,7 @@ async function submitDiscussionPost(threadId) {
         const data = await res.json();
         if (res.status === 401) { localStorage.removeItem(DISCUSS_TOKEN_KEY); throw new Error('Session expired — please sign in again.'); }
         if (!res.ok || data.error) throw new Error(data.error || 'Failed to post.');
-        renderThread(data.thread, data.posts || []);
+        renderThread(data.thread, data.posts || [], root, opts);
     } catch (e) {
         showErr(e.message);
         if (btn) btn.disabled = false;
@@ -11078,6 +11030,19 @@ const democracyView = createDemocracyView({ getApi: () => globalApi, account: ()
     getRest: () => democracyData, tab: () => democracyTab, extra: () => democracyReferendaFilter + '|' + democracyProposalsSortKey,
     root: () => document.getElementById('democracy-content'), renderFull: () => renderDemocracy(), refresh: (o) => fetchDemocracyData(o),
     helpers: { pdex: stakingFormatPDEX, num: stakingFormatNumber, esc: stakingEscapeHtml } });
+// Referendum / proposal / external / motion pages with the item's discussion
+// embedded (lib/gov-detail-view.js); rows on Democracy and Council open them.
+const govDetailPage = createGovDetailPage({ root: () => document.getElementById('governance-details-content'), fetchFn: (u, o) => fetch(u, o),
+    h: { esc: stakingEscapeHtml, num: stakingFormatNumber, pdex: stakingFormatPDEX, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime, helpIcon, connectPrompt: () => buildWalletConnectPrompt() },
+    // The Actions panel runs the Democracy and Council pages' own functions (lib/gov-actions.js).
+    same: (a, b) => isSameAddress(a, b),
+    actions: { vote: (i, side) => openReferendumVoteModal(i, side), second: (i, seconds) => secondPublicProposal(i, seconds),
+        motionVote: async (hash, i, aye, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionVote(hash, i, aye, key); },
+        motionClose: async (hash, i, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionClose(hash, i, key); } },
+    loadThread: (id, el, o) => fetchDiscussionThread(id, o.focus, el, { embedded: true }), setSeo: (o) => updateSeoMeta('governance-details', { canonicalPath: window.location.pathname, ...o }),
+    getApi: () => globalApi, toAddress: toPolkadexAddress, account: () => getStoredWallet(), location: () => window.location, env: { navigator, document },
+    visible: () => document.visibilityState === 'visible', scrollTo: (el) => el && el.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
+wireGovRowClicks(document, { open: (href) => window.open(href, '_blank', 'noopener'), selection: () => (window.getSelection ? window.getSelection() : '') });
 
 // Map raw indexer status strings to a label + accent color for the corner
 // badge on the Democracy/Treasury/Council pages. An unrecognised value
@@ -11141,9 +11106,6 @@ async function fetchDemocracyData(opts = {}) {
         democracyData = data;
         if (quiet) return democracyView.update();
         renderDemocracy();
-        // Deep-link: if we arrived from /calendar with ?ref=N or ?proposal=N,
-        // open the matching detail modal now that data is loaded.
-        tryOpenFromQueryString('democracy');
     } catch (e) {
         if (quiet) return console.warn('[democracy] refresh failed:', e && e.message);
         root.innerHTML = `
@@ -11234,7 +11196,7 @@ function renderDemocracyOverview(d) {
             <div class="wallet-stat"><span>Launch period length</span><strong>${stakingFormatNumber(lp)} blocks</strong></div>
             <div class="wallet-stat"><span>Next referendum launch in</span><strong>~${remDays}d ${remHrs}h &middot; ${stakingFormatNumber(remaining)} blocks</strong></div>
             <div class="wallet-stat"><span>Current block</span><strong>${stakingFormatNumber(d.currentBlock)}</strong></div>
-            <div class="wallet-stat"><span>External proposal</span><strong>${ext ? 'Queued' + (ext.threshold ? ' (' + stakingEscapeHtml(ext.threshold) + ')' : '') : 'None'}</strong></div>
+            <div class="wallet-stat"><span>External proposal</span><strong>${externalSummaryHtml(ext, stakingEscapeHtml)}</strong></div>
         </div>`;
 }
 
@@ -11280,7 +11242,7 @@ function mountDemocracyReferendaTable(refs) {
         NotPassed: 'not-passed'
     };
     makeTable({
-        container: el, rows: filtered,
+        container: el, rows: filtered, rowClass: () => GOV_ROW_CLASS,
         defaultSort: { key: 'refIndex', dir: 'desc' },
         globalSearch: true, summarySuffix: 'referenda',
         emptyMessage: democracyReferendaFilter === 'all'
@@ -11290,9 +11252,8 @@ function mountDemocracyReferendaTable(refs) {
             {
                 key: 'refIndex', label: 'Referendum', searchable: true,
                 sort: (a, b) => (a.refIndex || 0) - (b.refIndex || 0),
-                // Clickable — opens the governance-detail modal with the
-                // referendum's proposal hash + tally + end block.
-                format: row => `<button type="button" class="gov-proposal-link" data-kind="referendum" data-id="${stakingEscapeHtml(String(row.refIndex))}">#${stakingEscapeHtml(String(row.refIndex))}</button>`
+                // The referendum's own page; the whole row follows it (lib/gov-detail-view.js).
+                format: row => govRowLinkHtml(govItemPath('referendum', row.refIndex), '#' + row.refIndex, stakingEscapeHtml)
             },
             {
                 key: 'status', label: 'Status',
@@ -11328,7 +11289,8 @@ function mountDemocracyReferendaTable(refs) {
                 // delegate (wireReferendumVoteModal) opens the vote modal.
                 key: '__vote', label: 'Vote',
                 format: row => democracyView.cell('ref', row, 'vote')
-            }
+            },
+            { key: 'discussion', label: 'Discussion', format: row => referendumDiscussCell(row) }
         ]
     });
 }
@@ -11361,7 +11323,7 @@ function mountDemocracyProposalsTable(props) {
             ? { key: 'seconds', dir: 'desc' }
             : { key: 'deposit', dir: 'desc' };
     makeTable({
-        container: el, rows: props,
+        container: el, rows: props, rowClass: () => GOV_ROW_CLASS,
         defaultSort,
         globalSearch: true, summarySuffix: 'proposals',
         emptyMessage: 'No active public proposals.',
@@ -11369,9 +11331,7 @@ function mountDemocracyProposalsTable(props) {
             {
                 key: 'index', label: 'Proposal', searchable: true,
                 sort: (a, b) => (a.index || 0) - (b.index || 0),
-                // Clickable — opens the governance-detail modal with the
-                // pre-referendum proposal's hash + deposit + seconds count.
-                format: row => `<button type="button" class="gov-proposal-link" data-kind="public-proposal" data-id="${stakingEscapeHtml(String(row.index))}">#${stakingEscapeHtml(String(row.index))}</button>`
+                format: row => govRowLinkHtml(govItemPath('proposal', row.index), '#' + row.index, stakingEscapeHtml)
             },
             {
                 key: 'proposerName', label: 'Proposer', searchable: true,
@@ -11395,7 +11355,7 @@ function mountDemocracyProposalsTable(props) {
             { key: '__second', label: 'Second', format: row => democracyView.cell('prop', row, 'action') },
             {
                 key: 'discussion', label: 'Discussion',
-                format: row => `<a href="/discussions/proposal-${row.index}" class="item-link" style="color:var(--brand-secondary);">Discuss</a>`
+                format: row => `<a href="${govItemPath('proposal', row.index)}#discussion" class="item-link" style="color:var(--brand-secondary);">Discuss</a>`
             }
         ]
     });
@@ -11654,9 +11614,6 @@ async function fetchCouncilData(opts) {
         renderList(runnersUp, 'council-runnersup-list');
         renderList(candidates, 'council-candidates-list');
         renderCouncilMotions(data);
-        // Deep-link: if we arrived from /calendar with ?motion=N, open the
-        // matching motion detail modal now that data is loaded.
-        tryOpenFromQueryString('council');
     } catch (err) {
         console.error('Failed to fetch council data', err);
         const failMsg = '<tr><td colspan="2" style="text-align:center; padding:20px; color: var(--error);">Failed to load council data.</td></tr>';
@@ -11696,7 +11653,6 @@ async function fetchTechnicalCommitteeData(opts) {
             }).join('') : '<tr><td style="text-align:center;padding:20px;">No members</td></tr>';
         }
         renderCollectiveMotions(COLLECTIVE_VIEWS.technicalCommittee, data);
-        tryOpenFromQueryString('council-tc');
     } catch (err) {
         console.error('Failed to fetch technical committee data', err);
         if (list) list.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--error);">Failed to load the technical committee.</td></tr>';
@@ -11904,11 +11860,11 @@ function renderCollectiveMotions(view, data = view.getData()) {
             voters: voterList('Aye voters', m.ayes) + voterList('Nay voters', m.nays),
             actions
         };
-        const html = `<div class="motion-card" data-hash="${stakingEscapeHtml(m.hash)}">
+        const html = `<div class="motion-card ${GOV_ROW_CLASS}" data-hash="${stakingEscapeHtml(m.hash)}">
             <div class="motion-card-head">
                 <div>
                     ${(m.index !== null && m.index !== undefined)
-                        ? `<button type="button" class="gov-proposal-link motion-index" data-kind="motion" data-id="${stakingEscapeHtml(view.key + ':' + m.index)}" title="View motion details">${stakingEscapeHtml(idxLabel)}</button>`
+                        ? `<a href="${stakingEscapeHtml(govItemPath('motion', m.index, view.key))}" class="gov-item-link motion-index" data-gov-row-link="true" title="Open this motion's page">${stakingEscapeHtml(idxLabel)}</a>`
                         : `<span class="motion-index">${stakingEscapeHtml(idxLabel)}</span>`}
                     <span class="motion-title">${stakingEscapeHtml(m.title || view.motionLabel)}</span>
                 </div>
@@ -12001,14 +11957,14 @@ function renderResolvedMotions(resolved, view = COLLECTIVE_VIEWS.council) {
         // opened the wrong one; the index is the motion's real identity.
         const idxLabel = (m.motionIndex === null || m.motionIndex === undefined) ? '—' : ('#' + m.motionIndex);
         const idx = (m.motionIndex !== null && m.motionIndex !== undefined)
-            ? `<button type="button" class="gov-proposal-link" data-kind="motion" data-id="${stakingEscapeHtml(view.key + ':' + m.motionIndex)}">${stakingEscapeHtml(idxLabel)}</button>`
+            ? govRowLinkHtml(govItemPath('motion', m.motionIndex, view.key), idxLabel, stakingEscapeHtml)
             : idxLabel;
         const call = (m.section && m.method) ? `${m.section}.${m.method}` : view.motionLabel;
         const proposer = m.proposer
             ? `<a href="/account/${encodeURIComponent(m.proposer)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(treasuryPartyName(m.proposerName, m.proposer))}</a>`
             : '<span style="color:var(--text-muted);">—</span>';
         const tally = (m.ayes == null && m.nays == null) ? '—' : `${m.ayes || 0} / ${m.nays || 0}`;
-        return `<tr>
+        return `<tr class="${GOV_ROW_CLASS}">
             <td>${idx}</td>
             <td><span class="motion-title" style="font-size:0.82rem;">${stakingEscapeHtml(call)}</span></td>
             <td>${proposer}</td>
@@ -12058,7 +12014,7 @@ function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
     }
     if (!confirm(`Cast a ${approve ? 'AYE' : 'NAY'} vote on ${view.label.toLowerCase()} motion #${idx}?`)) return;
     const pallet = data.collectivePallet;
-    submitSignedTx({
+    return submitSignedTx({
         buildTx: (api) => {
             const tx = api.tx[pallet].vote(hash, idx, approve);
             // Log what we actually encode. When a submission fails at the node
@@ -12085,7 +12041,7 @@ function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
         },
         label: `${view.label} motion #${idx} ${approve ? 'aye' : 'nay'} vote`,
         action: { key: 'council.vote', params: { aye: approve, idx, body: view.label.toLowerCase() } },
-        onStage: motionStage(view, hash, approve ? 'aye' : 'nay'),
+        onStage: fanStage(motionStage(view, hash, approve ? 'aye' : 'nay'), govDetailPage.stage(view.key + ':' + hash, approve ? 'aye' : 'nay')),
         onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
     });
 }
@@ -12121,11 +12077,11 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
     if (!confirm(`Close ${view.label.toLowerCase()} motion #${idx}?\n\nThis finalizes the vote and, if it passed, dispatches the proposed call.`)) return;
     const pallet = data.collectivePallet;
     const weightBound = { refTime: motion.weightRefTime || '10000000000', proofSize: motion.weightProofSize || '500000' };
-    submitSignedTx({
+    return submitSignedTx({
         buildTx: (api) => api.tx[pallet].close(hash, idx, weightBound, motion.lengthBound || 0),
         label: `${view.label} motion #${idx} close`,
         action: { key: 'council.close', params: { idx, method: motion.method } },
-        onStage: motionStage(view, hash, 'close'),
+        onStage: fanStage(motionStage(view, hash, 'close'), govDetailPage.stage(view.key + ':' + hash, 'close')),
         onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
     });
 }
@@ -12136,6 +12092,14 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
 // waiting (never included in time) and resent (Retracted) clear the chip and
 // re-enable the buttons; only a real failure leaves an error on the card.
 const MOTION_STAGE_CLEARS = new Set(['cancelled', 'stalled', 'unconfirmed', 'waiting', 'resent']);
+// A governance item page votes or closes: the seat check and the motion lookup
+// run on a fresh read, not on the snapshot the Council page loaded earlier.
+async function ensureCollectiveData(key) {
+    const view = collectiveView(key);
+    if (await refreshCollectiveForSubmit(view)) return true;
+    showTxNotice(`Could not read the current ${view.label.toLowerCase()} state, so nothing was submitted. Try again in a moment.`);
+    return false;
+}
 function motionStage(view, hash, kind) {
     return (stage, m) => {
         const key = view.key + ':' + hash;
@@ -13114,10 +13078,6 @@ function formatGovAccountLink(address, displayName) {
     const label = (displayName && displayName !== 'Unknown') ? displayName : stakingShortAddress(address);
     return `<a href="/account/${encodeURIComponent(address)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(label)}</a>`;
 }
-function formatGovHash(hash, pending) {
-    if (!hash) return `<span style="color:var(--text-muted);">${pending ? 'not indexed yet' : '&mdash;'}</span>`;
-    return `<span class="address-cell" style="word-break:break-all;color:var(--brand-secondary);">${stakingEscapeHtml(hash)}</span>`;
-}
 
 // Generic 2-column row used inside the detail body so every kind has the same
 // look without re-implementing the styling at each site.
@@ -13166,67 +13126,6 @@ function renderTreasuryDetail(row) {
         ${proposeActions}`;
 }
 
-function renderMotionDetail(row) {
-    // Motions carry a real call hash (the SCALE-encoded extrinsic the council
-    // is voting on). Display it prominently as the "Proposal Hash".
-    const idxLabel = (row.motionIndex === null || row.motionIndex === undefined) ? '' : ` #${row.motionIndex}`;
-    const tally = (row.ayes == null && row.nays == null)
-        ? '<span style="color:var(--text-muted);">—</span>'
-        : `${row.ayes || 0} aye / ${row.nays || 0} nay`;
-    const isTc = row.__collective === 'technicalCommittee';
-    const bodyLabel = isTc ? 'Technical Committee Motion' : 'Council Motion';
-    const callLabel = (row.section && row.method) ? `${row.section}.${row.method}` : bodyLabel;
-    const statusBadge = (typeof resolvedMotionBadge === 'function' && row.status && row.status !== 'proposed')
-        ? resolvedMotionBadge(row.status)
-        : `<span class="reward-badge neutral">${stakingEscapeHtml(row.status || 'Open')}</span>`;
-    return `<h2 style="margin:0 0 8px 0;font-size:1.4rem;">${bodyLabel}${idxLabel}</h2>
-        <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
-            ${isTc ? 'Technical committee' : 'Council'} vote on a privileged on-chain call. The proposal hash identifies the underlying call (the same call can be proposed again as a new motion); the resolved block is where ${isTc ? 'the committee' : 'the council'} finalized the vote.
-        </div>
-        ${govDetailRow('Status', statusBadge)}
-        ${govDetailRow('Call', `<code style="font-size:0.85rem;">${stakingEscapeHtml(callLabel)}</code>`)}
-        ${govDetailRow('Proposal hash', formatGovHash(row.hash))}
-        ${govDetailRow('Proposer', formatGovAccountLink(row.proposer, row.proposerName))}
-        ${govDetailRow('Threshold', row.threshold == null ? '<span style="color:var(--text-muted);">—</span>' : String(row.threshold))}
-        ${govDetailRow('Tally', tally)}
-        ${govDetailRow('Proposed at block', formatGovBlockLink(row.proposedBlock))}
-        ${govDetailRow('Proposed at', formatGovTime(row.proposedAt))}
-        ${govDetailRow('Resolved at block', formatGovBlockLink(row.resolvedBlock))}
-        ${govDetailRow('Resolved at', formatGovTime(row.resolvedAt))}`;
-}
-
-function renderReferendumDetail(row) {
-    // Referenda also carry a proposal hash (the call to dispatch on enact).
-    const heading = `Referendum #${stakingEscapeHtml(String(row.refIndex))}`;
-    const tally = row.tallyKnown
-        ? `${stakingFormatPDEX(row.ayes)} aye PDEX / ${stakingFormatPDEX(row.nays)} nay PDEX`
-        : '<span style="color:var(--text-muted);">tally not indexed</span>';
-    return `<h2 style="margin:0 0 8px 0;font-size:1.4rem;">${heading}</h2>
-        <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
-            Public referendum on a runtime call. The proposal hash is the SCALE-encoded extrinsic the chain will dispatch if the referendum passes.
-        </div>
-        ${govDetailRow('Status', democracyStatusBadge(row.status))}
-        ${govDetailRow('Proposal hash', formatGovHash(row.proposal, row.proposalPending))}
-        ${govDetailRow('Tally', tally)}
-        ${govDetailRow('Turnout', row.tallyKnown ? stakingFormatPDEX(row.turnout) + ' PDEX' : '<span style="color:var(--text-muted);">—</span>')}
-        ${govDetailRow('Threshold', row.threshold ? `<code style="font-size:0.82rem;">${stakingEscapeHtml(row.threshold)}</code>` : '<span style="color:var(--text-muted);">—</span>')}
-        ${govDetailRow('End block', formatGovBlockLink(row.endBlock))}`;
-}
-
-function renderPublicProposalDetail(row) {
-    // Active proposals waiting to be tabled — pre-referendum stage. They have
-    // an index, deposit, seconds count, and a proposal hash.
-    const heading = `Public Proposal #${stakingEscapeHtml(String(row.index))}`;
-    return `<h2 style="margin:0 0 8px 0;font-size:1.4rem;">${heading}</h2>
-        <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
-            A public proposal pending tabling to a referendum. Anyone can "second" it to push it up the queue.
-        </div>
-        ${govDetailRow('Proposal hash', formatGovHash(row.proposal, row.proposalPending))}
-        ${govDetailRow('Proposer', formatGovAccountLink(row.proposer, row.proposerName))}
-        ${govDetailRow('Deposit', row.deposit == null ? '<span style="color:var(--text-muted);">—</span>' : stakingFormatPDEX(row.deposit) + ' PDEX')}
-        ${govDetailRow('Seconds', row.seconds == null ? '<span style="color:var(--text-muted);">—</span>' : stakingFormatNumber(row.seconds))}`;
-}
-
 function openGovernanceDetailModal({ kind, row, returnPage, returnTab }) {
     const modal = document.getElementById('governance-detail-modal');
     const content = document.getElementById('governance-detail-content');
@@ -13239,9 +13138,6 @@ function openGovernanceDetailModal({ kind, row, returnPage, returnTab }) {
     const renderBody = () => {
         let body = '';
         if (kind === 'treasury')              body = renderTreasuryDetail(row);
-        else if (kind === 'motion')           body = renderMotionDetail(row);
-        else if (kind === 'referendum')       body = renderReferendumDetail(row);
-        else if (kind === 'public-proposal')  body = renderPublicProposalDetail(row);
         else body = '<div style="color:var(--text-muted);">Unknown proposal kind.</div>';
         content.innerHTML = body;
 
@@ -13279,12 +13175,6 @@ function closeGovernanceDetailModal({ restorePage = true } = {}) {
     if (state.returnPage === 'treasury' && state.returnTab && typeof renderTreasury === 'function') {
         treasuryTab = state.returnTab;
         renderTreasury();
-    } else if (state.returnPage === 'democracy' && state.returnTab && typeof renderDemocracy === 'function') {
-        democracyTab = state.returnTab;
-        renderDemocracy();
-    } else if (state.returnPage === 'council' && state.returnTab) {
-        const tabBtn = document.querySelector(`.council-page .account-tab[data-tab="${state.returnTab}"]`);
-        if (tabBtn) tabBtn.click();
     } else if (state.returnPage === 'history-back') {
         // Deep-link open (banner CTA, calendar click, shared URL). We don't
         // know where the user came from at registration time — but the
@@ -13417,7 +13307,7 @@ async function submitReferendumVote() {
         onError: showErr,
         // The row shows the stage; In block asks for a fresh copy, and the
         // live feed has the new tally and your vote meanwhile.
-        onStage: democracyView.stage('ref:' + refIndex, aye ? 'aye' : 'nay'),
+        onStage: fanStage(democracyView.stage('ref:' + refIndex, aye ? 'aye' : 'nay'), govDetailPage.stage('ref:' + refIndex, aye ? 'aye' : 'nay')),
         onSuccess: closeReferendumVoteModal
     });
 }
@@ -13458,12 +13348,17 @@ async function submitReferendumVote() {
     document.addEventListener('click', e => {
         const b = e.target && e.target.closest ? e.target.closest('.democracy-second-btn') : null;
         if (!b || b.disabled || !/^\d+$/.test(b.getAttribute('data-prop-index') || '')) return;
-        const idx = Number(b.getAttribute('data-prop-index')), seconds = Number(b.getAttribute('data-seconds')) || 0;
-        if (!confirm(`Second public proposal #${idx}? This locks a deposit equal to the proposer's until the proposal is tabled.`)) return;
-        submitSignedTx({ buildTx: api => buildSecondTx(api, idx, seconds), label: `Second public proposal #${idx}`,
-            action: { key: 'democracy.second', params: { n: idx } }, onStage: democracyView.stage('prop:' + idx, 'second') });
+        secondPublicProposal(Number(b.getAttribute('data-prop-index')), Number(b.getAttribute('data-seconds')) || 0);
     });
 })();
+
+// Second a public proposal: the Public Proposals tab and the proposal's own page.
+function secondPublicProposal(idx, seconds) {
+    if (!/^\d+$/.test(String(idx))) return showTxNotice('Invalid proposal index.');   // F-118: Number('') is 0
+    if (!confirm(`Second public proposal #${idx}? This locks a deposit equal to the proposer's until the proposal is tabled.`)) return;
+    return submitSignedTx({ buildTx: api => buildSecondTx(api, idx, seconds), label: `Second public proposal #${idx}`,
+        action: { key: 'democracy.second', params: { n: idx } }, onStage: fanStage(democracyView.stage('prop:' + idx, 'second'), govDetailPage.stage('prop:' + idx, 'second')) });
+}
 
 (function wireGovernanceDetailModal() {
     const modal = document.getElementById('governance-detail-modal');
@@ -13510,31 +13405,6 @@ async function submitReferendumVote() {
             row = all.find(p => String(p.id) === String(id));
             returnPage = 'treasury';
             returnTab = treasuryTab;
-        } else if (kind === 'motion') {
-            // "<collective>:<index>" since Oct 2026. A bare hash (an old link
-            // still rendered somewhere) falls back to the council, newest match.
-            const sep = id.indexOf(':');
-            if (sep > 0) {
-                row = findCollectiveMotion(id.slice(0, sep), id.slice(sep + 1));
-            } else if (councilData) {
-                const open = Array.isArray(councilData.motions) ? councilData.motions : [];
-                const history = Array.isArray(councilData.motionHistory) ? councilData.motionHistory : [];
-                const hit = open.find(m => m.hash === id) || history.find(m => m.hash === id);
-                row = hit ? { ...hit, __collective: 'council' } : null;
-            }
-            returnPage = 'council';
-            const activeTab = document.querySelector('.council-page .account-tab.active');
-            returnTab = activeTab ? activeTab.getAttribute('data-tab') : null;
-        } else if (kind === 'referendum' && democracyData) {
-            const refs = (democracyView.data() || democracyData).referenda || [];   // live rows included
-            row = refs.find(r => String(r.refIndex) === String(id));
-            returnPage = 'democracy';
-            returnTab = democracyTab;
-        } else if (kind === 'public-proposal' && democracyData) {
-            const props = (democracyView.data() || democracyData).publicProposals || [];
-            row = props.find(p => String(p.index) === String(id));
-            returnPage = 'democracy';
-            returnTab = democracyTab;
         }
         if (!row) return;
         openGovernanceDetailModal({ kind, row, returnPage, returnTab });

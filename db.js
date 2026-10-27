@@ -455,6 +455,11 @@ const ADDITIVE_MIGRATIONS = [
     // Discussion board: set (epoch ms) when an author edits their own post.
     // NULL means never edited.
     ['discussion_posts', 'edited_at', 'INTEGER DEFAULT NULL'],
+    // Discussion board: the democracy proposal hash a thread is about, the key
+    // that links a motion, an external proposal, a public proposal and a
+    // referendum about the same call (lib/discussion-lifecycle.js). NULL when
+    // unknown or not applicable.
+    ['discussion_threads', 'proposal_hash', 'TEXT DEFAULT NULL'],
 ];
 
 // One-off statements that must run after SCHEMA + the ALTERs, in the same
@@ -1887,6 +1892,26 @@ export function upsertDemocracyReferendum(r) {
 export function getDemocracyReferenda() {
     return db.prepare('SELECT ref_index AS refIndex, status, end_block AS endBlock, ayes, nays, turnout, tally_known AS tallyKnown, proposal, threshold FROM democracy_referenda ORDER BY ref_index DESC').all();
 }
+export function getDemocracyReferendum(index) {
+    return db.prepare('SELECT ref_index AS refIndex, status, end_block AS endBlock, ayes, nays, turnout, tally_known AS tallyKnown, proposal, threshold FROM democracy_referenda WHERE ref_index = ?').get(Number(index)) || null;
+}
+// A referendum's enactment at one block, as the event indexer saw it: the
+// scheduler dispatching (current democracy) or democracy.Executed (older).
+// Uses the block index; false when that block's events are not indexed.
+export function hasGovEnactmentEvent(block) {
+    return !!db.prepare(`SELECT 1 FROM events WHERE block = ? AND ((section = 'democracy' AND method = 'Executed')
+        OR (section = 'scheduler' AND method = 'Dispatched')) LIMIT 1`).get(Number(block));
+}
+// The same events with their payload, so a caller can tell WHICH task ran:
+// any scheduler.Dispatched at that block proves nothing about one referendum.
+export function getGovEnactmentEvents(block) {
+    return db.prepare(`SELECT section, method, data FROM events WHERE block = ? AND ((section = 'democracy' AND method = 'Executed')
+        OR (section = 'scheduler' AND method = 'Dispatched'))`).all(Number(block)).map(r => {
+        let data = null;
+        try { data = JSON.parse(r.data); } catch (_) { /* keep null */ }
+        return { section: r.section, method: r.method, data };
+    });
+}
 export function countDemocracyReferenda() {
     return db.prepare('SELECT COUNT(*) AS c FROM democracy_referenda').get().c;
 }
@@ -1897,6 +1922,7 @@ function mapThread(r) {
     return {
         id: r.id, kind: r.kind, refKey: r.ref_key, title: r.title, status: r.status,
         createdAt: r.created_at, closedAt: r.closed_at, closedReason: r.closed_reason,
+        proposalHash: r.proposal_hash ?? null,
         postCount: db.prepare('SELECT COUNT(*) AS c FROM discussion_posts WHERE thread_id = ?').get(r.id).c
     };
 }
@@ -1928,6 +1954,35 @@ export function closeThread(id, reason) {
 export function reopenThread(id) {
     const r = db.prepare("UPDATE discussion_threads SET status = 'open', closed_at = NULL, closed_reason = NULL WHERE id = ? AND status = 'closed'").run(id);
     return Number(r.changes) > 0;
+}
+// Set once: an index or call hash names one call for good. Returns true when
+// a row changed.
+export function setThreadProposalHash(id, hash) {
+    if (!hash) return false;
+    const r = db.prepare('UPDATE discussion_threads SET proposal_hash = ? WHERE id = ? AND proposal_hash IS NULL').run(String(hash).toLowerCase(), id);
+    return Number(r.changes) > 0;
+}
+export function setThreadTitle(id, title) {
+    if (!title) return false;
+    const r = db.prepare('UPDATE discussion_threads SET title = ? WHERE id = ? AND (title IS NULL OR title != ?)').run(title, id, title);
+    return Number(r.changes) > 0;
+}
+export function getThreadsByProposalHash(hash) {
+    if (!hash) return [];
+    return db.prepare('SELECT * FROM discussion_threads WHERE proposal_hash = ? ORDER BY created_at ASC LIMIT 50').all(String(hash).toLowerCase()).map(mapThread);
+}
+// Council motion threads about an external-proposal call whose proposal hash
+// is not known yet (the motion concluded before the hash was recorded): the
+// backfill in server.js recovers it from the block that proposed the motion.
+// A motion whose call was never decoded (section NULL) is included too: the
+// backfill reads its call and isExternalProposeCall decides.
+export function getMotionThreadsMissingProposalHash() {
+    return db.prepare(`SELECT t.id, t.ref_key AS hash, m.collective, MAX(m.proposed_block) AS proposedBlock,
+            (SELECT MIN(e.block) FROM collective_motion_events e WHERE e.collective = m.collective AND e.hash = t.ref_key) AS resolvedBlock
+        FROM discussion_threads t JOIN collective_motions m ON m.hash = t.ref_key
+        WHERE t.kind = 'motion' AND t.proposal_hash IS NULL
+            AND ((m.section = 'democracy' AND m.method LIKE 'externalPropose%') OR m.section IS NULL)
+        GROUP BY t.id, t.ref_key, m.collective`).all();
 }
 // Every ref_key of one kind, open or closed - what the chain must already know
 // about for a read of it to count as current.
@@ -2241,12 +2296,28 @@ export function insertCollectiveMotionEvent(collective, e) {
 // Every motion of one collective, newest first, with status / tally / resolved
 // block attributed from the event table. Same shape the API has always served.
 export function getCollectiveMotions(collective) {
+    return collectiveMotionRows(collective, null);
+}
+// One hash's motions (every proposal of that call), same shape and the same
+// attribution as getCollectiveMotions, without loading the whole collective.
+// Events are attributed per hash, so the result equals that hash's slice of the
+// full list.
+export function getCollectiveMotionsByHash(collective, hash) {
+    return collectiveMotionRows(collective, String(hash).toLowerCase());
+}
+// The call hash of the motion with this index, or null.
+export function getCollectiveMotionHashByIndex(collective, motionIndex) {
+    const r = db.prepare('SELECT hash FROM collective_motions WHERE collective = ? AND motion_index = ? LIMIT 1').get(collective, Number(motionIndex));
+    return r ? String(r.hash) : null;
+}
+function collectiveMotionRows(collective, lowerHash) {
+    const byHash = lowerHash !== null;
     const motions = db.prepare(`SELECT motion_index AS motionIndex, hash, proposer, proposer_name AS proposerName,
             section, method, threshold, proposed_block AS proposedBlock, proposed_event_index AS proposedEventIndex,
             proposed_at AS proposedAt, live_ayes AS liveAyes, live_nays AS liveNays, left_storage_at AS leftStorageAt
-        FROM collective_motions WHERE collective = ?`).all(collective).map(r => ({ ...r }));
+        FROM collective_motions WHERE collective = ?${byHash ? ' AND LOWER(hash) = ?' : ''}`).all(...(byHash ? [collective, lowerHash] : [collective])).map(r => ({ ...r }));
     const events = db.prepare(`SELECT hash, block, event_index AS eventIndex, kind, ayes, nays, at
-        FROM collective_motion_events WHERE collective = ?`).all(collective).map(r => ({ ...r }));
+        FROM collective_motion_events WHERE collective = ?${byHash ? ' AND LOWER(hash) = ?' : ''}`).all(...(byHash ? [collective, lowerHash] : [collective])).map(r => ({ ...r }));
     return attributeMotionEvents(motions, events)
         .sort((a, b) => Number(b.motionIndex) - Number(a.motionIndex))
         .map(m => ({

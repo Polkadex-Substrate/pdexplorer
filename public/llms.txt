@@ -204,8 +204,14 @@ is CoinGecko (keyless public API).
 - GET /api/democracy — referenda and public proposals
 - GET /api/governance/latest — most-recent OPEN referendum / proposal
 - GET /api/governance/calendar — unified governance timeline
+- GET /api/democracy/referendum/:index - one referendum (page: /democracy/referendum/<n>): status, decoded call, tally, timeline, thread
+- GET /api/democracy/proposal/:index - one public proposal (page: /democracy/proposal/<n>)
+- GET /api/democracy/external/:hash - one external proposal by proposal hash (page: /democracy/external/<hash>)
+- GET /api/council/motion/:id - one council motion by hash or index (page: /council/motion/<n>)
+- GET /api/technical-committee/motion/:id - one Technical Committee motion (page: /council/tc-motion/<n>)
 - GET /api/discussions — discussion threads on governance items
-- GET /api/discussions/:id - single thread with posts (each post carries editedAt)
+- GET /api/discussions/:id - single thread with posts (each post carries editedAt;
+  content is the raw text as written, which may contain Markdown)
 
 ## Public JSON API — email alerts
 
@@ -227,7 +233,8 @@ Wallet-signed nonce login; sessions are 192-bit random tokens with a 7-day TTL.
   the server looks up the open challenge for that address. Returns
   { token, expiresIn } where expiresIn is milliseconds (7 days).
 - POST /api/auth/logout
-- POST /api/discussions/:id/posts — post to a discussion (requires session)
+- POST /api/discussions/:id/posts - post to a discussion (requires session);
+  content may use a Markdown subset, max 4000 characters of raw text
 - PATCH /api/discussions/:id/posts/:postId - edit your own post in an open thread (requires session)
 
 ## Schema: GET /api/network-info

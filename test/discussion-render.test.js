@@ -14,6 +14,8 @@ import assert from 'node:assert/strict';
 import { decodeAddress } from '@polkadot/util-crypto';
 import * as edit from '../lib/discussion-edit.js';
 import * as links from '../lib/discussion-links.js';
+import * as lifecycle from '../lib/discussion-lifecycle.js';
+import * as composer from '../lib/discussion-composer.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 
@@ -38,7 +40,7 @@ function payload({ posts = true, postCount = 2 } = {}) {
 }
 
 // Lift the thread view out of script.js and run it with a fake page.
-async function openThread(body, signedInAs) {
+async function openThread(body, signedInAs, viewOpts = {}) {
     const names = ['fetchDiscussionThread', 'renderThread', 'isSameAddress', 'getDiscussSession',
         'stakingShortAddress', 'formatLocalDateTime', 'helpIcon', 'stakingEscapeHtml'];
     const code = names.map(n => (n === 'fetchDiscussionThread' ? 'async ' : '') + bodyOf(SCRIPT, n)).join('\n');
@@ -47,7 +49,7 @@ async function openThread(body, signedInAs) {
     const fetches = [];
     const errors = [];
     const env = {
-        ...edit, ...links, canEditPost: edit.canEdit,
+        ...edit, ...links, ...lifecycle, ...composer, canEditPost: edit.canEdit,
         document: { getElementById: id => (id === 'discussions-content' ? root : null) },
         window: { location: { search: '', hash: '', origin: 'https://explorer.polkadex.ee' } },
         localStorage: { getItem: k => store.get(k) ?? null, removeItem: k => store.delete(k) },
@@ -60,7 +62,7 @@ async function openThread(body, signedInAs) {
     const run = new Function(...Object.keys(env), code + '\nreturn fetchDiscussionThread;')(...Object.values(env));
     const realError = console.error;   // the lib logs through the global console
     console.error = (...a) => errors.push(a.join(' '));
-    try { await run(TID, true); } finally { console.error = realError; }
+    try { await run(TID, true, undefined, viewOpts); } finally { console.error = realError; }
     const html = root.innerHTML;
     return {
         html, fetches, errors,
@@ -132,4 +134,34 @@ describe('never "No posts yet" for a thread that has posts', () => {
         const html = edit.renderPostList({ id: TID, postCount: 1 }, { 0: {} }, { esc: escapeHtml }, { error() {} });
         assert.match(html, /1 post that could not be loaded/);
     });
+});
+
+// Markdown (lib/discussion-markdown.js) on the thread page and on the boards
+// embedded in governance item pages, which run the same fetchDiscussionThread
+// with { embedded: true }.
+describe('posts render as Markdown on every board', () => {
+    const MD = '## Plan\n**Vote aye** - see [block 5](/blocks/5) and https://example.com/doc.\n\n- one\n- two\n\n<script>alert(1)</script> [x](javascript:alert(1))';
+    const body = () => {
+        const b = payload();
+        b.posts[0].content = MD;
+        return b;
+    };
+    for (const [name, viewOpts] of [['thread page', {}], ['embedded governance board', { embedded: true }]]) {
+        test(name, async () => {
+            const r = await openThread(body(), AUTHOR, viewOpts);
+            assert.equal(r.posts, 2);
+            assert.ok(r.html.includes('<h4 class="md-h">Plan</h4>'));
+            assert.ok(r.html.includes('<strong>Vote aye</strong>'));
+            assert.ok(r.html.includes('<a href="/blocks/5" class="md-link">block 5</a>'), 'internal link, routed in place');
+            assert.match(r.html, /<a href="https:\/\/example\.com\/doc" class="md-link md-ext" target="_blank" rel="nofollow noopener noreferrer ugc" title="Opens example\.com in a new tab">/);
+            assert.ok(r.html.includes('<ul><li>one</li><li>two</li></ul>'));
+            assert.ok(!r.html.includes('<script>'));
+            assert.ok(r.html.includes('[x](javascript:alert(1))'), 'the unsafe link stays text');
+            // The signed-in composer carries the toolbar, the Write / Preview tabs and the help link.
+            assert.ok(r.html.includes('class="md-composer"'));
+            assert.ok(r.html.includes('data-md-format="bold"') && r.html.includes('data-md-mode="preview"'));
+            assert.ok(r.html.includes('>Markdown supported</a>'));
+            if (viewOpts.embedded) assert.match(r.html, /<h2[^>]*>Discussion /);
+        });
+    }
 });
