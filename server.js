@@ -26,7 +26,7 @@ import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
 import { applyEdit } from './lib/discussion-edit.js';
 import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater, reconcileReferendumThreads, referendumReadTrusted,
-    externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash } from './lib/discussion-threads.js';
+    externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash, linkMotionThreadsByCallHash } from './lib/discussion-threads.js';
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
@@ -6293,29 +6293,52 @@ async function describeProposalCall(bounded, hash) {
 
 // A council motion that queued an external proposal and concluded before its
 // proposal hash was recorded (every such motion before 2026-10-26, motion #140
-// among them): recover its call from the block that proposed it, state first,
-// then the block body, so the motion thread can link forward. At most three
-// tries per thread; the attempts live in kv so restarts do not reset them.
-// Only a definite miss is a try (lib/discussion-threads.js
-// recoverMotionProposalHash): an RPC outage or a failed read leaves the
-// attempts untouched and stops this pass.
+// among them) gets it on the democracy tick, from what that tick reads anyway:
+// the motion's call is democracy.externalPropose*(B) with B the same bounded
+// call the external proposal or the referendum carries, so its hash is
+// recomputed from B (lib/discussion-threads.js linkMotionThreadsByCallHash).
+// No block history and no archive node, and a Technical Committee fast-track
+// that skipped the external thread does not matter. The operator tool
+// tools/link-motion-threads.mjs runs the same code (dry run first).
+function linkMotionThreadsFromDemocracy(items) {
+    const d = globalApi && globalApi.tx && globalApi.tx.democracy;
+    if (!d || !items.length) return;
+    const makeCall = (method, bounded) => (typeof d[method] === 'function' ? globalApi.tx.democracy[method](bounded).method : null);
+    for (const r of linkMotionThreadsByCallHash(db, items, makeCall)) {
+        if (r.status === 'linked') console.log(`Discussion threads: ${r.id} linked to ${r.source || 'democracy proposal'} by its call hash (${r.proposalHash}).`);
+        else if (r.status === 'conflict') console.warn(`Discussion threads: ${r.id} already holds ${r.current}; ${r.source || 'a democracy item'} says ${r.proposalHash}. Left as it is.`);
+    }
+}
+
+// The second path, for a motion whose referendum is no longer readable live
+// (finished before this ran): recover its call from the block that proposed
+// it, state first, then the block body, then the state before the block that
+// resolved it. At most three tries per thread; the attempts live in kv so
+// restarts do not reset them. Only a definite miss is a try
+// (lib/discussion-threads.js recoverMotionProposalHash): a read that could not
+// be done (RPC down, state pruned on the origin the load balancer picked, no
+// block known yet) leaves the attempts untouched. Rows are taken least
+// recently tried first, so one unreadable row cannot hold up the rest.
 const MOTION_HASH_ATTEMPTS_KEY = 'discussion:motion-hash-attempts';
+const MOTION_HASH_TRIED_KEY = 'discussion:motion-hash-tried';
 async function backfillMotionProposalHashes() {
     if (!isRpcReady()) return;
     let rows = [];
     try { rows = db.getMotionThreadsMissingProposalHash(); } catch (e) { return; }
     const attempts = db.getKv(MOTION_HASH_ATTEMPTS_KEY) || {};
-    const todo = rows.filter(r => (attempts[r.id] || 0) < 3).slice(0, 5);
+    const tried = db.getKv(MOTION_HASH_TRIED_KEY) || {};
+    const todo = rows.filter(r => (attempts[r.id] || 0) < 3)
+        .sort((a, b) => (tried[a.id] || 0) - (tried[b.id] || 0))
+        .slice(0, 5);
     if (!todo.length) return;
     let changed = false;
     for (const row of todo) {
+        // null only when the state answered None; a failed read throws.
         const stateAt = async (blockNumber) => {
             const q = globalApi.query[row.collective];
-            if (!q || !q.proposalOf || !(Number(blockNumber) > 0)) return null;
-            try {
-                const opt = await q.proposalOf.at(await getBlockHashCached(Number(blockNumber)), row.hash);
-                return opt && opt.isSome ? opt.unwrap() : null;
-            } catch (e) { return null; }   // state pruned (not an archive node)
+            if (!q || !q.proposalOf || !(Number(blockNumber) > 0)) throw new Error('proposalOf not readable');
+            const opt = await q.proposalOf.at(await getBlockHashCached(Number(blockNumber)), row.hash);
+            return opt && opt.isSome ? opt.unwrap() : null;
         };
         // Throws when the RPC is down or the block cannot be read: that is
         // 'unavailable', not a miss.
@@ -6327,17 +6350,26 @@ async function backfillMotionProposalHashes() {
         let r;
         try { r = await recoverMotionProposalHash(row, { stateAt, blockCalls, hashOf: (call) => proposalHashOf(call.args[0], blake2AsHex) }); }
         catch (e) { r = { outcome: 'unavailable' }; }
-        if (r.outcome === 'unavailable') break;
+        tried[row.id] = Date.now();
+        changed = true;
+        if (r.outcome === 'unavailable') {
+            if (!isRpcReady()) break;
+            continue;
+        }
         if (r.outcome === 'found' && db.setThreadProposalHash(row.id, r.hash)) {
             delete attempts[row.id];
-            changed = true;
+            delete tried[row.id];
             console.log(`Discussion threads: ${row.id} linked to external proposal ${r.hash}.`);
         } else if (r.outcome === 'miss') {
             attempts[row.id] = (attempts[row.id] || 0) + 1;
-            changed = true;
         }
     }
-    if (changed) db.setKv(MOTION_HASH_ATTEMPTS_KEY, attempts);
+    if (changed) {
+        const live = new Set(rows.map(r => r.id));
+        for (const id of Object.keys(tried)) if (!live.has(id)) delete tried[id];
+        db.setKv(MOTION_HASH_ATTEMPTS_KEY, attempts);
+        db.setKv(MOTION_HASH_TRIED_KEY, tried);
+    }
 }
 
 app.get('/api/wallet/:address', async (req, res) => {
@@ -7659,6 +7691,14 @@ async function syncDemocracyPass() {
             };
             reconcileGovThreads('external', extItems, extTrust, currentBlock, { closeReason: launchedAs });
         }
+        try {
+            linkMotionThreadsFromDemocracy([
+                ...refReads.filter(r => r.state === 'ongoing' && r.bounded && r.proposalHash)
+                    .map(r => ({ proposalHash: r.proposalHash, bounded: r.bounded, source: `referendum #${r.index}` })),
+                ...(externalProposal && externalProposal.proposalHash && externalBounded
+                    ? [{ proposalHash: externalProposal.proposalHash, bounded: externalBounded, source: 'the external proposal' }] : [])
+            ]);
+        } catch (e) { console.warn('Discussion threads: motion link by call hash failed:', e.message); }
         try { await backfillMotionProposalHashes(); } catch (e) { console.warn('Discussion threads: motion link backfill failed:', e.message); }
 
         db.setKv('democracy_meta', {
