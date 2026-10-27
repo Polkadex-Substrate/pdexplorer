@@ -514,7 +514,8 @@ describe('the page: embedded discussion, live votes, polling', () => {
         assert.equal(w.calls.threads.length, 1);
         assert.equal(w.calls.threads[0].id, 'referendum-2');
         assert.equal(w.calls.threads[0].el, w.root.querySelector('[data-gd-thread]'), 'rendered inside #discussion on this page');
-        assert.deepEqual(w.calls.threads[0].o, { focus: false });
+        assert.equal(w.calls.threads[0].o.focus, false);
+        assert.equal(typeof w.calls.threads[0].o.onRendered, 'function', 'the board reports what it drew');
         assert.ok(w.root.innerHTML.includes('id="discussion"'));
         assert.equal(w.calls.scrolled, 1, '#discussion scrolls to the board');
         assert.match(w.calls.seo[0].title, /^Referendum #2: treasury\.spend/);
@@ -594,6 +595,72 @@ describe('the page: embedded discussion, live votes, polling', () => {
     });
 });
 
+describe('the header count follows the board (referendum #36: "Discussion (2)" over one message)', () => {
+    const withThread = (own, earlier = 0) => refPayload({ thread: { id: 'referendum-2', status: 'open', postCount: own, earlierPostCount: earlier, links: { earlier: [], later: [] } } });
+    const headerOf = (w) => (w.root.querySelector('[data-gd-summary]').innerHTML.match(/>(Discussion[^<]*)<\/a>/) || [])[1];
+    const post = (id) => ({ id, content: 'p' + id });
+    test('the board drew one post while the (cached, polled) API says two: the button says one, and the board is read again', async () => {
+        const w = pageWorld({ body: withThread(1) });
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        const first = w.calls.threads[0];
+        first.o.onRendered({ id: 'referendum-2' }, [post(1)], []);
+        assert.equal(headerOf(w), 'Discussion (1)');
+        // Someone posts; the 30 s poll now reports two.
+        w.setBody(withThread(2));
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.equal(headerOf(w), 'Discussion (1)', 'never ahead of what the board lists');
+        assert.equal(w.calls.threads.length, 2, 'the board is read again');
+        assert.equal(w.calls.threads[1].o.quiet, true, 'in the background, without the loading placeholder');
+        w.calls.threads[1].o.onRendered({ id: 'referendum-2' }, [post(1), post(2)], []);
+        assert.equal(headerOf(w), 'Discussion (2)');
+        // Nothing changed: the next poll leaves the board alone.
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.equal(w.calls.threads.length, 2);
+    });
+    test('earlier posts are named apart from the item\'s own', async () => {
+        const w = pageWorld({ body: withThread(1, 2) });
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        assert.equal(headerOf(w), 'Discussion (1) + 2 earlier', 'before the board has drawn, the API\'s counts');
+        w.calls.threads[0].o.onRendered({ id: 'referendum-2' }, [post(1)], [{ thread: { id: 'motion-x' }, posts: [post(7), post(8)] }]);
+        assert.equal(headerOf(w), 'Discussion (1) + 2 earlier');
+        assert.equal(w.calls.threads.length, 1, 'counts agree: no reload');
+    });
+    test('a post being written is never thrown away by the refresh: the header holds at the board\'s count until it is sent', async () => {
+        const w = pageWorld({ body: withThread(1) });
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        w.calls.threads[0].o.onRendered({ id: 'referendum-2' }, [post(1)], []);
+        const board = w.root.querySelector('[data-gd-thread]');
+        board.querySelector = (sel) => (sel === '#discuss-post-input' ? { value: 'half a sentence' } : null);
+        w.setBody(withThread(2));
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.equal(w.calls.threads.length, 1, 'no redraw over the draft');
+        assert.equal(headerOf(w), 'Discussion (1)');
+        board.querySelector = () => null;   // sent or cleared
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.equal(w.calls.threads.length, 2, 'the next poll refreshes');
+    });
+    test('until the board catches up the header holds at the count of what the board lists, and each poll retries', async () => {
+        const w = pageWorld({ body: withThread(1) });
+        w.page.open('democracy/referendum/2');
+        await flush(); await flush();
+        w.calls.threads[0].o.onRendered({ id: 'referendum-2' }, [post(1)], []);
+        w.setBody(withThread(2));
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.equal(headerOf(w), 'Discussion (1)');
+        w.intervals[0].fn();
+        await flush(); await flush();
+        assert.equal(w.calls.threads.length, 3, 'tried again on the next poll');
+    });
+});
+
 describe('list rows open the item pages', () => {
     test('the row link is a real, escaped link', () => {
         assert.equal(govRowLinkHtml('/democracy/referendum/4', '#4', escapeHtml), '<a href="/democracy/referendum/4" class="gov-item-link" data-gov-row-link="true">#4</a>');
@@ -644,7 +711,7 @@ describe('wiring', () => {
         assert.match(script, /'governance-details': \{ title:/);
     });
     test('the embedded board is script.js\'s own thread view, in the page\'s element, with fetch unbound', () => {
-        assert.match(script, /loadThread: \(id, el, o\) => fetchDiscussionThread\(id, o\.focus, el, \{ embedded: true \}\)/);
+        assert.match(script, /loadThread: \(id, el, o\) => fetchDiscussionThread\(id, o\.focus, el, \{ embedded: true, onRendered: o\.onRendered, quiet: o\.quiet \}\)/);
         assert.match(script, /fetchFn: \(u, o\) => fetch\(u, o\)/);
         const render = bodyOf(script, 'renderThread');
         assert.match(render, /root\.querySelector\('#discuss-signin-btn'\)/);

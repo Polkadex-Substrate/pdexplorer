@@ -286,7 +286,7 @@ describe('wiring in server.js and script.js', () => {
     test('live motions carry their proposal hash; the API filters all four kinds and returns links', () => {
         assert.match(bodyOf(server, 'readLiveCollectiveMotions'), /isExternalProposeCall\(section, method\)\) proposalHash = proposalHashOf\(call\.args\[0\], blake2AsHex\)/);
         assert.match(server, /const kind = isThreadKind\(req\.query\.kind\) \? req\.query\.kind : null;/);
-        assert.match(server, /res\.json\(\{ thread: withLifecycleLinks\(thread\), posts: db\.getPosts\(thread\.id\) \}\)/);
+        assert.match(server, /res\.json\(\{ thread: withLinks, posts: db\.getPosts\(thread\.id\), earlier: earlierBoards\(withLinks\.links, db\.getThread, db\.getPosts\) \}\)/);
         assert.match(server, /referenda: withReferendumThreads\(db\.getDemocracyReferenda\(\)\)/);
     });
     test('the SPA renders the links, the Discuss links and the kind labels from the lib', () => {

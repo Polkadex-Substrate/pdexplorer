@@ -28,7 +28,7 @@ import { applyEdit } from './lib/discussion-edit.js';
 import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater, reconcileReferendumThreads, referendumReadTrusted,
     externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash } from './lib/discussion-threads.js';
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
-    lifecycleLinks, isThreadKind } from './lib/discussion-lifecycle.js';
+    lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
@@ -5981,7 +5981,10 @@ app.get('/api/discussions', (req, res) => {
     try {
         const kind = isThreadKind(req.query.kind) ? req.query.kind : null;
         cacheMedium(res);
-        res.json({ threads: db.getThreads(kind) });
+        // earlierPostCount: posts in the item's earlier lifecycle threads, listed
+        // apart from postCount (this thread's own) so the Posts column matches
+        // what the thread page shows.
+        res.json({ threads: withEarlierCounts(db.getThreads(kind), kind ? db.getThreads(null) : null) });
     } catch (err) { serverError(res, err, req.path); }
 });
 
@@ -6181,7 +6184,10 @@ app.get('/api/discussions/:id', (req, res) => {
     try {
         const thread = db.getThread(req.params.id);
         if (!thread) return res.status(404).json({ error: 'Discussion thread not found.' });
-        res.json({ thread: withLifecycleLinks(thread), posts: db.getPosts(thread.id) });
+        const withLinks = withLifecycleLinks(thread);
+        // earlier: the posts of the earlier lifecycle threads (council motion,
+        // external proposal), read-only context. postCount stays this thread's own.
+        res.json({ thread: withLinks, posts: db.getPosts(thread.id), earlier: earlierBoards(withLinks.links, db.getThread, db.getPosts) });
     } catch (err) { serverError(res, err, req.path); }
 });
 

@@ -17,6 +17,7 @@ import * as links from '../lib/discussion-links.js';
 import * as lifecycle from '../lib/discussion-lifecycle.js';
 import * as composer from '../lib/discussion-composer.js';
 import { escapeHtml } from '../lib/html-escape.js';
+import { itemPathForThread } from '../lib/gov-detail.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 
 const SCRIPT = readRepo('script.js', import.meta.url);
@@ -49,7 +50,7 @@ async function openThread(body, signedInAs, viewOpts = {}) {
     const fetches = [];
     const errors = [];
     const env = {
-        ...edit, ...links, ...lifecycle, ...composer, canEditPost: edit.canEdit,
+        ...edit, ...links, ...lifecycle, ...composer, canEditPost: edit.canEdit, itemPathForThread,
         document: { getElementById: id => (id === 'discussions-content' ? root : null) },
         window: { location: { search: '', hash: '', origin: 'https://explorer.polkadex.ee' } },
         localStorage: { getItem: k => store.get(k) ?? null, removeItem: k => store.delete(k) },
@@ -134,6 +135,31 @@ describe('never "No posts yet" for a thread that has posts', () => {
         const html = edit.renderPostList({ id: TID, postCount: 1 }, { 0: {} }, { esc: escapeHtml }, { error() {} });
         assert.match(html, /1 post that could not be loaded/);
     });
+});
+
+describe('earlier lifecycle discussion on the board', () => {
+    const body = () => ({
+        ...payload({ postCount: 2 }),
+        earlier: [{ thread: { id: 'motion-0xabc', kind: 'motion', title: 'Council Motion #140', status: 'closed', postCount: 2 },
+            posts: [{ id: 11, threadId: 'motion-0xabc', author: OTHER, authorName: 'Member', content: 'Earlier one', createdAt: 1792696000000 },
+                { id: 12, threadId: 'motion-0xabc', author: AUTHOR, authorName: 'Validator One', content: 'Earlier two', createdAt: 1792696100000 }] }]
+    });
+    for (const [name, viewOpts] of [['thread page', {}], ['embedded governance board', { embedded: true }]]) {
+        test(name + ': the earlier posts sit under their own heading, read-only, and are not the thread\'s own', async () => {
+            const seen = [];
+            const r = await openThread(body(), AUTHOR, { ...viewOpts, onRendered: (...a) => seen.push(a) });
+            assert.ok(r.html.includes('Earlier discussion on Council Motion #140'));
+            const own = r.html.slice(r.html.indexOf('class="discussion-posts"'));
+            assert.equal((own.match(/class="discussion-post"/g) || []).length, 2, 'this thread\'s two own posts');
+            assert.equal(r.posts, 4, 'two earlier + two own');
+            assert.equal(r.editButtons, 2, 'only the own posts can be edited, even by the author of an earlier one');
+            assert.ok(r.html.includes('Earlier one') && r.html.includes('Earlier two'));
+            assert.equal(seen.length, 1);
+            assert.equal(seen[0][1].length, 2, 'onRendered gets the own posts');
+            assert.equal(seen[0][2].length, 1, 'and the earlier boards');
+            if (viewOpts.embedded) assert.ok(r.html.includes('href="/council/motion/0xabc"') || r.html.includes('href="/discussions/motion-0xabc"'));
+        });
+    }
 });
 
 // Markdown (lib/discussion-markdown.js) on the thread page and on the boards

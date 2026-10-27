@@ -245,7 +245,7 @@ describe('every board gets the renderer and the composer', () => {
     test('posts render through renderMarkdown (thread pages and embedded boards share renderPostHtml)', () => {
         assert.match(editLib, /renderMarkdown\(p\.content, o\.md\)/);
         assert.ok(!/esc\(p\.content\)/.test(editLib), 'the old escape-and-<br> path is gone');
-        assert.match(script, /loadThread: \(id, el, o\) => fetchDiscussionThread\(id, o\.focus, el, \{ embedded: true \}\)/);
+        assert.match(script, /loadThread: \(id, el, o\) => fetchDiscussionThread\(id, o\.focus, el, \{ embedded: true, onRendered: o\.onRendered, quiet: o\.quiet \}\)/);
     });
     test('the new-post box and the edit box both carry the composer', () => {
         assert.match(script, /composerHtml\('<textarea id="discuss-post-input"/);
