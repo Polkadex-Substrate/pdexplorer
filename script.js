@@ -23,6 +23,7 @@ import { composerHtml, wireComposer } from './lib/discussion-composer.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { isGovDetailRoute, govItemPath, legacyGovRedirect } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
+import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { developersBodies } from './lib/developers-bodies.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
@@ -7868,6 +7869,7 @@ function setStoredWallet(addr) {
         else localStorage.removeItem(WALLET_STORAGE_KEY);
     } catch (e) { }
     if (getStoredWallet() !== before) democracyView.restart();   // "You voted" follows the wallet
+    if (getStoredWallet() !== before) govDetailPage.accountChanged();   // and so does an item page's Actions panel
 }
 
 // "Last used" address — a SEPARATE memory that survives `disconnectWallet()`.
@@ -11022,7 +11024,12 @@ const democracyView = createDemocracyView({ getApi: () => globalApi, account: ()
 // Referendum / proposal / external / motion pages with the item's discussion
 // embedded (lib/gov-detail-view.js); rows on Democracy and Council open them.
 const govDetailPage = createGovDetailPage({ root: () => document.getElementById('governance-details-content'), fetchFn: (u, o) => fetch(u, o),
-    h: { esc: stakingEscapeHtml, num: stakingFormatNumber, pdex: stakingFormatPDEX, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime, helpIcon },
+    h: { esc: stakingEscapeHtml, num: stakingFormatNumber, pdex: stakingFormatPDEX, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime, helpIcon, connectPrompt: () => buildWalletConnectPrompt() },
+    // The Actions panel runs the Democracy and Council pages' own functions (lib/gov-actions.js).
+    same: (a, b) => isSameAddress(a, b),
+    actions: { vote: (i, side) => openReferendumVoteModal(i, side), second: (i, seconds) => secondPublicProposal(i, seconds),
+        motionVote: async (hash, i, aye, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionVote(hash, i, aye, key); },
+        motionClose: async (hash, i, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionClose(hash, i, key); } },
     loadThread: (id, el, o) => fetchDiscussionThread(id, o.focus, el, { embedded: true }), setSeo: (o) => updateSeoMeta('governance-details', { canonicalPath: window.location.pathname, ...o }),
     getApi: () => globalApi, toAddress: toPolkadexAddress, account: () => getStoredWallet(), location: () => window.location, env: { navigator, document },
     visible: () => document.visibilityState === 'visible', scrollTo: (el) => el && el.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
@@ -11998,7 +12005,7 @@ function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
     }
     if (!confirm(`Cast a ${approve ? 'AYE' : 'NAY'} vote on ${view.label.toLowerCase()} motion #${idx}?`)) return;
     const pallet = data.collectivePallet;
-    submitSignedTx({
+    return submitSignedTx({
         buildTx: (api) => {
             const tx = api.tx[pallet].vote(hash, idx, approve);
             // Log what we actually encode. When a submission fails at the node
@@ -12025,7 +12032,7 @@ function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
         },
         label: `${view.label} motion #${idx} ${approve ? 'aye' : 'nay'} vote`,
         action: { key: 'council.vote', params: { aye: approve, idx, body: view.label.toLowerCase() } },
-        onStage: motionStage(view, hash, approve ? 'aye' : 'nay'),
+        onStage: fanStage(motionStage(view, hash, approve ? 'aye' : 'nay'), govDetailPage.stage(view.key + ':' + hash, approve ? 'aye' : 'nay')),
         onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
     });
 }
@@ -12061,11 +12068,11 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
     if (!confirm(`Close ${view.label.toLowerCase()} motion #${idx}?\n\nThis finalizes the vote and, if it passed, dispatches the proposed call.`)) return;
     const pallet = data.collectivePallet;
     const weightBound = { refTime: motion.weightRefTime || '10000000000', proofSize: motion.weightProofSize || '500000' };
-    submitSignedTx({
+    return submitSignedTx({
         buildTx: (api) => api.tx[pallet].close(hash, idx, weightBound, motion.lengthBound || 0),
         label: `${view.label} motion #${idx} close`,
         action: { key: 'council.close', params: { idx, method: motion.method } },
-        onStage: motionStage(view, hash, 'close'),
+        onStage: fanStage(motionStage(view, hash, 'close'), govDetailPage.stage(view.key + ':' + hash, 'close')),
         onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
     });
 }
@@ -12076,6 +12083,14 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
 // waiting (never included in time) and resent (Retracted) clear the chip and
 // re-enable the buttons; only a real failure leaves an error on the card.
 const MOTION_STAGE_CLEARS = new Set(['cancelled', 'stalled', 'unconfirmed', 'waiting', 'resent']);
+// A governance item page votes or closes: the seat check and the motion lookup
+// run on a fresh read, not on the snapshot the Council page loaded earlier.
+async function ensureCollectiveData(key) {
+    const view = collectiveView(key);
+    if (await refreshCollectiveForSubmit(view)) return true;
+    showTxNotice(`Could not read the current ${view.label.toLowerCase()} state, so nothing was submitted. Try again in a moment.`);
+    return false;
+}
 function motionStage(view, hash, kind) {
     return (stage, m) => {
         const key = view.key + ':' + hash;
@@ -13283,7 +13298,7 @@ async function submitReferendumVote() {
         onError: showErr,
         // The row shows the stage; In block asks for a fresh copy, and the
         // live feed has the new tally and your vote meanwhile.
-        onStage: democracyView.stage('ref:' + refIndex, aye ? 'aye' : 'nay'),
+        onStage: fanStage(democracyView.stage('ref:' + refIndex, aye ? 'aye' : 'nay'), govDetailPage.stage('ref:' + refIndex, aye ? 'aye' : 'nay')),
         onSuccess: closeReferendumVoteModal
     });
 }
@@ -13324,12 +13339,17 @@ async function submitReferendumVote() {
     document.addEventListener('click', e => {
         const b = e.target && e.target.closest ? e.target.closest('.democracy-second-btn') : null;
         if (!b || b.disabled || !/^\d+$/.test(b.getAttribute('data-prop-index') || '')) return;
-        const idx = Number(b.getAttribute('data-prop-index')), seconds = Number(b.getAttribute('data-seconds')) || 0;
-        if (!confirm(`Second public proposal #${idx}? This locks a deposit equal to the proposer's until the proposal is tabled.`)) return;
-        submitSignedTx({ buildTx: api => buildSecondTx(api, idx, seconds), label: `Second public proposal #${idx}`,
-            action: { key: 'democracy.second', params: { n: idx } }, onStage: democracyView.stage('prop:' + idx, 'second') });
+        secondPublicProposal(Number(b.getAttribute('data-prop-index')), Number(b.getAttribute('data-seconds')) || 0);
     });
 })();
+
+// Second a public proposal: the Public Proposals tab and the proposal's own page.
+function secondPublicProposal(idx, seconds) {
+    if (!/^\d+$/.test(String(idx))) return showTxNotice('Invalid proposal index.');   // F-118: Number('') is 0
+    if (!confirm(`Second public proposal #${idx}? This locks a deposit equal to the proposer's until the proposal is tabled.`)) return;
+    return submitSignedTx({ buildTx: api => buildSecondTx(api, idx, seconds), label: `Second public proposal #${idx}`,
+        action: { key: 'democracy.second', params: { n: idx } }, onStage: fanStage(democracyView.stage('prop:' + idx, 'second'), govDetailPage.stage('prop:' + idx, 'second')) });
+}
 
 (function wireGovernanceDetailModal() {
     const modal = document.getElementById('governance-detail-modal');

@@ -4408,6 +4408,12 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .gd-verdict.gd-passing { color: var(--success); }
 .gd-verdict.gd-failing { color: var(--error); }
 .gd-mine { font-size: 0.85rem; color: var(--brand-secondary); }
+/* The Actions panel of an item page (lib/gov-actions.js) */
+.gd-actions-panel { padding: 14px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.02); }
+.gd-act-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
+.gd-act-reason { font-size: 0.82rem; margin: 6px 0; }
+.gd-act-connect { font-size: 0.85rem; margin: 6px 0; }
+.motion-btn.gd-act-second { border-color: rgba(0, 230, 118, 0.4); }
 .gd-timeline { list-style: none; margin: 0; padding: 0 0 0 16px; border-left: 2px solid rgba(255, 255, 255, 0.08); }
 .gd-step { position: relative; padding: 0 0 12px 10px; font-size: 0.86rem; }
 .gd-step::before { content: ''; position: absolute; left: -23px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--text-muted); }
