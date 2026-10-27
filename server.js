@@ -24,7 +24,11 @@ import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
 import { applyEdit } from './lib/discussion-edit.js';
-import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater } from './lib/discussion-threads.js';
+import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater, reconcileReferendumThreads, referendumReadTrusted,
+    externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash } from './lib/discussion-threads.js';
+import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
+    lifecycleLinks, isThreadKind } from './lib/discussion-lifecycle.js';
+import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
@@ -41,6 +45,7 @@ import { getOnChainIdentity } from './lib/identity.js';
 // header of lib/api-reference.js for what four hand-maintained copies cost.
 import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READY, rpcNotReadyExample } from './lib/api-reference.js';
 import { developersBodies } from './lib/developers-bodies.js';
+import { OG_CARDS } from './lib/og-images.js';
 import {
     selectDispatchable, selectNewlyResolved, isTerminalRefStatus, describeRefOutcome
 } from './lib/email-events.js';
@@ -2883,6 +2888,8 @@ const SITEMAP_STATIC_ROUTES = [
     { path: '/help/transaction-status',       changefreq: 'monthly', priority: '0.6' },
     { path: '/help/treasury',                 changefreq: 'monthly', priority: '0.5' },
     { path: '/help/discussions',              changefreq: 'monthly', priority: '0.5' },
+    { path: '/help/discussion-formatting',    changefreq: 'monthly', priority: '0.5' },
+    { path: '/help/governance-item-pages',    changefreq: 'monthly', priority: '0.5' },
     { path: '/help/analytics',                changefreq: 'monthly', priority: '0.5' },
     { path: '/help/watchlist',                changefreq: 'monthly', priority: '0.5' },
     { path: '/help/community-labels',         changefreq: 'monthly', priority: '0.5' },
@@ -3105,6 +3112,13 @@ const DEVELOPERS_HTML = `<!DOCTYPE html>
 <meta property="og:title" content="Developers — Polkadex Explorer API Reference">
 <meta property="og:description" content="Public read-only JSON API for the Polkadex Mainnet: chain data, governance, price feed, and the exact /api/network-info schema.">
 <meta property="og:url" content="${SITE_URL}/developers">
+<meta property="og:site_name" content="Polkadex Explorer">
+<meta property="og:image" content="${SITE_URL}${OG_CARDS.developers.file}">
+<meta property="og:image:width" content="${OG_CARDS.developers.width}">
+<meta property="og:image:height" content="${OG_CARDS.developers.height}">
+<meta property="og:image:alt" content="${sharedEscapeHtml(OG_CARDS.developers.alt)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${SITE_URL}${OG_CARDS.developers.file}">
 <style>
 :root{color-scheme:dark}
 *{box-sizing:border-box}
@@ -4480,6 +4494,13 @@ app.get('/api/treasury', (req, res) => {
     }
 });
 
+// Each referendum row carries its discussion thread id when one exists (the
+// Democracy page's Discuss link; lib/discussion-lifecycle.js).
+function withReferendumThreads(rows) {
+    let keys;
+    try { keys = new Set(db.getThreadRefKeys('referendum').map(String)); } catch (e) { return rows; }
+    return rows.map(r => keys.has(String(r.refIndex)) ? { ...r, threadId: referendumThreadId(r.refIndex) } : r);
+}
 app.get('/api/democracy', (req, res) => {
     try {
         const meta = db.getKv('democracy_meta') || {};
@@ -4498,7 +4519,7 @@ app.get('/api/democracy', (req, res) => {
             totalIssuance: meta.totalIssuance || 0,
             publicProposals: meta.publicProposals || [],
             externalProposal: meta.externalProposal || null,
-            referenda: db.getDemocracyReferenda(),
+            referenda: withReferendumThreads(db.getDemocracyReferenda()),
             lastSync: meta.lastSync || state.lastSync || 0,
             status: state.status || 'Initializing'
         });
@@ -4507,6 +4528,166 @@ app.get('/api/democracy', (req, res) => {
         res.status(500).json({ error: 'Failed to fetch democracy data' });
     }
 });
+
+// --- Governance item pages: /democracy/referendum/<n> and friends ---------
+// The handlers and their sources are in lib/gov-detail-api.js; this is the
+// chain side they read through. Every method answers null (or { absent })
+// instead of throwing, so a flaky node degrades a page to its stored history.
+const GOV_DETAIL_ARG_MAX = 1000;
+const govCallCache = new Map();   // proposal hash -> decoded call (hits kept; misses retried after 10 min)
+const govHistCache = new Map();   // "<kind>:<id>:<block>" -> historical read (archive state never changes) or { miss, at } (pruned state: retried after 10 min)
+const GOV_HIST_MISS_MS = 10 * 60 * 1000;
+function govDescribeCall(c) {
+    const meta = (c.meta && c.meta.args) || [];
+    return {
+        section: String(c.section), method: String(c.method),
+        args: Array.from(c.args || []).map((a, i) => {
+            let value;
+            try { const h = a.toHuman(); value = typeof h === 'string' ? h : JSON.stringify(h); } catch (e) { try { value = String(a); } catch (_) { value = '[unprintable]'; } }
+            if (value.length > GOV_DETAIL_ARG_MAX) value = value.slice(0, GOV_DETAIL_ARG_MAX) + '...(truncated)';
+            return { name: meta[i] ? String(meta[i].name) : 'arg' + i, type: meta[i] ? String(meta[i].type) : null, value };
+        })
+    };
+}
+function govReadRefInfo(opt) {
+    if (!opt || opt.isNone) return { state: 'none' };
+    const r = opt.unwrap();
+    if (r.isOngoing) {
+        const s = r.asOngoing;
+        const bounded = s.proposal || s.proposalHash || null;
+        return { state: 'ongoing', end: s.end.toNumber(), threshold: s.threshold ? s.threshold.toString() : null,
+            delay: s.delay ? s.delay.toNumber() : null, ayes: balanceToPDEX(s.tally.ayes), nays: balanceToPDEX(s.tally.nays),
+            turnout: balanceToPDEX(s.tally.turnout), bounded, proposalHash: proposalHashOf(bounded, blake2AsHex) };
+    }
+    if (r.isFinished) { const f = r.asFinished; return { state: 'finished', approved: f.approved.isTrue, end: f.end.toNumber() }; }
+    return { state: 'none' };
+}
+function govCollectivePallet(collective) {
+    if (collective === 'technicalCommittee') return globalApi.query.technicalCommittee ? 'technicalCommittee' : null;
+    const snap = db.getKv('council') || {};
+    return snap.collectivePallet || ['council', 'councilCollective', 'generalCouncil'].find(n => globalApi.query[n] && globalApi.query[n].proposalOf) || null;
+}
+async function govHist(key, read) {
+    const hit = govHistCache.get(key);
+    if (hit) {
+        if (!hit.miss) return hit;
+        // A pruned (or failed) read: not asked again for a while, so a page of
+        // an old item on a non-archive node costs one RPC attempt, not one per view.
+        if (Date.now() - hit.at < GOV_HIST_MISS_MS) return null;
+        govHistCache.delete(key);
+    }
+    const v = await read();
+    if (govHistCache.size > 500) govHistCache.clear();
+    govHistCache.set(key, v || { miss: true, at: Date.now() });
+    return v;
+}
+// The scheduler name pallet-democracy gives a referendum's enactment task:
+// the padded SCALE encoding of ("democrac", index u32 LE), NOT a hash (see
+// democracyEnactmentTaskIds in lib/gov-detail-api.js for the pallet behaviour).
+// The dispatch event carries it as `id`, which is how an enactment is matched to
+// ITS referendum (a different task dispatching in that block proves nothing).
+// Returns the padded and the unpadded (older scheduler era) forms.
+function govEnactmentTaskId(index) {
+    return democracyEnactmentTaskIds(index);
+}
+const govChain = {
+    ready: () => isRpcReady(),
+    async currentBlock() { return (await globalApi.query.system.number()).toNumber(); },
+    consts() {
+        const d = globalApi.consts.democracy;
+        if (!d) return null;
+        const n = (x) => (x === undefined || x === null ? null : Number(x.toString()));
+        const babe = globalApi.consts.babe;
+        const blockMs = babe && babe.expectedBlockTime ? n(babe.expectedBlockTime) : null;
+        return { votingPeriod: n(d.votingPeriod), enactmentPeriod: n(d.enactmentPeriod), launchPeriod: n(d.launchPeriod), blockMs };
+    },
+    async referendum(index) {
+        const dem = globalApi.query.democracy;
+        return dem && dem.referendumInfoOf ? govReadRefInfo(await dem.referendumInfoOf(index)) : null;
+    },
+    async referendumAt(index, block) {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.referendumInfoOf) return null;
+        return govHist(`ref:${index}:${block}`, async () => {
+            try { return govReadRefInfo(await dem.referendumInfoOf.at(await getBlockHashCached(block), index)); }
+            catch (e) { return null; }   // pruned state: not an archive node
+        });
+    },
+    // A bounded call (inline, or a Legacy / Lookup hash with a noted
+    // preimage), or a bare proposal hash looked up in the preimage pallet.
+    async decodeCall(bounded, hash) {
+        const b = bounded ? boundedParts(bounded) : null;
+        const key = (b && b.hash) || (b && b.bytes ? blake2AsHex(b.bytes) : null) || hash;
+        const hit = key ? govCallCache.get(key) : null;
+        if (hit && (hit.call || Date.now() - hit.at < 10 * 60 * 1000)) return hit;
+        let bytes = b && b.kind === 'inline' ? b.bytes : null;
+        const ph = (b && b.hash) || hash || null;
+        const pre = globalApi.query.preimage;
+        if (!bytes && ph && pre && pre.preimageFor) {
+            let len = b && b.len !== null && b.len !== undefined ? b.len : null;
+            if (len === null && pre.statusFor) {
+                const st = await pre.statusFor(ph);
+                if (st && st.isSome) {
+                    const j = st.unwrap().toJSON() || {};
+                    const v = j.unrequested || j.requested || j.Unrequested || j.Requested || {};
+                    if (v.len !== undefined && v.len !== null) len = Number(v.len);
+                }
+            }
+            if (len !== null) { const opt = await pre.preimageFor([ph, len]); if (opt && opt.isSome) bytes = opt.unwrap(); }
+        }
+        let out;
+        if (bytes) out = { call: govDescribeCall(globalApi.registry.createType('Call', bytes)), at: Date.now() };
+        else out = { call: null, note: 'The preimage of this call is not noted on chain, so its contents cannot be shown.', at: Date.now() };
+        if (key) { if (govCallCache.size > 200) govCallCache.clear(); govCallCache.set(key, out); }
+        return out;
+    },
+    async publicProp(index) {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.publicProps) return null;
+        for (const e of await dem.publicProps()) {
+            if (Number(e[0].toString()) === Number(index)) return { bounded: e[1], proposalHash: proposalHashOf(e[1], blake2AsHex), proposer: String(e[e.length - 1]) };
+        }
+        return { absent: true };
+    },
+    async deposit(index) {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.depositOf) return null;
+        const opt = await dem.depositOf(index);
+        if (!opt || !opt.isSome) return null;
+        const t = opt.unwrap();
+        const listFirst = Array.isArray(t[0]) || (t[0] && typeof t[0].map === 'function' && !t[0].toBn);
+        const list = listFirst ? t[0] : t[1];
+        return { seconders: Array.from(list || []).map(a => String(a)), deposit: balanceToPDEX(listFirst ? t[1] : t[0]) };
+    },
+    async nextExternal() {
+        const dem = globalApi.query.democracy;
+        if (!dem || !dem.nextExternal) return null;
+        const opt = await dem.nextExternal();
+        if (!opt || !opt.isSome) return { absent: true };
+        const ext = opt.unwrap();
+        return { bounded: ext[0] || null, proposalHash: proposalHashOf(ext[0], blake2AsHex), threshold: ext[1] ? ext[1].toString() : null };
+    },
+    async motionAt(collective, hash, block) {
+        const pallet = govCollectivePallet(collective);
+        const q = pallet ? globalApi.query[pallet] : null;
+        if (!q || !q.proposalOf || !q.voting) return null;
+        return govHist(`motion:${collective}:${hash}:${block}`, async () => {
+            try {
+                const bh = await getBlockHashCached(block);
+                const [callOpt, votingOpt] = await Promise.all([q.proposalOf.at(bh, hash), q.voting.at(bh, hash)]);
+                const call = callOpt && callOpt.isSome ? govDescribeCall(callOpt.unwrap()) : null;
+                let voting = null;
+                if (votingOpt && votingOpt.isSome) {
+                    const v = votingOpt.unwrap();
+                    voting = { index: v.index.toNumber(), threshold: v.threshold.toNumber(), ayes: v.ayes.map(a => a.toString()), nays: v.nays.map(a => a.toString()), end: v.end.toNumber() };
+                }
+                return call || voting ? { call, voting } : null;
+            } catch (e) { return null; }
+        });
+    },
+    name: (address) => getIdentity(globalApi, address)
+};
+registerGovDetailRoutes(app, { db, chain: govChain, cacheShort, isFresh: isFreshRequest, serverError, enactmentTaskId: govEnactmentTaskId });
 
 // isOpenGovStatus is imported from ./lib/gov-status.js (audit F-003 — one
 // case-insensitive predicate shared by banner, calendar, and email so the
@@ -4627,7 +4808,7 @@ app.get('/api/governance/calendar', async (req, res) => {
                 endBlock: r.endBlock || null,
                 endTime: blockToTime(r.endBlock),
                 isActive,
-                link: '/democracy?ref=' + r.refIndex
+                link: '/democracy/referendum/' + r.refIndex
             });
         }
 
@@ -4686,7 +4867,7 @@ app.get('/api/governance/calendar', async (req, res) => {
                 endBlock: m.resolvedBlock || null,
                 endTime: m.resolvedAt || blockToTime(m.resolvedBlock),
                 isActive,
-                link: (isTc ? '/council?tcmotion=' : '/council?motion=') + m.motionIndex
+                link: (isTc ? '/council/tc-motion/' : '/council/motion/') + m.motionIndex
             });
         }
 
@@ -5828,7 +6009,7 @@ app.post('/api/labels/:address/:signer/veto', express.json({ limit: '1kb' }), (r
 
 app.get('/api/discussions', (req, res) => {
     try {
-        const kind = (req.query.kind === 'proposal' || req.query.kind === 'motion') ? req.query.kind : null;
+        const kind = isThreadKind(req.query.kind) ? req.query.kind : null;
         cacheMedium(res);
         res.json({ threads: db.getThreads(kind) });
     } catch (err) { serverError(res, err, req.path); }
@@ -6030,7 +6211,7 @@ app.get('/api/discussions/:id', (req, res) => {
     try {
         const thread = db.getThread(req.params.id);
         if (!thread) return res.status(404).json({ error: 'Discussion thread not found.' });
-        res.json({ thread, posts: db.getPosts(thread.id) });
+        res.json({ thread: withLifecycleLinks(thread), posts: db.getPosts(thread.id) });
     } catch (err) { serverError(res, err, req.path); }
 });
 
@@ -6076,7 +6257,7 @@ app.post('/api/discussions/:id/posts', async (req, res) => {
         let authorName = 'Unknown';
         try { authorName = await getIdentity(globalApi, address); } catch (e) { }
         db.createPost({ threadId: thread.id, author: address, authorName, content });
-        res.json({ thread: db.getThread(thread.id), posts: db.getPosts(thread.id) });
+        res.json({ thread: withLifecycleLinks(db.getThread(thread.id)), posts: db.getPosts(thread.id) });
     } catch (err) { serverError(res, err, req.path); }
 });
 
@@ -6086,9 +6267,11 @@ app.post('/api/discussions/:id/posts', async (req, res) => {
 // lib/discussion-threads.js. The kv row holds the block of the last trusted read
 // per kind, so a node that is behind it cannot close anything.
 const THREAD_HW_KEY = 'discussion:reconcile-block';
-function reconcileGovThreads(kind, items, trust, currentBlock) {
+function reconcileGovThreads(kind, items, trust, currentBlock, { closeReason } = {}) {
     try {
-        const r = reconcileThreads(db, kind, items, { trusted: trust.trusted });
+        const r = kind === 'referendum'
+            ? reconcileReferendumThreads(db, items, { trusted: trust.trusted })
+            : reconcileThreads(db, kind, items, { trusted: trust.trusted, closeReason });
         if (trust.trusted) {
             const hw = db.getKv(THREAD_HW_KEY) || {};
             db.setKv(THREAD_HW_KEY, { ...hw, [kind]: nextHighWater(hw[kind], currentBlock) });
@@ -6099,6 +6282,87 @@ function reconcileGovThreads(kind, items, trust, currentBlock) {
     } catch (e) { console.warn(`Discussion threads (${kind}): reconcile failed:`, e.message); }
 }
 function threadHighWater(kind) { return (db.getKv(THREAD_HW_KEY) || {})[kind] || 0; }
+
+// "Earlier discussion" / "Continued in" for a thread page, derived from the
+// proposal hash the threads share (lib/discussion-lifecycle.js). Read-only.
+function withLifecycleLinks(thread) {
+    if (!thread || !thread.proposalHash) return thread;
+    try { return { ...thread, links: lifecycleLinks(thread, db.getThreadsByProposalHash(thread.proposalHash)) }; }
+    catch (e) { return thread; }
+}
+
+// The decoded call of a democracy proposal, "section.method", for thread
+// titles: inline calls decode directly, Lookup calls through a noted preimage.
+// null when the preimage is not noted (yet). Misses are retried after 10 min.
+const proposalCallCache = new Map();
+async function describeProposalCall(bounded, hash) {
+    if (!bounded || !hash) return null;
+    const hit = proposalCallCache.get(hash);
+    if (hit && (hit.call || Date.now() - hit.at < 10 * 60 * 1000)) return hit.call;
+    let call = null;
+    try {
+        const b = boundedParts(bounded);
+        let bytes = b && b.kind === 'inline' ? b.bytes : null;
+        const pf = globalApi.query.preimage && globalApi.query.preimage.preimageFor;
+        if (b && b.kind === 'lookup' && b.len !== null && pf) {
+            const opt = await pf([b.hash, b.len]);
+            if (opt && opt.isSome) bytes = opt.unwrap();
+        }
+        if (bytes) { const c = globalApi.registry.createType('Call', bytes); call = `${c.section}.${c.method}`; }
+    } catch (e) { call = null; }
+    if (proposalCallCache.size > 200) proposalCallCache.clear();
+    proposalCallCache.set(hash, { call, at: Date.now() });
+    return call;
+}
+
+// A council motion that queued an external proposal and concluded before its
+// proposal hash was recorded (every such motion before 2026-10-26, motion #140
+// among them): recover its call from the block that proposed it, state first,
+// then the block body, so the motion thread can link forward. At most three
+// tries per thread; the attempts live in kv so restarts do not reset them.
+// Only a definite miss is a try (lib/discussion-threads.js
+// recoverMotionProposalHash): an RPC outage or a failed read leaves the
+// attempts untouched and stops this pass.
+const MOTION_HASH_ATTEMPTS_KEY = 'discussion:motion-hash-attempts';
+async function backfillMotionProposalHashes() {
+    if (!isRpcReady()) return;
+    let rows = [];
+    try { rows = db.getMotionThreadsMissingProposalHash(); } catch (e) { return; }
+    const attempts = db.getKv(MOTION_HASH_ATTEMPTS_KEY) || {};
+    const todo = rows.filter(r => (attempts[r.id] || 0) < 3).slice(0, 5);
+    if (!todo.length) return;
+    let changed = false;
+    for (const row of todo) {
+        const stateAt = async (blockNumber) => {
+            const q = globalApi.query[row.collective];
+            if (!q || !q.proposalOf || !(Number(blockNumber) > 0)) return null;
+            try {
+                const opt = await q.proposalOf.at(await getBlockHashCached(Number(blockNumber)), row.hash);
+                return opt && opt.isSome ? opt.unwrap() : null;
+            } catch (e) { return null; }   // state pruned (not an archive node)
+        };
+        // Throws when the RPC is down or the block cannot be read: that is
+        // 'unavailable', not a miss.
+        const blockCalls = async (blockNumber) => {
+            const block = await getBlockCached(await getBlockHashCached(Number(blockNumber)));
+            if (!block || !block.block) throw new Error('block not available');
+            return (block.block.extrinsics || []).map(x => x.method);
+        };
+        let r;
+        try { r = await recoverMotionProposalHash(row, { stateAt, blockCalls, hashOf: (call) => proposalHashOf(call.args[0], blake2AsHex) }); }
+        catch (e) { r = { outcome: 'unavailable' }; }
+        if (r.outcome === 'unavailable') break;
+        if (r.outcome === 'found' && db.setThreadProposalHash(row.id, r.hash)) {
+            delete attempts[row.id];
+            changed = true;
+            console.log(`Discussion threads: ${row.id} linked to external proposal ${r.hash}.`);
+        } else if (r.outcome === 'miss') {
+            attempts[row.id] = (attempts[row.id] || 0) + 1;
+            changed = true;
+        }
+    }
+    if (changed) db.setKv(MOTION_HASH_ATTEMPTS_KEY, attempts);
+}
 
 app.get('/api/wallet/:address', async (req, res) => {
     // Audit F-083: this handler set NO Cache-Control at all, so the response
@@ -6458,7 +6722,7 @@ async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
         
         for (const h of motionHashes) {
             const hash = h.toString();
-            let section = '', method = '', args = [];
+            let section = '', method = '', args = [], proposalHash = null;
             let lengthBound = 0;
             // Generous defaults used as the close() weight bound when an
             // exact estimate cannot be computed (bound only needs to be >= actual).
@@ -6469,6 +6733,7 @@ async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
                     const call = callOpt.unwrap();
                     section = String(call.section);
                     method = String(call.method);
+                    if (isExternalProposeCall(section, method)) proposalHash = proposalHashOf(call.args[0], blake2AsHex);
                     lengthBound = call.encodedLength;
                     const argMeta = (call.meta && call.meta.args) || [];
                     args = call.args.map((a, i) => {
@@ -6508,7 +6773,7 @@ async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
             motions.push({
                 hash,
                 title: (section && method) ? `${section}.${method}` : (collectivePallet === 'technicalCommittee' ? 'Technical Committee Motion' : 'Council Motion'),
-                section, method, args,
+                section, method, args, proposalHash,
                 index, threshold, ayes, nays, end,
                 lengthBound, weightRefTime, weightProofSize
             });
@@ -6625,7 +6890,7 @@ async function syncCouncilPass() {
         // absent from `motions`, so an empty list from a swallowed error would
         // close every open thread. Gated on the same flag, plus the block check
         // in lib/discussion-threads.js.
-        reconcileGovThreads('motion', motions.map(m => ({ id: `motion-${m.hash}`, refKey: m.hash, title: m.title || 'Council Motion' })),
+        reconcileGovThreads('motion', motions.map(m => ({ id: `motion-${m.hash}`, refKey: m.hash, title: m.title || 'Council Motion', proposalHash: m.proposalHash })),
             motionReadTrusted({ listTrusted: motionsTrusted, currentBlock, highWater: threadHighWater('motion') }), currentBlock);
 
         // Keep the persistent motions history fresh with the live open motions.
@@ -7297,6 +7562,8 @@ async function syncDemocracyPass() {
 
         // Active public proposals.
         const publicProposals = [];
+        const propHashes = {};   // index -> democracy proposal hash, for the thread links
+        try { for (const e of publicPropsRaw) propHashes[Number(e[0].toString())] = proposalHashOf(e[1], blake2AsHex); } catch (e) { }
         const propsJson = publicPropsRaw.toJSON() || [];
         for (const entry of propsJson) {
             const propIndex = Array.isArray(entry) ? entry[0] : entry;
@@ -7316,11 +7583,13 @@ async function syncDemocracyPass() {
         }
 
         // Current external proposal.
-        let externalProposal = null;
+        let externalProposal = null, externalBounded = null;
         if (nextExternalRaw && nextExternalRaw.isSome) {
             const ext = nextExternalRaw.unwrap();
+            externalBounded = ext[0] || null;
             externalProposal = {
                 proposal: ext[0] ? ext[0].toString().slice(0, 66) : null,
+                proposalHash: proposalHashOf(ext[0], blake2AsHex),
                 threshold: ext[1] ? ext[1].toString() : null
             };
         }
@@ -7329,16 +7598,22 @@ async function syncDemocracyPass() {
         const existing = {};
         for (const r of db.getDemocracyReferenda()) existing[r.refIndex] = r;
         let activeReferenda = 0;
+        // What this read saw per referendum, for the discussion threads. An
+        // index with an open thread is read again even when its row says it
+        // finished, so a close that an untrusted read had to skip still lands.
+        const refReads = [];
+        const openRefThreads = new Set(db.getOpenThreadIds('referendum').map(id => Number(String(id).slice('referendum-'.length))));
         for (let i = 0; i < referendumCount; i++) {
             const prev = existing[i];
-            if (prev && prev.status !== 'Ongoing' && prev.tallyKnown) continue;
+            if (prev && prev.status !== 'Ongoing' && prev.tallyKnown && !openRefThreads.has(i)) continue;
             let info;
             try { info = await dem.referendumInfoOf(i); } catch (e) { continue; }
-            if (!info || info.isNone) continue;
+            if (!info || info.isNone) { if (info && info.isNone) refReads.push({ index: i, state: 'cancelled' }); continue; }
             const r = info.unwrap();
             if (r.isOngoing) {
                 activeReferenda++;
                 const s = r.asOngoing;
+                refReads.push({ index: i, state: 'ongoing', bounded: s.proposal || null, proposalHash: proposalHashOf(s.proposal || s.proposalHash, blake2AsHex) });
                 db.upsertDemocracyReferendum({
                     refIndex: i, status: 'Ongoing', endBlock: s.end.toNumber(),
                     ayes: balanceToPDEX(s.tally.ayes), nays: balanceToPDEX(s.tally.nays), turnout: balanceToPDEX(s.tally.turnout),
@@ -7349,6 +7624,7 @@ async function syncDemocracyPass() {
             } else if (r.isFinished) {
                 const f = r.asFinished;
                 const status = f.approved.isTrue ? 'Passed' : 'NotPassed';
+                refReads.push({ index: i, state: f.approved.isTrue ? 'passed' : 'failed' });
                 const endBlock = f.end.toNumber();
                 let ayes = prev ? prev.ayes : null;
                 let nays = prev ? prev.nays : null;
@@ -7375,9 +7651,39 @@ async function syncDemocracyPass() {
             }
         }
 
-        reconcileGovThreads('proposal', publicProposals.map(p => ({ id: `proposal-${p.index}`, refKey: String(p.index), title: `Public Proposal #${p.index}` })),
+        // Democracy high-water: a node behind ANY trusted democracy read may not
+        // close an external or referendum thread (computed before the proposal
+        // reconcile below moves its own mark).
+        const demHighWater = Math.max(threadHighWater('proposal'), threadHighWater('external'), threadHighWater('referendum'));
+        const refTrust = referendumReadTrusted({ referendumCount, currentBlock, highWater: demHighWater, knownRefKeys: db.getThreadRefKeys('referendum') });
+        const extTrust = refTrust.trusted ? externalReadTrusted({ currentBlock, highWater: demHighWater }) : refTrust;
+        reconcileGovThreads('proposal', publicProposals.map(p => ({ id: `proposal-${p.index}`, refKey: String(p.index), title: `Public Proposal #${p.index}`, proposalHash: propHashes[Number(p.index)] || null })),
             proposalReadTrusted({ publicPropCount: propCountRaw ? publicPropCount : null, currentBlock,
                 highWater: threadHighWater('proposal'), knownRefKeys: db.getThreadRefKeys('proposal') }), currentBlock);
+        // Referenda: one thread per ongoing referendum, closed when it finishes.
+        for (const rr of refReads) {
+            const call = rr.state === 'ongoing' ? await describeProposalCall(rr.bounded, rr.proposalHash) : null;
+            Object.assign(rr, { id: referendumThreadId(rr.index), refKey: String(rr.index), title: referendumTitle({ index: rr.index, call }), titleDecoded: !!call });
+        }
+        reconcileGovThreads('referendum', refReads, refTrust, currentBlock);
+        // The queued external proposal. Skipped when the runtime has no
+        // nextExternal or its hash could not be read: an empty list would close.
+        if (dem.nextExternal && (!externalProposal || externalProposal.proposalHash)) {
+            const extItems = [];
+            if (externalProposal) {
+                const h = externalProposal.proposalHash;
+                const call = await describeProposalCall(externalBounded, h);
+                extItems.push({ id: externalThreadId(h), refKey: h, proposalHash: h, titleDecoded: !!call,
+                    title: externalTitle({ hash: h, call, threshold: externalProposal.threshold }) });
+                externalProposal.threadId = externalThreadId(h);
+            }
+            const launchedAs = (id) => {
+                const r = refReads.find(x => x.state === 'ongoing' && x.proposalHash && externalThreadId(x.proposalHash) === id);
+                return r ? externalLaunchedReason(r.index) : null;
+            };
+            reconcileGovThreads('external', extItems, extTrust, currentBlock, { closeReason: launchedAs });
+        }
+        try { await backfillMotionProposalHashes(); } catch (e) { console.warn('Discussion threads: motion link backfill failed:', e.message); }
 
         db.setKv('democracy_meta', {
             referendumCount, publicPropCount, launchPeriod, currentBlock, totalIssuance,
@@ -7697,7 +8003,7 @@ async function dispatchResolvedReferenda(referenda) {
             prefMatches: (p) => p.governance && p.governance.referendumResult,
             makeEmail: ({ subscriber }) => {
                 const unsub = unsubscribeUrlFor(subscriber);
-                const href = `${emailSiteOrigin()}/democracy?ref=${r.refIndex}`;
+                const href = `${emailSiteOrigin()}/democracy/referendum/${r.refIndex}`;
                 const tally = (r.ayes != null && r.nays != null && r.tallyKnown)
                     ? `Final tally: ${Number(r.ayes).toLocaleString('en-US')} aye / ${Number(r.nays).toLocaleString('en-US')} nay.`
                     : null;
@@ -7763,7 +8069,7 @@ async function dispatchNewCouncilMotions() {
         prefMatches: (p) => p.governance && p.governance.councilMotion,
         makeEmail: (m, subscriber) => {
             const unsub = unsubscribeUrlFor(subscriber);
-            const href = `${emailSiteOrigin()}/council?motion=${m.motionIndex}`;
+            const href = `${emailSiteOrigin()}/council/motion/${m.motionIndex}`;
             const call = m.section && m.method ? `${m.section}.${m.method}` : 'a runtime call';
             const tmpl = emailLayout({
                 title:   `New council motion — #${m.motionIndex}`,
@@ -7908,7 +8214,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
             prefMatches: (p) => p.governance && p.governance.newReferendum,
             makeEmail: ({ subscriber }) => {
                 const unsub = unsubscribeUrlFor(subscriber);
-                const href  = `${emailSiteOrigin()}/democracy?ref=${r.refIndex}`;
+                const href  = `${emailSiteOrigin()}/democracy/referendum/${r.refIndex}`;
                 const tmpl  = emailLayout({
                     title:   `New referendum tabled — #${r.refIndex}`,
                     intro:   `A new referendum (#${r.refIndex}) is now open for voting on Polkadex.`,
@@ -7930,7 +8236,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
             prefMatches: (pp) => pp.governance && pp.governance.newProposal,
             makeEmail: ({ subscriber }) => {
                 const unsub = unsubscribeUrlFor(subscriber);
-                const href  = `${emailSiteOrigin()}/democracy?proposal=${p.index}`;
+                const href  = `${emailSiteOrigin()}/democracy/proposal/${p.index}`;
                 const tmpl  = emailLayout({
                     title:   `New public proposal — #${p.index}`,
                     intro:   `A new public proposal (#${p.index}) has been tabled. Seconders can endorse it to move it toward a referendum.`,
@@ -7979,7 +8285,7 @@ async function dispatchGovernanceEmails({ referenda, publicProposals }) {
                 prefMatches: (p) => p.governance && p.governance.closingReminder,
                 makeEmail: ({ subscriber }) => {
                     const unsub = unsubscribeUrlFor(subscriber);
-                    const href  = `${emailSiteOrigin()}/democracy?ref=${r.refIndex}`;
+                    const href  = `${emailSiteOrigin()}/democracy/referendum/${r.refIndex}`;
                     const hoursLeft = Math.round(msLeft / 3600_000);
                     const tmpl  = emailLayout({
                         title:   `Referendum #${r.refIndex} closes in ~${hoursLeft} hours`,

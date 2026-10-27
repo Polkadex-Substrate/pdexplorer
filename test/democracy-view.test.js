@@ -162,9 +162,14 @@ describe('late node link and wallet changes', () => {
         assert.match(fnBody('function stopCouncilPolling()'), /for \(const k in councilCatchup\) clearTimeout\(councilCatchup\[k\]\);/);
     });
 
-    test('the detail modals show a placeholder for a proposal hash the server does not have yet', () => {
-        assert.equal(scriptSrc.split('formatGovHash(row.proposal, row.proposalPending)').length - 1, 2);
-        assert.match(fnBody('function formatGovHash(hash, pending)'), /pending \? 'not indexed yet'/);
+    // The referendum and proposal detail modals became pages (lib/gov-detail-view.js,
+    // 2026-10-26); a call the server cannot show yet still gets a placeholder, not a blank.
+    test('the item pages show a placeholder for a call the server does not have yet', async () => {
+        const { renderCall } = await import('../lib/gov-detail-view.js');
+        const h = { esc: (s) => String(s).replace(/</g, '&lt;') };
+        assert.match(renderCall({ call: null, callNote: null }, h), /The call is not available\./);
+        assert.match(renderCall({ call: null, callNote: 'The preimage of this call is not noted on chain.' }, h), /preimage of this call is not noted/);
+        assert.ok(!/formatGovHash\(/.test(scriptSrc), 'the modal helper is gone with the modals');
     });
 });
 

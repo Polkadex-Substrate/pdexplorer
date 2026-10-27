@@ -136,3 +136,20 @@ describe('Democracy view default timers with native-like globals', () => {
         }
     });
 });
+
+describe('Governance item page Actions panel wiring', () => {
+    // The panel's deps reach confirm(), the wallet modal and fetch through
+    // script.js functions; each one is passed as an arrow so nothing is ever
+    // called as a method of the deps object.
+    test('every action and helper is an arrow wrapper, never a bare reference', () => {
+        const init = /const govDetailPage = createGovDetailPage\(\{[\s\S]*?\}\);\n/.exec(scriptSrc)[0];
+        assert.match(init, /fetchFn: \(u, o\) => fetch\(u, o\)/);
+        const actions = /actions: \{([\s\S]*?)\} \},/.exec(init);
+        assert.ok(actions, 'actions block found');
+        for (const name of ['vote', 'second', 'motionVote', 'motionClose']) {
+            assert.match(actions[1], new RegExp(`\\b${name}: (async )?\\(`), `${name} is a wrapper function`);
+        }
+        assert.match(init, /connectPrompt: \(\) => buildWalletConnectPrompt\(\)/);
+        assert.match(init, /same: \(a, b\) => isSameAddress\(a, b\)/);
+    });
+});

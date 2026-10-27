@@ -1011,6 +1011,13 @@
                 <div id="discussions-content"></div>
             </div>
 
+            <!-- Governance item pages: /democracy/referendum/<n>, /democracy/proposal/<n>,
+                 /democracy/external/<hash>, /council/motion/<hash>, /council/tc-motion/<hash>
+                 (lib/gov-detail-view.js renders into the content div). -->
+            <div class="governance-details-page page-section" data-page="governance-details" style="display: none;">
+                <div id="governance-details-content"></div>
+            </div>
+
             <!-- Onboarding tour modal — shown automatically on first visit
                  (localStorage flag `pdex_tour_seen_v1`), or on-demand via the
                  "Take the tour" link in the footer / `?tour=1` query string.

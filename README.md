@@ -501,7 +501,9 @@ pdexplorer/
 ├── styles.css             # Stylesheet
 ├── public/
 │   ├── manifest.webmanifest   # PWA manifest — the ONLY copy (audit F-061)
-│   └── og-image.png           # 1200x630 social card
+│   ├── og/                    # Per-section 1200x630 link-preview cards (generated, see below)
+│   └── og-image.png           # Original social card, kept for old links
+├── tools/og/              # Card generator (Python + Pillow) and the build's shell writer
 ├── nginx.conf             # Reverse proxy: TLS, headers, /api proxy, SPA fallback
 ├── Dockerfile.backend     # Node 22.11-alpine, runs as `node` (uid 1000)
 ├── Dockerfile.frontend    # Node 22.11 (build) → nginx:1.27 (runtime)
@@ -638,7 +640,7 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 | Tier | Used by | Header |
 |---|---|---|
-| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
+| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, the governance item endpoints (`/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id`; no-store for `?fresh=1` and 404), `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
 | **Medium** | `/api/validators`, `/api/network-info`, `/api/holders`, `/api/price-latest`, `/api/staking-rewards-status`, `/api/discussions`, `/api/analytics/*`, `/api/labels/:address` (anonymous only), `/api/consts/*` + `/api/runtime` at head | `public, max-age=30, s-maxage=60, stale-while-revalidate=120` |
 | **Long** | `/api/price-history`, `/api/treasury`, `/api/democracy`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and any inspection route pinned to a past block with `?at=` | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
 
@@ -772,6 +774,10 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 - `GET /api/democracy` — referenda + public proposals
 - `GET /api/governance/latest` — most-recent OPEN referendum / proposal (drives homepage banner; only ongoing events)
 - `GET /api/governance/calendar` — unified timeline across referenda + motions + treasury for `/calendar`
+- `GET /api/democracy/referendum/:index` - one referendum for its page `/democracy/referendum/<n>`: status, decoded call, conviction-weighted tally, electorate, threshold, lifecycle timeline, discussion thread and lifecycle links; finished ones resolve from stored history, unknown ones are 404
+- `GET /api/democracy/proposal/:index` - one public proposal (`/democracy/proposal/<n>`): proposer, seconds and seconders, deposit, decoded call, next launch, the referendum it became
+- `GET /api/democracy/external/:hash` - the external proposal with that proposal hash (`/democracy/external/<hash>`): threshold, decoded call, launch block, the motion that queued it
+- `GET /api/council/motion/:id` and `GET /api/technical-committee/motion/:id` - one motion by call hash or index (`/council/motion/<n>`, `/council/tc-motion/<n>`): call, voters, members' votes, threshold, outcome, timeline
 
 ### Email alerts (governance + network events)
 
@@ -790,7 +796,7 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 ### Discussions
 
 - `GET /api/discussions` — discussion threads attached to governance items
-- `GET /api/discussions/:id` - single thread with posts (each post carries `editedAt`, null if never edited)
+- `GET /api/discussions/:id` - single thread with posts (each post carries `editedAt`, null if never edited). `content` is the raw text as written, which may contain Markdown; the explorer renders a safe subset of it in the browser (`lib/discussion-markdown.js`), and API consumers get the raw text unchanged
 
 ### Authenticated (wallet sign-in for discussion posts)
 
@@ -799,7 +805,7 @@ Wallet-signed nonce login. Sessions are 192-bit random tokens with a 7-day TTL (
 - `POST /api/auth/challenge` — request a sign-in nonce
 - `POST /api/auth/verify` — submit `{ address, signature }`; the nonce is **not** sent (the server looks up the open challenge for that address). Returns `{ token, expiresIn }`, `expiresIn` in ms
 - `POST /api/auth/logout`
-- `POST /api/discussions/:id/posts` — post to a discussion (rate-limited, requires session)
+- `POST /api/discussions/:id/posts` - post to a discussion (rate-limited, requires session). `{ content }` is stored as written, Markdown included; the 4,000-character limit counts the raw text
 - `PATCH /api/discussions/:id/posts/:postId` - edit your own post in an open thread (rate-limited, requires session); the post then carries `editedAt`
 
 ### Build provenance + liveness (public, `no-store`)
@@ -837,6 +843,48 @@ with no URLs, pids, or email fields.
 
 - `GET /sitemap.xml` — dynamically generated, 5-min cache
 - `GET /robots.txt`
+
+### Link previews (Open Graph cards per section)
+
+Each sidebar section (Home, Top Holders, Transactions, Blocks, Events,
+Validators, Staking Rewards, Analytics, Watchlist, My Account, Stake PDEX,
+Democracy, Council, Treasury, Calendar, Discussions, Developers) has its own
+1200x630 card in `public/og/`, so a shared link to `/democracy` unfurls with the
+Democracy card and title on X, Slack, Telegram, Discord and LinkedIn.
+
+Crawlers do not run JavaScript, so the tags have to be in the HTML nginx
+returns:
+
+- `vite build` runs `tools/og/shells.mjs` (plugin in `vite.config.js`), which
+  writes `dist/<section>/index.html` (section title, description, canonical,
+  og:url, card) and `dist/<section>/_deep.html` (same card, no canonical or
+  og:url) next to `dist/index.html` (home card). Titles and descriptions come
+  from `ROUTE_SEO` in `script.js`.
+- nginx: `try_files $uri $uri/index.html $og_section_shell /index.html`.
+  `/democracy` gets the Democracy shell, `/democracy/referendum/5` the
+  Democracy deep shell, anything else (`/block/123`, `/help/x`) `index.html`.
+- In the app, `updateSeoMeta()` keeps `og:image` and `twitter:image` in step on
+  navigation (`lib/og-route.js`, the same rule).
+- `/developers` is server-rendered by the backend; its card is set in
+  `DEVELOPERS_HTML` in `server.js`.
+
+**Changing or adding a card.** Edit `tools/og/sections.json` (title, one-line
+tagline, sidebar icon, routes), then on your Mac:
+
+```bash
+pip3 install Pillow
+python3 tools/og/generate.py
+npm test
+```
+
+Commit `tools/og/sections.json`, `public/og/` and `lib/og-images.js` together.
+The PNG file names carry a hash of their bytes so X and Slack, which cache
+cards by URL for days, fetch a changed card at once. Details, fonts and
+licences: `tools/og/README.md`.
+
+**After a deploy,** check a card with `curl -s https://explorer.polkadex.ee/democracy | grep og:image`
+and refresh X's or LinkedIn's cache with their card validators if an old
+preview sticks.
 
 ### Error envelope
 
@@ -1045,7 +1093,7 @@ topology where indexer stalls show up as request latency.
 
 | Tier | Headers | Endpoints |
 | --- | --- | --- |
-| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/technical-committee`, `/api/governance/latest`, `/api/state/*` |
+| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/technical-committee`, `/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id` (404s are no-store), `/api/governance/latest`, `/api/state/*` |
 | `cacheMedium` | `max-age=30, s-maxage=60, stale-while-revalidate=120` | `/api/network-info`, `/api/validators`, `/api/holders`, `/api/price-latest`, `/api/discussions`, `/api/staking-rewards-status`, `/api/analytics/*`, `GET /api/labels/:address` (anonymous callers only) |
 | `cacheLong` | `max-age=300, s-maxage=600, stale-while-revalidate=3600` | `/api/treasury`, `/api/democracy`, `/api/price-history`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and inspection routes pinned to a past block with `?at=` |
 
