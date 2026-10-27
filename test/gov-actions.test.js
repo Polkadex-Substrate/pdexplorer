@@ -548,7 +548,7 @@ describe('script.js wiring', () => {
         assert.match(govInit, /motionClose: async \(hash, i, key\) => \{ if \(!\(await ensureCollectiveData\(key\)\)\) return; return councilMotionClose/);
     });
     test('a wallet change reaches the item page', () => {
-        assert.match(bodyOf(script, 'setStoredWallet'), /if \(getStoredWallet\(\) !== before\) govDetailPage\.accountChanged\(\);/);
+        assert.match(bodyOf(script, 'onWalletChanged'), /govDetailPage\.accountChanged\(\);/);
     });
     test('script.js stays under its ceiling', () => {
         assert.ok(readRepo('script.js', import.meta.url).split('\n').length < 15000);

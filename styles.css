@@ -1738,6 +1738,42 @@ h1, h2, h3 { font-weight: 600; }
     background: rgba(255, 255, 255, 0.05);
 }
 .wallet-account-name { font-size: 0.88rem; font-weight: 600; }
+.wallet-account-btn.is-current { border-color: var(--brand-secondary, #00E676); }
+.wallet-account-badge {
+    margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-size: 0.68rem; font-weight: 600;
+    color: var(--brand-secondary, #00E676); border: 1px solid var(--brand-secondary, #00E676);
+}
+.wallet-account-group { display: flex; flex-direction: column; gap: 8px; }
+.wallet-account-group-title {
+    margin-top: 6px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--text-secondary);
+}
+.wallet-current-banner {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+    margin-bottom: 14px; padding: 12px 14px; font-size: 0.85rem; color: var(--text-secondary);
+    border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.03);
+}
+.wallet-current-actions { display: inline-flex; gap: 8px; }
+.wallet-picker-help {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px;
+    font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5;
+}
+
+/* --- My Account menu (header) --- */
+.wallet-menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; min-width: 220px;
+    padding: 6px; background: var(--bg-surface, #12121A); border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.wallet-menu[hidden] { display: none !important; }
+.wallet-menu-who { padding: 8px 10px 6px; font-size: 0.74rem; color: var(--text-secondary); word-break: break-all; }
+.wallet-menu button {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; background: none;
+    border: 0; border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; font-size: 0.85rem;
+    text-align: left; cursor: pointer;
+}
+.wallet-menu button:hover, .wallet-menu button:focus-visible { background: rgba(255, 255, 255, 0.07); outline: none; }
+.wallet-menu button[data-wallet-action="disconnect"]:hover { color: var(--error); }
 .wallet-account-addr { font-size: 0.78rem; color: var(--text-secondary); }
 
 /* --- Wallet dashboard loading state --- */
@@ -2114,6 +2150,7 @@ h1, h2, h3 { font-weight: 600; }
 
 /* --- Wallet connect / disconnect button group --- */
 .wallet-btn-group {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 6px;

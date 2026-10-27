@@ -280,9 +280,17 @@
                                 <span id="connect-wallet-sub" class="connect-wallet-sub" style="display: none;"></span>
                             </span>
                         </button>
-                        <button id="disconnect-wallet-btn" class="disconnect-wallet-btn" title="Disconnect wallet" style="display: none;">
+                        <button id="disconnect-wallet-btn" class="disconnect-wallet-btn" title="Disconnect wallet" aria-label="Disconnect wallet" style="display: none;">
                             <i class='bx bx-x'></i>
                         </button>
+                        <!-- My Account menu. Opened by #connect-wallet-btn while a wallet is
+                             connected; wired in script.js via lib/wallet-menu.js. -->
+                        <div id="wallet-menu" class="wallet-menu" role="menu" aria-label="My Account" hidden style="display: none;">
+                            <div class="wallet-menu-who" id="wallet-menu-who"></div>
+                            <button type="button" role="menuitem" data-wallet-action="view"><i class='bx bx-user-circle'></i> View my account</button>
+                            <button type="button" role="menuitem" data-wallet-action="switch"><i class='bx bx-transfer-alt'></i> Switch wallet</button>
+                            <button type="button" role="menuitem" data-wallet-action="disconnect"><i class='bx bx-log-out'></i> Disconnect</button>
+                        </div>
                     </div>
                 </div>
             </header>
@@ -1329,8 +1337,10 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_address</code></td><td style="padding: 10px 12px;">Connected wallet address and source extension name.</td><td style="padding: 10px 12px;">So the My Account page works without re-connecting on every reload.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_address</code></td><td style="padding: 10px 12px;">Connected wallet address.</td><td style="padding: 10px 12px;">So the My Account page works without re-connecting on every reload.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_last_used_wallet_address</code></td><td style="padding: 10px 12px;">The most recently active address when your wallet has multiple accounts.</td><td style="padding: 10px 12px;">So we can default to the right account instead of always picking the first one.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_source</code></td><td style="padding: 10px 12px;">Which wallet extension (for example <code>polkadot-js</code>, <code>talisman</code> or <code>subwallet-js</code>) the connected account was chosen from.</td><td style="padding: 10px 12px;">So a signing request goes to the extension you picked when the same account exists in more than one.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_disconnected</code></td><td style="padding: 10px 12px;">A flag set when you click Disconnect and cleared when you connect an account.</td><td style="padding: 10px 12px;">So we do not reconnect an account for you on the next visit; you see the account picker instead.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_watchlist_v1</code></td><td style="padding: 10px 12px;">Addresses, validators, and governance items you've starred.</td><td style="padding: 10px 12px;">So your watchlist follows you across sessions.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_discuss_session</code></td><td style="padding: 10px 12px;">Signed bearer token (valid 7 days, matching the server-side session TTL) for posting on the discussion board. <strong>This is a credential</strong> — anyone with it can post as your address until it expires.</td><td style="padding: 10px 12px;">So you don't have to re-sign for every post.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_tour_seen_v1</code></td><td style="padding: 10px 12px;">A boolean flag once you've completed the onboarding tour.</td><td style="padding: 10px 12px;">So we don't pop the tour up again every visit.</td></tr>
@@ -1352,7 +1362,7 @@
                         <p>We do not set any tracking cookies. We do not load Google Analytics, Mixpanel, Segment, advertising pixels, or any other third-party analytics or tracking script. There are no third-party scripts in the explorer's HTML — every script you see runs from explorer.polkadex.ee.</p>
 
                         <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">Sessions</h2>
-                        <p>We use <code style="background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 3px; color: var(--brand-secondary);">sessionStorage</code> (cleared when you close the tab) for one transient flag: <code style="color: var(--brand-secondary);">pdex_skip_wallet_auto_pick</code> — set when you click "Switch wallet" so we don't immediately re-pick the same account.</p>
+                        <p>We do not use <code style="background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 3px; color: var(--brand-secondary);">sessionStorage</code> for wallet state. Whether you are connected, and whether you chose to disconnect, is remembered in the localStorage keys above until you switch or disconnect again.</p>
 
                         <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">Reset everything</h2>
                         <p>You can clear every <code style="color: var(--brand-secondary);">pdex_*</code> key in your browser at any time. The button below removes them all and reloads the page.</p>
