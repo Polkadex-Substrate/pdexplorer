@@ -29,6 +29,7 @@ import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
+import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
@@ -4537,31 +4538,8 @@ const GOV_DETAIL_ARG_MAX = 1000;
 const govCallCache = new Map();   // proposal hash -> decoded call (hits kept; misses retried after 10 min)
 const govHistCache = new Map();   // "<kind>:<id>:<block>" -> historical read (archive state never changes) or { miss, at } (pruned state: retried after 10 min)
 const GOV_HIST_MISS_MS = 10 * 60 * 1000;
-function govDescribeCall(c) {
-    const meta = (c.meta && c.meta.args) || [];
-    return {
-        section: String(c.section), method: String(c.method),
-        args: Array.from(c.args || []).map((a, i) => {
-            let value;
-            try { const h = a.toHuman(); value = typeof h === 'string' ? h : JSON.stringify(h); } catch (e) { try { value = String(a); } catch (_) { value = '[unprintable]'; } }
-            if (value.length > GOV_DETAIL_ARG_MAX) value = value.slice(0, GOV_DETAIL_ARG_MAX) + '...(truncated)';
-            return { name: meta[i] ? String(meta[i].name) : 'arg' + i, type: meta[i] ? String(meta[i].type) : null, value };
-        })
-    };
-}
-function govReadRefInfo(opt) {
-    if (!opt || opt.isNone) return { state: 'none' };
-    const r = opt.unwrap();
-    if (r.isOngoing) {
-        const s = r.asOngoing;
-        const bounded = s.proposal || s.proposalHash || null;
-        return { state: 'ongoing', end: s.end.toNumber(), threshold: s.threshold ? s.threshold.toString() : null,
-            delay: s.delay ? s.delay.toNumber() : null, ayes: balanceToPDEX(s.tally.ayes), nays: balanceToPDEX(s.tally.nays),
-            turnout: balanceToPDEX(s.tally.turnout), bounded, proposalHash: proposalHashOf(bounded, blake2AsHex) };
-    }
-    if (r.isFinished) { const f = r.asFinished; return { state: 'finished', approved: f.approved.isTrue, end: f.end.toNumber() }; }
-    return { state: 'none' };
-}
+const govDescribeCall = (c) => describeCall(c, GOV_DETAIL_ARG_MAX);
+const govReadRefInfo = (opt) => readReferendumInfo(opt, { toPdex: balanceToPDEX, hashBytes: blake2AsHex });
 function govCollectivePallet(collective) {
     if (collective === 'technicalCommittee') return globalApi.query.technicalCommittee ? 'technicalCommittee' : null;
     const snap = db.getKv('council') || {};
@@ -4625,14 +4603,10 @@ const govChain = {
         const pre = globalApi.query.preimage;
         if (!bytes && ph && pre && pre.preimageFor) {
             let len = b && b.len !== null && b.len !== undefined ? b.len : null;
-            if (len === null && pre.statusFor) {
-                const st = await pre.statusFor(ph);
-                if (st && st.isSome) {
-                    const j = st.unwrap().toJSON() || {};
-                    const v = j.unrequested || j.requested || j.Unrequested || j.Requested || {};
-                    if (v.len !== undefined && v.len !== null) len = Number(v.len);
-                }
-            }
+            // A Legacy or bare hash carries no length: the preimage status has
+            // it. RequestStatusFor first (the 392 runtime notes new preimages
+            // there, with Requested's length as maybeLen), then StatusFor.
+            if (len === null) len = await notedPreimageLen(pre, ph);
             if (len !== null) { const opt = await pre.preimageFor([ph, len]); if (opt && opt.isSome) bytes = opt.unwrap(); }
         }
         let out;
@@ -4644,28 +4618,17 @@ const govChain = {
     async publicProp(index) {
         const dem = globalApi.query.democracy;
         if (!dem || !dem.publicProps) return null;
-        for (const e of await dem.publicProps()) {
-            if (Number(e[0].toString()) === Number(index)) return { bounded: e[1], proposalHash: proposalHashOf(e[1], blake2AsHex), proposer: String(e[e.length - 1]) };
-        }
-        return { absent: true };
+        return readPublicProp(await dem.publicProps(), index, { hashBytes: blake2AsHex });
     },
     async deposit(index) {
         const dem = globalApi.query.democracy;
         if (!dem || !dem.depositOf) return null;
-        const opt = await dem.depositOf(index);
-        if (!opt || !opt.isSome) return null;
-        const t = opt.unwrap();
-        const listFirst = Array.isArray(t[0]) || (t[0] && typeof t[0].map === 'function' && !t[0].toBn);
-        const list = listFirst ? t[0] : t[1];
-        return { seconders: Array.from(list || []).map(a => String(a)), deposit: balanceToPDEX(listFirst ? t[1] : t[0]) };
+        return readDepositOf(await dem.depositOf(index), { toPdex: balanceToPDEX });
     },
     async nextExternal() {
         const dem = globalApi.query.democracy;
         if (!dem || !dem.nextExternal) return null;
-        const opt = await dem.nextExternal();
-        if (!opt || !opt.isSome) return { absent: true };
-        const ext = opt.unwrap();
-        return { bounded: ext[0] || null, proposalHash: proposalHashOf(ext[0], blake2AsHex), threshold: ext[1] ? ext[1].toString() : null };
+        return readNextExternal(await dem.nextExternal(), { hashBytes: blake2AsHex });
     },
     async motionAt(collective, hash, block) {
         const pallet = govCollectivePallet(collective);
@@ -4676,11 +4639,7 @@ const govChain = {
                 const bh = await getBlockHashCached(block);
                 const [callOpt, votingOpt] = await Promise.all([q.proposalOf.at(bh, hash), q.voting.at(bh, hash)]);
                 const call = callOpt && callOpt.isSome ? govDescribeCall(callOpt.unwrap()) : null;
-                let voting = null;
-                if (votingOpt && votingOpt.isSome) {
-                    const v = votingOpt.unwrap();
-                    voting = { index: v.index.toNumber(), threshold: v.threshold.toNumber(), ayes: v.ayes.map(a => a.toString()), nays: v.nays.map(a => a.toString()), end: v.end.toNumber() };
-                }
+                const voting = readCollectiveVoting(votingOpt);
                 return call || voting ? { call, voting } : null;
             } catch (e) { return null; }
         });
