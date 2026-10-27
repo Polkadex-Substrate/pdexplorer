@@ -16,6 +16,9 @@
 //   scans instead of full-table scans. Everything works without them — just
 //   slower on the timeseries pre-warm — so there's no rush and no risk in
 //   running it during quiet traffic.
+//   idx_events_signer_block ON events(signer_address, block)
+//   Lets a page of an account's signed events read in index order instead of
+//   sorting every event the account signed (db.js accountEventsQuery).
 //
 // SAFETY
 //   * CREATE INDEX IF NOT EXISTS — safe to re-run; a completed index is a no-op.
@@ -49,6 +52,7 @@ if (!fs.existsSync(DB_PATH)) {
 const INDEXES = [
     ['idx_tx_timestamp', 'CREATE INDEX IF NOT EXISTS idx_tx_timestamp ON transactions(timestamp)'],
     ['idx_blocks_timestamp', 'CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp)'],
+    ['idx_events_signer_block', 'CREATE INDEX IF NOT EXISTS idx_events_signer_block ON events(signer_address, block)'],
 ];
 
 console.log(`[index-migrate] DB: ${DB_PATH}`);
