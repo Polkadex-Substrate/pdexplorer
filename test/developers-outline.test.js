@@ -170,9 +170,12 @@ describe('F-083 — the documented tiers match the handlers', () => {
         // The specific error both pages had made. /api/wallet/:address is one
         // account's balances; describing it as cacheable for 30 seconds invites
         // an intermediary to serve one visitor's balances to another.
+        // The account page is the exception: the same public chain data for every visitor, fed by the
+        // 12 s indexer, so it is Short. Without a header the CDN kept it for an hour.
+        const PUBLIC_ACCOUNT = ['/api/account/:address', '/api/account/:address/history'];
         const shareable = CACHE_TIERS.filter(t => t.header.startsWith('public'));
         for (const t of shareable) {
-            for (const r of t.routes) {
+            for (const r of t.routes.filter(r => !PUBLIC_ACCOUNT.includes(r))) {
                 assert.ok(!/:address|\/api\/auth|\/api\/email|\/api\/search/.test(r),
                     `${r} is per-caller but sits in the '${t.name}' (public) tier`);
             }

@@ -16,6 +16,7 @@ import { resolveClientIp } from './lib/client-ip.js';
 import { planReorgSweep, hashesDiffer, heightsToVerify } from './lib/reorg.js';
 import { planTxPage, cursorPage, parseCursor, withoutRowId } from './lib/tx-paging.js';
 import { buildTxRowFromEventRow, eventTxId, rewardId } from './lib/tx-from-event.js';
+import { attachAccounts, backfillAccountLinks, LINKS_STATE } from './lib/account-links.js';
 import { checkUserText } from './lib/user-text.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_GAP_ATTEMPTS } from './lib/gap-scheduling.js';
@@ -453,6 +454,9 @@ const TX_OLDER_SCAN_BLOCKS = readPositiveInteger(process.env.TX_OLDER_SCAN_BLOCK
 // IGNORE — so it can be generous; 5000/tick walks the full 12.8M-block history
 // in well under a day without the chain node noticing anything happened.
 const TX_BACKFILL_CHUNK = readPositiveInteger(process.env.TX_BACKFILL_CHUNK, 5000);
+// Account-links backfill (lib/account-links.js): blocks of stored events per tick, and the tick interval.
+const ACCOUNT_LINKS_CHUNK = readPositiveInteger(process.env.ACCOUNT_LINKS_CHUNK, 5000);
+const ACCOUNT_LINKS_INTERVAL_MS = readPositiveInteger(process.env.ACCOUNT_LINKS_INTERVAL_MS, 2000);
 // Below this height there is nothing to derive (block 1 onward by default).
 const TX_MIN_BLOCK = readPositiveInteger(process.env.TX_MIN_BLOCK, 1);
 const TX_SCAN_BATCH_SIZE = readPositiveInteger(process.env.TX_SCAN_BATCH_SIZE, 25);
@@ -535,6 +539,8 @@ const DISPLAY_NAME_OVERRIDES = new Map([
 // Known Polkadex mainnet treasury account — used as a fallback if the
 // pallet-id derivation is unavailable on the connected runtime.
 const TREASURY_ACCOUNT = process.env.TREASURY_ACCOUNT || 'esoEt6uZ9vs23yW8aqTACLf1tViGpSLZKnhPXt5Nq7vQwHGew';
+// How lib/account-links.js links an event to the accounts its data names, and the account treasury payouts come from.
+const ACCOUNT_LINK_RULES = { normalize: normalizeAddress, treasury: TREASURY_ACCOUNT };
 
 // Comma-separated list of WebSocket RPC endpoints. WsProvider will rotate
 // across them on failure and reconnect with exponential-ish backoff. Set
@@ -4128,6 +4134,8 @@ app.get('/api/account/:address', async (req, res) => {
         // nobody has to guess which half a field came from.
         const chainState = db.getSyncState('chain_index') || {};
         const blocksState = db.getSyncState('blocks') || {};
+        const linksState = db.getSyncState(LINKS_STATE);
+        cacheShort(res);
         res.json({
             account: address, display: name,
             balanceTotal: free + reserved, balanceFree: free,
@@ -4155,8 +4163,9 @@ app.get('/api/account/:address', async (req, res) => {
                 // all older than oldestScannedBlock returned truncated:false
                 // and read as "no earlier activity" — the absence-as-fact this
                 // finding exists to stop, surviving inside its own fix.
+                // The account-links backfill (lib/account-links.js) bounds them below the same way until it is done.
                 truncated: (txs.length >= ACCOUNT_PAGE) || (evs.length >= ACCOUNT_PAGE)
-                    || !chainState.backfillComplete,
+                    || !chainState.backfillComplete || !linksState.complete,
                 rowLimit: ACCOUNT_PAGE,
                 // Below this height we have not indexed yet; anything older is
                 // unknown rather than absent.
@@ -4187,7 +4196,9 @@ app.get('/api/account/:address/history', (req, res) => {
         return res.status(400).json({ error: 'before must be the <block>:<rowId> cursor from next.' });
     }
     try {
-        res.json({ list, ...cursorPage(ACCOUNT_LISTS[list](acct, cursor), ACCOUNT_PAGE) });
+        const page = cursorPage(ACCOUNT_LISTS[list](acct, cursor), ACCOUNT_PAGE);
+        cacheShort(res);
+        res.json({ list, ...page });
     } catch (err) { serverError(res, err, req.path); }
 });
 
@@ -8488,6 +8499,7 @@ async function scanSingleBlock(blockNumber) {
             data: record.event.data.toHuman(), signerAddress, signerName, timestamp, status
         });
     }
+    attachAccounts(events, ACCOUNT_LINK_RULES);
     return { block, events, eventsIncomplete };
 }
 
@@ -8760,10 +8772,22 @@ function deriveTransactionsFromLocalEvents(lo, hi) {
     // spelling as live-indexed ones. A review caught that only the live writer
     // normalised, while this path produces the bulk of the table.
     const rows = db.getTransferEventRowsRange(lo, hi)
-        .map(ev => buildTxRowFromEventRow(ev, normalizeAddress))
+        .map(ev => buildTxRowFromEventRow(ev, normalizeAddress, TREASURY_ACCOUNT))
         .filter(Boolean);
     if (rows.length) db.insertTransactions(rows);
     return rows.length;
+}
+
+// One account-links backfill tick (lib/account-links.js); true once the walk is done, so the caller stops its timer.
+function syncAccountLinks() {
+    try {
+        const st = backfillAccountLinks(db, { rules: ACCOUNT_LINK_RULES, chunk: ACCOUNT_LINKS_CHUNK });
+        if (st && st.complete) console.log(`[account-links] backfill complete: ${st.links || 0} links and ${st.payouts || 0} treasury payouts added`);
+        return !st || st.complete;
+    } catch (err) {
+        console.warn('[account-links] backfill tick failed, retrying next tick:', err && err.message ? err.message : err);
+        return false;
+    }
 }
 
 // Repair one height whose canonical hash is known and differs from storage.
@@ -8959,6 +8983,8 @@ async function syncChainIndex() {
             const forward = await scanChainRange(headSeen + 1, head, BLOCKS_FORWARD_MAX);
             if (forward.blocks.length) db.insertBlocks(forward.blocks);
             if (forward.events.length) db.insertEvents(forward.events);
+            // Transfer rows from the events just stored, treasury payouts included (the RPC transfer scanner builds balances.Transfer only).
+            if (forward.events.length) deriveTransactionsFromLocalEvents(headSeen + 1, head);
             // Event-driven governance refresh. The snapshots otherwise renew on
             // slow timers (COUNCIL_REFRESH_MS, TREASURY_REFRESH_MS,
             // DEMOCRACY_REFRESH_MS), so a new motion, referendum or vote took
@@ -10879,6 +10905,8 @@ function startIndexerLoops() {
     // Cadence: GOVERNANCE_INDEXER_INTERVAL_MS (default 30s).
     setInterval(syncGovernance, GOVERNANCE_INDEXER_INTERVAL_MS);
     setInterval(syncPrice, PRICE_SYNC_INTERVAL);
+    // Links and treasury payout rows for events stored before they existed; the timer stops once the walk is done.
+    const accountLinksTimer = setInterval(() => { if (syncAccountLinks()) clearInterval(accountLinksTimer); }, ACCOUNT_LINKS_INTERVAL_MS);
 }
 
 // Surface anything that escapes a sync's try/catch so we never see a

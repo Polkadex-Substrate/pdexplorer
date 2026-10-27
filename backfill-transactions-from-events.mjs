@@ -23,7 +23,9 @@
 //   (buildFinancialTransactionFromEvent in server.js): one row per
 //   `balances.Transfer` event. This captures transfers from every call
 //   variant (transfer, transferKeepAlive, transferAllowDeath, transferAll,
-//   forceTransfer) because they all emit the same Transfer event.
+//   forceTransfer) because they all emit the same Transfer event. Treasury
+//   payouts (treasury.Awarded) are derived by the indexer, not by this script
+//   (lib/account-links.js).
 //
 // HASH / IDEMPOTENCY
 //   Each row's primary key is `event-<blockHash>-<eventIndex>` (audit F-021 —
