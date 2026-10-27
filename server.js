@@ -43,6 +43,7 @@ import { getOnChainIdentity } from './lib/identity.js';
 // header of lib/api-reference.js for what four hand-maintained copies cost.
 import { renderSection, renderToc, renderOutline, renderCacheTiers, RPC_NOT_READY, rpcNotReadyExample } from './lib/api-reference.js';
 import { developersBodies } from './lib/developers-bodies.js';
+import { OG_CARDS } from './lib/og-images.js';
 import {
     selectDispatchable, selectNewlyResolved, isTerminalRefStatus, describeRefOutcome
 } from './lib/email-events.js';
@@ -3074,6 +3075,13 @@ const DEVELOPERS_HTML = `<!DOCTYPE html>
 <meta property="og:title" content="Developers — Polkadex Explorer API Reference">
 <meta property="og:description" content="Public read-only JSON API for the Polkadex Mainnet: chain data, governance, price feed, and the exact /api/network-info schema.">
 <meta property="og:url" content="${SITE_URL}/developers">
+<meta property="og:site_name" content="Polkadex Explorer">
+<meta property="og:image" content="${SITE_URL}${OG_CARDS.developers.file}">
+<meta property="og:image:width" content="${OG_CARDS.developers.width}">
+<meta property="og:image:height" content="${OG_CARDS.developers.height}">
+<meta property="og:image:alt" content="${sharedEscapeHtml(OG_CARDS.developers.alt)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${SITE_URL}${OG_CARDS.developers.file}">
 <style>
 :root{color-scheme:dark}
 *{box-sizing:border-box}

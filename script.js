@@ -26,6 +26,7 @@ import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } 
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { developersBodies } from './lib/developers-bodies.js';
+import { ogCardFor, ogImageUrl } from './lib/og-route.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
 // server-rendered DEVELOPERS_HTML in server.js for hard loads and crawlers).
 // Both build their endpoint lists from this one table, so the two documents
@@ -3569,10 +3570,18 @@ function updateSeoMeta(mainTarget, { title, description, canonicalPath, noindex 
     setMetaContent('property', 'og:description', finalDesc);
     setMetaContent('property', 'og:url', canonical);
     setMetaContent('property', 'og:type', mainTarget === 'home' ? 'website' : 'article');
+    // Section card, picked from the address bar exactly as nginx picked the
+    // shell for a crawler (lib/og-route.js), so a copied link previews the same.
+    const ogCard = ogCardFor(window.location.pathname);
+    setMetaContent('property', 'og:image', ogImageUrl(ogCard));
+    setMetaContent('property', 'og:image:secure_url', ogImageUrl(ogCard));
+    setMetaContent('property', 'og:image:alt', ogCard.alt);
 
     // Twitter
     setMetaContent('name', 'twitter:title', finalTitle);
     setMetaContent('name', 'twitter:description', finalDesc);
+    setMetaContent('name', 'twitter:image', ogImageUrl(ogCard));
+    setMetaContent('name', 'twitter:image:alt', ogCard.alt);
 
     // Clear any route-scoped JSON-LD by default; routes that own one (e.g.
     // /wallet) re-inject after this call returns.

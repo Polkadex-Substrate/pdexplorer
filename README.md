@@ -501,7 +501,9 @@ pdexplorer/
 ├── styles.css             # Stylesheet
 ├── public/
 │   ├── manifest.webmanifest   # PWA manifest — the ONLY copy (audit F-061)
-│   └── og-image.png           # 1200x630 social card
+│   ├── og/                    # Per-section 1200x630 link-preview cards (generated, see below)
+│   └── og-image.png           # Original social card, kept for old links
+├── tools/og/              # Card generator (Python + Pillow) and the build's shell writer
 ├── nginx.conf             # Reverse proxy: TLS, headers, /api proxy, SPA fallback
 ├── Dockerfile.backend     # Node 22.11-alpine, runs as `node` (uid 1000)
 ├── Dockerfile.frontend    # Node 22.11 (build) → nginx:1.27 (runtime)
@@ -841,6 +843,48 @@ with no URLs, pids, or email fields.
 
 - `GET /sitemap.xml` — dynamically generated, 5-min cache
 - `GET /robots.txt`
+
+### Link previews (Open Graph cards per section)
+
+Each sidebar section (Home, Top Holders, Transactions, Blocks, Events,
+Validators, Staking Rewards, Analytics, Watchlist, My Account, Stake PDEX,
+Democracy, Council, Treasury, Calendar, Discussions, Developers) has its own
+1200x630 card in `public/og/`, so a shared link to `/democracy` unfurls with the
+Democracy card and title on X, Slack, Telegram, Discord and LinkedIn.
+
+Crawlers do not run JavaScript, so the tags have to be in the HTML nginx
+returns:
+
+- `vite build` runs `tools/og/shells.mjs` (plugin in `vite.config.js`), which
+  writes `dist/<section>/index.html` (section title, description, canonical,
+  og:url, card) and `dist/<section>/_deep.html` (same card, no canonical or
+  og:url) next to `dist/index.html` (home card). Titles and descriptions come
+  from `ROUTE_SEO` in `script.js`.
+- nginx: `try_files $uri $uri/index.html $og_section_shell /index.html`.
+  `/democracy` gets the Democracy shell, `/democracy/referendum/5` the
+  Democracy deep shell, anything else (`/block/123`, `/help/x`) `index.html`.
+- In the app, `updateSeoMeta()` keeps `og:image` and `twitter:image` in step on
+  navigation (`lib/og-route.js`, the same rule).
+- `/developers` is server-rendered by the backend; its card is set in
+  `DEVELOPERS_HTML` in `server.js`.
+
+**Changing or adding a card.** Edit `tools/og/sections.json` (title, one-line
+tagline, sidebar icon, routes), then on your Mac:
+
+```bash
+pip3 install Pillow
+python3 tools/og/generate.py
+npm test
+```
+
+Commit `tools/og/sections.json`, `public/og/` and `lib/og-images.js` together.
+The PNG file names carry a hash of their bytes so X and Slack, which cache
+cards by URL for days, fetch a changed card at once. Details, fonts and
+licences: `tools/og/README.md`.
+
+**After a deploy,** check a card with `curl -s https://explorer.polkadex.ee/democracy | grep og:image`
+and refresh X's or LinkedIn's cache with their card validators if an old
+preview sticks.
 
 ### Error envelope
 
