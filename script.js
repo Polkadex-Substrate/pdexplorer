@@ -23,11 +23,11 @@ import { safeReturnPath } from './lib/safe-return.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
-import { canEdit as canEditPost, renderPostList, wireEditing } from './lib/discussion-edit.js';
+import { canEdit as canEditPost, renderPostList, renderEarlierDiscussion, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
 import { composerHtml, wireComposer } from './lib/discussion-composer.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
-import { isGovDetailRoute, govItemPath, legacyGovRedirect } from './lib/gov-detail.js';
+import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
@@ -10866,7 +10866,8 @@ function renderThreadList(threads) {
             {
                 key: 'postCount', label: 'Posts',
                 sort: (a, b) => (a.postCount || 0) - (b.postCount || 0),
-                format: row => stakingFormatNumber(row.postCount || 0)
+                format: row => stakingFormatNumber(row.postCount || 0) + (row.earlierPostCount > 0
+                    ? ` <span style="color:var(--text-muted);font-size:0.78rem;">+ ${stakingFormatNumber(row.earlierPostCount)} earlier</span>` : '')
             },
             {
                 key: 'closedReason', label: 'Closed reason', searchable: true,
@@ -10882,16 +10883,19 @@ function renderThreadList(threads) {
 // root/opts: the governance item pages embed the same view (opts.embedded).
 async function fetchDiscussionThread(id, focusLink = false, root = document.getElementById('discussions-content'), opts = {}) {
     if (!root) return;
-    root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading discussion…</div>';
+    if (!opts.quiet) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading discussion…</div>';
     try {
         // no-store: a cached copy from before a post was made showed "No posts yet" (2026-10-22).
         const res = await fetch('/api/discussions/' + encodeURIComponent(id), { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
-        renderThread(data.thread, data.posts || [], root, opts);
+        renderThread(data.thread, data.posts || [], root, { ...opts, earlier: data.earlier || [] });
         if (focusLink) focusLinkedPost(root, readLinkedPostId(window.location.search, window.location.hash), { document });
+        return data;
     } catch (e) {
+        if (opts.quiet) return null;   // a background refresh that failed leaves the board as it is
         root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
+        return null;
     }
 }
 
@@ -10921,6 +10925,10 @@ function renderThread(thread, posts, root = document.getElementById('discussions
         </div>`;
     }
 
+    // Posts of the earlier lifecycle threads (council motion, external proposal):
+    // read-only, above this thread's own posts, never counted into them.
+    const earlierHtml = renderEarlierDiscussion(opts.earlier, { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime,
+        hrefOf: opts.embedded ? itemPathForThread : null });
     const badge = thread.status === 'open'
         ? '<span class="reward-badge claimed">Open</span>'
         : '<span class="reward-badge unclaimed">Closed</span>';
@@ -10931,6 +10939,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
                 <a href="/discussions${opts.embedded ? '/' + encodeURIComponent(thread.id) : ''}" class="item-link" style="color:var(--text-secondary);font-size:0.8rem;">${opts.embedded ? 'Open as a thread page' : 'All discussions'}</a>
             </div>
             ${opts.embedded ? '' : renderLifecycleLinks(thread.links, stakingEscapeHtml)}
+            ${earlierHtml}
             <div class="discussion-posts">${postsHtml}</div>
             ${composer}
         </div>`;
@@ -10949,6 +10958,8 @@ function renderThread(thread, posts, root = document.getElementById('discussions
     wireEditing(root, { esc: stakingEscapeHtml, fetchFn: (input, init) => fetch(input, init), getSession: getDiscussSession, threadId: thread.id, posts,
         clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread({ links: thread.links, ...d.thread }, d.posts || [], root, opts) });
     wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
+    // The item page's header count is taken from what was just drawn.
+    if (typeof opts.onRendered === 'function') opts.onRendered(thread, posts, opts.earlier || []);
 }
 
 // Locate an extension signer that can sign for the given address.
@@ -11050,7 +11061,7 @@ const govDetailPage = createGovDetailPage({ root: () => document.getElementById(
     actions: { vote: (i, side) => openReferendumVoteModal(i, side), second: (i, seconds) => secondPublicProposal(i, seconds),
         motionVote: async (hash, i, aye, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionVote(hash, i, aye, key); },
         motionClose: async (hash, i, key) => { if (!(await ensureCollectiveData(key))) return; return councilMotionClose(hash, i, key); } },
-    loadThread: (id, el, o) => fetchDiscussionThread(id, o.focus, el, { embedded: true }), setSeo: (o) => updateSeoMeta('governance-details', { canonicalPath: window.location.pathname, ...o }),
+    loadThread: (id, el, o) => fetchDiscussionThread(id, o.focus, el, { embedded: true, onRendered: o.onRendered, quiet: o.quiet }), setSeo: (o) => updateSeoMeta('governance-details', { canonicalPath: window.location.pathname, ...o }),
     getApi: () => globalApi, toAddress: toPolkadexAddress, account: () => getStoredWallet(), location: () => window.location, env: { navigator, document },
     visible: () => document.visibilityState === 'visible', scrollTo: (el) => el && el.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
 wireGovRowClicks(document, { open: (href) => window.open(href, '_blank', 'noopener'), selection: () => (window.getSelection ? window.getSelection() : '') });
