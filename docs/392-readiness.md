@@ -1,5 +1,9 @@
 # Explorer readiness for runtime spec 392
 
+Deadline (noted 2026-10-27): referendum #36 enacts about 2026-10-29 18:00 UTC
+(voting ends at block 13,342,284; enactment 300 blocks later). This build must
+be live on the mainnet explorer before then.
+
 Mainnet runs spec 373 until a referendum enacts 392. Testnet already runs 392
 (enacted there at block 1,553,840 on 2026-10-07). One explorer build must index
 and sign correctly on both runtimes and across the upgrade block, and must
@@ -7,32 +11,72 @@ decode every historical block with that block's own runtime (the explorer uses
 `api.at(blockHash)`).
 
 **Deadline: this build must be live and healthy on the mainnet explorer BEFORE
-the referendum enacts 392 on mainnet.** The old explorer (@polkadot/api 10.13.1)
+the referendum enacts 392.** The old explorer (@polkadot/api 10.13.1)
 cannot decode blocks produced under 392. Rollback to the previous image is valid
 only before enactment; see "Rollback" below.
 
-## Base and status (2026-10-26)
+## Base and status (2026-10-27)
 
-- Branch `chore/polkadot-api-v5-r2`: the eleven commits of
-  `chore/polkadot-api-v5` (reviewed 2026-10-18) rebased onto `main` at
-  `62b5106` (merge of PR #19), plus the round-2 commits listed under "Round 2"
-  below. It carries everything on `main` up to `62b5106` (live governance,
-  discussion edit, permalinks, render and fetch fixes). Explorer PR 20 is NOT
-  in it.
-- The rebase had no conflicts: `main` did not touch `package.json` or
-  `package-lock.json`; the only files both sides changed are `db.js`,
-  `server.js` and `script.js`, and git merged them without a conflict. The lock file is the branch's own
-  (api 17.0.2), unchanged; `npm ci` from it works offline from a warm cache.
-- `script.js` is 14,977 lines (ceiling 15,000).
-- Here (Linux, Node 22.23, `npm ci --offline` from the lock), 2026-10-25:
-  `npm test` exit 0, `# fail 0` in three runs. No fixtures: 1805 tests,
-  `# skipped 2` (the two FIXTURE MISSING lines). With the mainnet 373 fixture
-  fetched on 2026-10-19: 1823 tests, `# skipped 1` (392 missing). With that
-  373 fixture plus a synthetic 392 fixture (Substrate v15/v16 metadata, one
-  v5 General and one v4 sample): 1849 tests, `# skipped 0`. The real 392
-  fixture can only be fetched from the CEO's Mac (run sheet A).
+- Branch `chore/polkadot-api-v5-r3`: `chore/polkadot-api-v5-r2` (head
+  `5df54e9`, reviewed: the eleven commits of `chore/polkadot-api-v5` rebased
+  onto `main` at `62b5106`, plus the round-2 commits below) with `origin/main`
+  at `d76676d` (merge of PR #24) MERGED into it, not rebased, so every reviewed
+  commit keeps its id. Then the round-3 commits below. It carries everything on
+  `main` up to `d76676d`: governance item pages, democracy and referendum
+  discussion threads, Markdown posts, item page voting, Open Graph cards.
+  Explorer PR 20 is NOT in it (see the trial merge below).
+- The merge had no textual conflicts (`main` did not touch `package.json` or
+  `package-lock.json`; git merged `db.js`, `server.js` and `script.js`). It
+  had one semantic conflict, resolved in the merge commit: both sides added
+  `blake2AsHex` to `server.js`'s imports on different lines, and a duplicate
+  import binding is a SyntaxError, so `server.js` would not start while every
+  test passed. `test/module-link.test.js` now catches that class (round 3).
+  The lock file is the branch's own (api 17.0.2), unchanged; `npm ci` from it
+  works offline from a warm cache.
+- `script.js` is 14,847 lines (ceiling 15,000).
+- Here (Linux, Node 22.23, `npm ci --offline` from the lock), 2026-10-27:
+  `npm test` exit 0, `# fail 0`. With the mainnet 373 fixture (fetched
+  2026-10-19): 2247 tests, `# skipped 1` (392 missing), two runs. No
+  fixtures: 2220 tests, `# skipped 2`. `npm run build` (Vite) passes and the
+  new Open Graph step writes 43 section shells. A backend boot answers
+  `/api/version` and the new governance item routes (RPC unreachable, as
+  expected here). The real 392 fixture can only be fetched from the CEO's Mac
+  (run sheet A).
+- Trial merge of PR 20 (`refs/pull/20/head` at `b372776`) into this branch,
+  not committed: no conflicts, `npm test` exit 0, 2287 tests, `# fail 0`,
+  `# skipped 1` (392 missing), Vite build passes. If PR 20 lands on `main`
+  first, merging `main` into this branch again is expected to be clean.
 
-### Round 2 (on top of the reviewed branch)
+### Round 3 (2026-10-27, on top of the merge)
+
+1. **Startup guard.** `test/module-link.test.js` runs `node --check` on every
+   entry module, `lib/`, `scripts/`, `tools/` and `vite.config.js`, and checks
+   each named import of `server.js`, `db.js`, `email.js` and `script.js`
+   against the real exports of its module. Proved failing on the merge's
+   duplicate import and on a misspelt export, both reported by line.
+2. **New-on-main governance code checked against api 17.** The item pages'
+   chain reads moved unchanged from `server.js` into `lib/gov-chain-read.js`
+   and run in `test/gov-chain-read.test.js` on real codecs (Substrate's
+   metadata always, the Polkadex fixtures when present): Bounded
+   Inline/Lookup/Legacy proposal hashes, `referendumInfoOf` Ongoing (tally,
+   delay) / Finished / None, `depositOf` and `publicProps` tuples,
+   `nextExternal`, collective `voting` and `proposalOf`, the call description,
+   `scheduler.Dispatched` as the indexer stores it (`toHuman`, then JSON)
+   matching the referendum enactment task id, the motion-hash backfill finding
+   `externalPropose*` inside `council.propose`, and the Actions panel balance
+   from a real `AccountInfo`. Voting from item pages goes through the same
+   `submitSignedTx` (withSignedTransaction, CheckMetadataHash) as the list
+   pages; main only added stage fan-out there. Historical reads
+   (`query.x.y.at`) decode with that block's own registry under api 17.
+3. **One real difference, fixed: preimage length on 392.** A Legacy or
+   bare-hash proposal read its preimage length only from `preimage.statusFor`,
+   only as `len`. Spec 392 (pallet-preimage 45) notes new preimages in
+   `RequestStatusFor`, where a Requested entry carries the length as
+   `maybeLen`, so an item page would have said "not noted" for a noted
+   preimage. It now reads `RequestStatusFor` first, then `StatusFor`, and
+   accepts either key. The test fails on the old logic.
+
+### Round 2 (2026-10-26, on top of the reviewed branch)
 
 1. **Gate fix: `# skipped 0` was unreachable, and a real 392 fixture would
    have FAILED.** Metadata v14 and v15 have room for one extrinsic version and
@@ -215,6 +259,10 @@ byte-identical with the right hash (v14 and v15 registries included, so a 392
 v5 sample is also decoded the way the api does after an in-place upgrade,
 which loads v14 metadata). `test/gov-live-codecs.test.js` also runs the live
 governance decoders on codecs built from each fixture.
+`test/gov-chain-read.test.js` does the same for the governance item pages'
+chain reads, enactment matching and the motion-hash backfill.
+`test/module-link.test.js` (no network) fails if any entry module would not
+parse or names an import its module does not export.
 
 ## CEO run sheet
 
@@ -222,6 +270,24 @@ In order. Each block says where it runs. Every block is plain commands for
 bash 3.2 or zsh, one per line, nothing to edit except where a step says
 "put the value from ... here". Paste a block, read the output against the
 pass line, then go on.
+
+### A0. The branch (on your Mac)
+
+The `pdexplorer-wt-392` worktree was created from the CTO sandbox, so its git
+links point at sandbox paths until repaired. Repair them from the main
+checkout, then confirm the branch:
+
+```
+cd ~/Projects/Polkadex/pdexplorer
+git worktree repair ../pdexplorer-wt-392
+cd ~/Projects/Polkadex/pdexplorer-wt-392
+git status -sb
+git log -1 --format=%h
+```
+
+Pass: `## chore/polkadot-api-v5-r3` and the commit the reviewer cleared. The
+`node_modules` there were installed on Linux; the `npm ci` in A replaces them
+(Vite's esbuild binary is per platform), so do not skip it.
 
 ### A. Fixtures (on your Mac, needs network)
 
@@ -234,7 +300,7 @@ in anything we hold, so ask him). It must be an ARCHIVE node. Whatever
 endpoint you use here, use the same one in step C.
 
 ```
-cd ~/Projects/Polkadex/pdexplorer-wt-api5
+cd ~/Projects/Polkadex/pdexplorer-wt-392
 git log -1 --format=%h
 TESTNET_WS=wss://polkadex-testnet.polkadex.ee
 npm ci
@@ -262,7 +328,7 @@ enactment), the 373 file records 392; that is expected then.
 ### B. Full test suite (on your Mac, same directory)
 
 ```
-cd ~/Projects/Polkadex/pdexplorer-wt-api5
+cd ~/Projects/Polkadex/pdexplorer-wt-392
 npm test > /tmp/pdex-392-test.log 2>&1
 echo "npm test exit: $?"
 tail -n 9 /tmp/pdex-392-test.log
@@ -277,7 +343,7 @@ output; do not deploy.
 C1. Where did this chain switch to 392? Terminal 1:
 
 ```
-cd ~/Projects/Polkadex/pdexplorer-wt-api5
+cd ~/Projects/Polkadex/pdexplorer-wt-392
 TESTNET_WS=wss://polkadex-testnet.polkadex.ee
 node scripts/find-upgrade-block.mjs --ws "$TESTNET_WS"
 ```
@@ -297,7 +363,7 @@ the RESULT line in the second line. `ls data` must say "No such file"; if a
 `mv data data-previous`.
 
 ```
-cd ~/Projects/Polkadex/pdexplorer-wt-api5
+cd ~/Projects/Polkadex/pdexplorer-wt-392
 MIN_BLOCK=1552840
 TESTNET_WS=wss://polkadex-testnet.polkadex.ee
 ls data
@@ -312,7 +378,7 @@ the head (about 17 blocks a second). Terminal 2, after terminal 1 shows
 `Backend listening`. Put M and E from the RESULT line in:
 
 ```
-cd ~/Projects/Polkadex/pdexplorer-wt-api5
+cd ~/Projects/Polkadex/pdexplorer-wt-392
 node --experimental-sqlite tools/requeue-scan-range.mjs --indexer chain_index --from 1552840 --to 1554840
 ```
 
@@ -328,7 +394,7 @@ VITE_POLKADEX_WS="$TESTNET_WS" npm run dev
 C4. Checks. Terminal 3. Put M and E in the first query:
 
 ```
-cd ~/Projects/Polkadex/pdexplorer-wt-api5
+cd ~/Projects/Polkadex/pdexplorer-wt-392
 sqlite3 data/explorer.db "SELECT COUNT(*) FROM blocks WHERE number BETWEEN 1552840 AND 1554840;"
 sqlite3 data/explorer.db "SELECT indexer, COUNT(*) FROM scan_failures GROUP BY indexer;"
 curl -s localhost:3001/api/blocks | grep -o '"decodeFailures":{[^}]*}'
@@ -374,8 +440,11 @@ then stop all three processes (Ctrl-C).
 
 ### D. Production deploy (mainnet is on 373; it must keep working)
 
-D1. Merge. On your Mac, push `chore/polkadot-api-v5-r2`, open a PR into
-`main` on GitHub, merge it once A to C pass. The explorer box deploys `main`.
+D1. Merge. On your Mac, push `chore/polkadot-api-v5-r3`, open a PR into
+`main` on GitHub, merge it once A to C pass (a merge commit, not squash or
+rebase, so the reviewed commits keep their ids). If `main` moved since
+`d76676d` (PR 20, for example), the PR shows it; re-run B on the merged
+result before deploying. The explorer box deploys `main`.
 
 D2. Baseline and backup, on the explorer box (`ssh explorer`):
 
@@ -464,7 +533,7 @@ OK (ok, spec 392)` (each once per worker process), no other line; the scan_failu
 On your Mac, find mainnet's upgrade block U and spot-check both sides:
 
 ```
-cd ~/Projects/Polkadex/pdexplorer-wt-api5
+cd ~/Projects/Polkadex/pdexplorer-wt-392
 node scripts/find-upgrade-block.mjs --ws wss://rpc2.polkadex.ee
 ```
 
@@ -614,9 +683,11 @@ hand if wanted.
 
 ## Verified here vs by reading only
 
-Verified by running (Linux, Node 22.23, 2026-10-18 and again 2026-10-25 on the
-rebased branch): `npm ci` (offline, from the lock), `npm test`, `npm run build`
-(Vite), a backend boot (workers start, `/api/version` answers, RPC unreachable
+Verified by running (Linux, Node 22.23, 2026-10-18, again 2026-10-25 on the
+rebased branch, and 2026-10-27 on the merged r3 branch): `npm ci` (offline,
+from the lock), `npm test`, `npm run build` (Vite, with the Open Graph shell
+step), a trial merge of PR 20 with `npm test` and the build, a backend boot
+(on 2026-10-27 also the five governance item routes) (workers start, `/api/version` answers, RPC unreachable
 as expected in the sandbox), `scripts/fetch-metadata.mjs` end to end against a
 local mock JSON-RPC server (2026-10-18; on 2026-10-25 only its connect-failure
 path, after the JSON-RPC client moved to `lib/json-rpc-client.js` unchanged),
