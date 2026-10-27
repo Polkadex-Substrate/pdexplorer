@@ -10902,7 +10902,9 @@ async function fetchDiscussionThread(id, focusLink = false, root = document.getE
 function renderThread(thread, posts, root = document.getElementById('discussions-content'), opts = {}) {
     if (!root) return;
     const session = getDiscussSession();
-    const postsHtml = renderPostList(thread, posts, { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime,
+    // One set of render options for the board and the earlier block, so earlier posts render exactly like current ones.
+    const postOpts = { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime, md: opts.md };
+    const postsHtml = renderPostList(thread, posts, { ...postOpts,
         isEditable: p => !!session && canEditPost(p, thread, session.address, isSameAddress), actions: renderCopyLinkButton });
 
     let composer;
@@ -10927,7 +10929,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
 
     // Posts of the earlier lifecycle threads (council motion, external proposal):
     // read-only, above this thread's own posts, never counted into them.
-    const earlierHtml = renderEarlierDiscussion(opts.earlier, { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime,
+    const earlierHtml = renderEarlierDiscussion(opts.earlier, { ...postOpts,
         hrefOf: opts.embedded ? itemPathForThread : null });
     const badge = thread.status === 'open'
         ? '<span class="reward-badge claimed">Open</span>'
@@ -10949,7 +10951,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
         signinBtn.disabled = true;
         signinBtn.innerHTML = "<i class='bx bx-loader-alt'></i> Check your wallet…";
         const ok = await discussSignIn();
-        if (ok) fetchDiscussionThread(thread.id, false, root, opts);
+        if (ok) fetchDiscussionThread(thread.id, false, root, { ...opts, quiet: false });
         else { signinBtn.disabled = false; signinBtn.innerHTML = "<i class='bx bx-log-in'></i> Sign in with wallet"; }
     });
     const postBtn = root.querySelector('#discuss-post-btn');
@@ -11016,7 +11018,7 @@ async function submitDiscussionPost(threadId, root = document.getElementById('di
     const showErr = msg => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
     if (!content) { showErr('Write something before posting.'); return; }
     const session = getDiscussSession();
-    if (!session) { showErr('Your session has expired. Please sign in again.'); fetchDiscussionThread(threadId, false, root, opts); return; }
+    if (!session) { showErr('Your session has expired. Please sign in again.'); fetchDiscussionThread(threadId, false, root, { ...opts, quiet: false }); return; }
     if (btn) btn.disabled = true;
     if (errEl) errEl.style.display = 'none';
     try {

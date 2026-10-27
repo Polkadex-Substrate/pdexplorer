@@ -15,7 +15,7 @@ import path from 'node:path';
 import * as db from '../db.js';
 import { referendumDetail } from '../lib/gov-detail-api.js';
 import { renderGovDetailSummary, discussionCountLabel, boardIsStale } from '../lib/gov-detail-view.js';
-import { discussionLabel, earlierPostCount, earlierBoards, withEarlierCounts, lifecycleLinks } from '../lib/discussion-lifecycle.js';
+import { discussionLabel, earlierPostCount, earlierBoards, withEarlierCounts, lifecycleLinks, LINKS_MAX } from '../lib/discussion-lifecycle.js';
 import { renderEarlierDiscussion, EARLIER_OPEN_MAX } from '../lib/discussion-edit.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
@@ -141,6 +141,28 @@ describe('the board draws the earlier discussion read-only, under its own headin
     });
 });
 
+describe('the link list and the earlier boards share one cap', () => {
+    test('seven linked earlier threads: all seven are linked, drawn and counted', () => {
+        assert.equal(LINKS_MAX, 10);
+        const ids = Array.from({ length: 7 }, (_, i) => 'motion-' + i);
+        const rows = ids.map((id, i) => ({ id, kind: 'motion', title: id, status: 'closed', proposalHash: PH, createdAt: i + 1, postCount: 1 }));
+        const ref = { id: 'referendum-36', kind: 'referendum', proposalHash: PH, createdAt: 100 };
+        const links = lifecycleLinks(ref, rows.concat([ref]));
+        assert.equal(links.earlier.length, 7);
+        const boards = earlierBoards(links, id => rows.find(r => r.id === id), id => [{ id: 1, threadId: id }]);
+        assert.equal(boards.length, links.earlier.length, 'what is linked is what is drawn');
+        assert.equal(earlierPostCount(links), boards.reduce((n, b) => n + b.posts.length, 0), 'and what is counted');
+    });
+    test('beyond the cap both stop at the same number', () => {
+        const rows = Array.from({ length: 13 }, (_, i) => ({ id: 'motion-' + i, kind: 'motion', title: 'm' + i, status: 'closed', proposalHash: PH, createdAt: i + 1, postCount: 1 }));
+        const ref = { id: 'referendum-36', kind: 'referendum', proposalHash: PH, createdAt: 100 };
+        const links = lifecycleLinks(ref, rows);
+        const boards = earlierBoards(links, id => rows.find(r => r.id === id), () => [{ id: 1 }]);
+        assert.equal(links.earlier.length, LINKS_MAX);
+        assert.equal(boards.length, LINKS_MAX);
+    });
+});
+
 describe('boardIsStale', () => {
     const d = (own, earlier) => ({ thread: { id: 'referendum-36', postCount: own, earlierPostCount: earlier } });
     test('compares the board\'s counts with the server\'s, only for the same thread', () => {
@@ -150,6 +172,12 @@ describe('boardIsStale', () => {
         assert.equal(boardIsStale(d(2, 0), null), false, 'no board drawn yet: nothing to refresh');
         assert.equal(boardIsStale(d(2, 0), { threadId: 'other', own: 0, earlier: 0 }), false);
     });
+    test('posts are never deleted: a stale LOWER server count does not redraw the board', () => {
+        assert.equal(boardIsStale(d(1, 2), { threadId: 'referendum-36', own: 3, earlier: 2 }), false);
+        assert.equal(boardIsStale(d(0, 2), { threadId: 'referendum-36', own: 1, earlier: 2 }), false);
+        assert.equal(boardIsStale(d(4, 2), { threadId: 'referendum-36', own: 3, earlier: 2 }), true, 'more posts on the server still redraws');
+        assert.equal(boardIsStale(d(3, 5), { threadId: 'referendum-36', own: 3, earlier: 2 }), true, 'a changed earlier count still redraws');
+    });
 });
 
 describe('wiring', () => {
@@ -158,6 +186,16 @@ describe('wiring', () => {
     test('the list route adds earlierPostCount; the thread route adds earlier', () => {
         assert.match(server_, /res\.json\(\{ threads: withEarlierCounts\(db\.getThreads\(kind\), kind \? db\.getThreads\(null\) : null\) \}\)/);
         assert.match(server_, /earlier: earlierBoards\(withLinks\.links, db\.getThread, db\.getPosts\)/);
+    });
+    test('the sign-in and expired-session re-fetches ignore a stored quiet flag so failures show', () => {
+        assert.match(bodyOf(script, 'renderThread'), /fetchDiscussionThread\(thread\.id, false, root, \{ \.\.\.opts, quiet: false \}\)/);
+        assert.match(bodyOf(script, 'submitDiscussionPost'), /fetchDiscussionThread\(threadId, false, root, \{ \.\.\.opts, quiet: false \}\)/);
+    });
+    test('the board and the earlier block take the same render options (markdown included)', () => {
+        const render = bodyOf(script, 'renderThread');
+        assert.match(render, /postOpts = \{[^}]*md: opts\.md \}/);
+        assert.match(render, /renderPostList\(thread, posts, \{ \.\.\.postOpts,/);
+        assert.match(render, /renderEarlierDiscussion\(opts\.earlier, \{ \.\.\.postOpts,/);
     });
     test('the thread view draws the earlier block and reports what it drew; the list shows "+ N earlier"', () => {
         const render = bodyOf(script, 'renderThread');
