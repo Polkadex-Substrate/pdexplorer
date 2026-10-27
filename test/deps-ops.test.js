@@ -69,13 +69,24 @@ describe('F-103 — the production tree has no known-vulnerable ws', () => {
         }
     });
 
-    test('@polkadot/api is STILL pinned to exactly 10.13.1', () => {
-        // The whole point of fixing ws by override rather than by upgrade.
-        // 10.13.1 + the manual CheckMetadataHash signed extension is what makes
-        // wallet signing work at all; `npm audit fix --force` would have moved
-        // it and broken every signed extrinsic.
-        assert.equal(pkg.dependencies['@polkadot/api'], '10.13.1');
-        assert.deepEqual(lockedVersions('@polkadot/api'), ['10.13.1']);
+    test('@polkadot/* is pinned EXACTLY (17.0.2 / 14.0.3) and resolves to one copy each', () => {
+        // Moved deliberately from 10.13.1 for spec 392 (extrinsic v5, metadata
+        // TxExtensions); see docs/392-readiness.md. Still exact pins: a
+        // floating range here is how `npm audit fix --force` once nearly
+        // broke every signed extrinsic. One copy each matters twice over:
+        // duplicate @polkadot/types breaks instanceof checks, and
+        // lib/tx-extensions.js patches the TypeRegistry the api actually uses.
+        const want = {
+            '@polkadot/api': '17.0.2', '@polkadot/types': '17.0.2', '@polkadot/keyring': '14.0.3',
+            '@polkadot/util': '14.0.3', '@polkadot/util-crypto': '14.0.3'
+        };
+        for (const [name, version] of Object.entries(want)) {
+            assert.equal(pkg.dependencies[name], version, `${name} in package.json`);
+            assert.deepEqual(lockedVersions(name), [version], `${name} resolves to more than one copy, or the wrong one`);
+        }
+        for (const name of ['@polkadot/types-codec', '@polkadot/types-create', '@polkadot/rpc-core', '@polkadot/rpc-provider']) {
+            assert.deepEqual(lockedVersions(name), ['17.0.2'], `${name} is not a single 17.0.2 copy`);
+        }
     });
 });
 

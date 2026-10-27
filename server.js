@@ -3,12 +3,15 @@ import cors from 'cors';
 import cluster from 'node:cluster';
 import { cpus } from 'node:os';
 import { ApiPromise, WsProvider } from '@polkadot/api';
-import { decodeAddress, encodeAddress, signatureVerify, randomAsHex } from '@polkadot/util-crypto';
-import { u8aWrapBytes, stringToU8a, u8aConcat } from '@polkadot/util';
+import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
+import { decodeAddress, encodeAddress, signatureVerify, randomAsHex, blake2AsHex } from '@polkadot/util-crypto';
+import { u8aWrapBytes, stringToU8a, u8aConcat, hexToU8a } from '@polkadot/util';
+import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck, apiSpecVersion, assetFeeCheckIsStale } from './lib/tx-extensions.js';
+import { decodeExtrinsicsTolerant, timestampFromExtrinsics, recoverBlockDecode } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
-import { deriveIndexStatus, describeIndexStatus } from './lib/index-status.js';
+import { deriveIndexStatus, describeIndexStatus, coverageOf } from './lib/index-status.js';
 import { isRpcUnavailableError } from './lib/rpc-errors.js';
 import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/reward-dedup.js';
 import { attributeBatchRewards, isBatchDelimiter, isAttributableBatch } from './lib/reward-attribution.js';
@@ -27,7 +30,7 @@ import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
-import { blake2AsHex } from '@polkadot/util-crypto';
+import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
@@ -51,6 +54,12 @@ import {
 import path from 'path';
 import * as db from './db.js';
 import { sendEmail, emailProviderStatus } from './email.js';
+
+// Transaction extension types from each runtime's own metadata, and the v5
+// General extrinsic re-encoding fix. Must run before any ApiPromise exists so
+// every registry (tip and api.at(hash) historical ones) is covered. See
+// lib/tx-extensions.js and docs/392-readiness.md.
+installPolkadotFixes({ TypeRegistry, GenericExtrinsic });
 
 // --- Timestamped logging ---------------------------------------------------
 // Prefix every console.* line with an ISO-8601 UTC timestamp so raw stdout
@@ -1188,11 +1197,8 @@ async function getIdentity(api, address) {
 // which corrupts the analytics day-buckets and makes timeAgo nonsense. Null
 // says "unknown", and callers already treat a null timestamp as unknown.
 function getBlockTimestamp(signedBlock) {
-    let timestamp = null;
-    signedBlock.block.extrinsics.forEach((ex) => {
-        if (ex.method.section === 'timestamp' && ex.method.method === 'set') timestamp = ex.method.args[0].toNumber();
-    });
-    return timestamp;
+    // Skips undecoded stubs from getBlockTolerant (lib/extrinsic-decode.js).
+    return timestampFromExtrinsics(signedBlock.block.extrinsics);
 }
 
 function getExtrinsicStatus(events, index) {
@@ -1971,10 +1977,10 @@ const DEV_API_TIMEOUT_MS = readPositiveInteger(process.env.DEV_API_TIMEOUT_MS, 2
 // ─── Audit F-073: what a timeout can and cannot do here ─────────────────────
 //
 // The finding asks for an abort signal so a timed-out query stops running on
-// the shared WsProvider. That is not available: @polkadot/api 10.13.1 exposes
-// no cancellation on `api.query.*()`, `api.rpc.*` or `entriesPaged`, and the
-// version is pinned hard (removing the pin breaks wallet signing — see the
-// CheckMetadataHash note at both ApiPromise.create sites). Claiming to cancel
+// the shared WsProvider. That is not available: @polkadot/api (10.13.1, and
+// still 17.0.2, re-checked 2026-10-18) exposes no cancellation on
+// `api.query.*()`, `api.rpc.*` or `entriesPaged`, and the version is pinned
+// exactly (see docs/392-readiness.md before changing it). Claiming to cancel
 // would be worse than the current behaviour, because the next reader would
 // stop worrying about the load.
 //
@@ -2037,9 +2043,9 @@ const DEV_RPC_SLOT_MAX_MS = readPositiveInteger(process.env.DEV_RPC_SLOT_MAX_MS,
 //
 // ── Audit F-073 round 3: "inflight cap 12; timeout still does not abort" ─────
 //
-// The abort half is not fixable here. @polkadot/api is pinned to EXACTLY
-// 10.13.1 (see the CheckMetadataHash note at ApiPromise.create — unpinning
-// breaks wallet signing), and its provider signature is
+// The abort half is not fixable here. @polkadot/api is pinned exactly (now
+// 17.0.2; see docs/392-readiness.md before changing it), and its provider
+// signature, unchanged from 10.13.1, is
 // `send(method, params, isCacheable?, subscription?)`: no AbortSignal, no
 // cancel handle, nothing to call. Once a request is on the wire the node WILL
 // do the work. Verified against the installed package, not assumed.
@@ -2752,6 +2758,31 @@ app.get('/api/decode/:block', async (req, res) => {
     }
 });
 
+// Result of the start-up asset-fee extension self-check (lib/tx-extensions.js,
+// checkAssetFeeExtension), re-run on every RPC reconnect AND whenever the
+// api's runtime spec differs from the one it was computed on: a runtime
+// upgrade (392 enactment) swaps the metadata in place without a reconnect.
+// null until the api exists. Surfaced on /api/version (with the spec it
+// describes) so a mismatch is visible without logs.
+let assetFeeCheck = null;
+function runAssetFeeSelfCheck(api) {
+    try {
+        assetFeeCheck = checkAssetFeeExtension(api.registry);
+    } catch (err) {
+        assetFeeCheck = { ok: false, status: 'error', message: String(err && err.message ? err.message : err) };
+    }
+    assetFeeCheck.specVersion = apiSpecVersion(api);
+    const { level, line } = describeAssetFeeCheck(assetFeeCheck, 'server');
+    if (level === 'log') console.log(line);
+    else console.error(line);
+}
+// Called from /api/version and /api/health, so the first request after an
+// upgrade re-runs the check and logs its line.
+function currentAssetFeeCheck() {
+    if (globalApi && assetFeeCheckIsStale(globalApi, assetFeeCheck)) runAssetFeeSelfCheck(globalApi);
+    return assetFeeCheck;
+}
+
 // ---- GET /api/version -------------------------------------------------------
 // What is this process actually running? Baked in at image build time by
 // deploy.sh (see the ARG/ENV pair in Dockerfile.backend).
@@ -2783,7 +2814,14 @@ app.get('/api/version', (req, res) => {
         // here did) achieved nothing. Operators get the full detail on
         // /api/diag/* behind DIAG_TOKEN.
         specVersion: globalApi && globalApi.runtimeVersion ? globalApi.runtimeVersion.specVersion.toNumber() : null,
-        rpcConnected: !!(globalApi && globalApi.isConnected)
+        rpcConnected: !!(globalApi && globalApi.isConnected),
+        // Start-up self-check that the asset-fee extension types come from
+        // metadata. ok:false means the build would mis-encode or mis-decode
+        // asset-fee extrinsics; see the [tx-extensions] line in the log.
+        assetFeeCheck: (() => {
+            const c = currentAssetFeeCheck();
+            return c ? { ok: c.ok, status: c.status, specVersion: c.specVersion } : null;
+        })()
     });
 });
 
@@ -3177,6 +3215,7 @@ app.get('/developers', (req, res) => {
 // look. Deliberately no pid, no URLs, no version — this is public.
 app.get('/api/health', (req, res) => {
     res.set('Cache-Control', 'no-store');
+    try { currentAssetFeeCheck(); } catch (_) { /* the check never blocks health */ }
 
     const chainState = db.getSyncState('chain_index') || {};
     const headState = db.getKv('chain_head_state') || null;
@@ -3640,19 +3679,7 @@ app.get('/api/transactions/older', async (req, res) => {
 // a healthy index), while long-lived deployments served a fossilised 'Synced'
 // + months-old lastSync that no longer described anything. Both endpoints now
 // report the health of the indexer that actually populates their tables.
-// coverage: the indexer's own account of what it is missing (audit F-004 /
-// F-050). Sent on both feeds so a client can distinguish "up to date" from
-// "serving data with a known hole in it" without a manual measurement.
-function coverageOf(state) {
-    return {
-        knownGapBlocks: Number(state.knownGapBlocks) || 0,
-        // F-046: > 0 means some holes are no longer being retried this round.
-        gapsExhausted: Number(state.gapsExhausted) || 0,
-        retryableFailures: Number(state.retryableFailures) || 0,
-        permanentFailures: Number(state.permanentFailures) || 0,
-        detail: state.detail || null
-    };
-}
+// coverage: coverageOf in lib/index-status.js.
 app.get('/api/blocks', (req, res) => {
     try {
         const state = db.getSyncState('chain_index');
@@ -4522,31 +4549,8 @@ const GOV_DETAIL_ARG_MAX = 1000;
 const govCallCache = new Map();   // proposal hash -> decoded call (hits kept; misses retried after 10 min)
 const govHistCache = new Map();   // "<kind>:<id>:<block>" -> historical read (archive state never changes) or { miss, at } (pruned state: retried after 10 min)
 const GOV_HIST_MISS_MS = 10 * 60 * 1000;
-function govDescribeCall(c) {
-    const meta = (c.meta && c.meta.args) || [];
-    return {
-        section: String(c.section), method: String(c.method),
-        args: Array.from(c.args || []).map((a, i) => {
-            let value;
-            try { const h = a.toHuman(); value = typeof h === 'string' ? h : JSON.stringify(h); } catch (e) { try { value = String(a); } catch (_) { value = '[unprintable]'; } }
-            if (value.length > GOV_DETAIL_ARG_MAX) value = value.slice(0, GOV_DETAIL_ARG_MAX) + '...(truncated)';
-            return { name: meta[i] ? String(meta[i].name) : 'arg' + i, type: meta[i] ? String(meta[i].type) : null, value };
-        })
-    };
-}
-function govReadRefInfo(opt) {
-    if (!opt || opt.isNone) return { state: 'none' };
-    const r = opt.unwrap();
-    if (r.isOngoing) {
-        const s = r.asOngoing;
-        const bounded = s.proposal || s.proposalHash || null;
-        return { state: 'ongoing', end: s.end.toNumber(), threshold: s.threshold ? s.threshold.toString() : null,
-            delay: s.delay ? s.delay.toNumber() : null, ayes: balanceToPDEX(s.tally.ayes), nays: balanceToPDEX(s.tally.nays),
-            turnout: balanceToPDEX(s.tally.turnout), bounded, proposalHash: proposalHashOf(bounded, blake2AsHex) };
-    }
-    if (r.isFinished) { const f = r.asFinished; return { state: 'finished', approved: f.approved.isTrue, end: f.end.toNumber() }; }
-    return { state: 'none' };
-}
+const govDescribeCall = (c) => describeCall(c, GOV_DETAIL_ARG_MAX);
+const govReadRefInfo = (opt) => readReferendumInfo(opt, { toPdex: balanceToPDEX, hashBytes: blake2AsHex });
 function govCollectivePallet(collective) {
     if (collective === 'technicalCommittee') return globalApi.query.technicalCommittee ? 'technicalCommittee' : null;
     const snap = db.getKv('council') || {};
@@ -4610,14 +4614,10 @@ const govChain = {
         const pre = globalApi.query.preimage;
         if (!bytes && ph && pre && pre.preimageFor) {
             let len = b && b.len !== null && b.len !== undefined ? b.len : null;
-            if (len === null && pre.statusFor) {
-                const st = await pre.statusFor(ph);
-                if (st && st.isSome) {
-                    const j = st.unwrap().toJSON() || {};
-                    const v = j.unrequested || j.requested || j.Unrequested || j.Requested || {};
-                    if (v.len !== undefined && v.len !== null) len = Number(v.len);
-                }
-            }
+            // A Legacy or bare hash carries no length: the preimage status has
+            // it. RequestStatusFor first (the 392 runtime notes new preimages
+            // there, with Requested's length as maybeLen), then StatusFor.
+            if (len === null) len = await notedPreimageLen(pre, ph);
             if (len !== null) { const opt = await pre.preimageFor([ph, len]); if (opt && opt.isSome) bytes = opt.unwrap(); }
         }
         let out;
@@ -4629,28 +4629,17 @@ const govChain = {
     async publicProp(index) {
         const dem = globalApi.query.democracy;
         if (!dem || !dem.publicProps) return null;
-        for (const e of await dem.publicProps()) {
-            if (Number(e[0].toString()) === Number(index)) return { bounded: e[1], proposalHash: proposalHashOf(e[1], blake2AsHex), proposer: String(e[e.length - 1]) };
-        }
-        return { absent: true };
+        return readPublicProp(await dem.publicProps(), index, { hashBytes: blake2AsHex });
     },
     async deposit(index) {
         const dem = globalApi.query.democracy;
         if (!dem || !dem.depositOf) return null;
-        const opt = await dem.depositOf(index);
-        if (!opt || !opt.isSome) return null;
-        const t = opt.unwrap();
-        const listFirst = Array.isArray(t[0]) || (t[0] && typeof t[0].map === 'function' && !t[0].toBn);
-        const list = listFirst ? t[0] : t[1];
-        return { seconders: Array.from(list || []).map(a => String(a)), deposit: balanceToPDEX(listFirst ? t[1] : t[0]) };
+        return readDepositOf(await dem.depositOf(index), { toPdex: balanceToPDEX });
     },
     async nextExternal() {
         const dem = globalApi.query.democracy;
         if (!dem || !dem.nextExternal) return null;
-        const opt = await dem.nextExternal();
-        if (!opt || !opt.isSome) return { absent: true };
-        const ext = opt.unwrap();
-        return { bounded: ext[0] || null, proposalHash: proposalHashOf(ext[0], blake2AsHex), threshold: ext[1] ? ext[1].toString() : null };
+        return readNextExternal(await dem.nextExternal(), { hashBytes: blake2AsHex });
     },
     async motionAt(collective, hash, block) {
         const pallet = govCollectivePallet(collective);
@@ -4661,11 +4650,7 @@ const govChain = {
                 const bh = await getBlockHashCached(block);
                 const [callOpt, votingOpt] = await Promise.all([q.proposalOf.at(bh, hash), q.voting.at(bh, hash)]);
                 const call = callOpt && callOpt.isSome ? govDescribeCall(callOpt.unwrap()) : null;
-                let voting = null;
-                if (votingOpt && votingOpt.isSome) {
-                    const v = votingOpt.unwrap();
-                    voting = { index: v.index.toNumber(), threshold: v.threshold.toNumber(), ayes: v.ayes.map(a => a.toString()), nays: v.nays.map(a => a.toString()), end: v.end.toNumber() };
-                }
+                const voting = readCollectiveVoting(votingOpt);
                 return call || voting ? { call, voting } : null;
             } catch (e) { return null; }
         });
@@ -8438,7 +8423,17 @@ async function scanSingleBlock(blockNumber) {
     // differs ("Decoded input doesn't match input, 64 vs 67 bytes"). That throw
     // aborted the whole block and re-queued it forever, stalling the backfill —
     // and meant the getEventsAtBlock mitigation below was never even reached.
-    const signedBlock = await globalApi.rpc.chain.getBlock(hash);
+    // An extrinsic the library cannot decode makes getBlock throw for the WHOLE
+    // block. Transport errors still propagate (retry handling is unchanged);
+    // anything else falls back to per-extrinsic decoding so the block and its
+    // events are indexed and the bad extrinsic is recorded, not lost.
+    let signedBlock;
+    try {
+        signedBlock = await globalApi.rpc.chain.getBlock(hash);
+    } catch (err) {
+        if (isRpcUnavailableError(err)) throw err;
+        signedBlock = await getBlockTolerant(hash, blockNumber, err);
+    }
     if (!signedBlock || !signedBlock.block) return null;
     const header = signedBlock.block.header;
     const blockHash = header.hash.toHex();
@@ -8501,6 +8496,39 @@ async function scanSingleBlock(blockNumber) {
     }
     attachAccounts(events, ACCOUNT_LINK_RULES);
     return { block, events, eventsIncomplete };
+}
+
+// Fallback for scanSingleBlock: fetch the block undecoded, then decode each
+// extrinsic on its own against the block's OWN registry (the runtime that
+// produced it). Undecodable extrinsics become marked stubs (true hash, signer
+// when readable). recoverBlockDecode (lib/extrinsic-decode.js) writes one
+// scan_failures row per bad extrinsic ('extrinsic_decode:<index>'), or one
+// 'block_decode_recovered' row when every extrinsic decodes alone, and keeps
+// the original error if this second fetch fails. Nothing retries those rows
+// automatically; they are an operator signal, counted on /api/blocks and
+// /api/events (coverage.decodeFailures) and in docs/392-readiness.md.
+async function getBlockTolerant(hash, blockNumber, cause) {
+    const hashHex = typeof hash === 'string' ? hash : hash.toHex();
+    return recoverBlockDecode({
+        blockNumber,
+        cause,
+        fetchAndDecode: async () => {
+            if (!isRpcReady()) throw new Error('rpc not ready (disconnected mid-fetch)');
+            const raw = await globalApi.rpc.chain.getBlock.raw(hashHex);
+            if (!raw || !raw.block) return null;
+            const { registry } = await globalApi.getBlockRegistry(hexToU8a(hashHex));
+            const header = registry.createType('Header', raw.block.header);
+            const ss58 = registry.chainSS58 != null ? registry.chainSS58 : 88;
+            const { extrinsics, failures } = decodeExtrinsicsTolerant(
+                raw.block.extrinsics || [],
+                hex => registry.createType('Extrinsic', hex),
+                { hashHex: hex => blake2AsHex(hexToU8a(hex)), encodeAddress: u8a => encodeAddress(u8a, ss58) }
+            );
+            return { header, extrinsics, failures };
+        },
+        record: (indexer, block, msg) => db.recordScanFailure(indexer, block, msg),
+        warn: (m) => console.warn(`[chain-index] ${m}`)
+    });
 }
 
 // Scan an inclusive numeric range, processing blocks in parallel batches.
@@ -9343,6 +9371,9 @@ async function syncChainIndex() {
         // the very measurement that is supposed to report it.
         const edgeGaps = db.getEdgeGaps(oldestScannedBlock, headSeen);
         const failCounts = db.countScanFailures('chain_index', SCAN_MAX_ATTEMPTS);
+        // Undecodable extrinsics / recovered blocks (lib/extrinsic-decode.js):
+        // never retried, so they are not in failCounts; shown on coverage.
+        const decodeFailures = db.countDecodeFailures();
 
         // Audit F-004 (round 2): the watermark is DERIVED, once, from the state
         // of the failure queue after this tick's repairs — never assigned from
@@ -9400,6 +9431,7 @@ async function syncChainIndex() {
             interiorGapBlocks,
             retryableFailures: failCounts.retrying,
             permanentFailures: failCounts.permanent,
+            decodeFailures,
             detail: describeIndexStatus({
                 knownGapBlocks,
                 retryableFailures: failCounts.retrying,
@@ -10277,23 +10309,13 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
 
     let newApi;
     try {
-        // signedExtensions: same declaration as the frontend, for a different
-        // reason. The backend never signs anything, but it DECODES signed
-        // extrinsics (/api/decode, block indexing). @polkadot/api 10.13.1
-        // doesn't know the runtime's CheckMetadataHash extension, so it skips
-        // the Mode byte when reading an extrinsic's signed extra — every field
-        // after it (era, nonce, tip) is then read from the wrong offset.
-        // Declaring the shape keeps decoded output faithful to the chain,
-        // which is the whole point of the forensic endpoints.
-        newApi = await ApiPromise.create({
-            provider: wsProvider,
-            signedExtensions: {
-                CheckMetadataHash: {
-                    extrinsic: { mode: 'u8' },
-                    payload: { metadataHash: 'Option<[u8;32]>' }
-                }
-            }
-        });
+        // No signedExtensions override. 10.13.1 needed a hand-declared
+        // CheckMetadataHash shape to decode (it did not know the extension and
+        // read every later field from the wrong offset). 17.x knows it
+        // natively, and the asset-fee extension's types now come from each
+        // runtime's metadata via installPolkadotFixes at the top of this file,
+        // which also covers the api.at(hash) registries used for old blocks.
+        newApi = await ApiPromise.create({ provider: wsProvider });
     } catch (err) {
         // ApiPromise.create only rejects on hard errors (bad metadata, etc.);
         // transient connect failures are handled by WsProvider's retry loop.
@@ -10311,6 +10333,10 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
         return;
     }
     globalApi = newApi;
+    // One-line self-check: the asset-fee extension the api encodes with must be
+    // the metadata-derived type, not the library's Option<MultiLocation>. A
+    // mismatch is logged loudly and flagged on /api/version (assetFeeCheck).
+    runAssetFeeSelfCheck(newApi);
     // ApiPromise also emits these on top of WsProvider — useful when a single
     // request times out and the api lib decides to flag itself disconnected
     // before the underlying socket closes.
