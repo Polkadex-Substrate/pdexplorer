@@ -177,6 +177,13 @@ describe('an account page lists each event once', () => {
         assert.equal(db.countEventsByAddress(MULTISIG), 1);
     });
 
+    test('a link to the signer, which the linker never makes, still lists the event once', () => {
+        freshDb();
+        const e = { ...ev(63, 1, OWNER_A, 'multisig.NewMultisig', { approving: OWNER_A, multisig: MULTISIG, callHash: HASH }), accounts: [OWNER_A] };
+        db.insertEvents([e]);
+        assert.deepEqual(db.getEventsByAddress(OWNER_A, 10).map(r => r.hash), [e.hash]);
+    });
+
     test('an event stored before its links gets them under the rowid it already has', () => {
         freshDb();
         const e = ev(61, null, 'System', 'balances.Deposit', { who: MULTISIG, amount: '1,000,000,000,000' });

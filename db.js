@@ -1691,13 +1691,14 @@ export function getEventBlockSpan() {
 export function getRecentEvents(limit) {
     return db.prepare(`SELECT ${EVENT_COLS} FROM events ORDER BY block DESC, event_index DESC LIMIT ?`).all(limit).map(mapEventRow);
 }
-// An account's events: the ones it signed, plus the ones naming it (event_accounts). lib/account-links.js never
-// links the signer, so the two sets are disjoint: each branch reads one page in index order, the outer query merges.
+// An account's events: the ones it signed, plus the ones naming it (event_accounts). Each branch reads one page in
+// index order and the outer query merges them; UNION drops an event both branches return, so a linker regression
+// cannot list it twice (lib/account-links.js never links the signer).
 export function accountEventsQuery(address, limit, before = null) {
     const signed = olderThan(before), named = olderThan(before, 'l.block', 'l.event_rowid');
     return {
         sql: `SELECT * FROM (SELECT ${EVENT_COLS}, rowid AS rowId FROM events WHERE signer_address = ?${signed.sql} ${PAGE_ORDER})
-            UNION ALL
+            UNION
             SELECT * FROM (SELECT ${EVENT_COLS_E}, e.rowid AS rowId
                 FROM event_accounts l JOIN events e ON e.rowid = l.event_rowid AND e.hash = l.event_hash
                 WHERE l.address = ?${named.sql} ORDER BY l.block DESC, l.event_rowid DESC LIMIT ?)
@@ -1709,7 +1710,7 @@ export function getEventsByAddress(address, limit, before = null) {
     const q = accountEventsQuery(address, limit, before);
     return db.prepare(q.sql).all(...q.args).map(mapEventRow);
 }
-// Two index counts; the sets are disjoint for the same reason.
+// Two index counts: this sum assumes the two sets are disjoint, i.e. that the signer is never linked.
 export function countEventsByAddress(address) {
     return db.prepare('SELECT (SELECT COUNT(*) FROM events WHERE signer_address = ?) + (SELECT COUNT(*) FROM event_accounts WHERE address = ?) AS n')
         .get(address, address).n;
