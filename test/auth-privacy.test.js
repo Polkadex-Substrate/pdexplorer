@@ -89,13 +89,18 @@ describe('F-120 — Disconnect revokes the server-side session', () => {
         assert.match(fn, /'Bearer '\s*\+\s*token/, 'the current bearer is not sent');
     });
 
-    test('disconnectWallet calls it', () => {
+    test('disconnectWallet reaches it through the wallet session', () => {
+        // The revoke moved into lib/wallet-session.js so it also runs when the
+        // user SWITCHES to a different account. Behaviour is tested in
+        // wallet-switch.test.js; this pins the wiring.
         const dw = scriptSrc.slice(
             scriptSrc.indexOf('function disconnectWallet()'),
-            scriptSrc.indexOf('function consumeSkipAutoPickFlag()')
+            scriptSrc.indexOf('function disconnectWallet()') + 900
         );
-        assert.match(dw, /revokeDiscussSession\(\)/,
-            'Disconnect no longer revokes the session — that IS F-120');
+        assert.match(dw, /walletSession\.disconnect\(\)/,
+            'Disconnect no longer goes through the wallet session — F-120 would regress');
+        assert.match(scriptSrc, /revokeDiscuss: \(\) => revokeDiscussSession\(\)/,
+            'the wallet session is not given the revoker — Disconnect would leave the token valid (F-120)');
     });
 
     test('local state is cleared BEFORE the network call', () => {

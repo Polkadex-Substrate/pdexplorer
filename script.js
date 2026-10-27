@@ -39,6 +39,9 @@ import { BUTTON_STAGE_TEXT, defaultThreshold, checkThreshold, motionState, overl
 import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
 import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers } from './lib/collective-live.js';
 import { createDemocracyView } from './lib/democracy-view.js';
+import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from './lib/wallet-session.js';
+import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel } from './lib/wallet-picker.js';
+import { wireWalletMenu } from './lib/wallet-menu.js';
 import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
@@ -6902,7 +6905,6 @@ let stakingRewardsChart = null;
 let stakingRewardFilter = 'all';
 let stakingUnclaimedPolls = 0;
 let walletPriceChart = null;
-const WALLET_STORAGE_KEY = 'pdex_wallet_address';
 
 // ─── /email/preferences ─────────────────────────────────────────────────────
 //
@@ -7856,64 +7858,32 @@ async function downloadStakingRewardsTaxCSV() {
 }
 
 // --- Wallet Connect + Dashboard ---
-function getStoredWallet() {
-    try {
-        const v = localStorage.getItem(WALLET_STORAGE_KEY) || '';
-        if (!v) return '';
-        // Legacy installs may have a generic Polkadot/Substrate address in
-        // storage from before we normalised on write — coerce on read and
-        // rewrite so the rest of the UI sees the Polkadex form.
-        const pdex = toPolkadexAddress(v);
-        if (pdex && pdex !== v) {
-            try { localStorage.setItem(WALLET_STORAGE_KEY, pdex); } catch (e) { /* ignore quota */ }
-            return pdex;
-        }
-        return v;
-    } catch (e) { return ''; }
-}
-function setStoredWallet(addr) {
-    const before = getStoredWallet();
-    try {
-        if (addr) localStorage.setItem(WALLET_STORAGE_KEY, toPolkadexAddress(addr));
-        else localStorage.removeItem(WALLET_STORAGE_KEY);
-    } catch (e) { }
-    if (getStoredWallet() !== before) democracyView.restart();   // "You voted" follows the wallet
-    if (getStoredWallet() !== before) govDetailPage.accountChanged();   // and so does an item page's Actions panel
+// Connected-wallet state lives in lib/wallet-session.js (storage keys, the
+// persistent Disconnect opt-out, discussion-session revocation on any change of
+// address). These are thin wrappers so the ~60 call sites below read as before.
+const walletSession = createWalletSession({
+    storage: localStorage, toAddress: toPolkadexAddress, isSame: isSameAddress, isValid: isValidPolkadexAddress,
+    revokeDiscuss: () => revokeDiscussSession(), onChange: () => onWalletChanged()
+});
+function getStoredWallet() { return walletSession.connected(); }
+let walletMenu = null;   // the header My Account menu, wired once at the bottom of this file
+
+// The connected address just changed (switch, disconnect, or another tab).
+// Everything that read it at render time has to hear about it: the header, the
+// governance Actions panel, "You voted", and whichever page is on screen.
+// Wallet routes are re-entered by their own navigation, so they are skipped.
+function isWalletRoute(r) { return /^(wallet|stake|staking)(\/|$)/.test(r || ''); }
+function onWalletChanged() {
+    walletActionsBlockedReason = null; currentWalletData = null; walletEntryIntent = null;
+    if (_walletSigningRecheckTimer) { clearTimeout(_walletSigningRecheckTimer); _walletSigningRecheckTimer = null; }
+    invalidateWalletFetch();
+    refreshConnectWalletButton();
+    democracyView.restart();                // "You voted" follows the wallet
+    govDetailPage.accountChanged();         // and so does an item page's Actions panel
+    const here = readRouteFromLocation();
+    if (!isWalletRoute(here)) routeTo(here);   // discussions, council, treasury... re-render for the new identity
 }
 
-// "Last used" address — a SEPARATE memory that survives `disconnectWallet()`.
-//
-//   `WALLET_STORAGE_KEY`        — currently-connected address. Cleared on
-//                                 disconnect.
-//   `LAST_USED_ADDRESS_KEY`     — the last address the user explicitly
-//                                 picked from a wallet extension. Persists
-//                                 even after disconnect so the auto-pick
-//                                 in `tryAutoSelectFirstWallet()` can
-//                                 honour a multi-account user's preference
-//                                 the next time they revisit My Account.
-//
-// Written by `selectWallet()` (the path manual-button-click and auto-pick
-// both flow through), never written by `setStoredWallet('')`.
-const LAST_USED_ADDRESS_KEY = 'pdex_last_used_wallet_address';
-function getLastUsedAddress() {
-    try {
-        const v = localStorage.getItem(LAST_USED_ADDRESS_KEY) || '';
-        if (!v) return '';
-        // Same legacy coercion the stored-wallet getter does — older entries
-        // may be in the generic SS58 form.
-        const pdex = toPolkadexAddress(v);
-        if (pdex && pdex !== v) {
-            try { localStorage.setItem(LAST_USED_ADDRESS_KEY, pdex); } catch (e) { }
-            return pdex;
-        }
-        return v;
-    } catch (e) { return ''; }
-}
-function setLastUsedAddress(addr) {
-    try {
-        if (addr) localStorage.setItem(LAST_USED_ADDRESS_KEY, toPolkadexAddress(addr));
-    } catch (e) { }
-}
 function refreshConnectWalletButton() {
     const btn = document.getElementById('connect-wallet-btn');
     const label = document.getElementById('connect-wallet-label');
@@ -7927,8 +7897,8 @@ function refreshConnectWalletButton() {
         if (sub) { sub.textContent = stakingShortAddress(stored); sub.style.display = 'block'; }
         if (btn) {
             btn.classList.add('is-connected');
-            btn.setAttribute('title', 'View your account: ' + stored);
-            btn.setAttribute('aria-label', 'View my account (' + stakingShortAddress(stored) + ')');
+            btn.setAttribute('title', 'My Account: ' + stored + ' (view, switch wallet or disconnect)');
+            btn.setAttribute('aria-label', 'My Account menu (' + stakingShortAddress(stored) + ')');
         }
     } else {
         if (label) label.textContent = 'Connect Wallet';
@@ -7940,6 +7910,10 @@ function refreshConnectWalletButton() {
         }
     }
     if (disconnectBtn) disconnectBtn.style.display = stored ? 'inline-flex' : 'none';
+    // The My Account menu: who is connected, and shut it when nobody is.
+    const who = document.getElementById('wallet-menu-who');
+    if (who) who.textContent = stored ? (stakingShortAddress(stored) + (walletSession.source() ? ' (' + sourceLabel(walletSession.source()) + ')' : '')) : '';
+    if (!stored && walletMenu) walletMenu.close();
     // Reflect connected state on the sidebar item too — clearer than a generic "My Account" link.
     const navMine = document.getElementById('nav-my-account');
     if (navMine) {
@@ -8083,17 +8057,19 @@ function connectWallet() {
     const stored = getStoredWallet();
     navigateTo(stored ? ('wallet/' + stored) : 'wallet');
 }
-function selectWallet(address) {
+// Open the account picker WITHOUT dropping the current selection. /wallet used to
+// redirect to the stored dashboard, so the picker was unreachable until the user
+// had disconnected; ?switch=1 is the explicit "I want to choose" signal.
+function openWalletPicker() { navigateTo('wallet?switch=1'); }
+// `source` is the extension key the account came from, '' for a typed address.
+function selectWallet(address, source = '') {
     if (!isValidPolkadexAddress(address)) return;
     // Always store + route with the Polkadex-prefixed form so the URL bar,
     // localStorage, and dashboard all show the chain-specific "e…" address.
+    // select() lifts a Disconnect opt-out, remembers the extension, and revokes
+    // the previous account's discussion session if the address changed.
     const pdex = toPolkadexAddress(address);
-    setStoredWallet(pdex);
-    // Record the explicit choice in the last-used memory so a future visit
-    // (even after the user has disconnected and a wallet extension now
-    // exposes several accounts) can prefer it over the first-in-the-list
-    // default. See `tryAutoSelectFirstWallet()`.
-    setLastUsedAddress(pdex);
+    walletSession.select(pdex, source);
     refreshConnectWalletButton();
     // Honour ?returnTo=<path> if the user arrived at /wallet from a
     // "Connect a wallet to <do thing>" link elsewhere in the app — e.g.
@@ -8140,13 +8116,6 @@ function readSafeReturnTo() {
         return safeReturnPath(sp.get('returnTo'), window.location.origin);
     } catch (_) { return null; }
 }
-// One-shot session flag that suppresses the auto-pick in tryAutoSelectFirstWallet
-// for the next /wallet visit. Set by disconnectWallet so an explicit "Switch
-// wallet" / "Disconnect" click can't be immediately undone by the auto-pick
-// re-selecting the same last-used address. Lives in sessionStorage so it
-// doesn't outlive the browser tab.
-const SKIP_AUTO_PICK_KEY = 'pdex_skip_wallet_auto_pick';
-
 // Audit F-120: `POST /api/auth/logout` deletes the server-side session row,
 // and script.js never called it. Disconnecting cleared local state only, so the
 // Bearer token stayed valid on the server for the full AUTH_SESSION_TTL — a
@@ -8177,37 +8146,14 @@ function revokeDiscussSession() {
 }
 
 function disconnectWallet() {
-    revokeDiscussSession();          // F-120
-    setStoredWallet('');
+    // Clears the address, extension and last-used memory, revokes the discussion
+    // session (F-120, via revokeDiscussSession) and records a PERSISTENT opt-out,
+    // so a reload or a new tab shows the picker instead of silently reconnecting.
+    // onWalletChanged() then resets the views.
+    walletSession.disconnect();
     refreshConnectWalletButton();
-    // Tell the next initWalletPage() to skip auto-pick — without this, the
-    // "Switch wallet" button silently routes back to the same address
-    // because tryAutoSelectFirstWallet finds the still-remembered last-used
-    // address in the extension's account list and re-selects it.
-    try { sessionStorage.setItem(SKIP_AUTO_PICK_KEY, '1'); } catch (e) {}
-    // If the user is currently on a wallet page, return them to the connect panel.
-    const current = readRouteFromLocation();
-    if (current.startsWith('wallet')) {
-        if (current === 'wallet') {
-            const root = document.getElementById('wallet-dashboard');
-            // Reset SEO + meta in case we were on a personal wallet page.
-            updateSeoMeta('wallet', { canonicalPath: '/wallet', noindex: false });
-            if (root) renderWalletConnectPanel(root);
-        } else {
-            navigateTo('wallet');
-        }
-    }
-}
-
-// Read-and-clear helper for the one-shot flag. Called by both initWalletPage
-// branches (immediate render and async auto-pick) so the flag is always
-// consumed exactly once even if the page is re-entered quickly.
-function consumeSkipAutoPickFlag() {
-    try {
-        const v = sessionStorage.getItem(SKIP_AUTO_PICK_KEY);
-        if (v) sessionStorage.removeItem(SKIP_AUTO_PICK_KEY);
-        return !!v;
-    } catch (e) { return false; }
+    // On a wallet page, land on the connect panel; initWalletPage renders it.
+    if (isWalletRoute(readRouteFromLocation())) navigateTo('wallet');
 }
 
 // One-shot intent carried from a sidebar shortcut into the wallet dashboard.
@@ -8265,7 +8211,10 @@ function initWalletPage(address) {
         return;
     }
     // No address in the URL — user clicked "My Account" from the sidebar.
-    // Decide where to land them on three rules (in priority order):
+    // Decide where to land them on these rules (in priority order):
+    //
+    //   0. ?switch=1 is an explicit "let me choose": show the picker even though
+    //      an address is stored, and never auto-pick over the user's choice.
     //
     //   1. If a wallet address is already remembered in localStorage
     //      (`getStoredWallet()`), navigate directly to /wallet/<addr>.
@@ -8281,22 +8230,27 @@ function initWalletPage(address) {
     //
     //   3. Otherwise show the connect panel as before (search-indexable,
     //      lists every detected extension account as a button).
+    const wantPicker = new URLSearchParams(window.location.search || '').get('switch') === '1';
     const stored = getStoredWallet();
-    if (stored && isValidPolkadexAddress(stored)) {
+    if (!wantPicker && stored && isValidPolkadexAddress(stored)) {
         navigateTo('wallet/' + stored, { replace: true });
         return;
     }
 
+    // Anything still loading for a dashboard must not repaint over the picker.
+    invalidateWalletFetch();
+
     // Public connect-wallet landing: indexable + rich HowTo/FAQ structured
     // data so search engines surface us for "connect Polkadex wallet" and
     // "how to send PDEX" queries.
-    updateSeoMeta('wallet', { canonicalPath: '/wallet', noindex: false });
+    updateSeoMeta('wallet', { canonicalPath: '/wallet', noindex: wantPicker });
     setRouteJsonLd(buildWalletConnectJsonLd());
     renderWalletConnectPanel(root);
 
-    // Fire-and-forget auto-pick. Throws are swallowed (user-rejected extension
-    // permission, no extension, etc.) so we never break the connect panel.
-    tryAutoSelectFirstWallet();
+    // Fire-and-forget auto-pick, only when nothing is connected and the user has
+    // not asked to choose or to disconnect. Throws are swallowed (user-rejected
+    // extension permission, no extension, etc.) so we never break the panel.
+    if (!wantPicker) tryAutoSelectFirstWallet();
 }
 
 // Background helper used by initWalletPage when no address is in the URL
@@ -8304,7 +8258,7 @@ function initWalletPage(address) {
 // extension's injected list and selects it.
 //
 // Priority for which account to pick:
-//   1. Last-used address (`getLastUsedAddress()`), if it's currently in
+//   1. Last-used address (`walletSession.lastUsed()`), if it's currently in
 //      the extension's list. This honours a multi-account user's prior
 //      choice across disconnect → reconnect cycles, so they always land
 //      on "their" address rather than whichever the extension happens to
@@ -8317,20 +8271,18 @@ function initWalletPage(address) {
 // whatever the user picked manually or navigated to while we were waiting.
 async function tryAutoSelectFirstWallet() {
     try {
-        // Honour an explicit disconnect/switch — the user just told us they
-        // want to pick a different account, so re-selecting the previously-
-        // used one would be hostile. The flag is one-shot: consuming it
-        // clears it, so the next /wallet visit is back to normal.
-        if (consumeSkipAutoPickFlag()) return;
-        // Bail early if the user clicked an account between us starting and
-        // getting here — for example, while the extension's permission
-        // prompt was open.
-        if (getStoredWallet()) return;
+        // Honour an explicit Disconnect. It is PERSISTENT (lib/wallet-session.js):
+        // the old one-shot sessionStorage flag stopped the auto-pick for a single
+        // page view, and the next reload or tab silently reconnected the account
+        // the user had just disconnected. Also bails if an account is already
+        // connected, e.g. clicked while the extension's permission prompt was open.
+        if (!walletSession.mayAutoPick()) return;
         const accounts = await getInjectedAccounts();
         if (!accounts || !accounts.length) return;
         // Late-bind these gates AFTER the async wait so they're checked
-        // against the freshest state, not stale captures from start time.
-        if (getStoredWallet()) return;
+        // against the freshest state, not stale captures from start time. The
+        // user may have clicked Disconnect or picked an account meanwhile.
+        if (!walletSession.mayAutoPick()) return;
         const here = readRouteFromLocation();
         // /stake and /staking land on this same dashboard (see routeTo), so
         // they get the same auto-pick. Without them listed the shortcut used
@@ -8342,7 +8294,7 @@ async function tryAutoSelectFirstWallet() {
         // extension. The `lastUsed` value may belong to a different wallet
         // or to a since-removed account — in either case we fall through
         // to the first injected account below.
-        const lastUsed = getLastUsedAddress();
+        const lastUsed = walletSession.lastUsed();
         let chosen = null;
         if (lastUsed) {
             chosen = accounts.find(a => isSameAddress(a.address, lastUsed)) || null;
@@ -8351,7 +8303,7 @@ async function tryAutoSelectFirstWallet() {
         if (!chosen || !isValidPolkadexAddress(chosen.address)) return;
         // Mirror the manual-selection path: persist + navigate, so the
         // wallet topbar pill and SEO meta both update consistently.
-        selectWallet(chosen.address);
+        selectWallet(chosen.address, chosen.source);
     } catch (e) {
         // Permission-denied / no-extension / etc. — silently fall back to
         // the connect panel that's already on screen.
@@ -8395,10 +8347,12 @@ async function renderWalletConnectPanel(root) {
         ? `<div class="wallet-env-banner"><i class='bx bx-check-circle'></i> Detected <strong>${stakingEscapeHtml(env.name)}</strong> — pick an account below to connect.</div>`
         : '';
 
+    const current = getStoredWallet();
     root.innerHTML = `
         <div class="list-container glass">
-            <div class="list-header"><h2>Connect Wallet ${helpIcon('connecting-wallet', 'How to connect your wallet')}</h2></div>
+            <div class="list-header"><h2>${current ? 'Switch Wallet' : 'Connect Wallet'} ${helpIcon('connecting-wallet', 'How to connect your wallet')}</h2></div>
             <div style="padding: 24px;">
+                ${buildCurrentBannerHtml({ current, currentSource: walletSession.source(), esc: stakingEscapeHtml, shortAddr: stakingShortAddress })}
                 ${envBanner}
                 <p style="color: var(--text-secondary); font-size: 0.88rem; margin-bottom: 16px; line-height: 1.6;">
                     Connect a Substrate wallet to open your dashboard. You'll be able to view your balance and
@@ -8470,41 +8424,49 @@ async function renderWalletConnectPanel(root) {
     const mobileSection = document.getElementById('wallet-mobile-section');
     const accountsEl = document.getElementById('wallet-accounts');
 
-    const accounts = await getInjectedAccounts();
-    if (accounts === null) {
-        accountsEl.innerHTML = onMobile
-            ? `<div class="wallet-empty-msg">
+    const stay = document.getElementById('wallet-picker-stay');
+    if (stay) stay.addEventListener('click', () => navigateTo('wallet/' + current));
+    const dis = document.getElementById('wallet-picker-disconnect');
+    if (dis) dis.addEventListener('click', disconnectWallet);
+
+    // (Re)ask every extension for its accounts. The Refresh button calls this
+    // again, so an account the user has just allowed in their wallet appears
+    // without a page reload.
+    const loadAccounts = async () => {
+        accountsEl.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">Looking for wallets…</div>';
+        const accounts = await getInjectedAccounts();
+        let list = '';
+        if (accounts === null) {
+            list = onMobile
+                ? `<div class="wallet-empty-msg">
                 No wallet is exposing accounts to this browser tab. If you're on a phone, open this URL inside a
                 mobile wallet's in-app browser using one of the options below. On desktop, install
                 <a href="https://polkadot.js.org/extension/" target="_blank" rel="noopener">Polkadot.js</a>,
                 Talisman or SubWallet.
                </div>`
-            : `<div class="wallet-empty-msg">
+                : `<div class="wallet-empty-msg">
                 No Substrate wallet extension detected. Install
                 <a href="https://polkadot.js.org/extension/" target="_blank" rel="noopener">Polkadot.js</a>,
                 Talisman or SubWallet — or, if your stash lives on your phone, use a mobile wallet's in-app
                 browser (see below).
                </div>`;
-        if (mobileSection) mobileSection.style.display = 'block';
-        return;
-    }
-    if (accounts.length === 0) {
-        accountsEl.innerHTML = `<div class="wallet-empty-msg">
+        } else if (accounts.length === 0) {
+            list = `<div class="wallet-empty-msg">
             ${env ? stakingEscapeHtml(env.name) + ' is connected, but no accounts were shared.' : 'No accounts were shared.'}
             Authorise this site in your wallet and try again.
            </div>`;
-        if (mobileSection) mobileSection.style.display = onMobile ? 'block' : 'none';
-        return;
-    }
-    accountsEl.innerHTML = accounts.map(a => `
-        <button class="wallet-account-btn" data-address="${stakingEscapeHtml(a.address)}">
-            <span class="wallet-account-name">${stakingEscapeHtml(a.name)}</span>
-            <span class="wallet-account-addr">${stakingShortAddress(a.address)}</span>
-        </button>`).join('');
-    accountsEl.querySelectorAll('.wallet-account-btn').forEach(btn => {
-        btn.addEventListener('click', () => selectWallet(btn.getAttribute('data-address')));
-    });
-    if (mobileSection) mobileSection.style.display = onMobile ? 'block' : 'none';
+        } else {
+            list = buildAccountListHtml({ accounts, current, currentSource: walletSession.source(), isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress });
+        }
+        accountsEl.innerHTML = list + buildMissingAccountHelpHtml();
+        accountsEl.querySelectorAll('.wallet-account-btn').forEach(btn => {
+            btn.addEventListener('click', () => selectWallet(btn.getAttribute('data-address'), btn.getAttribute('data-source') || ''));
+        });
+        const refresh = document.getElementById('wallet-picker-refresh');
+        if (refresh) refresh.addEventListener('click', loadAccounts);
+        if (mobileSection) mobileSection.style.display = (accounts === null || onMobile) ? 'block' : 'none';
+    };
+    await loadAccounts();
 }
 
 // Animated, stepped loading state shown while the wallet dashboard is fetched.
@@ -8656,9 +8618,21 @@ function applyWalletActionBlock() {
     });
 }
 
+// Generation counter for dashboard loads. The three requests below take seconds
+// (30-60 on a cold RPC), and the cache-first paint means the Switch / Disconnect
+// controls are on screen the whole time. Without this, a user who clicked Switch
+// wallet before the live fetch landed got the picker, and then the late response
+// repainted the OLD account's dashboard over it: "Switch doesn't work". Anything
+// that replaces the wallet pane (picker, another address, a disconnect) bumps the
+// counter, and a response from an older generation is dropped.
+let walletFetchGen = 0;
+function invalidateWalletFetch() { walletFetchGen++; }
+
 async function fetchWalletDashboard(address) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
+    const gen = ++walletFetchGen;
+    const stale = () => gen !== walletFetchGen;
 
     // ─── Cache-first paint ──────────────────────────────────────────────
     // If we have a recent snapshot for THIS address, render it immediately.
@@ -8701,6 +8675,7 @@ async function fetchWalletDashboard(address) {
 
     // Wallet payload — main render path.
     walletPromise.then(result => {
+        if (stale()) { stopLoading(); return; }
         if (!result.ok || (result.data && result.data.error)) {
             stopLoading();
             const msg = (result.data && result.data.error) || ('Request failed (' + result.status + ')');
@@ -8733,6 +8708,7 @@ async function fetchWalletDashboard(address) {
         maybeRunWalletEntryIntent();
     }).catch(err => {
         stopLoading();
+        if (stale()) return;
         const msg = err && err.message ? err.message : String(err);
         if (!didPaintFromCache) {
             root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(msg)}</div>`;
@@ -8746,6 +8722,7 @@ async function fetchWalletDashboard(address) {
 
     // Price-history payload — repaint just the price chart slot.
     pricePromise.then(price => {
+        if (stale()) return;
         latestPrice = price || { history: [], configured: false };
         // Only do the targeted repaint if the wallet payload has already
         // rendered the dashboard (otherwise the chart slot doesn't exist
@@ -8758,6 +8735,7 @@ async function fetchWalletDashboard(address) {
 
     // Staking-rewards payload — repaint just the APR card.
     rewardsPromise.then(rewards => {
+        if (stale()) return;
         latestRewards = rewards;
         walletAprData = rewards || null;
         if (latestWallet) {
@@ -8841,6 +8819,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
                 <div style="display:flex; gap:14px; align-items:center;">
                     <a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">Full reward history</a>
                     <button id="wallet-switch-btn" class="staking-download-btn">Switch wallet</button>
+                    ${isOwnWallet ? '<button id="wallet-disconnect-btn" class="staking-download-btn">Disconnect</button>' : ''}
                 </div>
             </div>
             <div style="padding: 12px 24px 0;">
@@ -9009,7 +8988,9 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     });
 
     const switchBtn = document.getElementById('wallet-switch-btn');
-    if (switchBtn) switchBtn.addEventListener('click', disconnectWallet);
+    if (switchBtn) switchBtn.addEventListener('click', openWalletPicker);   // keeps the current wallet until another is chosen
+    const disconnectBtn = document.getElementById('wallet-disconnect-btn');
+    if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectWallet);
     if (isOwnWallet) {
         bindWalletActionHandlers();
         bindViewOnlyCalloutHandlers();
@@ -10766,7 +10747,9 @@ function getDiscussSession() {
         // forced a fresh signature. isSameAddress compares the decoded public
         // key, which is the thing that actually identifies the account.
         const connected = getStoredWallet();
-        if (connected && !isSameAddress(connected, s.address)) return null;
+        // No connected wallet means no posting identity either: a token left over
+        // from an account that has since been switched away from must not post.
+        if (!connected || !isSameAddress(connected, s.address)) return null;
         return s;
     } catch (e) { return null; }
 }
@@ -10944,7 +10927,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
 async function getWalletSigner(address) {
     const injected = window.injectedWeb3;
     if (!injected) return null;
-    for (const key of Object.keys(injected)) {
+    for (const key of orderSources(Object.keys(injected), walletSession.source())) {
         try {
             const provider = injected[key];
             if (!provider || typeof provider.enable !== 'function') continue;
@@ -11484,7 +11467,15 @@ if (stakingPasteBtn) {
     });
 }
 const connectWalletBtn = document.getElementById('connect-wallet-btn');
-if (connectWalletBtn) connectWalletBtn.addEventListener('click', connectWallet);
+// Connected: My Account opens a menu (view / switch / disconnect). Not connected: it connects.
+walletMenu = wireWalletMenu({ doc: document, button: connectWalletBtn, menu: document.getElementById('wallet-menu'),
+    isConnected: () => !!getStoredWallet(), onConnect: connectWallet, onView: connectWallet, onSwitch: openWalletPicker, onDisconnect: disconnectWallet });
+// Another tab connected, switched or disconnected: follow it without a reload.
+window.addEventListener('storage', (e) => {
+    if (e.key !== WALLET_KEYS.address && e.key !== null) return;
+    onWalletChanged();
+    if (isWalletRoute(readRouteFromLocation())) routeTo(readRouteFromLocation());
+});
 const disconnectWalletBtn = document.getElementById('disconnect-wallet-btn');
 if (disconnectWalletBtn) disconnectWalletBtn.addEventListener('click', disconnectWallet);
 refreshConnectWalletButton();
@@ -12710,7 +12701,7 @@ async function resolveWalletSigner(fail) {
     // Match by underlying public key so an SS58-prefix mismatch between the
     // extension (often prefix 42) and the stored address (Polkadex prefix 88)
     // doesn't make the account look missing.
-    const account = injected.find(a => isSameAddress(a.address, address));
+    const account = pickSigningAccount(injected, address, walletSession.source(), isSameAddress);
     if (!account) return fail("This account isn't available in your connected wallet. Switch to the right account in your wallet extension (or reconnect) and try again.");
 
     let signer;

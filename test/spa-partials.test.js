@@ -172,10 +172,11 @@ describe('F-120 — the cookies Reset button revokes server-side', () => {
         assert.match(rv, /\.catch\(\(\) => \{\}\)/);
     });
 
-    test('disconnectWallet still revokes too', () => {
+    test('disconnectWallet still revokes too (through the wallet session)', () => {
         const dw = src.slice(src.indexOf('function disconnectWallet('),
-                             src.indexOf('function disconnectWallet(') + 600);
-        assert.match(dw, /revokeDiscussSession\(\)/);
+                             src.indexOf('function disconnectWallet(') + 900);
+        assert.match(dw, /walletSession\.disconnect\(\)/);
+        assert.match(src, /revokeDiscuss: \(\) => revokeDiscussSession\(\)/);
     });
 });
 

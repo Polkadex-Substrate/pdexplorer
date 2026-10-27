@@ -148,10 +148,13 @@ describe('late node link and wallet changes', () => {
         w.view.stop();
     });
 
-    test('setStoredWallet restarts the democracy view when the wallet actually changes', () => {
-        const body = fnBody('function setStoredWallet(addr)');
-        assert.match(body, /const before = getStoredWallet\(\);/);
-        assert.match(body, /if \(getStoredWallet\(\) !== before\) democracyView\.restart\(\);/);
+    test('a wallet change restarts the democracy view, and only an actual change fires it', () => {
+        // lib/wallet-session.js calls onChange only when the address or extension
+        // really changed (tested in wallet-switch.test.js); script.js's handler
+        // is what restarts the view.
+        const body = fnBody('function onWalletChanged()');
+        assert.match(body, /democracyView\.restart\(\);/);
+        assert.match(scriptSrc, /onChange: \(\) => onWalletChanged\(\)/);
     });
 
     test('council catch-up refetches are cleared on leaving the page', () => {
