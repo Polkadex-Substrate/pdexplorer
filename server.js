@@ -26,7 +26,8 @@ import { chooseGap, recordAttempt, shouldRetire, exhaustedGapCount, DEFAULT_MAX_
 import { checkWindow, perWorkerLimit } from './lib/rate-limit.js';
 import { applyEdit } from './lib/discussion-edit.js';
 import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater, reconcileReferendumThreads, referendumReadTrusted,
-    externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash, linkMotionThreadsByCallHash } from './lib/discussion-threads.js';
+    externalReadTrusted, externalLaunchedReason, recoverMotionProposalHash, linkMotionThreadsByCallHash,
+    preimageLength, preimageStatusReads, fallbackItemsFromThreads } from './lib/discussion-threads.js';
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
@@ -6305,9 +6306,52 @@ function linkMotionThreadsFromDemocracy(items) {
     if (!d || !items.length) return;
     const makeCall = (method, bounded) => (typeof d[method] === 'function' ? globalApi.tx.democracy[method](bounded).method : null);
     for (const r of linkMotionThreadsByCallHash(db, items, makeCall)) {
-        if (r.status === 'linked') console.log(`Discussion threads: ${r.id} linked to ${r.source || 'democracy proposal'} by its call hash (${r.proposalHash}).`);
-        else if (r.status === 'conflict') console.warn(`Discussion threads: ${r.id} already holds ${r.current}; ${r.source || 'a democracy item'} says ${r.proposalHash}. Left as it is.`);
+        if (r.status === 'linked') {
+            console.log(`Discussion threads: ${r.id} linked to ${r.source || 'democracy proposal'} by its call hash (${r.proposalHash}).`);
+            forgetMotionBackfill(r.id);
+        } else if (r.status === 'conflict') console.warn(`Discussion threads: ${r.id} already holds ${r.current}; ${r.source || 'a democracy item'} says ${r.proposalHash}. Left as it is.`);
     }
+}
+
+// kv keys of the backfill below: its try counter and its rotation stamp per thread.
+const MOTION_HASH_ATTEMPTS_KEY = 'discussion:motion-hash-attempts';
+const MOTION_HASH_TRIED_KEY = 'discussion:motion-hash-tried';
+// The backfill's try counter and rotation stamp for a thread that is linked now
+// (by the tick above), so a linked thread leaves no stale entry in kv.
+function forgetMotionBackfill(id) {
+    for (const key of [MOTION_HASH_ATTEMPTS_KEY, MOTION_HASH_TRIED_KEY]) {
+        const m = db.getKv(key);
+        if (m && typeof m === 'object' && id in m) { delete m[id]; db.setKv(key, m); }
+    }
+}
+
+// The no-archive fallback for the same link. Once referendum #36 finishes the
+// chain no longer serves its proposal and the archive read for the state before
+// it ended may be pruned behind the load balancer, but the referendum's thread
+// stored the proposal hash, and for a Lookup call that hash is the preimage
+// hash; the preimage length comes from current state (preimage.requestStatusFor
+// where the runtime has it, else statusFor; spec 373 has only statusFor), and
+// { Lookup: { hash, len } } is B again. Only runs while some motion thread has
+// no proposal hash. A length is immutable for a hash, so it is cached for good;
+// a miss (no status, or unreadable) is retried after 10 minutes.
+// lib/discussion-threads.js fallbackItemsFromThreads.
+const preimageLenCache = new Map();
+const PREIMAGE_LEN_MISS_MS = 10 * 60 * 1000;
+async function fallbackMotionItems(liveItems) {
+    let missing = 0;
+    try { missing = db.countMotionThreadsWithoutProposalHash(); } catch (e) { return []; }
+    if (!missing) return [];
+    const reads = preimageStatusReads(globalApi);
+    const lenOf = async (hash) => {
+        const hit = preimageLenCache.get(hash);
+        if (hit && (hit.len || Date.now() - hit.at < PREIMAGE_LEN_MISS_MS)) return hit;
+        const r = await preimageLength(hash, reads);
+        if (preimageLenCache.size > 500) preimageLenCache.clear();
+        preimageLenCache.set(hash, { ...r, at: Date.now() });
+        return r;
+    };
+    const { items } = await fallbackItemsFromThreads(db.getDemocracyThreadsWithProposalHash(), liveItems.map(i => i.proposalHash), lenOf);
+    return items;
 }
 
 // The second path, for a motion whose referendum is no longer readable live
@@ -6319,8 +6363,6 @@ function linkMotionThreadsFromDemocracy(items) {
 // be done (RPC down, state pruned on the origin the load balancer picked, no
 // block known yet) leaves the attempts untouched. Rows are taken least
 // recently tried first, so one unreadable row cannot hold up the rest.
-const MOTION_HASH_ATTEMPTS_KEY = 'discussion:motion-hash-attempts';
-const MOTION_HASH_TRIED_KEY = 'discussion:motion-hash-tried';
 async function backfillMotionProposalHashes() {
     if (!isRpcReady()) return;
     let rows = [];
@@ -6331,7 +6373,7 @@ async function backfillMotionProposalHashes() {
         .sort((a, b) => (tried[a.id] || 0) - (tried[b.id] || 0))
         .slice(0, 5);
     if (!todo.length) return;
-    let changed = false;
+    const before = JSON.stringify([attempts, tried]);
     for (const row of todo) {
         // null only when the state answered None; a failed read throws.
         const stateAt = async (blockNumber) => {
@@ -6351,7 +6393,6 @@ async function backfillMotionProposalHashes() {
         try { r = await recoverMotionProposalHash(row, { stateAt, blockCalls, hashOf: (call) => proposalHashOf(call.args[0], blake2AsHex) }); }
         catch (e) { r = { outcome: 'unavailable' }; }
         tried[row.id] = Date.now();
-        changed = true;
         if (r.outcome === 'unavailable') {
             if (!isRpcReady()) break;
             continue;
@@ -6364,9 +6405,11 @@ async function backfillMotionProposalHashes() {
             attempts[row.id] = (attempts[row.id] || 0) + 1;
         }
     }
-    if (changed) {
-        const live = new Set(rows.map(r => r.id));
-        for (const id of Object.keys(tried)) if (!live.has(id)) delete tried[id];
+    // Write kv only when it differs from what was read (a pass that tried
+    // nothing, or that ended where it started, writes nothing).
+    const live = new Set(rows.map(r => r.id));
+    for (const id of Object.keys(tried)) if (!live.has(id)) delete tried[id];
+    if (JSON.stringify([attempts, tried]) !== before) {
         db.setKv(MOTION_HASH_ATTEMPTS_KEY, attempts);
         db.setKv(MOTION_HASH_TRIED_KEY, tried);
     }
@@ -7692,12 +7735,13 @@ async function syncDemocracyPass() {
             reconcileGovThreads('external', extItems, extTrust, currentBlock, { closeReason: launchedAs });
         }
         try {
-            linkMotionThreadsFromDemocracy([
+            const liveItems = [
                 ...refReads.filter(r => r.state === 'ongoing' && r.bounded && r.proposalHash)
                     .map(r => ({ proposalHash: r.proposalHash, bounded: r.bounded, source: `referendum #${r.index}` })),
                 ...(externalProposal && externalProposal.proposalHash && externalBounded
                     ? [{ proposalHash: externalProposal.proposalHash, bounded: externalBounded, source: 'the external proposal' }] : [])
-            ]);
+            ];
+            linkMotionThreadsFromDemocracy([...liveItems, ...await fallbackMotionItems(liveItems)]);
         } catch (e) { console.warn('Discussion threads: motion link by call hash failed:', e.message); }
         try { await backfillMotionProposalHashes(); } catch (e) { console.warn('Discussion threads: motion link backfill failed:', e.message); }
 

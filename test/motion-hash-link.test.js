@@ -35,11 +35,13 @@ import * as db from '../db.js';
 import { registryFromMetadata, loadFixture } from './helpers/extrinsic-builders.js';
 import {
     reconcileThreads, reconcileReferendumThreads, recoverMotionProposalHash, linkMotionThreadsByCallHash,
-    externalProposeCallHashes, EXTERNAL_PROPOSE_METHODS, AUTO_CLOSE_REASON
+    externalProposeCallHashes, EXTERNAL_PROPOSE_METHODS, AUTO_CLOSE_REASON,
+    preimageStatusLen, preimageLength, preimageStatusReads, fallbackItemsFromThreads
 } from '../lib/discussion-threads.js';
 import { proposalHashOf, lifecycleLinks, earlierPostCount, referendumThreadId } from '../lib/discussion-lifecycle.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
-import { sqliteThreadStore, motionThreadDiagnostics, linkMotionThreads, clearAttempts } from '../tools/link-motion-threads.mjs';
+import { sqliteThreadStore, motionThreadDiagnostics, linkMotionThreads, clearAttempts,
+    sqliteDemocracyThreads, fallbackChainItems } from '../tools/link-motion-threads.mjs';
 
 const dirs = [];
 function tmp() { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-motion-link-')); dirs.push(d); return d; }
@@ -231,6 +233,152 @@ describe('operator tool: tools/link-motion-threads.mjs', () => {
     test('the tool is read-only unless --apply, and prints how to run it on the box', () => {
         const src = readRepo('tools/link-motion-threads.mjs', import.meta.url);
         assert.match(src, /new DatabaseSync\(dbPath, \{ readOnly: !apply \}\)/);
-        assert.match(src, /docker compose exec backend node --experimental-sqlite tools\/link-motion-threads\.mjs --apply/);
+        assert.match(src, /docker compose exec -T backend node --experimental-sqlite tools\/link-motion-threads\.mjs --apply/);
+    });
+});
+
+// Referendum #36 finishes (Ongoing ends ~29 Oct 2026): referendumInfoOf(36)
+// then has no proposal and the archive read behind the load balancer may be
+// pruned. The referendum thread stored the proposal hash; the preimage length
+// comes from current state, and B is rebuilt as Lookup { hash, len }.
+sources.forEach((src, n) => {
+    describe(`no-archive fallback from the stored proposal hash: ${src.label}`, () => {
+        const { registry, tx, makeCall } = chainFor(src.hex);
+        const HASH = '0x' + (0xd0 + n).toString(16).repeat(32);
+        const REFN = 70 + n;
+        const refId = referendumThreadId(REFN);
+        const motionOf = () => tx.democracy.externalProposeMajority({ Lookup: { hash: HASH, len: LEN } }).hash.toHex();
+        const MOTION = motionOf();
+        const threadId = `motion-${MOTION}`;
+
+        // The preimage status storage the runtime has: StatusFor (373 and 392,
+        // deposit/len) and RequestStatusFor (392, ticket/len). Real codecs.
+        const pallet = registry.metadata.pallets.find(p => p.name.toString() === 'Preimage');
+        const storageType = (name) => {
+            const item = pallet && pallet.storage.unwrap().items.find(i => i.name.toString() === name);
+            return item ? registry.createLookupType(item.type.asMap.value) : null;
+        };
+        const optStatus = (name, v) => registry.createType(`Option<${storageType(name)}>`, v);
+        const acct = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY';
+        const reads = (map) => ({ requestStatusFor: map.request ? async () => map.request : null, statusFor: map.status ? async () => map.status : null });
+
+        before(() => {
+            // The thread rows as production has them after the referendum finished.
+            reconcileThreads(db, 'motion', [{ id: threadId, refKey: MOTION, title: 'democracy.externalProposeMajority' }], { trusted: true });
+            reconcileThreads(db, 'motion', [], { trusted: true });
+            reconcileReferendumThreads(db, [{ id: refId, refKey: String(REFN), state: 'ongoing', title: `Referendum #${REFN}`, proposalHash: HASH }], { trusted: true });
+            reconcileReferendumThreads(db, [{ id: refId, refKey: String(REFN), state: 'passed', title: `Referendum #${REFN}`, proposalHash: HASH }], { trusted: true });
+        });
+
+        test('the preimage status of this runtime yields the length (Unrequested and Requested)', () => {
+            assert.equal(preimageStatusLen(optStatus('StatusFor', { Unrequested: { deposit: [acct, 1], len: LEN } })), LEN);
+            assert.equal(preimageStatusLen(optStatus('StatusFor', { Requested: { deposit: null, count: 1, len: LEN } })), LEN);
+            assert.equal(preimageStatusLen(optStatus('StatusFor', null)), null, 'None');
+            assert.equal(preimageStatusLen(optStatus('StatusFor', { Requested: { deposit: null, count: 1, len: null } })), null, 'Requested without a length');
+            if (storageType('RequestStatusFor')) {
+                assert.equal(preimageStatusLen(optStatus('RequestStatusFor', { Unrequested: { ticket: [acct, null], len: LEN } })), LEN);
+                assert.equal(preimageStatusLen(optStatus('RequestStatusFor', { Requested: { maybeTicket: null, count: 2, maybeLen: LEN } })), LEN);
+            }
+        });
+
+        test('finished referendum: the thread row alone rebuilds B and links the motion', async () => {
+            const stored = db.getDemocracyThreadsWithProposalHash().filter(t => t.id === refId);
+            assert.deepEqual(stored.map(t => [t.kind, t.refKey, t.status, t.proposalHash]), [['referendum', String(REFN), 'closed', HASH]]);
+            const { items, notes } = await fallbackItemsFromThreads(stored, [], (h) => preimageLength(h, reads({ status: optStatus('StatusFor', { Unrequested: { deposit: [acct, 1], len: LEN } }) })));
+            assert.deepEqual(notes, []);
+            assert.equal(items.length, 1);
+            assert.equal(items[0].proposalHash, HASH);
+            assert.match(items[0].source, new RegExp(`^referendum #${REFN} `));
+            // Same call hash as the live path (and as the motion the council stored).
+            assert.ok(externalProposeCallHashes(items[0].bounded, makeCall).includes(MOTION));
+            assert.equal(db.getThread(threadId).proposalHash, null);
+            const r = linkMotionThreadsByCallHash(db, items, makeCall);
+            assert.deepEqual(r.map(x => [x.id, x.status, x.proposalHash]), [[threadId, 'linked', HASH]]);
+            assert.equal(db.getThread(threadId).proposalHash, HASH);
+            assert.deepEqual(linkMotionThreadsByCallHash(db, items, makeCall), [], 'idempotent');
+        });
+
+        test('RequestStatusFor is preferred where the runtime has it, StatusFor otherwise', async () => {
+            if (storageType('RequestStatusFor')) {
+                const got = await preimageLength(HASH, reads({
+                    request: optStatus('RequestStatusFor', { Unrequested: { ticket: [acct, null], len: 4321 } }),
+                    status: optStatus('StatusFor', { Unrequested: { deposit: [acct, 1], len: 1234 } }) }));
+                assert.deepEqual(got, { len: 4321 });
+            }
+            assert.deepEqual(await preimageLength(HASH, reads({ status: optStatus('StatusFor', { Unrequested: { deposit: [acct, 1], len: 1234 } }) })), { len: 1234 });
+            // The newer item empty, the older one still holds it.
+            if (storageType('RequestStatusFor')) {
+                assert.deepEqual(await preimageLength(HASH, reads({ request: optStatus('RequestStatusFor', null), status: optStatus('StatusFor', { Unrequested: { deposit: [acct, 1], len: 777 } }) })), { len: 777 });
+            }
+        });
+
+        test('live referendum: the proposal hash is already covered, nothing is rebuilt (and nothing is read)', async () => {
+            let reads_ = 0;
+            const { items, notes } = await fallbackItemsFromThreads(
+                [{ id: refId, kind: 'referendum', refKey: String(REFN), proposalHash: HASH }], [HASH], async () => { reads_++; return LEN; });
+            assert.deepEqual([items, notes, reads_], [[], [], 0]);
+        });
+
+        test('preimage status missing: nothing is linked, and the skip says why', async () => {
+            const stored = [{ id: refId, kind: 'referendum', refKey: String(REFN), proposalHash: HASH }];
+            const none = await fallbackItemsFromThreads(stored, [], (h) => preimageLength(h, reads({ status: optStatus('StatusFor', null) })));
+            assert.deepEqual(none.items, []);
+            assert.match(none.notes[0], new RegExp(`referendum #${REFN} \\(${HASH}\\): not rebuilt, preimage status is empty`));
+            const noStorage = await fallbackItemsFromThreads(stored, [], (h) => preimageLength(h, {}));
+            assert.match(noStorage.notes[0], /no preimage status storage/);
+            const down = await fallbackItemsFromThreads(stored, [], (h) => preimageLength(h, { statusFor: async () => { throw new Error('rpc down'); } }));
+            assert.match(down.notes[0], /could not be read/);
+            const thrown = await fallbackItemsFromThreads(stored, [], async () => { throw new Error('boom'); });
+            assert.deepEqual(thrown.items, []);
+        });
+
+        test('the tool: dry run reads the stored threads, rebuilds B from a fake api, and plans the link', async () => {
+            const M = `motion-${tx.democracy.externalProposeMajority({ Lookup: { hash: '0x' + (0xe0 + n).toString(16).repeat(32), len: 55 } }).hash.toHex()}`;
+            const P = '0x' + (0xe0 + n).toString(16).repeat(32);
+            db.createThreadIfMissing({ id: M, kind: 'motion', refKey: M.slice(7), title: 't' });
+            for (const state of ['ongoing', 'passed']) reconcileReferendumThreads(db, [{ id: referendumThreadId(90 + n), refKey: String(90 + n), state, title: 'r', proposalHash: P }], { trusted: true });
+            const file = path.join(DIR, 'explorer.db');
+            const ro = new DatabaseSync(file, { readOnly: true });
+            const logs = [];
+            const api = { query: { preimage: { statusFor: async (h) => (h === P ? optStatus('StatusFor', { Unrequested: { deposit: [acct, 1], len: 55 } }) : optStatus('StatusFor', null)) } } };
+            const rebuilt = await fallbackChainItems(api, [], sqliteDemocracyThreads(ro), (m) => logs.push(m));
+            const plan = linkMotionThreads(sqliteThreadStore(ro), rebuilt, makeCall, { apply: false });
+            ro.close();
+            assert.deepEqual(plan.map(x => [x.id, x.status]), [[M, 'would-link']]);
+            assert.equal(db.getThread(M).proposalHash, null, 'dry run wrote nothing');
+            // Every other stored referendum has no status on this fake chain: listed, not guessed.
+            assert.ok(logs.length >= 1 && logs.every(l => /not rebuilt/.test(l)), logs.join('\n'));
+        });
+    });
+});
+
+describe('server.js: the tick wiring and the review follow-ups', () => {
+    const code = stripComments(readRepo('server.js', import.meta.url));
+    test('the democracy tick adds the fallback items to the live ones', () => {
+        const pass = bodyOf(code, 'syncDemocracyPass');
+        assert.match(pass, /linkMotionThreadsFromDemocracy\(\[\.\.\.liveItems, \.\.\.await fallbackMotionItems\(liveItems\)\]\)/);
+        const fb = bodyOf(code, 'fallbackMotionItems');
+        assert.match(fb, /countMotionThreadsWithoutProposalHash\(\)/, 'only while a motion thread has no hash');
+        assert.match(fb, /fallbackItemsFromThreads\(db\.getDemocracyThreadsWithProposalHash\(\), liveItems\.map/);
+    });
+    test('a motion linked by the tick leaves no backfill counter behind', () => {
+        const fn = bodyOf(code, 'linkMotionThreadsFromDemocracy');
+        assert.match(fn, /forgetMotionBackfill\(r\.id\)/);
+        const forget = bodyOf(code, 'forgetMotionBackfill');
+        assert.match(forget, /MOTION_HASH_ATTEMPTS_KEY, MOTION_HASH_TRIED_KEY/);
+        assert.match(forget, /delete m\[id\]; db\.setKv\(key, m\)/);
+    });
+    test('the backfill writes kv only when it changed', () => {
+        const fn = bodyOf(code, 'backfillMotionProposalHashes');
+        assert.doesNotMatch(fn, /changed = true/);
+        assert.match(fn, /JSON\.stringify\(\[attempts, tried\]\) !== before/);
+    });
+    test('the image ships what the tool needs', () => {
+        const df = readRepo('Dockerfile.backend', import.meta.url);
+        assert.match(df, /^COPY --chown=node:node lib \.\/lib$/m);
+        assert.match(df, /^COPY --chown=node:node tools \.\/tools$/m);
+        const tool = readRepo('tools/link-motion-threads.mjs', import.meta.url);
+        for (const m of tool.matchAll(/from '(\.\.?\/[^']+)'/g)) assert.match(m[1], /^\.\.\/lib\//, 'the tool imports only lib/ relatively');
+        assert.match(tool, /docker compose exec -T backend node --experimental-sqlite tools\/link-motion-threads\.mjs --apply/);
     });
 });

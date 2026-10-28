@@ -1985,6 +1985,18 @@ export function getMotionThreadsMissingProposalHash() {
             AND ((m.section = 'democracy' AND m.method LIKE 'externalPropose%') OR m.section IS NULL)
         GROUP BY t.id, t.ref_key, m.collective`).all();
 }
+// How many council motion threads have no proposal hash yet. The democracy
+// tick only rebuilds proposals from stored threads (server.js) when this is
+// above zero.
+export function countMotionThreadsWithoutProposalHash() {
+    return Number(db.prepare("SELECT COUNT(*) AS c FROM discussion_threads WHERE kind = 'motion' AND proposal_hash IS NULL").get().c);
+}
+// Referendum and external threads that hold a proposal hash, open or closed:
+// what a motion can be linked to once the chain no longer serves the proposal
+// (lib/discussion-threads.js fallbackItemsFromThreads).
+export function getDemocracyThreadsWithProposalHash() {
+    return db.prepare("SELECT id, kind, ref_key AS refKey, status, proposal_hash AS proposalHash FROM discussion_threads WHERE kind IN ('referendum','external') AND proposal_hash IS NOT NULL ORDER BY created_at DESC").all();
+}
 // Every ref_key of one kind, open or closed - what the chain must already know
 // about for a read of it to count as current.
 export function getThreadRefKeys(kind) {

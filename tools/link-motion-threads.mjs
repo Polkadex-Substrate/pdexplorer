@@ -18,15 +18,22 @@
 // B comes from the chain: every ongoing referendum and the queued external
 // proposal, plus any referendum named with --referendum (a finished one is
 // read from the state one block before it ended, which needs an archive node).
+// No archive needed for the rest: a referendum that is finished (or whose
+// proposal the live read does not give) still has its thread, which stored the
+// proposal hash, and for a Lookup call that hash is the preimage hash. B is
+// rebuilt as Lookup { hash, len } with the length from the preimage pallet's
+// current state (requestStatusFor, else statusFor). A proposal whose preimage
+// status is gone is listed as not rebuilt, never guessed.
 //
 // Dry run by default: the database is opened READ-ONLY and nothing is written.
 // --apply writes the links and clears those threads' retired backfill
 // attempts. Safe to repeat.
 //
-// Usage, on the explorer box (inside the backend container, so it sees the
-// same DATA_DIR and POLKADEX_WS):
-//   docker compose exec backend node --experimental-sqlite tools/link-motion-threads.mjs
-//   docker compose exec backend node --experimental-sqlite tools/link-motion-threads.mjs --apply
+// Usage, on the explorer box, from the deploy directory (inside the backend
+// container, which ships tools/ and lib/, and sees the same DATA_DIR and
+// POLKADEX_WS). Dry run first, then --apply:
+//   docker compose exec -T backend node --experimental-sqlite tools/link-motion-threads.mjs
+//   docker compose exec -T backend node --experimental-sqlite tools/link-motion-threads.mjs --apply
 //
 //   --referendum  comma-separated referendum indices to read even if finished
 //   --ws          RPC endpoint; defaults to the first of $POLKADEX_WS, then
@@ -37,7 +44,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { linkMotionThreadsByCallHash } from '../lib/discussion-threads.js';
+import { linkMotionThreadsByCallHash, preimageLength, preimageStatusReads, fallbackItemsFromThreads } from '../lib/discussion-threads.js';
 import { proposalHashOf, normalizeHash } from '../lib/discussion-lifecycle.js';
 
 export const ATTEMPTS_KEY = 'discussion:motion-hash-attempts';
@@ -95,9 +102,25 @@ export function clearAttempts(sqlite, ids) {
     if (changed) sqlite.prepare('INSERT OR REPLACE INTO kv(key, value, updated_at) VALUES(?,?,?)').run(ATTEMPTS_KEY, JSON.stringify(attempts), Date.now());
 }
 
+// Referendum and external threads that hold a proposal hash, open or closed.
+export function sqliteDemocracyThreads(sqlite) {
+    return sqlite.prepare("SELECT id, kind, ref_key AS refKey, status, proposal_hash AS proposalHash FROM discussion_threads WHERE kind IN ('referendum','external') AND proposal_hash IS NOT NULL ORDER BY created_at DESC")
+        .all().map(r => ({ ...r }));
+}
+
+// The no-archive items: for every stored thread whose proposal hash the chain
+// items do not cover, B rebuilt as Lookup { hash, len } with the length from the
+// preimage pallet's current state. Prints one line per thread it cannot rebuild.
+export async function fallbackChainItems(api, items, threads, log = console.log) {
+    const reads = preimageStatusReads(api);
+    const { items: extra, notes } = await fallbackItemsFromThreads(threads, items.map(i => i.proposalHash), (hash) => preimageLength(hash, reads));
+    for (const n of notes) log(`  ${n}`);
+    return extra;
+}
+
 // The bounded calls to recompute from: ongoing referenda, the queued external
 // proposal, and the named referenda at the block before they ended.
-async function chainItems(api, extraIndices, blake2AsHex) {
+export async function chainItems(api, extraIndices, blake2AsHex) {
     const dem = api.query.democracy;
     const items = [];
     const push = (bounded, source) => {
@@ -123,7 +146,7 @@ async function chainItems(api, extraIndices, blake2AsHex) {
             if (hist && hist.isSome && hist.unwrap().isOngoing) push(hist.unwrap().asOngoing.proposal, `referendum #${index} (finished, state at ${end - 1})`);
             else console.log(`referendum #${index}: no ongoing state at ${end - 1}, skipped`);
         } catch (e) {
-            console.log(`referendum #${index}: state at ${end - 1} not readable (${e.message}); this needs an archive node`);
+            console.log(`referendum #${index}: state at ${end - 1} not readable (${e.message}); this needs an archive node; falling back to the stored proposal hash`);
         }
     }
     return items;
@@ -169,8 +192,12 @@ async function main(argv) {
     const api = await ApiPromise.create({ provider, throwOnConnect: true });
     try {
         const items = await chainItems(api, extra.map(Number), blake2AsHex);
+        const stored = sqliteDemocracyThreads(sqlite);
+        const notes = [];
+        items.push(...await fallbackChainItems(api, items, stored, (m) => notes.push(m)));
         console.log(`\nDemocracy items read from ${ws}: ${items.length}`);
         for (const it of items) console.log(`  ${it.source}: proposal hash ${it.proposalHash}`);
+        for (const n of notes) console.log(n);
         const d = api.tx.democracy;
         const makeCall = (method, bounded) => (d && typeof d[method] === 'function' ? d[method](bounded).method : null);
         const result = linkMotionThreads(sqliteThreadStore(sqlite), items, makeCall, { apply });
