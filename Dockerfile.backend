@@ -37,8 +37,10 @@ COPY --chown=node:node server.js db.js email.js backfill-transactions-from-event
 #
 # Nothing else is added here on purpose: a COPY of a path that isn't in the
 # repo FAILS THE BUILD, so each extra line is another way to break a deploy.
-# Operator scripts under tools/ are deliberately NOT copied — run them with
-#     docker compose exec -T backend node --experimental-sqlite - < tools/<script>
+# tools/ IS copied (the COPY near the end of this file), so an operator script
+# runs in the container as
+#     docker compose exec -T backend node --experimental-sqlite tools/<script>.mjs
+# e.g. tools/link-motion-threads.mjs, which imports only ./lib and @polkadot/*.
 COPY --chown=node:node lib ./lib
 # Audit F-182: INSTALL documents
 #   docker compose exec backend node --experimental-sqlite tools/migrate-hash-ids.mjs

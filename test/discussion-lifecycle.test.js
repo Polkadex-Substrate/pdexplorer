@@ -312,8 +312,12 @@ describe('review fixes: motion hash backfill, external trust, undecoded motions'
         const r = await recoverMotionProposalHash(row(), io({ blockCalls: async () => { throw new Error('rpc not ready (disconnected mid-fetch)'); } }));
         assert.deepEqual(r, { outcome: 'unavailable' });
     });
-    test('a state read that throws (not swallowed) is unavailable too; a non-array body is unavailable', async () => {
-        assert.deepEqual(await recoverMotionProposalHash(row(), io({ stateAt: async () => { throw new Error('boom'); } })), { outcome: 'unavailable' });
+    test('a state read that throws is not an answer: the body is still read; a non-array body is unavailable', async () => {
+        // 2026-10-27 (motion #140): a pruned state read must not end the try
+        // before the body, and is never a miss on its own.
+        const boom = async () => { throw new Error('boom'); };
+        assert.deepEqual(await recoverMotionProposalHash(row(), io({ stateAt: boom, blockCalls: async () => [] })), { outcome: 'miss' }, 'the body answered');
+        assert.deepEqual(await recoverMotionProposalHash(row({ proposedBlock: null }), io({ stateAt: boom })), { outcome: 'unavailable' });
         assert.deepEqual(await recoverMotionProposalHash(row(), io({ blockCalls: async () => null })), { outcome: 'unavailable' });
     });
     test('the body WAS read and the call is not in it: a miss (one try)', async () => {
@@ -329,16 +333,18 @@ describe('review fixes: motion hash backfill, external trust, undecoded motions'
         assert.deepEqual(r, { outcome: 'found', hash: H1 });
         assert.deepEqual(seen, [100, 199]);
     });
-    test('a decoded call that is not an external proposal is a miss; no proposing block is a miss', async () => {
+    test('a decoded call that is not an external proposal is a miss; no block known yet is not a try', async () => {
         const other = call('treasury', 'approveProposal', [5], MOTION);
         assert.deepEqual(await recoverMotionProposalHash(row(), io({ stateAt: async () => other })), { outcome: 'miss' });
-        assert.deepEqual(await recoverMotionProposalHash(row({ proposedBlock: null, resolvedBlock: null }), io()), { outcome: 'miss' });
+        // 2026-10-27: this used to be a miss, so a motion the locator had not
+        // placed yet used its three tries in three ticks and was retired.
+        assert.deepEqual(await recoverMotionProposalHash(row({ proposedBlock: null, resolvedBlock: null }), io()), { outcome: 'unavailable' });
     });
-    test('server.js counts only a miss, stops the pass on unavailable, and skips the pass while the RPC is down', () => {
+    test('server.js counts only a miss, stops the pass on unavailable only when the RPC is down, and skips the pass while it is', () => {
         const server = stripComments(readRepo('server.js', import.meta.url));
         const fn = bodyOf(server, 'backfillMotionProposalHashes');
         assert.match(fn, /if \(!isRpcReady\(\)\) return;/);
-        assert.match(fn, /if \(r\.outcome === 'unavailable'\) break;/);
+        assert.match(fn, /if \(r\.outcome === 'unavailable'\) \{\s*if \(!isRpcReady\(\)\) break;\s*continue;/);
         assert.match(fn, /else if \(r\.outcome === 'miss'\) \{\s*attempts\[row\.id\] = \(attempts\[row\.id\] \|\| 0\) \+ 1;/);
         assert.equal((fn.match(/attempts\[row\.id\] = /g) || []).length, 1, 'exactly one place increments the tries');
         assert.match(fn, /if \(!block \|\| !block\.block\) throw new Error/, 'a missing block is unavailable, not an empty body');
