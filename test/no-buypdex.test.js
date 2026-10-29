@@ -1,6 +1,5 @@
-// buypdex.com is down (404), so the explorer must not link to it. The links
-// are meant to come back pointing at the swap app, at which point this test is
-// updated to the new URL rather than deleted.
+// buypdex.com is down (404), so the explorer must not link to it. Only the dead
+// domain is banned: a future "Buy PDEX" link pointing at the swap app is fine.
 //
 // Source assertion over the shipped files. HTML comments are stripped first
 // because the removal spots carry a comment that names the old site on purpose.
@@ -29,13 +28,28 @@ function walk(dir, out = []) {
     return out;
 }
 
-test('no shipped file references buypdex.com or a "Buy PDEX" link', () => {
+const DEAD_DOMAIN = /buypdex\.com/i;
+
+function referencesDeadDomain(src) {
+    return DEAD_DOMAIN.test(src.replace(/<!--[\s\S]*?-->/g, ''));
+}
+
+test('no shipped file references the dead buypdex.com domain', () => {
     const offenders = [];
     for (const f of walk(ROOT)) {
-        const src = readFileSync(f, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-        if (/buypdex/i.test(src) || /buy\s+pdex/i.test(src)) offenders.push(relative(ROOT, f));
+        if (referencesDeadDomain(readFileSync(f, 'utf8'))) offenders.push(relative(ROOT, f));
     }
-    assert.deepEqual(offenders, [], 'files still referencing Buy PDEX: ' + offenders.join(', '));
+    assert.deepEqual(offenders, [], 'files still referencing buypdex.com: ' + offenders.join(', '));
+});
+
+test('a "Buy PDEX" link to the swap app is allowed', () => {
+    assert.equal(referencesDeadDomain('<a href="https://swap.polkadex.ee">Buy PDEX</a>'), false);
+});
+
+test('a link to buypdex.com fails, in any case or scheme', () => {
+    assert.equal(referencesDeadDomain('<a href="https://buypdex.com">Buy PDEX</a>'), true);
+    assert.equal(referencesDeadDomain('<a href="http://www.BuyPDEX.com/x">x</a>'), true);
+    assert.equal(referencesDeadDomain('<!-- buypdex.com was removed -->'), false);
 });
 
 test('the removed sidebar section and footer column leave no empty heading', () => {
