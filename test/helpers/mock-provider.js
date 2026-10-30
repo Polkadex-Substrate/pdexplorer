@@ -4,13 +4,15 @@
 // is asked for, and answers anything listed in `extra`. Anything else is
 // rejected, so a test sees a method it did not expect instead of a hang.
 //
-// Used by the tests that boot a real ApiPromise (test/live-runtime.test.js).
+// Used by the tests that boot a real ApiPromise (test/live-runtime.test.js,
+// test/rpc-methods.test.js).
 
 import { TypeRegistry, Metadata } from '@polkadot/types';
 import { u8aToHex } from '@polkadot/util';
 
-export function mockProvider({ metadataHex, specVersion = 392, specName = 'node', transactionVersion = 3, extra = {} }) {
+export function mockProvider({ metadataHex, specVersion = 392, specName = 'node', transactionVersion = 3, apis = [], extra = {} }) {
     const sent = [];
+    const calls = [];
     const subscriptions = [];
     const handlers = { connected: [], disconnected: [], error: [] };
     const registry = new TypeRegistry();
@@ -18,9 +20,9 @@ export function mockProvider({ metadataHex, specVersion = 392, specName = 'node'
     const genesis = '0x' + '11'.repeat(32);
     const runtimeVersion = {
         specName, implName: specName, authoringVersion: 1, specVersion, implVersion: 0,
-        apis: [], transactionVersion, stateVersion: 1
+        apis, transactionVersion, stateVersion: 1
     };
-    const header = { parentHash: '0x' + '00'.repeat(32), number: '0x10', stateRoot: '0x' + '00'.repeat(32), extrinsicsRoot: '0x' + '00'.repeat(32), digest: { logs: [] } };
+    const header = { parentHash: '0x' + '22'.repeat(32), number: '0x10', stateRoot: '0x' + '00'.repeat(32), extrinsicsRoot: '0x' + '00'.repeat(32), digest: { logs: [] } };
     const answers = {
         rpc_methods: () => ({ version: 1, methods: Object.keys(answers).concat(['chain_subscribeNewHeads', 'chain_unsubscribeNewHeads', 'state_subscribeRuntimeVersion', 'state_unsubscribeRuntimeVersion']) }),
         chain_getBlockHash: () => genesis,
@@ -52,6 +54,7 @@ export function mockProvider({ metadataHex, specVersion = 392, specName = 'node'
         on(type, cb) { (handlers[type] = handlers[type] || []).push(cb); return () => {}; },
         async send(method, params) {
             sent.push(method);
+            calls.push({ method, params });
             const a = answers[method];
             if (!a) throw new Error(`mock provider: ${method} not mocked`);
             return a(params, registry);
@@ -66,5 +69,5 @@ export function mockProvider({ metadataHex, specVersion = 392, specName = 'node'
         },
         async unsubscribe(type, method) { sent.push(method); return true; }
     };
-    return { provider, sent, subscriptions, registry, runtimeVersion, header, u8aToHex };
+    return { provider, sent, calls, subscriptions, registry, runtimeVersion, header, u8aToHex };
 }

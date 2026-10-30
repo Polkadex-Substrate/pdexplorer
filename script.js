@@ -2,6 +2,7 @@ import { ApiPromise, WsProvider } from '@polkadot/api';
 import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck } from './lib/tx-extensions.js';
 import { liveRuntimeStatus, liveRuntimeError, describeLiveRuntime } from './lib/live-runtime.js';
+import { canonicalRpc } from './lib/rpc-methods.js';
 import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses,
          blake2AsHex, xxhashAsHex, keccakAsHex, signatureVerify } from '@polkadot/util-crypto';
 import { u8aToHex, hexToU8a, stringToU8a, isHex } from '@polkadot/util';
@@ -898,7 +899,9 @@ async function init() {
         // its own signed transaction with mode 1 and a metadata hash (Ledger);
         // that is accepted only with the call data unchanged. Signing stays on
         // extrinsic v4, which spec 392 accepts (it lists versions 4 and 5).
-        const apiPromise = ApiPromise.create({ provider: wsProvider });
+        // rpc: subscribeNewBlocks uses the canonical chain_subscribeNewHeads,
+        // not the library's chain_subscribeNewHead alias (lib/rpc-methods.js).
+        const apiPromise = ApiPromise.create({ provider: wsProvider, rpc: canonicalRpc() });
 
         // Adopt the connection whenever it lands — this tick or in five
         // minutes. Idempotent: adoptChainApi guards against running twice.

@@ -8,6 +8,7 @@ import { decodeAddress, encodeAddress, signatureVerify, randomAsHex, blake2AsHex
 import { u8aWrapBytes, stringToU8a, u8aConcat, hexToU8a } from '@polkadot/util';
 import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck, apiSpecVersion, assetFeeCheckIsStale } from './lib/tx-extensions.js';
 import { liveRuntimeStatus, describeLiveRuntime } from './lib/live-runtime.js';
+import { canonicalRpc, RUNTIME_API_CONSOLE } from './lib/rpc-methods.js';
 import { decodeExtrinsicsTolerant, timestampFromExtrinsics, recoverBlockDecode } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
@@ -2508,8 +2509,25 @@ const RPC_ALLOWLIST = new Set([
     // (it is paged by construction and needs an explicit page size).
     'state_getRuntimeVersion', 'state_getStorage', 'state_getKeysPaged', 'state_getStorageHash', 'state_getStorageSize',
     'system_chain', 'system_chainType', 'system_health', 'system_name', 'system_properties', 'system_version', 'system_syncState',
-    'payment_queryInfo'
+    // Not a JSON-RPC method: the TransactionPaymentApi runtime API, which
+    // replaces the deprecated payment_queryInfo (lib/rpc-methods.js).
+    'transactionPaymentApi_queryInfo'
 ]);
+
+// Runs a console entry that is a runtime API call, not an RPC method. A bad
+// parameter is the caller's mistake (400, our own text); anything else goes
+// through serverError like the RPC path.
+async function runConsoleRuntimeApi(req, res, method, params) {
+    try {
+        const value = await withRpcBudget(method, () => RUNTIME_API_CONSOLE[method].run(globalApi, params));
+        res.set('Cache-Control', 'no-store');
+        res.json({ method, params, ...serialiseCodec(value) });
+    } catch (err) {
+        res.set('Cache-Control', 'no-store');
+        if (err && err.consoleParam) return res.status(400).json({ error: err.message });
+        serverError(res, err, req.path);
+    }
+}
 
 // Discoverable allowlist, so the UI can populate its method picker without
 // firing a deliberately-invalid POST just to read the list out of a 400 body.
@@ -2532,6 +2550,7 @@ app.post('/api/rpc/call', async (req, res) => {
             });
         }
         if (params.length > 8) return res.status(400).json({ error: 'Too many parameters (max 8).' });
+        if (RUNTIME_API_CONSOLE[method]) return runConsoleRuntimeApi(req, res, method, params);
 
         // Audit F-077 (round 2). `state_queryStorageAt` was removed from the
         // allowlist in round 1; `state_getKeysPaged` stayed, and it is the one
@@ -10430,7 +10449,9 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
         // natively, and the asset-fee extension's types now come from each
         // runtime's metadata via installPolkadotFixes at the top of this file,
         // which also covers the api.at(hash) registries used for old blocks.
-        newApi = await ApiPromise.create({ provider: wsProvider });
+        // rpc: the canonical chain_subscribeNewHeads instead of the library's
+        // chain_subscribeNewHead alias (lib/rpc-methods.js).
+        newApi = await ApiPromise.create({ provider: wsProvider, rpc: canonicalRpc() });
     } catch (err) {
         // ApiPromise.create only rejects on hard errors (bad metadata, etc.);
         // transient connect failures are handled by WsProvider's retry loop.
