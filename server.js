@@ -33,6 +33,7 @@ import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, 
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
+import { readEraSummary, missingEras, buildChoiceSnapshot, readConst, FALLBACK_HISTORY_DEPTH } from './lib/stake-choice-sync.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
 import { addTail, takeFromTail, tailSize, normalizeTail } from './lib/skip-tail.js';
@@ -1701,6 +1702,42 @@ async function syncValidatorHistory(activeEra, validators) {
     }
 }
 
+// Stake picker data (lib/stake-choice-sync.js): era reward summaries for the
+// realized APR, then a snapshot of every validator candidate, active and
+// waiting. Era summaries are written once per completed era (a completed era
+// never changes) and pruned past HistoryDepth; the snapshot is rebuilt with
+// every validator sync and served from KV by /api/staking/validator-choice.
+// Indexer worker only (syncData's caller). Best-effort: a failure keeps the
+// previous snapshot.
+async function syncValidatorChoice(activeEra) {
+    if (!globalApi || !activeEra || !globalApi.query.staking.erasRewardPoints) return;
+    try {
+        const depth = readConst(globalApi, 'staking', 'historyDepth', FALLBACK_HISTORY_DEPTH);
+        const firstEra = Math.max(activeEra - depth, 0);
+        db.pruneEraRewardSummaries(firstEra);
+        const have = db.getEraRewardSummaries(firstEra).map(r => r.era);
+        for (const era of missingEras(activeEra, depth, have)) {
+            try {
+                const summary = await readEraSummary(globalApi, era, { formatPDEX, commissionPercent: getCommissionPercent });
+                if (summary) db.upsertEraRewardSummary(summary);
+            } catch (err) {
+                console.warn(`[validator-choice] era ${era} summary skipped:`, err && err.message);
+            }
+        }
+        const snapshot = await buildChoiceSnapshot({
+            api: globalApi,
+            activeEra,
+            summaries: db.getEraRewardSummaries(firstEra),
+            formatPDEX,
+            commissionPercent: getCommissionPercent,
+            getName: (address) => getIdentity(globalApi, address)
+        });
+        db.setKv('validator_choice', snapshot);
+    } catch (err) {
+        console.warn('[validator-choice] snapshot skipped:', err && err.message);
+    }
+}
+
 // Crossings of the 50% mark, for the "raised past 50%" badge.
 //
 // Audit F-198: this walked the raw rows, so the phantom 0% eras that
@@ -2887,6 +2924,7 @@ const SITEMAP_STATIC_ROUTES = [
     { path: '/help/proxies-and-multisig',     changefreq: 'monthly', priority: '0.6' },
     { path: '/help/how-staking-works',        changefreq: 'monthly', priority: '0.7' },
     { path: '/help/nominating',               changefreq: 'monthly', priority: '0.7' },
+    { path: '/help/choosing-validators',      changefreq: 'monthly', priority: '0.6' },
     { path: '/help/claiming-rewards',         changefreq: 'monthly', priority: '0.6' },
     { path: '/help/unstaking',                changefreq: 'monthly', priority: '0.6' },
     { path: '/help/staking-rewards-page',     changefreq: 'monthly', priority: '0.6' },
@@ -3548,6 +3586,44 @@ app.get('/api/validators', (req, res) => {
         res.json(payload);
     }
     catch (err) { /* F-084 */ console.error('[api] /api/validators failed:', err && err.stack ? err.stack : err); res.status(500).json({ validators: [], status: 'Error', error: 'Internal error.' }); }
+});
+// The stake picker's data: every validator candidate (active and waiting) with
+// realized APR over 7 / 28 / 84 eras, reliability, identity facts, self-stake,
+// backers, exposure pages and recent slashes. Built by syncValidatorChoice on
+// the indexer; this handler only reads KV and attaches the commission track
+// record the same way /api/validators does.
+app.get('/api/staking/validator-choice', (req, res) => {
+    try {
+        const snap = db.getKv('validator_choice');
+        if (!snap || !Array.isArray(snap.validators)) {
+            res.set('Cache-Control', 'no-store');
+            return res.json({ validators: [], status: 'Initializing' });
+        }
+        try {
+            const byAddress = db.getCommissionHistoryByValidator();
+            const activeEra = Number((db.getKv('network_info') || {}).networkInfo?.activeEra) || snap.activeEra || null;
+            snap.validators = snap.validators.map(v => {
+                const summary = summarizeCommissionHistory(byAddress[v.address]);
+                return {
+                    ...v,
+                    commissionHistory: {
+                        note: describeCommissionHistory(summary),
+                        volatility: summary.volatility,
+                        raisedRecently: raisedRecently(summary, activeEra),
+                        pendingRaise: v.commission == null ? false : pendingRaise(summary, v.commission)
+                    }
+                };
+            });
+        } catch (e) {
+            console.warn('[api] validator-choice commission enrichment skipped:', e && e.message);
+        }
+        cacheShort(res);
+        res.json({ ...snap, status: 'Synced' });
+    } catch (err) {
+        console.error('[api] /api/staking/validator-choice failed:', err && err.stack ? err.stack : err);
+        res.set('Cache-Control', 'no-store');
+        res.status(500).json({ validators: [], status: 'Error', error: 'Internal error.' });
+    }
 });
 app.get('/api/network-info', async (req, res) => {
     try {
@@ -8404,6 +8480,8 @@ async function syncData() {
         }
         await syncValidatorHistory(activeEra, validators);
         db.replaceValidators(validatorData, { totalCount: validators.length, lastSync: Date.now(), status: 'Synced' });
+        // After the list is saved: a failure here must not cost the list.
+        await syncValidatorChoice(activeEra);
     } catch (err) {
         logSyncError('Validator sync', err);
         db.setSyncState('validators', { ...db.getSyncState('validators'), status: 'Error', error: err.message });

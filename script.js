@@ -52,6 +52,7 @@ import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
+import { createStakePicker, loadPickerData } from './lib/stake-picker-view.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -9200,13 +9201,12 @@ const VALIDATORS_CACHE_TTL = 60 * 1000;
 let stakeSelected = new Map(); // address -> { address, name }
 let stakeValidators = [];
 
+// { validators, meta } from /api/staking/validator-choice, falling back to
+// /api/validators while that is cold (lib/stake-picker-view.js). Order and
+// filtering are the picker's job.
 async function loadValidatorsForPicker() {
     if (validatorsCache && Date.now() - validatorsCacheAt < VALIDATORS_CACHE_TTL) return validatorsCache;
-    const res = await fetch('/api/validators');
-    const data = await res.json();
-    validatorsCache = Array.isArray(data.validators) ? data.validators.slice() : [];
-    // Sort by total stake desc so the top validators surface first.
-    validatorsCache.sort((a, b) => (Number(b.totalStake) || 0) - (Number(a.totalStake) || 0));
+    validatorsCache = await loadPickerData(async (url) => (await fetch(url)).json());
     validatorsCacheAt = Date.now();
     return validatorsCache;
 }
@@ -9299,7 +9299,9 @@ async function openStakeModal() {
     const listEl = document.getElementById('stake-validator-list');
     if (listEl) listEl.innerHTML = '<div class="stake-empty">Loading validators…</div>';
     try {
-        stakeValidators = await loadValidatorsForPicker();
+        const pick = await loadValidatorsForPicker();
+        stakeValidators = pick.validators;
+        stakePickerView().setData(pick);
     } catch (e) {
         if (listEl) listEl.innerHTML = '<div class="stake-empty">Could not load validators.</div>';
         return;
@@ -9312,59 +9314,28 @@ async function openStakeModal() {
     }
 }
 
+// Filters, sort, APR and the rows live in lib/stake-picker-view.js; the list
+// still calls back into addStakeValidator, and signing below is unchanged.
+let stakePicker = null;
+function stakePickerView() {
+    if (stakePicker) return stakePicker;
+    let storage = null;
+    try { storage = window.localStorage; } catch (e) { storage = null; }
+    stakePicker = createStakePicker({
+        barEl: document.getElementById('stake-filter-bar'),
+        listEl: document.getElementById('stake-validator-list'),
+        noteEl: document.getElementById('stake-spread-note'),
+        storage,
+        escapeHtml: stakingEscapeHtml,
+        shortAddress: stakingShortAddress,
+        helpIcon,
+        onAdd: (address) => addStakeValidator(address),
+        isNarrow: () => !!(window.matchMedia && window.matchMedia('(max-width: 720px)').matches)
+    });
+    return stakePicker;
+}
 function renderStakeValidatorList(filterStr) {
-    const listEl = document.getElementById('stake-validator-list');
-    if (!listEl) return;
-    const f = (filterStr || '').trim().toLowerCase();
-    const filtered = stakeValidators.filter(v => {
-        if (!f) return true;
-        return (v.name || '').toLowerCase().includes(f) || (v.address || '').toLowerCase().includes(f);
-    });
-    if (!filtered.length) {
-        listEl.innerHTML = '<div class="stake-empty">No matching validators.</div>';
-        return;
-    }
-    listEl.innerHTML = filtered.map(v => {
-        const isSelected = stakeSelected.has(v.address);
-        const name = v.name && v.name !== 'Unknown' ? v.name : stakingShortAddress(v.address);
-        const commission = (Number(v.commission) || 0).toFixed(1);
-        // The commission track record, at the moment of the decision.
-        //
-        // The list view showing it is necessary but not sufficient — this
-        // picker is where someone actually chooses who to nominate, and a
-        // nominator told us the problem is validators raising commission
-        // "the day after you nominate them". Putting the history only on the
-        // browse page and not here would leave the warning one screen away
-        // from the action it is about.
-        const ch = v.commissionHistory || null;
-        const chNote = ch && ch.note
-            ? `<div class="stake-val-history${ch.volatility === 'volatile' ? ' is-volatile' : ''}">${stakingEscapeHtml(ch.note)}</div>`
-            : '';
-        // The badge goes on the META line, not inside .stake-val-name.
-        //
-        // A review caught the first version putting it inside the name element,
-        // which is `white-space: nowrap; overflow: hidden; text-overflow:
-        // ellipsis` — so for any validator with a realistic identity (Polkadex
-        // has names like "MASTER VALIDATOR / 13") the badge was ellipsised
-        // straight off the edge. Invisible in the picker, which is the one
-        // screen where the warning has to land.
-        const chBadge = ch && (ch.raisedRecently || ch.pendingRaise)
-            ? ` <span class="badge commission-raised">${ch.pendingRaise ? 'RAISING NOW' : 'RAISED RECENTLY'}</span>` : '';
-        return `<div class="stake-validator-item${isSelected ? ' selected' : ''}" data-addr="${stakingEscapeHtml(v.address)}">
-            <div class="stake-val-info">
-                <div class="stake-val-name">${stakingEscapeHtml(name)}</div>
-                <div class="stake-val-meta">${stakingFormatPDEX(v.totalStake)} PDEX &middot; ${commission}% comm${chBadge}</div>
-                ${chNote}
-            </div>
-            <button type="button" class="stake-val-add" ${isSelected ? 'disabled aria-label="Already selected"' : 'aria-label="Add to selection"'}>${isSelected ? '✓' : '+'}</button>
-        </div>`;
-    }).join('');
-    listEl.querySelectorAll('.stake-validator-item').forEach(item => {
-        const addr = item.getAttribute('data-addr');
-        const addBtn = item.querySelector('.stake-val-add');
-        if (addBtn) addBtn.addEventListener('click', (e) => { e.stopPropagation(); addStakeValidator(addr); });
-        item.addEventListener('click', () => addStakeValidator(addr));
-    });
+    stakePickerView().render(filterStr, stakeSelected);
 }
 
 function addStakeValidator(address) {

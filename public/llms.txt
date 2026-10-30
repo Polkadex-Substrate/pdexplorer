@@ -60,6 +60,7 @@ Access notes:
   /api/extrinsic/:block/:txHash. found:false means "not in the scanned window",
   NOT "does not exist"
 - GET /api/validators — full validator set with stake + commission
+- GET /api/staking/validator-choice - every validator candidate (active and waiting) for the stake picker: realized nominator APR over 7 / 28 / 84 completed eras (past rewards, not a guarantee), reliability, self-stake, backers, exposure pages, blocked flag, identity facts, slash eras, commission track record
 - GET /api/validator/:address — per-validator era history
 - GET /api/holders — top-balance accounts
 - GET /api/account/:address — account-level summary
@@ -299,7 +300,8 @@ backoff — it is not a permanent error. `RPC_NOT_READY` is currently the only
 ## Caching tiers (respect the Cache-Control headers)
 
 - Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events,
-  /api/council, /api/technical-committee, /api/governance/latest, /api/state/* at the current head):
+  /api/council, /api/technical-committee, /api/governance/latest, /api/state/* at the current head,
+  /api/staking/validator-choice):
   public, max-age=5, s-maxage=10, stale-while-revalidate=30
 - Medium — /api/validators, /api/network-info, /api/holders, /api/price-latest,
   /api/discussions, /api/staking-rewards-status, /api/analytics/*, and
