@@ -951,45 +951,33 @@ The signing helper (`submitSignedTx`):
 
 If `window.injectedWeb3` is empty when the user lands on their own dashboard, the action bar is replaced with a "read-only mode" callout plus deep-link buttons to mobile wallets — so the buttons never lead to a confusing "no wallet" error after click.
 
-### ⚠️ `@polkadot/api` 10.13.1 and the manual `CheckMetadataHash` — one change, two files
+### `@polkadot/api` 17.0.2, spec 392, and transaction extensions
 
-**Read this before touching `@polkadot/api` in `package.json`.** The exact pin
-and a hand-written signed-extension declaration are a single mechanism spread
-across three files, and splitting them breaks signing on mainnet.
+**Read this before touching `@polkadot/api` in `package.json`.** The api is
+pinned EXACTLY (17.0.2, with `@polkadot/types` 17.0.2 and util/keyring 14.0.3;
+`test/deps-ops.test.js` asserts one copy of each). The hand-declared
+`CheckMetadataHash` shape that 10.13.1 needed is gone: 17.x knows the
+extension and encodes `Mode::Disabled (0)` + `None`, because the explorer
+never asks for mode 1.
 
-The Polkadex runtime declares the `CheckMetadataHash` signed extension.
-`@polkadot/api` **10.13.1 predates support for it**: it logs
-`Unknown signed extensions CheckMetadataHash ... no-effect` and then encodes
-*nothing* for it. The runtime still expects a `Mode` byte in the signed extra and
-an `Option<[u8;32]>` in the signing payload, so every signed extrinsic decoded
-misaligned on-chain and panicked inside
-`TaggedTransactionQueue_validate_transaction` — which reached the user as
-`wasm 'unreachable' instruction executed`. Every transfer, stake and vote failed.
+Two wrappers in `lib/tx-extensions.js` remain, installed before any
+`ApiPromise` exists in both `script.js` and `server.js`:
 
-The fix is to declare the shape by hand, so 10.13.1 encodes `Mode::Disabled (0)`
-+ `None` — byte-identical to what a current api sends when metadata-hash
-checking is off. That declaration exists at **both** `ApiPromise.create` call
-sites, for two different reasons:
+- the asset-fee extension's types are read from each runtime's own metadata
+  (the tip registry and every `api.at(blockHash)` registry), because the
+  library's built-in table has the wrong asset id shape for Polkadex; this is
+  what keeps old blocks decoding with their own runtime;
+- a v5 General extrinsic is re-encoded once, so its hash is right.
 
-| Where | Why it needs the declaration |
-| --- | --- |
-| `script.js` (frontend, `ApiPromise.create`) | It **signs**. Without it, submitted extrinsics are rejected by the runtime. |
-| `server.js` (backend, `connectRpc` → `ApiPromise.create`) | It **decodes**. Without it the Mode byte is skipped when reading a signed extra, and every field after it (era, nonce, tip) is read from the wrong offset — silently wrong output from `/api/decode/:block` and the block indexer. |
+The live paths assume runtime spec 392 or later, which mainnet has run since
+29 October 2026 (`lib/live-runtime.js`). Browser signing refuses a node that
+reports an older spec with one readable error before the wallet is asked, and
+the backend logs `[runtime] server live runtime FAILED` and reports
+`liveRuntime.ok: false` on `/api/version`. History is unaffected. The record
+of the upgrade is `docs/archive/392-readiness.md`.
 
-The invariant, therefore:
-
-- **`"@polkadot/api": "10.13.1"` is an exact pin, not a floor.** No caret, no
-  tilde. A range would let `npm ci` resolve a version that knows the extension
-  natively, and a native codec fighting a user-supplied override is undefined
-  behaviour. `npm ci` (both Dockerfiles) installs the lockfile verbatim, which
-  is the other half of this guarantee.
-- **Bumping the api means deleting the `signedExtensions` block in BOTH files,
-  in the same commit.** Removing it from one leaves the other's extrinsics
-  misencoded; keeping both after the bump is the codec conflict.
-- **Verify on-chain, not in the console.** The original bug produced a *warning*,
-  not an error, and only failed at runtime validation. After any change here,
-  sign one real `balances.transferKeepAlive` on mainnet and confirm it reaches
-  `InBlock` — a green console is not evidence.
+After any change here, sign one real `balances.transferKeepAlive` on mainnet
+and confirm it reaches `InBlock`; a green console is not evidence.
 
 Audit F-119.
 

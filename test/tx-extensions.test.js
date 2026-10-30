@@ -1,5 +1,5 @@
 // Extrinsic v4 + v5 decoding and v4 signing, with transaction extension types
-// taken from metadata (lib/tx-extensions.js). See docs/392-readiness.md.
+// taken from metadata (lib/tx-extensions.js). See docs/archive/392-readiness.md.
 //
 // Two layers:
 //   1. Always runs: Substrate's own runtime metadata as shipped inside
@@ -7,8 +7,9 @@
 //      SkipCheckIfFeeless<ChargeAssetTxPayment> with a NativeOrWithId asset
 //      id, CheckMetadataHash, WeightReclaim). It is the same extension family
 //      Polkadex 392 runs, so it exercises the same code paths.
-//   2. Runs only when the Polkadex fixtures exist (test/fixtures/metadata-373.json
-//      from mainnet, metadata-392.json from testnet; written by
+//   2. Runs only when the Polkadex fixtures exist (test/fixtures/metadata-373.json,
+//      the pre-392 mainnet runtime, kept for HISTORY: old blocks are still
+//      decoded with it; metadata-392.json, the current runtime; both written by
 //      scripts/fetch-metadata.mjs). Absent fixtures SKIP with a loud message;
 //      they never pass silently.
 //
@@ -232,8 +233,8 @@ for (const v of ['v14', 'v15']) {
 // ---- Polkadex fixtures: present on the CEO's Mac after scripts/fetch-metadata.mjs ----
 
 const FIXTURES = [
-    { file: 'metadata-373.json', label: 'mainnet spec 373', expectV5: false },
-    { file: 'metadata-392.json', label: 'testnet spec 392', expectV5: true }
+    { file: 'metadata-373.json', label: 'historical spec 373', expectV5: false },
+    { file: 'metadata-392.json', label: 'current runtime, spec 392 or later', expectV5: true }
 ];
 
 for (const { file, label, expectV5 } of FIXTURES) {

@@ -30,6 +30,8 @@
 // connection landed on — that is the only way to inspect nodes you cannot
 // reach directly.
 
+import { MIN_LIVE_SPEC } from '../lib/live-runtime.js';
+
 const DEFAULT_ENDPOINTS = [
     'wss://rpc.polkadex.ee',                    // Cloudflare LB — what users hit
     'wss://so.polkadex.ee',                     // origins, as last recorded;
@@ -140,6 +142,7 @@ function judge(s, label) {
     if (!s.ok) { fail(label, `unreachable — ${s.error}`); return; }
     if (s.genesis !== canonicalGenesis) fail(label, `WRONG CHAIN — genesis ${s.genesis.slice(0, 12)}… differs from the majority`);
     if (s.specVersion !== canonicalSpec) fail(label, `runtime spec ${s.specVersion}, others run ${canonicalSpec} — missed or premature upgrade`);
+    if (s.specVersion < MIN_LIVE_SPEC) fail(label, `runtime spec ${s.specVersion} is older than ${MIN_LIVE_SPEC}, the runtime mainnet has run since 29 Oct 2026; the explorer refuses to sign through it`);
     if (s.isSyncing) fail(label, 'still syncing');
     if (s.peers < 1) fail(label, 'zero peers — isolated, cannot receive new blocks');
     if (bestSeen - s.best > MAX_BEHIND) fail(label, `BEHIND — best #${s.best}, ${bestSeen - s.best} blocks behind the best node seen`);

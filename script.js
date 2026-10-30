@@ -1,11 +1,13 @@
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck } from './lib/tx-extensions.js';
+import { liveRuntimeStatus, liveRuntimeStatusForVersion, liveRuntimeError, describeLiveRuntime, followRuntimeVersion } from './lib/live-runtime.js';
+import { canonicalRpc } from './lib/rpc-methods.js';
 import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses,
          blake2AsHex, xxhashAsHex, keccakAsHex, signatureVerify } from '@polkadot/util-crypto';
 import { u8aToHex, hexToU8a, stringToU8a, isHex } from '@polkadot/util';
 // Asset-fee extension types from each runtime's metadata + the v5 General
-// re-encoding fix (lib/tx-extensions.js, docs/392-readiness.md). Runs before
+// re-encoding fix (lib/tx-extensions.js, docs/archive/392-readiness.md). Runs before
 // any ApiPromise so the signing registry is covered.
 installPolkadotFixes({ TypeRegistry, GenericExtrinsic });
 // Signing-critical helpers live in lib/ so they can be unit-tested without a
@@ -750,15 +752,62 @@ function runAssetFeeSelfCheck(api) {
     } catch (e) { console.warn('[tx-extensions] browser self-check could not run:', e && e.message ? e.message : e); }
 }
 
+// The node must report the runtime the live paths assume (spec >= 392,
+// lib/live-runtime.js). An older one is out of date: say so in the status
+// pill and the console once. Signing re-checks before every transaction
+// (resolveWalletSigner), so this is the notice, not the guard.
+//
+// `version` is the runtime version the node just reported (from the
+// subscription in followRuntimeVersion). Without it the check reads
+// api.runtimeVersion, which is right at first connect only: polkadot.js keeps
+// the old value across a reconnect.
+function runLiveRuntimeCheck(api, version) {
+    try {
+        const status = version === undefined ? liveRuntimeStatus(api) : liveRuntimeStatusForVersion(version);
+        const { level, line } = describeLiveRuntime(status, 'browser');
+        if (level === 'log') {
+            console.log(line);
+            // A reconnect to an up-to-date node clears an earlier "out of date" notice.
+            if (networkStatusText.innerText === 'Node out of date') setNodeConnectedStatus();
+            return true;
+        }
+        console.error(line);
+        if (status.status === 'stale') {
+            networkStatusText.innerText = 'Node out of date';
+            networkStatusText.title = status.message + ' Browsing still works; sending and staking are refused until the page reconnects to an up-to-date node.';
+            statusIndicator.classList.remove('live');
+            statusIndicator.style.background = 'var(--error)';
+        }
+        return false;
+    } catch (e) { console.warn('[runtime] browser live runtime check could not run:', e && e.message ? e.message : e); return true; }
+}
+
+function setNodeConnectedStatus() {
+    networkStatusText.innerText = "Polkadex Connected";
+    networkStatusText.title = '';
+    statusIndicator.classList.add('live');
+    statusIndicator.style.background = 'var(--success)';
+}
+
+// Keep the pill true to the node actually connected. The runtime version
+// subscription fires on every (re)connect and on every runtime upgrade with the
+// version the node reports, and the check reads the spec from that value. (An
+// isReady re-check would be a no-op: it is long settled, and api.runtimeVersion
+// still holds the old node's value after a reconnect.) Once per api; stopped on
+// page teardown and when the api is disconnected.
+function watchRuntimeVersion(api) {
+    const { stop } = followRuntimeVersion(api, (version) => { runLiveRuntimeCheck(api, version); });
+    try { window.addEventListener('pagehide', stop, { once: true }); } catch (_) { /* no window */ }
+}
+
 function adoptChainApi(api) {
     if (chainApiAdopted || !api) return;
     chainApiAdopted = true;
     globalApi = api;
 
-    networkStatusText.innerText = "Polkadex Connected";
-    networkStatusText.title = '';
-    statusIndicator.classList.add('live');
-    statusIndicator.style.background = 'var(--success)';
+    setNodeConnectedStatus();
+    runLiveRuntimeCheck(api);
+    watchRuntimeVersion(api);
 
     // Chain-derived stat cards. These DO need the api.
     fetchNetworkStats(globalApi);
@@ -852,9 +901,8 @@ async function init() {
         // Cloudflare LB endpoint — auto-fails over between origin nodes
         // (so.polkadex.ee, polkadex-rpc.faradaynodes.com, ...) so this single
         // URL is resilient without the frontend needing to know the topology.
-        // Dev-only override for the 392 testnet proof (docs/392-readiness.md):
-        // VITE_POLKADEX_WS is read only by the Vite dev server; a production
-        // build always uses the mainnet LB.
+        // Dev-only endpoint override: VITE_POLKADEX_WS is read only by the
+        // Vite dev server; a production build always uses the mainnet LB.
         const wsEndpoint = (import.meta.env && import.meta.env.DEV && import.meta.env.VITE_POLKADEX_WS) || 'wss://rpc.polkadex.ee';
         const wsProvider = new WsProvider(wsEndpoint);
         // F-063: `await ApiPromise.create(...)` does not REJECT when the
@@ -878,8 +926,10 @@ async function init() {
         // (signAndSendOptions in lib/tx-submit.js). A wallet may still return
         // its own signed transaction with mode 1 and a metadata hash (Ledger);
         // that is accepted only with the call data unchanged. Signing stays on
-        // extrinsic v4, which spec 373 and 392 both accept.
-        const apiPromise = ApiPromise.create({ provider: wsProvider });
+        // extrinsic v4, which spec 392 accepts (it lists versions 4 and 5).
+        // rpc: subscribeNewBlocks uses the canonical chain_subscribeNewHeads,
+        // not the library's chain_subscribeNewHead alias (lib/rpc-methods.js).
+        const apiPromise = ApiPromise.create({ provider: wsProvider, rpc: canonicalRpc() });
 
         // Adopt the connection whenever it lands — this tick or in five
         // minutes. Idempotent: adoptChainApi guards against running twice.
@@ -10111,8 +10161,8 @@ if (document.readyState === 'loading') {
 // Token transfer for the connected wallet. Uses balances.transferKeepAlive by
 // default (so the user can't accidentally reap their own account by undershooting
 // the existential deposit) and balances.transferAllowDeath if they explicitly
-// uncheck "Keep account alive". Falls back to balances.transfer on older
-// runtimes that don't expose the split variants. The fee is estimated via
+// uncheck "Keep account alive". There is no fallback to the old
+// balances.transfer: spec 392 removed it. The fee is estimated via
 // `tx.paymentInfo(sender)` and refreshed as the recipient/amount changes.
 const SEND_FEE_BUFFER = 0.05; // PDEX held back from "Max" to cover fee + slippage.
 let sendFeeDebounce = null;
@@ -12704,6 +12754,11 @@ async function resolveWalletSigner(fail) {
     const address = getStoredWallet();
     if (!address) return fail('Please connect your wallet first.');
     if (!globalApi) return fail('Blockchain connection is not ready yet. Please wait a moment and try again.');
+    // Before the wallet is asked anything: the node must be on the runtime
+    // the signing path assumes (spec >= 392). A stale node gets one readable
+    // refusal instead of a payload built for a runtime it does not run.
+    const staleRuntime = liveRuntimeError(globalApi);
+    if (staleRuntime) return fail(staleRuntime);
 
     let injected;
     try { injected = await getInjectedAccounts(); }

@@ -71,7 +71,7 @@ describe('F-103 — the production tree has no known-vulnerable ws', () => {
 
     test('@polkadot/* is pinned EXACTLY (17.0.2 / 14.0.3) and resolves to one copy each', () => {
         // Moved deliberately from 10.13.1 for spec 392 (extrinsic v5, metadata
-        // TxExtensions); see docs/392-readiness.md. Still exact pins: a
+        // TxExtensions); see docs/archive/392-readiness.md. Still exact pins: a
         // floating range here is how `npm audit fix --force` once nearly
         // broke every signed extrinsic. One copy each matters twice over:
         // duplicate @polkadot/types breaks instanceof checks, and

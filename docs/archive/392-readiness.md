@@ -1,3 +1,29 @@
+> **Archived 2026-10-29.** Polkadex mainnet enacted runtime spec 392 on
+> 29 October 2026 (block about 13,342,584). This file is kept as the record of
+> how the explorer crossed the upgrade. Its run sheet, deploy gate, checklist
+> and rollback sections no longer apply: rollback to the pre-392 image is
+> closed, and the explorer no longer keeps the chain head or signing working
+> on spec 373.
+>
+> What changed when it was archived (branch `chore/retire-pre392-compat`):
+>
+> - The live paths assume spec 392 or later (`lib/live-runtime.js`). Browser
+>   signing refuses a node that reports an older spec with one readable error
+>   before the wallet is asked; the server logs one `[runtime] ... FAILED`
+>   line and `/api/version` carries `liveRuntime.ok: false`.
+> - Signing no longer falls back to `balances.transfer` (spec 392 removed it).
+> - `scripts/find-upgrade-block.mjs` and `lib/upgrade-block.js` were removed
+>   (one-shot tools for the testnet proof).
+> - `scripts/fetch-metadata.mjs` now writes `metadata-392.json` from mainnet
+>   (the current runtime), and `metadata-373.json` only from an archive node at
+>   a block before the upgrade. Both fixtures stay: the 373 one backs the
+>   historical decode tests.
+> - Everything that decodes HISTORY is kept unchanged: `api.at(blockHash)`
+>   registries, the per-runtime asset-fee extension types and their self-check
+>   (`lib/tx-extensions.js`), v4 and v5 extrinsic decoding, `getBlockTolerant`
+>   (`lib/extrinsic-decode.js`), and the preimage reads of both `StatusFor` and
+>   `RequestStatusFor`.
+
 # Explorer readiness for runtime spec 392
 
 Deadline (noted 2026-10-27): referendum #36 enacts about 2026-10-29 18:00 UTC
