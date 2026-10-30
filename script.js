@@ -1,7 +1,7 @@
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck } from './lib/tx-extensions.js';
-import { liveRuntimeStatus, liveRuntimeError, describeLiveRuntime } from './lib/live-runtime.js';
+import { liveRuntimeStatus, liveRuntimeStatusForVersion, liveRuntimeError, describeLiveRuntime, followRuntimeVersion } from './lib/live-runtime.js';
 import { canonicalRpc } from './lib/rpc-methods.js';
 import { decodeAddress, encodeAddress, createKeyMulti, sortAddresses,
          blake2AsHex, xxhashAsHex, keccakAsHex, signatureVerify } from '@polkadot/util-crypto';
@@ -754,9 +754,14 @@ function runAssetFeeSelfCheck(api) {
 // lib/live-runtime.js). An older one is out of date: say so in the status
 // pill and the console once. Signing re-checks before every transaction
 // (resolveWalletSigner), so this is the notice, not the guard.
-function runLiveRuntimeCheck(api) {
+//
+// `version` is the runtime version the node just reported (from the
+// subscription in followRuntimeVersion). Without it the check reads
+// api.runtimeVersion, which is right at first connect only: polkadot.js keeps
+// the old value across a reconnect.
+function runLiveRuntimeCheck(api, version) {
     try {
-        const status = liveRuntimeStatus(api);
+        const status = version === undefined ? liveRuntimeStatus(api) : liveRuntimeStatusForVersion(version);
         const { level, line } = describeLiveRuntime(status, 'browser');
         if (level === 'log') {
             console.log(line);
@@ -782,17 +787,15 @@ function setNodeConnectedStatus() {
     statusIndicator.style.background = 'var(--success)';
 }
 
-// The provider fires "connected" on every (re)connect. The first one lands
-// before adoptChainApi, which does the first check; later ones re-check, so a
-// reconnect to a node still below spec 392 shows "Node out of date" again
-// rather than leaving a stale "Polkadex Connected". Waits for the api to be
-// ready so the runtime version is the new link's.
-function watchProviderReconnects(provider) {
-    provider.on('connected', () => {
-        if (!chainApiAdopted || !globalApi) return;
-        const api = globalApi;
-        Promise.resolve(api.isReady).then(() => runLiveRuntimeCheck(api)).catch(() => {});
-    });
+// Keep the pill true to the node actually connected. The runtime version
+// subscription fires on every (re)connect and on every runtime upgrade with the
+// version the node reports, and the check reads the spec from that value. (An
+// isReady re-check would be a no-op: it is long settled, and api.runtimeVersion
+// still holds the old node's value after a reconnect.) Once per api; stopped on
+// page teardown and when the api is disconnected.
+function watchRuntimeVersion(api) {
+    const { stop } = followRuntimeVersion(api, (version) => { runLiveRuntimeCheck(api, version); });
+    try { window.addEventListener('pagehide', stop, { once: true }); } catch (_) { /* no window */ }
 }
 
 function adoptChainApi(api) {
@@ -802,6 +805,7 @@ function adoptChainApi(api) {
 
     setNodeConnectedStatus();
     runLiveRuntimeCheck(api);
+    watchRuntimeVersion(api);
 
     // Chain-derived stat cards. These DO need the api.
     fetchNetworkStats(globalApi);
@@ -899,7 +903,6 @@ async function init() {
         // Vite dev server; a production build always uses the mainnet LB.
         const wsEndpoint = (import.meta.env && import.meta.env.DEV && import.meta.env.VITE_POLKADEX_WS) || 'wss://rpc.polkadex.ee';
         const wsProvider = new WsProvider(wsEndpoint);
-        watchProviderReconnects(wsProvider);
         // F-063: `await ApiPromise.create(...)` does not REJECT when the
         // WebSocket cannot be established — WsProvider retries forever, so the
         // promise simply never settles. That is why the old ordering was so
