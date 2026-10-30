@@ -81,9 +81,8 @@ EXPOSE 3001
 # still prints `ExperimentalWarning: SQLite is an experimental feature` on
 # import, so a minor bump buys nothing but a re-test, and a MAJOR bump is not a
 # config change here — @polkadot/api is pinned to
-# exactly 10.13.1 with a manually declared CheckMetadataHash signed extension
-# (see server.js), and that combination is what makes wallet signing produce
-# valid extrinsics. Re-qualifying it is a signing-correctness project, not a
+# exactly 17.0.2 with metadata-driven extension types (lib/tx-extensions.js),
+# and that combination is what makes wallet signing produce valid extrinsics. Re-qualifying it is a signing-correctness project, not a
 # Dockerfile edit. Keeping the pin and documenting it accurately is the option
 # that risks nothing.
 #

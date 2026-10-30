@@ -1,24 +1,36 @@
 #!/usr/bin/env node
-// Saves the Polkadex runtime metadata fixtures used by test/tx-extensions.test.js.
+// Saves the Polkadex runtime metadata fixtures used by test/tx-extensions.test.js
+// and the other fixture suites.
 //
 //   node scripts/fetch-metadata.mjs                 both fixtures
-//   node scripts/fetch-metadata.mjs --only 373      mainnet only
-//   node scripts/fetch-metadata.mjs --only 392      testnet only
-//   --mainnet <wss url>  --testnet <wss url>  --samples <n>  --out <dir>
-//   --blocks <n>    how many recent blocks to scan (default 400)
+//   node scripts/fetch-metadata.mjs --only 392      the current runtime only
+//   node scripts/fetch-metadata.mjs --only 373      the pre-392 runtime only
+//   --mainnet <wss url>   current runtime, read at the finalized head
+//                         (default wss://rpc.polkadex.ee)
+//   --archive <wss url>   archive node for the 373 fixture
+//                         (default wss://rpc2.polkadex.ee)
+//   --at373 <block>       a mainnet block still under spec 373
+//                         (default 13342000; 392 was enacted at ~13,342,584)
+//   --samples <n>  --out <dir>
+//   --blocks <n>    how many blocks to scan back (default 400)
 //
-// For the 392 target the script scans the whole window for extrinsic format
-// versions and prints seenFormats ({"4": {...}, "5": {...}} with the
-// bare/signed/general split read from the version byte: 0x04, 0x84, 0x05,
-// 0x45). If no v5 extrinsic is found it exits non-zero WITHOUT writing the
-// file; widen the window with --blocks.
+// metadata-392.json is the CURRENT runtime: mainnet at its finalized head,
+// which must report spec 392 or later (lib/live-runtime.js MIN_LIVE_SPEC);
+// an older spec means a stale or wrong node and nothing is written. The script
+// scans the whole window for extrinsic format versions and prints seenFormats
+// ({"4": {...}, "5": {...}} with the bare/signed/general split read from the
+// version byte: 0x04, 0x84, 0x05, 0x45). If no v5 extrinsic is found it exits
+// non-zero WITHOUT writing the file; widen the window with --blocks.
 //
-// Writes test/fixtures/metadata-373.json (mainnet, wss://rpc.polkadex.ee) and
-// test/fixtures/metadata-392.json (testnet, wss://polkadex-testnet.polkadex.ee).
+// metadata-373.json is HISTORY: the runtime mainnet ran before 29 October
+// 2026, read at a fixed block from an archive node. It backs the historical
+// decode tests and changes only if that file is lost. A block that is not
+// under spec 373 is refused and nothing is written.
+//
 // Each file holds the metadata from state_getMetadata (v14), the v15/v16
 // metadata where the runtime offers it, and a handful of real signed or
-// general extrinsics from recent blocks of the SAME runtime, so the tests
-// decode genuine chain bytes and not only bytes the tests built.
+// general extrinsics from blocks of the SAME runtime, so the tests decode
+// genuine chain bytes and not only bytes the tests built.
 //
 // Read-only: JSON-RPC reads only, no keys, nothing is submitted. Needs Node 22
 // (global WebSocket). Plain JSON-RPC on purpose, so a library bug cannot
@@ -29,6 +41,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newFormatTally, tallyExtrinsic, sampleLabel, v5MissingMessage } from '../lib/extrinsic-formats.js';
 import { rpcClient } from '../lib/json-rpc-client.js';
+import { MIN_LIVE_SPEC } from '../lib/live-runtime.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -37,9 +50,16 @@ const opt = (name, fallback) => {
     return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 
+const AT_373 = Number(opt('at373', '13342000'));
+if (!Number.isInteger(AT_373) || AT_373 < 1) {
+    console.error('--at373 must be a positive block number.');
+    process.exit(2);
+}
 const TARGETS = [
-    { label: '373', file: 'metadata-373.json', url: opt('mainnet', 'wss://rpc.polkadex.ee'), expectSpec: 373, network: 'mainnet' },
-    { label: '392', file: 'metadata-392.json', url: opt('testnet', 'wss://polkadex-testnet.polkadex.ee'), expectSpec: 392, network: 'testnet' }
+    // The current runtime, at the finalized head.
+    { label: '392', file: 'metadata-392.json', url: opt('mainnet', 'wss://rpc.polkadex.ee'), at: null, minSpec: MIN_LIVE_SPEC, network: 'mainnet' },
+    // History: the runtime before the 392 upgrade, at a fixed block.
+    { label: '373', file: 'metadata-373.json', url: opt('archive', 'wss://rpc2.polkadex.ee'), at: AT_373, exactSpec: 373, network: 'mainnet' }
 ];
 const ONLY = opt('only', null);
 const SAMPLES = Number(opt('samples', '12'));
@@ -106,14 +126,18 @@ async function fetchTarget(t) {
     console.log(`\n[${t.network}] ${t.url}`);
     const { call, close } = rpcClient(t.url);
     try {
-        const blockHash = await call('chain_getFinalizedHead');
+        const blockHash = t.at === null ? await call('chain_getFinalizedHead') : await call('chain_getBlockHash', [t.at]);
+        if (!blockHash) throw new Error(`block #${t.at} is not on ${t.url}.`);
         const header = await call('chain_getHeader', [blockHash]);
         const blockNumber = parseInt(header.number, 16);
         const rv = await call('state_getRuntimeVersion', [blockHash]);
         const genesisHash = await call('chain_getBlockHash', [0]);
-        console.log(`  finalized #${blockNumber} ${blockHash}, ${rv.specName} spec ${rv.specVersion} tx ${rv.transactionVersion}`);
-        if (rv.specVersion !== t.expectSpec) {
-            console.warn(`  WARNING: expected spec ${t.expectSpec}, the chain runs ${rv.specVersion}. Saving it anyway; the file name is a label, the content records the real spec.`);
+        console.log(`  ${t.at === null ? 'finalized' : 'block'} #${blockNumber} ${blockHash}, ${rv.specName} spec ${rv.specVersion} tx ${rv.transactionVersion}`);
+        if (t.minSpec && rv.specVersion < t.minSpec) {
+            throw new Error(`the node reports spec ${rv.specVersion} at its finalized head, below ${t.minSpec}: it is out of date or not mainnet. Nothing written; use an up-to-date endpoint with --mainnet.`);
+        }
+        if (t.exactSpec && rv.specVersion !== t.exactSpec) {
+            throw new Error(`block #${blockNumber} runs spec ${rv.specVersion}, not ${t.exactSpec}. Nothing written; pick a block before the 392 upgrade with --at373.`);
         }
         const metadata = await call('state_getMetadata', [blockHash]);
         const versions = await metadataVersions(call, blockHash);
@@ -124,10 +148,11 @@ async function fetchTarget(t) {
         console.log(`  metadata versions offered: ${versions.join(', ')}`);
 
         // Real signed (0x84), bare v5 (0x05, the inherents) and general (0x45)
-        // extrinsics from the same runtime, up to SAMPLES of each kind. A v5 target (392) scans the whole window
-        // so seenFormats counts every extrinsic; the others stop as soon as
-        // enough signed samples are in.
-        const wantV5 = t.expectSpec >= 392 || rv.specVersion >= 392;
+        // extrinsics from the same runtime, up to SAMPLES of each kind. A v5
+        // runtime (392 or later) scans the whole window so seenFormats counts
+        // every extrinsic; the 373 one stops as soon as enough signed samples
+        // are in.
+        const wantV5 = rv.specVersion >= 392;
         const extrinsics = [];
         const have = { 'v4-signed': 0, 'v5-general': 0, 'v5-bare': 0 };
         const seenFormats = newFormatTally();

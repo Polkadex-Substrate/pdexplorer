@@ -7,6 +7,7 @@ import { TypeRegistry, GenericExtrinsic } from '@polkadot/types';
 import { decodeAddress, encodeAddress, signatureVerify, randomAsHex, blake2AsHex } from '@polkadot/util-crypto';
 import { u8aWrapBytes, stringToU8a, u8aConcat, hexToU8a } from '@polkadot/util';
 import { installPolkadotFixes, checkAssetFeeExtension, describeAssetFeeCheck, apiSpecVersion, assetFeeCheckIsStale } from './lib/tx-extensions.js';
+import { liveRuntimeStatus, describeLiveRuntime } from './lib/live-runtime.js';
 import { decodeExtrinsicsTolerant, timestampFromExtrinsics, recoverBlockDecode } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
@@ -59,7 +60,7 @@ import { sendEmail, emailProviderStatus } from './email.js';
 // Transaction extension types from each runtime's own metadata, and the v5
 // General extrinsic re-encoding fix. Must run before any ApiPromise exists so
 // every registry (tip and api.at(hash) historical ones) is covered. See
-// lib/tx-extensions.js and docs/392-readiness.md.
+// lib/tx-extensions.js and docs/archive/392-readiness.md.
 installPolkadotFixes({ TypeRegistry, GenericExtrinsic });
 
 // --- Timestamped logging ---------------------------------------------------
@@ -1981,7 +1982,7 @@ const DEV_API_TIMEOUT_MS = readPositiveInteger(process.env.DEV_API_TIMEOUT_MS, 2
 // the shared WsProvider. That is not available: @polkadot/api (10.13.1, and
 // still 17.0.2, re-checked 2026-10-18) exposes no cancellation on
 // `api.query.*()`, `api.rpc.*` or `entriesPaged`, and the version is pinned
-// exactly (see docs/392-readiness.md before changing it). Claiming to cancel
+// exactly (see docs/archive/392-readiness.md before changing it). Claiming to cancel
 // would be worse than the current behaviour, because the next reader would
 // stop worrying about the load.
 //
@@ -2045,7 +2046,7 @@ const DEV_RPC_SLOT_MAX_MS = readPositiveInteger(process.env.DEV_RPC_SLOT_MAX_MS,
 // ── Audit F-073 round 3: "inflight cap 12; timeout still does not abort" ─────
 //
 // The abort half is not fixable here. @polkadot/api is pinned exactly (now
-// 17.0.2; see docs/392-readiness.md before changing it), and its provider
+// 17.0.2; see docs/archive/392-readiness.md before changing it), and its provider
 // signature, unchanged from 10.13.1, is
 // `send(method, params, isCacheable?, subscription?)`: no AbortSignal, no
 // cancel handle, nothing to call. Once a request is on the wire the node WILL
@@ -2762,9 +2763,9 @@ app.get('/api/decode/:block', async (req, res) => {
 // Result of the start-up asset-fee extension self-check (lib/tx-extensions.js,
 // checkAssetFeeExtension), re-run on every RPC reconnect AND whenever the
 // api's runtime spec differs from the one it was computed on: a runtime
-// upgrade (392 enactment) swaps the metadata in place without a reconnect.
-// null until the api exists. Surfaced on /api/version (with the spec it
-// describes) so a mismatch is visible without logs.
+// upgrade swaps the metadata in place without a reconnect. null until the api
+// exists. Surfaced on /api/version (with the spec it describes) so a mismatch
+// is visible without logs.
 let assetFeeCheck = null;
 function runAssetFeeSelfCheck(api) {
     try {
@@ -2781,7 +2782,25 @@ function runAssetFeeSelfCheck(api) {
 // upgrade re-runs the check and logs its line.
 function currentAssetFeeCheck() {
     if (globalApi && assetFeeCheckIsStale(globalApi, assetFeeCheck)) runAssetFeeSelfCheck(globalApi);
+    currentLiveRuntime();
     return assetFeeCheck;
+}
+
+// The live paths assume spec >= MIN_LIVE_SPEC (lib/live-runtime.js). A node
+// reporting an older spec at its head is out of date: one console.error line
+// per spec seen (on connect, and when the spec changes), and /api/version
+// carries liveRuntime.ok:false. History is not affected: old blocks are still
+// decoded with their own runtime through api.at(blockHash).
+let liveRuntime = null;
+function runLiveRuntimeCheck(api) {
+    liveRuntime = liveRuntimeStatus(api);
+    const { level, line } = describeLiveRuntime(liveRuntime, 'server');
+    if (level === 'log') console.log(line);
+    else console.error(line);
+}
+function currentLiveRuntime() {
+    if (globalApi && (!liveRuntime || apiSpecVersion(globalApi) !== liveRuntime.specVersion)) runLiveRuntimeCheck(globalApi);
+    return liveRuntime;
 }
 
 // ---- GET /api/version -------------------------------------------------------
@@ -2822,6 +2841,12 @@ app.get('/api/version', (req, res) => {
         assetFeeCheck: (() => {
             const c = currentAssetFeeCheck();
             return c ? { ok: c.ok, status: c.status, specVersion: c.specVersion } : null;
+        })(),
+        // ok:false means the node in use reports a runtime older than the one
+        // the live paths assume (lib/live-runtime.js); see the [runtime] line.
+        liveRuntime: (() => {
+            const l = currentLiveRuntime();
+            return l ? { ok: l.ok, status: l.status, specVersion: l.specVersion, minSpec: l.minSpec } : null;
         })()
     });
 });
@@ -8596,7 +8621,7 @@ async function scanSingleBlock(blockNumber) {
 // 'block_decode_recovered' row when every extrinsic decodes alone, and keeps
 // the original error if this second fetch fails. Nothing retries those rows
 // automatically; they are an operator signal, counted on /api/blocks and
-// /api/events (coverage.decodeFailures) and in docs/392-readiness.md.
+// /api/events (coverage.decodeFailures) and in docs/archive/392-readiness.md.
 async function getBlockTolerant(hash, blockNumber, cause) {
     const hashHex = typeof hash === 'string' ? hash : hash.toHex();
     return recoverBlockDecode({
@@ -10427,6 +10452,8 @@ async function connectRpc({ kickSyncsOnConnect = true } = {}) {
     // the metadata-derived type, not the library's Option<MultiLocation>. A
     // mismatch is logged loudly and flagged on /api/version (assetFeeCheck).
     runAssetFeeSelfCheck(newApi);
+    // The node must be on the runtime the live paths assume (spec >= 392).
+    runLiveRuntimeCheck(newApi);
     // ApiPromise also emits these on top of WsProvider — useful when a single
     // request times out and the api lib decides to flag itself disconnected
     // before the underlying socket closes.

@@ -172,9 +172,11 @@ describe('buildTransferTx — audit F-054 (keep-alive intent binds the method)',
         assert.equal(buildTransferTx(api, DEST, AMT, false).method, 'transferAllowDeath');
     });
 
-    test('keepAlive=false may use legacy transfer when that is all there is', () => {
+    test('keepAlive=false never uses the legacy transfer (spec 392 removed it)', () => {
+        // The pre-392 fallback is retired: a runtime that only has the old
+        // bare `transfer` is not one the signing path supports.
         const api = stub(['transfer']);
-        assert.equal(buildTransferTx(api, DEST, AMT, false).method, 'transfer');
+        assert.throws(() => buildTransferTx(api, DEST, AMT, false), /transferAllowDeath/);
     });
 
     test('passes dest and amount through untouched', () => {
