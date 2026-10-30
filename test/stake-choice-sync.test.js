@@ -74,6 +74,82 @@ describe('readEraSummary', () => {
     });
 });
 
+// The 392 transition era. The runtime HAS erasStakersOverview, but the era
+// that was active when 392 was enacted (and every older era in HistoryDepth)
+// was written by 373 into the legacy erasStakers map only. readEraExposures
+// returned the (empty) overview result unconditionally, so those eras read
+// as no stake and no backers.
+describe('readEraExposures across the 392 boundary', () => {
+    const ERA_OLD = 110, ERA_NEW = 120;
+    const legacy = {
+        [ERA_OLD]: { V1: { total: 250, own: 100, n: 300 }, V2: { total: 40, own: 40, n: 0 } },
+        [ERA_NEW]: { V1: { total: 1, own: 1, n: 0 }, V3: { total: 70, own: 70, n: 1 } }   // V1 here must not override the overview
+    };
+    const overview = {
+        [ERA_NEW]: { V1: { total: 300, own: 100, nominatorCount: 3, pageCount: 2 }, V2: { total: 50, own: 50, nominatorCount: 0, pageCount: 0 } }
+    };
+    const transitionApi = (extra = {}) => ({
+        query: { staking: {
+            erasStakersOverview: { entries: async (e) => Object.entries(overview[e] || {}).map(([a, x]) => [key(e, a), some(x)]) },
+            erasStakers: { entries: async (e) => Object.entries(legacy[e] || {}).map(([a, x]) => [key(e, a), { total: x.total, own: x.own, others: new Array(x.n).fill({}) }]) },
+            ...extra
+        } }
+    });
+
+    // The pre-fix reader, transcribed from a785065, to prove the first test
+    // fails against it.
+    async function oldReadEraExposures(api, era) {
+        const q = api.query.staking;
+        const out = Object.create(null);
+        if (q.erasStakersOverview && q.erasStakersOverview.entries) {
+            for (const [k, opt] of await q.erasStakersOverview.entries(era)) out[k.args[1].toString()] = opt.unwrap();
+            return out;
+        }
+        return out;
+    }
+
+    test('pre-392 era: legacy erasStakers is read (the old reader returned nothing)', async () => {
+        const api = transitionApi();
+        assert.deepEqual(Object.keys(await oldReadEraExposures(api, ERA_OLD)), []);
+        const x = await readEraExposures(api, ERA_OLD, { formatPDEX, pageSize: 256 });
+        assert.deepEqual(x.V1, { total: 250, own: 100, nominatorCount: 300, pageCount: 2 });
+        assert.deepEqual(x.V2, { total: 40, own: 40, nominatorCount: 0, pageCount: 1 });
+    });
+
+    test('post-392 era: overview wins; a validator missing from it falls back to legacy', async () => {
+        const x = await readEraExposures(transitionApi(), ERA_NEW, { formatPDEX, pageSize: 256 });
+        assert.deepEqual(x.V1, { total: 300, own: 100, nominatorCount: 3, pageCount: 2 });
+        assert.deepEqual(x.V2, { total: 50, own: 50, nominatorCount: 0, pageCount: 0 });
+        // V3 has a legacy row only; it is not in the overview, so the
+        // per-validator fallback picks it up, exactly as era-exposure does.
+        assert.equal(x.V3.total, 70);
+    });
+
+    test('legacy counts every backer, not the clipped payout set', async () => {
+        const clipped = { entries: async (e) => Object.entries(legacy[e] || {}).map(([a, x]) => [key(e, a), { total: x.total, own: x.own, others: new Array(Math.min(x.n, 64)).fill({}) }]) };
+        const x = await readEraExposures(transitionApi({ erasStakersClipped: clipped }), ERA_OLD, { formatPDEX, pageSize: 256 });
+        assert.equal(x.V1.nominatorCount, 300);
+    });
+
+    test('paged pages are not scanned for the summary (cost)', async () => {
+        let scanned = 0;
+        const paged = { entries: async () => { scanned++; return []; } };
+        await readEraExposures(transitionApi({ erasStakersPaged: paged }), ERA_NEW, { formatPDEX, pageSize: 256 });
+        assert.equal(scanned, 0);
+    });
+
+    test('readEraSummary on the transition era carries stake from legacy', async () => {
+        const api = transitionApi({
+            erasValidatorReward: async () => some(1000),
+            erasRewardPoints: async () => ({ total: 100, individual: new Map([['V1', 60], ['V2', 40]]) }),
+            erasValidatorPrefs: { entries: async (e) => [[key(e, 'V1'), { commission: 10 }], [key(e, 'V2'), { commission: 0 }]] }
+        });
+        const s = await readEraSummary(api, ERA_OLD, { formatPDEX, commissionPercent });
+        assert.equal(s.validators.V1.stake, 250);
+        assert.equal(s.validators.V2.stake, 40);
+    });
+});
+
 describe('helpers', () => {
     test('missingEras walks the completed eras of the history window', () => {
         assert.deepEqual(missingEras(10, 4, [8]), [9, 7, 6]);
