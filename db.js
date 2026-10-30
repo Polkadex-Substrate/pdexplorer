@@ -1235,7 +1235,10 @@ export function replaceValidators(list, meta) {
             v.address, v.name ?? null, v.totalStake ?? 0, v.commission ?? 0,
             v[APY_FIELD] ?? v.realApy ?? null, v[APY_FIELD] ?? v.avg30DayApy ?? null, i));
     });
-    setSyncState('validators', { totalCount: meta.totalCount, lastSync: meta.lastSync, status: meta.status });
+    // stakeDataOk: false when the indexer's zero-stake guard fired (every
+    // active validator read 0 total stake). Absent on rows written before the
+    // guard existed, which reads back as true.
+    setSyncState('validators', { totalCount: meta.totalCount, lastSync: meta.lastSync, status: meta.status, stakeDataOk: meta.stakeDataOk !== false });
 }
 export function getValidators() {
     // Audit F-044, found by checking the LIVE endpoint rather than the tests.
@@ -1273,7 +1276,7 @@ export function getValidators() {
     // KV row, which /api/diag/* (token-gated) and the logs expose. `status`
     // already tells a public caller what they can act on — Synced, Repairing,
     // Degraded, Error — without naming our infrastructure.
-    return { validators, totalCount: s.totalCount ?? validators.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing' };
+    return { validators, totalCount: s.totalCount ?? validators.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing', stakeDataOk: s.stakeDataOk !== false };
 }
 
 // Per-era commission history for EVERY validator, for the list view.

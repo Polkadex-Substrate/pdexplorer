@@ -147,6 +147,21 @@ if noisy:
 else:
     print(f"  {G}PASS{N}  'unknown' histories stay quiet")
 PY
+pycheck "validator total stake is not all zero (spec 392 exposure read)" - /tmp/vals.json <<'PY'
+import sys, json
+d = json.load(open(sys.argv[1]))
+vs = d.get('validators') or []
+G, R, N = '\033[32m', '\033[31m', '\033[0m'
+pos = [v for v in vs if (v.get('totalStake') or 0) > 0]
+print(f"        {len(pos)}/{len(vs)} validators with totalStake > 0; stakeDataOk={d.get('stakeDataOk')}")
+if vs and not pos:
+    print(f"  {R}FAIL{N}  every validator reports totalStake 0: the exposure read is broken (erasStakersOverview / erasStakers)")
+    sys.exit(1)
+if d.get('stakeDataOk') is False:
+    print(f"  {R}FAIL{N}  stakeDataOk is false: the indexer's zero-stake guard fired")
+    sys.exit(1)
+print(f"  {G}PASS{N}  validator stake is populated")
+PY
 fi
 
 echo

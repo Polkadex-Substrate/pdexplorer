@@ -2023,7 +2023,12 @@ async function fetchValidators() {
         }
 
         validatorCountEl.innerText = `${data.totalCount} Active`;
-        currentValidators = data.validators;
+        // stakeDataOk false: the indexer read 0 stake for every active
+        // validator (spec 392 incident). Show the stake as unavailable rather
+        // than as 0 PDEX, which looks like data.
+        currentValidators = data.stakeDataOk === false
+            ? data.validators.map(v => ({ ...v, totalStake: null }))
+            : data.validators;
         validatorsFetched = true;
         renderValidators();
 
@@ -2066,7 +2071,9 @@ function renderValidators() {
                 {
                     key: 'totalStake', label: 'Total Stake',
                     sort: (a, b) => (a.totalStake || 0) - (b.totalStake || 0),
-                    format: row => `${Number(row.totalStake).toLocaleString('en-US', { maximumFractionDigits: 2 })} <span class="unit">PDEX</span>`
+                    format: row => row.totalStake == null
+                        ? '<span style="color: var(--text-muted)" title="Stake data is temporarily unavailable">unavailable</span>'
+                        : `${Number(row.totalStake).toLocaleString('en-US', { maximumFractionDigits: 2 })} <span class="unit">PDEX</span>`
                 },
                 {
                     // Reported by a nominator: "every validator changes rewards
