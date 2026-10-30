@@ -34,6 +34,7 @@ import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-de
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { readEraExposureOverview, readEraExposureNominators, readEraValidatorStake, assessStakeHealth } from './lib/era-exposure.js';
+import { computeStashUnclaimed, mergeUnclaimed } from './lib/unclaimed-rewards.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
 import { addTail, takeFromTail, tailSize, normalizeTail } from './lib/skip-tail.js';
@@ -10058,35 +10059,53 @@ function toRewardRow(reward) {
     };
 }
 
-// Compute a stash's unpaid (unclaimed) rewards on demand via the staking
-// derive and cache them in SQLite. Runs in the background, guarded per stash.
+// Exposure indexes of completed eras never change, so one per era serves
+// every stash. Bounded to HistoryDepth plus a little.
+const unclaimedEraIndexCache = new Map();
+
+// Compute a stash's unpaid (unclaimed) rewards on demand from chain state and
+// cache them in SQLite. Runs in the background, guarded per stash.
+//
+// Not api.derive.staking.stakerRewards: in @polkadot/api-derive 17.0.2 its
+// exposure source reads only erasStakersPaged, so on 392 every unpaid reward
+// from an era elected before the upgrade vanished from this list. See
+// lib/unclaimed-rewards.js.
 async function recomputeUnclaimed(stash) {
     if (computingUnclaimed.has(stash) || !globalApi) return;
     computingUnclaimed.add(stash);
     try {
-        if (!globalApi.derive || !globalApi.derive.staking || !globalApi.derive.staking.stakerRewards) {
-            db.replaceUnclaimed(stash, []);
-            return;
+        const staking = globalApi.query && globalApi.query.staking;
+        if (!staking || !staking.activeEra || !staking.erasValidatorReward) return;
+        const activeOpt = await staking.activeEra();
+        if (!activeOpt || !activeOpt.isSome) return;
+        const activeEra = activeOpt.unwrap().index.toNumber();
+        const hd = Number(globalApi.consts?.staking?.historyDepth ?? 84) || 84;
+        const eras = [];
+        for (let e = Math.max(activeEra - hd, 0); e < activeEra; e++) eras.push(e);
+        for (const e of unclaimedEraIndexCache.keys()) if (e < activeEra - hd) unclaimedEraIndexCache.delete(e);
+
+        const { rows: owed, emptyEras } = await computeStashUnclaimed(globalApi, stash, eras, {
+            normalize: normalizeAddress, indexCache: unclaimedEraIndexCache
+        });
+        if (emptyEras.length) {
+            console.warn(`Unclaimed rewards for ${stash}: exposure read empty for ${emptyEras.length} of ${eras.length} eras (${emptyEras.slice(0, 5).join(', ')}${emptyEras.length > 5 ? ', ...' : ''}); keeping stored rows for those eras.`);
         }
-        const pending = await globalApi.derive.staking.stakerRewards(stash, false);
         // Same reconciliation rules the endpoint applies at read time
         // (lib/reward-dedup.js) so the cache and the response can't disagree.
         const claimedIndex = buildClaimedIndex(db.getClaimedRewardKeys(stash));
-        const rows = [];
-        for (const entry of pending) {
-            const era = entry.era && entry.era.toNumber ? entry.era.toNumber() : Number(entry.era);
-            const validators = entry.validators || {};
-            for (const validatorId of Object.keys(validators)) {
-                const info = validators[validatorId];
-                const amount = balanceToPDEX(info.value);
-                if (!(amount > 0)) continue;
-                let validator = validatorId;
-                try { validator = normalizeAddress(validatorId); } catch (e) { }
-                // Skip anything already recorded as a claimed payout.
-                if (claimedIndex.unattributedEras.has(era)) continue;
-                if (claimedIndex.exact.has(claimedRewardKey(era, validator))) continue;
-                rows.push({ era, validator, amount });
-            }
+        const computed = [];
+        for (const o of owed) {
+            const amount = balanceToPDEX(o.amount);
+            if (!(amount > 0)) continue;
+            // Skip anything already recorded as a claimed payout.
+            if (claimedIndex.unattributedEras.has(o.era)) continue;
+            if (claimedIndex.exact.has(claimedRewardKey(o.era, o.validator))) continue;
+            computed.push({ era: o.era, validator: o.validator, amount });
+        }
+        const rows = mergeUnclaimed(db.getUnclaimed(stash), computed, emptyEras, eras.length);
+        if (rows === null) {
+            console.error(`Unclaimed rewards for ${stash}: every era's exposure read came back empty; not overwriting the stored list.`);
+            return;
         }
         db.replaceUnclaimed(stash, rows);
         console.log(`Unclaimed rewards computed for ${stash}: ${rows.length} pending entries.`);

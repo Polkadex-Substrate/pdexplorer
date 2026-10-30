@@ -31,6 +31,7 @@ import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } f
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
+import { validatorsWithStakeState, stakeMetaText } from './lib/stake-display.js';
 import { developersBodies } from './lib/developers-bodies.js';
 import { ogCardFor, ogImageUrl } from './lib/og-route.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
@@ -2026,9 +2027,7 @@ async function fetchValidators() {
         // stakeDataOk false: the indexer read 0 stake for every active
         // validator (spec 392 incident). Show the stake as unavailable rather
         // than as 0 PDEX, which looks like data.
-        currentValidators = data.stakeDataOk === false
-            ? data.validators.map(v => ({ ...v, totalStake: null }))
-            : data.validators;
+        currentValidators = validatorsWithStakeState(data);
         validatorsFetched = true;
         renderValidators();
 
@@ -9211,7 +9210,9 @@ async function loadValidatorsForPicker() {
     if (validatorsCache && Date.now() - validatorsCacheAt < VALIDATORS_CACHE_TTL) return validatorsCache;
     const res = await fetch('/api/validators');
     const data = await res.json();
-    validatorsCache = Array.isArray(data.validators) ? data.validators.slice() : [];
+    // Same stakeDataOk rule as fetchValidators: a broken stake read shows as
+    // "stake unavailable", never as 0.0000 PDEX.
+    validatorsCache = validatorsWithStakeState(data);
     // Sort by total stake desc so the top validators surface first.
     validatorsCache.sort((a, b) => (Number(b.totalStake) || 0) - (Number(a.totalStake) || 0));
     validatorsCacheAt = Date.now();
@@ -9360,7 +9361,7 @@ function renderStakeValidatorList(filterStr) {
         return `<div class="stake-validator-item${isSelected ? ' selected' : ''}" data-addr="${stakingEscapeHtml(v.address)}">
             <div class="stake-val-info">
                 <div class="stake-val-name">${stakingEscapeHtml(name)}</div>
-                <div class="stake-val-meta">${stakingFormatPDEX(v.totalStake)} PDEX &middot; ${commission}% comm${chBadge}</div>
+                <div class="stake-val-meta">${stakingEscapeHtml(stakeMetaText(v.totalStake, stakingFormatPDEX))} &middot; ${commission}% comm${chBadge}</div>
                 ${chNote}
             </div>
             <button type="button" class="stake-val-add" ${isSelected ? 'disabled aria-label="Already selected"' : 'aria-label="Add to selection"'}>${isSelected ? '✓' : '+'}</button>
