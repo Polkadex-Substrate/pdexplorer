@@ -31,6 +31,7 @@ import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } f
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
+import { validatorsWithStakeState } from './lib/stake-display.js';
 import { developersBodies } from './lib/developers-bodies.js';
 import { ogCardFor, ogImageUrl } from './lib/og-route.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
@@ -2024,7 +2025,10 @@ async function fetchValidators() {
         }
 
         validatorCountEl.innerText = `${data.totalCount} Active`;
-        currentValidators = data.validators;
+        // stakeDataOk false: the indexer read 0 stake for every active
+        // validator (spec 392 incident). Show the stake as unavailable rather
+        // than as 0 PDEX, which looks like data.
+        currentValidators = validatorsWithStakeState(data);
         validatorsFetched = true;
         renderValidators();
 
@@ -2067,7 +2071,9 @@ function renderValidators() {
                 {
                     key: 'totalStake', label: 'Total Stake',
                     sort: (a, b) => (a.totalStake || 0) - (b.totalStake || 0),
-                    format: row => `${Number(row.totalStake).toLocaleString('en-US', { maximumFractionDigits: 2 })} <span class="unit">PDEX</span>`
+                    format: row => row.totalStake == null
+                        ? '<span style="color: var(--text-muted)" title="Stake data is temporarily unavailable">unavailable</span>'
+                        : `${Number(row.totalStake).toLocaleString('en-US', { maximumFractionDigits: 2 })} <span class="unit">PDEX</span>`
                 },
                 {
                     // Reported by a nominator: "every validator changes rewards

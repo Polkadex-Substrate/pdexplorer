@@ -147,6 +147,53 @@ if noisy:
 else:
     print(f"  {G}PASS{N}  'unknown' histories stay quiet")
 PY
+# The zero-stake check judges only a validator sync that ran under THIS
+# deploy. Right after a deploy the payload is still the last sync of the old
+# code (pre-fix rows), so failing on it would fail every first run. Deploy
+# start, newest source first: DEPLOY_STARTED_AT (epoch s or ms, or ISO 8601),
+# else the backend container's start time. Unknown start: every sync counts
+# (strict, the old behaviour).
+DEPLOY_START_RAW="${DEPLOY_STARTED_AT:-}"
+if [ -z "$DEPLOY_START_RAW" ]; then
+    DEPLOY_START_RAW=$(docker inspect -f '{{.State.StartedAt}}' pdexplorer-backend 2>/dev/null || true)
+fi
+pycheck "validator total stake is not all zero (spec 392 exposure read)" - /tmp/vals.json "$DEPLOY_START_RAW" <<'PY'
+import sys, json, re
+from datetime import datetime
+d = json.load(open(sys.argv[1]))
+vs = d.get('validators') or []
+G, R, Y, N = '\033[32m', '\033[31m', '\033[33m', '\033[0m'
+
+def start_ms(raw):
+    raw = (raw or '').strip()
+    if not raw or raw.startswith('0001-'):
+        return 0
+    if re.fullmatch(r'\d+(\.\d+)?', raw):
+        n = float(raw)
+        return int(n * 1000) if n < 1e12 else int(n)
+    m = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$', raw)
+    if not m:
+        return 0
+    frac = (m.group(2) or '.0')[:7]
+    tz = m.group(3) or 'Z'
+    tz = '+00:00' if tz == 'Z' else tz
+    return int(datetime.fromisoformat(m.group(1) + frac + tz).timestamp() * 1000)
+
+start = start_ms(sys.argv[2] if len(sys.argv) > 2 else '')
+last = int(d.get('lastSync') or 0)
+pos = [v for v in vs if (v.get('totalStake') or 0) > 0]
+print(f"        {len(pos)}/{len(vs)} validators with totalStake > 0; stakeDataOk={d.get('stakeDataOk')}; lastSync={last} deployStart={start or 'unknown'}")
+if start and last < start:
+    print(f"  {Y}WAIT{N}  the validator list predates this deploy (last sync before the backend started); re-run after the next validator sync")
+elif vs and not pos:
+    print(f"  {R}FAIL{N}  every validator reports totalStake 0: the exposure read is broken (erasStakersOverview / erasStakers)")
+    sys.exit(1)
+elif d.get('stakeDataOk') is False:
+    print(f"  {R}FAIL{N}  stakeDataOk is false: the indexer's zero-stake guard fired")
+    sys.exit(1)
+else:
+    print(f"  {G}PASS{N}  validator stake is populated")
+PY
 fi
 
 echo
