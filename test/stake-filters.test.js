@@ -1,4 +1,4 @@
-// Stake picker filters, counts, the Recommended preset, sort and persistence
+// Stake picker filters, counts, the Suggested filters preset, sort and persistence
 // (lib/stake-filters.js). Fixture validators are made up; no real addresses or names.
 
 import { test, describe } from 'node:test';
@@ -40,8 +40,10 @@ describe('each filter on its own', () => {
         ['reliability 90', { reliability: '90' }, v('a', { perf: perf(5, { reliability: 90 }) }), v('b', { perf: perf(5, { reliability: 89.9 }) })],
         ['no missed eras', { reliability: 'nomiss' }, v('a'), v('b', { perf: perf(5, { missedEras: 1 }) })],
         ['reliability needs data', { reliability: '90' }, v('a'), v('b', { perf: null })],
-        ['room on one payout page', { singlePage: true }, v('a', { exposureNominators: 255 }), v('b', { exposureNominators: 256 })],
-        ['waiting validators use backers for the page check', { singlePage: true }, v('a', { exposureNominators: null, backers: 3 }), v('b', { exposureNominators: null, backers: 300 })],
+        ['room on one payout page: exactly 256 backers is one page', { singlePage: true }, v('a', { exposureNominators: 256 }), v('b', { exposureNominators: 257 })],
+        ['the chain page count wins when known', { singlePage: true }, v('a', { exposureNominators: 256, exposurePages: 1 }), v('b', { exposureNominators: 256, exposurePages: 2 })],
+        ['no nominators at all is zero pages, which fits', { singlePage: true }, v('a', { exposureNominators: 0, exposurePages: 0 }), v('b', { exposurePages: 3 })],
+        ['waiting validators use backers for the page check', { singlePage: true }, v('a', { exposureNominators: null, backers: 256 }), v('b', { exposureNominators: null, backers: 300 })],
         ['min self-stake', { minSelfStake: 100 }, v('a', { selfStake: 100 }), v('b', { selfStake: 99.9 })],
         ['unknown self-stake fails a minimum', { minSelfStake: 1 }, v('a'), v('b', { selfStake: null })],
         ['slashed inside 84 eras', { noSlash: true }, v('a', { slashEras: [900] }), v('b', { slashEras: [916] })]
@@ -128,7 +130,7 @@ describe('combined filters and counts', () => {
     });
 });
 
-describe('Recommended preset', () => {
+describe('Suggested filters preset', () => {
     test('is exactly the documented definition', () => {
         assert.deepEqual({ ...RECOMMENDED_PRESET }, {
             status: 'active', maxCommission: 10, noRecentRaise: true, identity: 'has', notBlocked: true,

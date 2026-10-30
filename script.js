@@ -52,7 +52,7 @@ import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
-import { createStakePicker, loadPickerData } from './lib/stake-picker-view.js';
+import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -9211,6 +9211,17 @@ async function loadValidatorsForPicker() {
     return validatorsCache;
 }
 
+// Nominations limit from the chain (StakingApi.nominations_quota, in the
+// snapshot meta). Falls back to 16 with one console warning when the loaded
+// data has none; before the picker data loads it is the fallback, quietly,
+// and the counts are re-rendered once it arrives.
+let stakeQuotaWarned = false;
+function stakeMaxNominations() {
+    return maxNominationsFrom(validatorsCache && validatorsCache.meta, {
+        warn: (m) => { if (validatorsCache && !stakeQuotaWarned) { stakeQuotaWarned = true; console.warn(m); } }
+    });
+}
+
 // pdexToPlanck and isPositiveNumberInput are imported from
 // ./lib/wallet-safety.js — decimal-string BigInt conversion (audit F-011),
 // unit-tested in test/wallet-safety.test.js.
@@ -9302,6 +9313,7 @@ async function openStakeModal() {
         const pick = await loadValidatorsForPicker();
         stakeValidators = pick.validators;
         stakePickerView().setData(pick);
+        renderStakeSelected();
     } catch (e) {
         if (listEl) listEl.innerHTML = '<div class="stake-empty">Could not load validators.</div>';
         return;
@@ -9340,7 +9352,8 @@ function renderStakeValidatorList(filterStr) {
 
 function addStakeValidator(address) {
     if (stakeSelected.has(address)) return;
-    if (stakeSelected.size >= 16) { showStakeError('You can nominate at most 16 validators per transaction.'); return; }
+    const maxNoms = stakeMaxNominations();
+    if (stakeSelected.size >= maxNoms) { showStakeError(`You can nominate at most ${maxNoms} validators per transaction.`); return; }
     const v = stakeValidators.find(x => x.address === address) || { address, name: null };
     stakeSelected.set(address, { address, name: v.name });
     renderStakeSelected();
@@ -9360,8 +9373,9 @@ function renderStakeSelected() {
     const countEl = document.getElementById('stake-selected-count');
     const headerCountEl = document.getElementById('stake-chosen-count');
     const n = stakeSelected.size;
-    if (countEl) countEl.textContent = `${n} / 16`;
-    if (headerCountEl) headerCountEl.textContent = `${n} / 16`;
+    const maxNoms = stakeMaxNominations();
+    if (countEl) countEl.textContent = `${n} / ${maxNoms}`;
+    if (headerCountEl) headerCountEl.textContent = `${n} / ${maxNoms}`;
     if (!el) return;
     if (!n) { el.innerHTML = '<div class="stake-empty">Pick validators from the list on the left.</div>'; return; }
     el.innerHTML = Array.from(stakeSelected.values()).map(v => {
@@ -9394,7 +9408,8 @@ async function submitStakeTx() {
     const hasAmount = amtStr !== '' && parseFloat(amtStr) > 0;
 
     if (!targets.length) return showStakeError('Select at least one validator before submitting.');
-    if (targets.length > 16) return showStakeError('At most 16 validators can be nominated.');
+    const maxNoms = stakeMaxNominations();
+    if (targets.length > maxNoms) return showStakeError(`At most ${maxNoms} validators can be nominated.`);
 
     const available = getStakeableBalance(data);
     const hasBond = ((data.staking && data.staking.totalStaked) || 0) > 0;

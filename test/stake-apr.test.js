@@ -84,13 +84,15 @@ describe('the window', () => {
         assert.equal(p.erasUsed, 3);
         close(p.apr, 16.43625);
     });
-    test('partial eras: elected in only some eras, the mean is over the eras it was elected', () => {
-        // Elected eras 95..99 at A's rate, 93..94 waiting (no exposure row).
+    test('joined mid-window: counted from its first elected era, not from the window start', () => {
+        // First elected in era 95 and never before in any held era: eras 93..94
+        // predate it, so they are not zeros. Elected every era since.
         const s = [];
         for (let e = 93; e < 100; e++) s.push(era(e, e >= 95 ? { A: A(), B: B() } : { B: B() }));
         const p = validatorPerformance(s, 'A', { activeEra: 100, window: 7 });
         assert.equal(p.electedEras, 5);
         assert.equal(p.erasInWindow, 7);
+        assert.equal(p.erasUsed, 5);
         close(p.apr, 16.43625);
     });
     test('different eras average, they are not pooled', () => {
@@ -98,6 +100,66 @@ describe('the window', () => {
         const s = [era(97, { A: A() }), era(98, { A: A() }), era(99, { A: A({ points: 1000 }) })];
         const p = validatorPerformance(s, 'A', { activeEra: 100, window: 3, erasPerYear: 1 });
         close(p.apr, ((0.00045 * 2 + 0.0009) / 3) * 100);
+    });
+});
+
+describe('intermittent validators: the mean is over the whole window', () => {
+    // Fable review HIGH: a nominator behind a validator that drops out of the
+    // active set earns nothing in those eras. The mean must divide by every era
+    // of the window the validator existed in, not only the elected ones.
+    const rate = 16.43625;
+    test('28 of 28 elected: the full rate', () => {
+        const s = [];
+        for (let e = 72; e < 100; e++) s.push(era(e, { A: A(), B: B() }));
+        const p = validatorPerformance(s, 'A', { activeEra: 100, window: 28 });
+        assert.equal(p.status, 'ok');
+        assert.equal(p.electedEras, 28);
+        assert.equal(p.erasUsed, 28);
+        close(p.apr, rate);
+    });
+    test('7 of 28 elected, spread over the window: a quarter of the rate', () => {
+        const s = [];
+        for (let e = 72; e < 100; e++) s.push(era(e, (e - 72) % 4 === 0 ? { A: A(), B: B() } : { B: B() }));
+        const p = validatorPerformance(s, 'A', { activeEra: 100, window: 28 });
+        assert.equal(p.status, 'ok');
+        assert.equal(p.electedEras, 7);
+        assert.equal(p.erasUsed, 28);
+        close(p.apr, rate / 4);
+    });
+    test('7 of 28 elected at the end, but elected before the window: still a quarter', () => {
+        const s = [era(60, { A: A(), B: B() })];
+        for (let e = 72; e < 100; e++) s.push(era(e, e >= 93 ? { A: A(), B: B() } : { B: B() }));
+        const p = validatorPerformance(s, 'A', { activeEra: 100, window: 28 });
+        assert.equal(p.status, 'ok');
+        assert.equal(p.erasUsed, 28);
+        close(p.apr, rate / 4);
+    });
+    test('7 of 28 at the end with no earlier history: a newcomer, full rate over its 7 eras', () => {
+        const s = [];
+        for (let e = 72; e < 100; e++) s.push(era(e, e >= 93 ? { A: A(), B: B() } : { B: B() }));
+        const p = validatorPerformance(s, 'A', { activeEra: 100, window: 28 });
+        assert.equal(p.status, 'ok');
+        assert.equal(p.erasUsed, 7);
+        close(p.apr, rate);
+    });
+    test('2 of 28 elected, around for all 28: a real, low number, not new', () => {
+        const s = [];
+        for (let e = 72; e < 100; e++) s.push(era(e, e === 72 || e === 99 ? { A: A(), B: B() } : { B: B() }));
+        const p = validatorPerformance(s, 'A', { activeEra: 100, window: 28 });
+        assert.equal(p.status, 'ok');
+        close(p.apr, rate * 2 / 28);
+    });
+    test('an elected era with unusable data is left out of the mean, not counted as zero', () => {
+        const s = [era(97, { A: A() }), era(98, { A: A() }, { totalPoints: 0 }), era(99, { A: A() }), era(96, { A: A() })];
+        const p = validatorPerformance(s, 'A', { activeEra: 100, window: 4 });
+        assert.equal(p.erasUsed, 3);
+        close(p.apr, rate);
+    });
+    test('performanceForAll agrees with validatorPerformance', () => {
+        const s = [era(60, { A: A() })];
+        for (let e = 72; e < 100; e++) s.push(era(e, e >= 93 ? { A: A(), B: B() } : { B: B() }));
+        const all = performanceForAll(s, ['A'], { activeEra: 100, erasPerYear: 365.25 });
+        assert.deepEqual(all.A['28'], validatorPerformance(s, 'A', { activeEra: 100, window: 28, erasPerYear: 365.25 }));
     });
 });
 
@@ -170,6 +232,26 @@ describe('reliability', () => {
         const p = validatorPerformance(s, 'A', { activeEra: 100, window: 3 });
         assert.equal(p.missedEras, 1);
         close(p.reliability, 100 / 3);
+    });
+});
+
+describe('era median is computed once per era', () => {
+    test('the work does not grow with the number of validators asked about', () => {
+        // Count how often each era's validator map is enumerated (Object.values,
+        // Object.entries, Object.keys all hit ownKeys).
+        function run(addrCount) {
+            let enumerations = 0;
+            const s = [];
+            for (let e = 16; e < 100; e++) {
+                const v = {};
+                for (let i = 0; i < 50; i++) v['V' + i] = { points: 100 + i, stake: 1000, commission: 5 };
+                s.push({ era: e, reward: 1000, totalPoints: 10000, validators: new Proxy(v, { ownKeys(t) { enumerations++; return Reflect.ownKeys(t); } }) });
+            }
+            const addrs = Array.from({ length: addrCount }, (_, i) => 'V' + i);
+            performanceForAll(s, addrs, { activeEra: 100 });
+            return enumerations;
+        }
+        assert.equal(run(50), run(1));
     });
 });
 

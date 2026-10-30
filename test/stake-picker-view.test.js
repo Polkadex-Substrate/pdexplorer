@@ -6,8 +6,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     validatorRowHtml, filterBarHtml, spreadNoteHtml, updateBar, readControl, loadPickerData,
-    createStakePicker, showAllState, compactNumber, aprNoteText, CHOICE_URL, FALLBACK_URL
+    createStakePicker, showAllState, compactNumber, aprNoteText, CHOICE_URL, FALLBACK_URL, maxNominationsFrom
 } from '../lib/stake-picker-view.js';
+import { FALLBACK_MAX_NOMINATIONS } from '../lib/stake-choice-sync.js';
 import { DEFAULT_FILTERS, RECOMMENDED_PRESET, STORAGE_KEY, selectedGroups } from '../lib/stake-filters.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
@@ -40,7 +41,7 @@ describe('row html', () => {
     test('new and none render words with an explanation, never a number', () => {
         const n = validatorRowHtml(row({ perf: { '28': { status: 'new', apr: null, electedEras: 3 } } }), { esc, shortAddress, window: 28 });
         assert.match(n, /APR new/);
-        assert.match(n, /only 3 of the last 28 eras; 7 are needed/);
+        assert.match(n, /history for only 3 of the last 28 eras; 7 are needed/);
         const none = validatorRowHtml(row({ perf: null }), { esc, shortAddress, window: 28 });
         assert.match(none, /APR n\/a/);
     });
@@ -79,7 +80,9 @@ describe('filter bar html', () => {
             assert.ok(h.includes(`data-count-for="${k}"`), `count slot ${k}`);
         }
         assert.ok((h.match(/Why this matters:/g) || []).length >= 11);
-        assert.match(h, /data-preset="recommended"/);
+        assert.match(h, /data-preset="recommended"[^>]*>Suggested filters</);
+        assert.ok(!/>Recommended</.test(h), 'the chip no longer says Recommended');
+        assert.match(h, /Room on one payout page \(at most 256 backers\)/);
         assert.match(h, /data-preset="all"/);
         assert.match(h, /href="\/help\/choosing-validators"/);
         assert.match(h, /<details class="stake-filter-more" open>/);
@@ -92,6 +95,11 @@ describe('filter bar html', () => {
     });
     test('the APR note says it is history', () => {
         assert.match(aprNoteText(84), /last 84 completed eras.*Past rewards, not a guarantee/);
+        assert.match(aprNoteText(28), /assumes every payout page is claimed/);
+    });
+    test('the APR tooltip says how many eras it averages and how many were in the active set', () => {
+        const h = validatorRowHtml(row({ perf: { '28': { status: 'ok', apr: 4.1, erasUsed: 28, electedEras: 7, reliability: 100, missedEras: 0 } } }), { esc, shortAddress, window: 28 });
+        assert.match(h, /Based on 28 eras, 7 of them in the active set/);
     });
 });
 
@@ -218,6 +226,22 @@ describe('createStakePicker wiring (stub DOM)', () => {
     });
 });
 
+describe('nominations limit', () => {
+    test('read from the snapshot meta', () => {
+        const warns = [];
+        assert.equal(maxNominationsFrom({ full: true, maxNominations: 24 }, { warn: (m) => warns.push(m) }), 24);
+        assert.equal(warns.length, 0);
+    });
+    test('falls back to 16 with a warning when the snapshot has none', () => {
+        for (const meta of [null, undefined, { full: false }, { maxNominations: 0 }, { maxNominations: 'x' }, { maxNominations: 2.5 }]) {
+            const warns = [];
+            assert.equal(maxNominationsFrom(meta, { warn: (m) => warns.push(m) }), 16);
+            assert.equal(warns.length, 1, JSON.stringify(meta));
+        }
+        assert.equal(FALLBACK_MAX_NOMINATIONS, 16);
+    });
+});
+
 describe('cross-file promises', () => {
     const script = readRepo('script.js', import.meta.url);
     const server = readRepo('server.js', import.meta.url);
@@ -232,6 +256,15 @@ describe('cross-file promises', () => {
         assert.match(body, /await submitSignedTx\(\{/);
         assert.match(body, /Array\.from\(stakeSelected\.keys\(\)\)/);
         assert.ok(!/stake-picker-view|createStakePicker/.test(body));
+    });
+    test('the stake modal takes the nominations limit from the snapshot, not a literal 16', () => {
+        const code = stripComments(script);
+        for (const fn of ['addStakeValidator', 'renderStakeSelected', 'submitStakeTx']) {
+            const body = bodyOf(code, fn);
+            assert.ok(!/\b16\b/.test(body), `${fn} still has a literal 16`);
+            assert.match(body, /stakeMaxNominations\(\)/, fn);
+        }
+        assert.match(bodyOf(code, 'stakeMaxNominations'), /maxNominationsFrom\(validatorsCache && validatorsCache\.meta/);
     });
     test('the picker module never builds a transaction', () => {
         const lib = stripComments(readRepo('lib/stake-picker-view.js', import.meta.url));

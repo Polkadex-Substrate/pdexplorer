@@ -10,8 +10,10 @@ import path from 'node:path';
 import * as db from '../db.js';
 import {
     readEraSummary, readEraExposures, missingEras, isVerifiedJudgements, registrationFromHuman,
-    readIdentityFacts, buildChoiceSnapshot, eraDurationMs, toBool, FALLBACK_MAX_NOMINATIONS
+    readIdentityFacts, buildChoiceSnapshot, eraDurationMs, toBool, FALLBACK_MAX_NOMINATIONS, readNominationsQuota
 } from '../lib/stake-choice-sync.js';
+import { TypeRegistry, Metadata } from '@polkadot/types';
+import { loadFixture } from './helpers/extrinsic-builders.js';
 
 const some = (v) => ({ isSome: true, unwrap: () => v });
 const none = () => ({ isSome: false, unwrap: () => { throw new Error('none'); } });
@@ -106,13 +108,55 @@ describe('helpers', () => {
     });
 });
 
+describe('nominations quota from the runtime API (staking.maxNominations does not exist on 392)', () => {
+    test('the 392 metadata has StakingApi.nominations_quota(balance: u128) -> u32 and no MaxNominations constant', (t) => {
+        const fx = loadFixture('metadata-392.json');
+        if (!fx || !fx.metadataAtVersion || !fx.metadataAtVersion['15']) { t.skip('metadata-392.json fixture not present'); return; }
+        const registry = new TypeRegistry();
+        const md = new Metadata(registry, fx.metadataAtVersion['15']);
+        registry.setMetadata(md);
+        const api = md.asLatest.apis.find(a => a.name.toString() === 'StakingApi');
+        assert.ok(api, 'StakingApi missing');
+        const m = api.methods.find(x => x.name.toString() === 'nominations_quota');
+        assert.ok(m, 'nominations_quota missing');
+        assert.deepEqual(m.inputs.map(i => [i.name.toString(), registry.lookup.getTypeDef(i.type).type]), [['balance', 'u128']]);
+        assert.equal(registry.lookup.getTypeDef(m.output).type, 'u32');
+        const staking = md.asLatest.pallets.find(p => p.name.toString() === 'Staking');
+        assert.ok(!staking.constants.some(c => c.name.toString() === 'MaxNominations'));
+    });
+    test('reads api.call.stakingApi.nominationsQuota with the minimum nominator bond', async () => {
+        const seen = [];
+        const api = {
+            query: { staking: { minNominatorBond: async () => c(7) } },
+            call: { stakingApi: { nominationsQuota: async (b) => { seen.push(String(b)); return c(24); } } }
+        };
+        const warns = [];
+        assert.equal(await readNominationsQuota(api, { warn: (m) => warns.push(m) }), 24);
+        assert.deepEqual(seen, ['7']);
+        assert.equal(warns.length, 0);
+    });
+    test('falls back to 16 with a warning only when the API is missing or fails', async () => {
+        for (const api of [{}, { call: {} }, { call: { stakingApi: { nominationsQuota: async () => { throw new Error('rpc'); } } } },
+            { call: { stakingApi: { nominationsQuota: async () => c(0) } } }]) {
+            const warns = [];
+            assert.equal(await readNominationsQuota(api, { warn: (m) => warns.push(m) }), FALLBACK_MAX_NOMINATIONS);
+            assert.equal(warns.length, 1);
+        }
+    });
+});
+
 describe('buildChoiceSnapshot', () => {
+    test('maxNominations comes from the runtime API, not a constant', async () => {
+        const api = { ...fakeApi(), call: { stakingApi: { nominationsQuota: async () => c(20) } } };
+        const snap = await buildChoiceSnapshot({ api, activeEra: 100, summaries: [], formatPDEX, commissionPercent, getName: async () => 'n', warn: () => {} });
+        assert.equal(snap.maxNominations, 20);
+    });
     test('active and waiting candidates with every field the filters need', async () => {
         const api = fakeApi();
         const summaries = [];
         for (let e = 72; e < 100; e++) summaries.push({ ...(await readEraSummary(api, 99, { formatPDEX, commissionPercent })), era: e });
         const snap = await buildChoiceSnapshot({
-            api, activeEra: 100, summaries, formatPDEX, commissionPercent, getName: async (a) => `Name ${a}`, now: 1
+            api, activeEra: 100, summaries, formatPDEX, commissionPercent, getName: async (a) => `Name ${a}`, now: 1, warn: () => {}
         });
         assert.equal(snap.maxNominations, FALLBACK_MAX_NOMINATIONS);
         assert.equal(snap.exposurePageSize, 256);
@@ -135,7 +179,7 @@ describe('buildChoiceSnapshot', () => {
         assert.equal(by.W1.perf['28'].status, 'none');
     });
     test('a failing name lookup degrades to Unknown', async () => {
-        const snap = await buildChoiceSnapshot({ api: fakeApi(), activeEra: 100, summaries: [], formatPDEX, commissionPercent, getName: () => { throw new Error('rpc'); } });
+        const snap = await buildChoiceSnapshot({ api: fakeApi(), activeEra: 100, summaries: [], formatPDEX, commissionPercent, getName: () => { throw new Error('rpc'); }, warn: () => {} });
         assert.ok(snap.validators.every(v => v.name === 'Unknown'));
     });
 });
