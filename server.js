@@ -33,6 +33,8 @@ import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, 
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
+import { readEraExposureOverview, readEraExposureNominators, readEraValidatorStake, assessStakeHealth } from './lib/era-exposure.js';
+import { computeStashUnclaimed, mergeUnclaimed } from './lib/unclaimed-rewards.js';
 import { retryTransient, isTransientSqliteError } from './lib/sqlite-errors.js';
 import { contiguousWatermark, isCaughtUp, readHeadSeen } from './lib/watermark.js';
 import { addTail, takeFromTail, tailSize, normalizeTail } from './lib/skip-tail.js';
@@ -902,16 +904,26 @@ function chunkArray(items, size) {
     return chunks;
 }
 
-async function getEraValidatorStake(api, era, address) {
-    let totalStake = 0;
-    if (api.query.staking.erasStakersOverview) {
-        const overviewOpt = await api.query.staking.erasStakersOverview(era, address);
-        if (overviewOpt.isSome) totalStake = overviewOpt.unwrap().total;
-    } else if (api.query.staking.erasStakers) {
-        const exposure = await api.query.staking.erasStakers(era, address);
-        totalStake = exposure.total;
-    }
-    return totalStake && totalStake.unwrap ? totalStake.unwrap() : totalStake;
+// Spec 392: this used to read erasStakersOverview whenever the runtime HAD it
+// and return 0 when the era had no overview entry, never trying the legacy
+// erasStakers map where every pre-upgrade era's exposure lives. Result: total
+// stake 0 for every validator on /api/validators and in validator history.
+// lib/era-exposure.js now does overview, then legacy, then an explicit none.
+async function getEraValidatorStake(api, era, address, memo = null) {
+    return readEraValidatorStake(api, era, address, memo);
+}
+
+// Last result of the zero-stake guard, per surface, for /api/health and the
+// API payloads. Lives in the KV table so every worker sees the indexer's view.
+function recordStakeHealth(surface, health, era) {
+    const prev = db.getKv('stake_health') || {};
+    const next = { ...prev, [surface]: { ok: health.ok, allZero: health.allZero, era, checkedAt: Date.now() } };
+    db.setKv('stake_health', next);
+    if (!health.ok) console.error(`[stake-health] ${surface}: ${health.message}`);
+}
+function stakeHealthOk() {
+    const h = db.getKv('stake_health') || {};
+    return Object.values(h).every(x => !x || x.ok !== false);
 }
 
 // In-flight dedupe: a cold request and the background pre-warm should share a
@@ -1065,20 +1077,28 @@ async function computeNetworkInfo() {
     const commissions = [];
     const activeNominators = new Set();
 
+    // Spec 392: erasStakers is no longer written, so reading it directly gave
+    // 0 stake and 0 active nominators from the first post-upgrade era. Overview
+    // for the totals, erasStakersPaged pages for the nominator set, legacy map
+    // only for an era elected before the upgrade (lib/era-exposure.js).
+    const exposureMemo = new Map();
     for (const chunk of chunkArray(validators, 25)) {
         const results = await Promise.all(chunk.map(async address => {
-            const [prefs, exposure] = await Promise.all([
+            const [prefs, overview] = await Promise.all([
                 globalApi.query.staking.validators(address),
-                globalApi.query.staking.erasStakers(activeEra, address)
+                readEraExposureOverview(globalApi, activeEra, address, exposureMemo)
             ]);
-            return { prefs, exposure };
+            const nominators = await readEraExposureNominators(globalApi, activeEra, address, overview);
+            return { prefs, overview, nominators };
         }));
-        for (const { prefs, exposure } of results) {
-            stakes.push(formatPDEX(exposure.total));
+        for (const { prefs, overview, nominators } of results) {
+            stakes.push(formatPDEX(overview.total));
             commissions.push(getCommissionPercent(prefs));
-            for (const nomination of exposure.others) activeNominators.add(nomination.who.toString());
+            for (const who of nominators) activeNominators.add(who);
         }
     }
+    const stakeHealth = assessStakeHealth(stakes, validators.length, activeEra);
+    recordStakeHealth('networkInfo', stakeHealth, activeEra);
 
     // `totalUnlocking` requires scanning every staking.ledger on the chain
     // (potentially thousands of entries) which is by far the most expensive
@@ -1114,6 +1134,9 @@ async function computeNetworkInfo() {
         avgValidatorCommission: avgCommissionPct,
         avgApy,                 // headline AVG APY (%), commission-adjusted
         avg_apy: avgApy,        // snake_case alias for external integrators
+        // False when every active validator read 0 stake: the per-validator
+        // stake figures below are a broken read, not data.
+        stakeDataOk: stakeHealth.ok,
         validators: {
             active: validators.length,
             total: Number(counterForValidators)
@@ -1667,13 +1690,14 @@ async function syncValidatorHistory(activeEra, validators) {
     const historyRows = [];
     const perAddress = {};
 
+    const exposureMemo = new Map();
     for (let era = activeEra; era >= firstEra; era--) {
         for (const address of validators) {
             const addrStr = address.toString();
             try {
                 const [prefs, totalStake] = await Promise.all([
                     globalApi.query.staking.erasValidatorPrefs(era, address),
-                    getEraValidatorStake(globalApi, era, address)
+                    getEraValidatorStake(globalApi, era, address, exposureMemo)
                 ]);
                 const commission = getCommissionPercent(prefs);
                 const row = { era, address: addrStr, commission, stake: formatPDEX(totalStake), apy: estimatedApy(commission) };
@@ -1768,12 +1792,13 @@ async function loadValidatorHistory(address) {
     // rewrite over pruned eras.
     const firstEra = Math.max(activeEra - historyDepthCap() + 1, 0);
     const history = [];
+    const exposureMemo = new Map();
 
     for (let era = activeEra; era >= firstEra; era--) {
         try {
             const [prefs, totalStake] = await Promise.all([
                 globalApi.query.staking.erasValidatorPrefs(era, address),
-                getEraValidatorStake(globalApi, era, address)
+                getEraValidatorStake(globalApi, era, address, exposureMemo)
             ]);
             const commission = getCommissionPercent(prefs);
             history.push({
@@ -3234,7 +3259,10 @@ app.get('/api/health', (req, res) => {
         chainAdvancing: lastAdvanceAt ? (Date.now() - lastAdvanceAt) <= CHAIN_HEAD_STALE_MS : true,
         // The indexer is not sitting on a hole it has given up on. Repairing is
         // fine; Repairing with every gap exhausted is not (F-046).
-        indexerProgressing: !(Number(chainState.gapsExhausted) > 0)
+        indexerProgressing: !(Number(chainState.gapsExhausted) > 0),
+        // The validator sync / network info did not read 0 stake for every
+        // active validator (spec 392 incident: served as data for a day).
+        validatorStake: (() => { try { return stakeHealthOk(); } catch (_) { return true; } })()
     };
 
     const healthy = Object.values(checks).every(Boolean);
@@ -8371,12 +8399,13 @@ async function syncData() {
         const activeEra = activeEraOption.isSome ? activeEraOption.unwrap().index.toNumber() : 0;
         const validators = await globalApi.query.session.validators();
         const validatorData = [];
+        const exposureMemo = new Map();
 
         for (const address of validators) {
             const addrStr = address.toString();
             const name = await getIdentity(globalApi, address);
             const [totalStake, prefs] = await Promise.all([
-                getEraValidatorStake(globalApi, activeEra, address),
+                getEraValidatorStake(globalApi, activeEra, address, exposureMemo),
                 globalApi.query.staking.validators(address)
             ]);
             const commissionPct = getCommissionPercent(prefs);
@@ -8402,8 +8431,20 @@ async function syncData() {
                 ...apyFields(commissionPct)
             });
         }
+        // Zero-stake guard: on spec 392 this list went out with totalStake 0 on
+        // all 200 rows, status Synced, and nothing logged. Every active
+        // validator at 0 is a broken read, so say so: error log, status
+        // Degraded, stakeDataOk false on the payload, /api/health 503.
+        const stakeHealth = assessStakeHealth(validatorData.map(v => v.totalStake), validators.length, activeEra);
+        recordStakeHealth('validators', stakeHealth, activeEra);
+        // Publish the list before the history scan: the scan walks HistoryDepth
+        // eras x every validator and takes minutes, and the list does not
+        // depend on it.
+        db.replaceValidators(validatorData, {
+            totalCount: validators.length, lastSync: Date.now(),
+            status: stakeHealth.ok ? 'Synced' : 'Degraded', stakeDataOk: stakeHealth.ok
+        });
         await syncValidatorHistory(activeEra, validators);
-        db.replaceValidators(validatorData, { totalCount: validators.length, lastSync: Date.now(), status: 'Synced' });
     } catch (err) {
         logSyncError('Validator sync', err);
         db.setSyncState('validators', { ...db.getSyncState('validators'), status: 'Error', error: err.message });
@@ -10018,35 +10059,53 @@ function toRewardRow(reward) {
     };
 }
 
-// Compute a stash's unpaid (unclaimed) rewards on demand via the staking
-// derive and cache them in SQLite. Runs in the background, guarded per stash.
+// Exposure indexes of completed eras never change, so one per era serves
+// every stash. Bounded to HistoryDepth plus a little.
+const unclaimedEraIndexCache = new Map();
+
+// Compute a stash's unpaid (unclaimed) rewards on demand from chain state and
+// cache them in SQLite. Runs in the background, guarded per stash.
+//
+// Not api.derive.staking.stakerRewards: in @polkadot/api-derive 17.0.2 its
+// exposure source reads only erasStakersPaged, so on 392 every unpaid reward
+// from an era elected before the upgrade vanished from this list. See
+// lib/unclaimed-rewards.js.
 async function recomputeUnclaimed(stash) {
     if (computingUnclaimed.has(stash) || !globalApi) return;
     computingUnclaimed.add(stash);
     try {
-        if (!globalApi.derive || !globalApi.derive.staking || !globalApi.derive.staking.stakerRewards) {
-            db.replaceUnclaimed(stash, []);
-            return;
+        const staking = globalApi.query && globalApi.query.staking;
+        if (!staking || !staking.activeEra || !staking.erasValidatorReward) return;
+        const activeOpt = await staking.activeEra();
+        if (!activeOpt || !activeOpt.isSome) return;
+        const activeEra = activeOpt.unwrap().index.toNumber();
+        const hd = Number(globalApi.consts?.staking?.historyDepth ?? 84) || 84;
+        const eras = [];
+        for (let e = Math.max(activeEra - hd, 0); e < activeEra; e++) eras.push(e);
+        for (const e of unclaimedEraIndexCache.keys()) if (e < activeEra - hd) unclaimedEraIndexCache.delete(e);
+
+        const { rows: owed, emptyEras } = await computeStashUnclaimed(globalApi, stash, eras, {
+            normalize: normalizeAddress, indexCache: unclaimedEraIndexCache
+        });
+        if (emptyEras.length) {
+            console.warn(`Unclaimed rewards for ${stash}: exposure read empty for ${emptyEras.length} of ${eras.length} eras (${emptyEras.slice(0, 5).join(', ')}${emptyEras.length > 5 ? ', ...' : ''}); keeping stored rows for those eras.`);
         }
-        const pending = await globalApi.derive.staking.stakerRewards(stash, false);
         // Same reconciliation rules the endpoint applies at read time
         // (lib/reward-dedup.js) so the cache and the response can't disagree.
         const claimedIndex = buildClaimedIndex(db.getClaimedRewardKeys(stash));
-        const rows = [];
-        for (const entry of pending) {
-            const era = entry.era && entry.era.toNumber ? entry.era.toNumber() : Number(entry.era);
-            const validators = entry.validators || {};
-            for (const validatorId of Object.keys(validators)) {
-                const info = validators[validatorId];
-                const amount = balanceToPDEX(info.value);
-                if (!(amount > 0)) continue;
-                let validator = validatorId;
-                try { validator = normalizeAddress(validatorId); } catch (e) { }
-                // Skip anything already recorded as a claimed payout.
-                if (claimedIndex.unattributedEras.has(era)) continue;
-                if (claimedIndex.exact.has(claimedRewardKey(era, validator))) continue;
-                rows.push({ era, validator, amount });
-            }
+        const computed = [];
+        for (const o of owed) {
+            const amount = balanceToPDEX(o.amount);
+            if (!(amount > 0)) continue;
+            // Skip anything already recorded as a claimed payout.
+            if (claimedIndex.unattributedEras.has(o.era)) continue;
+            if (claimedIndex.exact.has(claimedRewardKey(o.era, o.validator))) continue;
+            computed.push({ era: o.era, validator: o.validator, amount });
+        }
+        const rows = mergeUnclaimed(db.getUnclaimed(stash), computed, emptyEras, eras.length);
+        if (rows === null) {
+            console.error(`Unclaimed rewards for ${stash}: every era's exposure read came back empty; not overwriting the stored list.`);
+            return;
         }
         db.replaceUnclaimed(stash, rows);
         console.log(`Unclaimed rewards computed for ${stash}: ${rows.length} pending entries.`);
