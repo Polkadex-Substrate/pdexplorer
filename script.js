@@ -31,7 +31,7 @@ import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } f
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
-import { validatorsWithStakeState, stakeMetaText } from './lib/stake-display.js';
+import { validatorsWithStakeState } from './lib/stake-display.js';
 import { developersBodies } from './lib/developers-bodies.js';
 import { ogCardFor, ogImageUrl } from './lib/og-route.js';
 // Audit F-154/F-155 — /developers is rendered TWICE (this SPA copy, and the
@@ -53,6 +53,7 @@ import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
+import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -9206,17 +9207,25 @@ const VALIDATORS_CACHE_TTL = 60 * 1000;
 let stakeSelected = new Map(); // address -> { address, name }
 let stakeValidators = [];
 
+// { validators, meta } from /api/staking/validator-choice, falling back to
+// /api/validators while that is cold (lib/stake-picker-view.js). Order and
+// filtering are the picker's job.
 async function loadValidatorsForPicker() {
     if (validatorsCache && Date.now() - validatorsCacheAt < VALIDATORS_CACHE_TTL) return validatorsCache;
-    const res = await fetch('/api/validators');
-    const data = await res.json();
-    // Same stakeDataOk rule as fetchValidators: a broken stake read shows as
-    // "stake unavailable", never as 0.0000 PDEX.
-    validatorsCache = validatorsWithStakeState(data);
-    // Sort by total stake desc so the top validators surface first.
-    validatorsCache.sort((a, b) => (Number(b.totalStake) || 0) - (Number(a.totalStake) || 0));
+    validatorsCache = await loadPickerData(async (url) => (await fetch(url)).json());
     validatorsCacheAt = Date.now();
     return validatorsCache;
+}
+
+// Nominations limit from the chain (StakingApi.nominations_quota, in the
+// snapshot meta). Falls back to 16 with one console warning when the loaded
+// data has none; before the picker data loads it is the fallback, quietly,
+// and the counts are re-rendered once it arrives.
+let stakeQuotaWarned = false;
+function stakeMaxNominations() {
+    return maxNominationsFrom(validatorsCache && validatorsCache.meta, {
+        warn: (m) => { if (validatorsCache && !stakeQuotaWarned) { stakeQuotaWarned = true; console.warn(m); } }
+    });
 }
 
 // pdexToPlanck and isPositiveNumberInput are imported from
@@ -9307,7 +9316,10 @@ async function openStakeModal() {
     const listEl = document.getElementById('stake-validator-list');
     if (listEl) listEl.innerHTML = '<div class="stake-empty">Loading validators…</div>';
     try {
-        stakeValidators = await loadValidatorsForPicker();
+        const pick = await loadValidatorsForPicker();
+        stakeValidators = pick.validators;
+        stakePickerView().setData(pick);
+        renderStakeSelected();
     } catch (e) {
         if (listEl) listEl.innerHTML = '<div class="stake-empty">Could not load validators.</div>';
         return;
@@ -9320,64 +9332,34 @@ async function openStakeModal() {
     }
 }
 
+// Filters, sort, APR and the rows live in lib/stake-picker-view.js; the list
+// still calls back into addStakeValidator, and signing below is unchanged.
+let stakePicker = null;
+function stakePickerView() {
+    if (stakePicker) return stakePicker;
+    let storage = null;
+    try { storage = window.localStorage; } catch (e) { storage = null; }
+    stakePicker = createStakePicker({
+        barEl: document.getElementById('stake-filter-bar'),
+        listEl: document.getElementById('stake-validator-list'),
+        noteEl: document.getElementById('stake-spread-note'),
+        storage,
+        escapeHtml: stakingEscapeHtml,
+        shortAddress: stakingShortAddress,
+        helpIcon,
+        onAdd: (address) => addStakeValidator(address),
+        isNarrow: () => !!(window.matchMedia && window.matchMedia('(max-width: 720px)').matches)
+    });
+    return stakePicker;
+}
 function renderStakeValidatorList(filterStr) {
-    const listEl = document.getElementById('stake-validator-list');
-    if (!listEl) return;
-    const f = (filterStr || '').trim().toLowerCase();
-    const filtered = stakeValidators.filter(v => {
-        if (!f) return true;
-        return (v.name || '').toLowerCase().includes(f) || (v.address || '').toLowerCase().includes(f);
-    });
-    if (!filtered.length) {
-        listEl.innerHTML = '<div class="stake-empty">No matching validators.</div>';
-        return;
-    }
-    listEl.innerHTML = filtered.map(v => {
-        const isSelected = stakeSelected.has(v.address);
-        const name = v.name && v.name !== 'Unknown' ? v.name : stakingShortAddress(v.address);
-        const commission = (Number(v.commission) || 0).toFixed(1);
-        // The commission track record, at the moment of the decision.
-        //
-        // The list view showing it is necessary but not sufficient — this
-        // picker is where someone actually chooses who to nominate, and a
-        // nominator told us the problem is validators raising commission
-        // "the day after you nominate them". Putting the history only on the
-        // browse page and not here would leave the warning one screen away
-        // from the action it is about.
-        const ch = v.commissionHistory || null;
-        const chNote = ch && ch.note
-            ? `<div class="stake-val-history${ch.volatility === 'volatile' ? ' is-volatile' : ''}">${stakingEscapeHtml(ch.note)}</div>`
-            : '';
-        // The badge goes on the META line, not inside .stake-val-name.
-        //
-        // A review caught the first version putting it inside the name element,
-        // which is `white-space: nowrap; overflow: hidden; text-overflow:
-        // ellipsis` — so for any validator with a realistic identity (Polkadex
-        // has names like "MASTER VALIDATOR / 13") the badge was ellipsised
-        // straight off the edge. Invisible in the picker, which is the one
-        // screen where the warning has to land.
-        const chBadge = ch && (ch.raisedRecently || ch.pendingRaise)
-            ? ` <span class="badge commission-raised">${ch.pendingRaise ? 'RAISING NOW' : 'RAISED RECENTLY'}</span>` : '';
-        return `<div class="stake-validator-item${isSelected ? ' selected' : ''}" data-addr="${stakingEscapeHtml(v.address)}">
-            <div class="stake-val-info">
-                <div class="stake-val-name">${stakingEscapeHtml(name)}</div>
-                <div class="stake-val-meta">${stakingEscapeHtml(stakeMetaText(v.totalStake, stakingFormatPDEX))} &middot; ${commission}% comm${chBadge}</div>
-                ${chNote}
-            </div>
-            <button type="button" class="stake-val-add" ${isSelected ? 'disabled aria-label="Already selected"' : 'aria-label="Add to selection"'}>${isSelected ? '✓' : '+'}</button>
-        </div>`;
-    }).join('');
-    listEl.querySelectorAll('.stake-validator-item').forEach(item => {
-        const addr = item.getAttribute('data-addr');
-        const addBtn = item.querySelector('.stake-val-add');
-        if (addBtn) addBtn.addEventListener('click', (e) => { e.stopPropagation(); addStakeValidator(addr); });
-        item.addEventListener('click', () => addStakeValidator(addr));
-    });
+    stakePickerView().render(filterStr, stakeSelected);
 }
 
 function addStakeValidator(address) {
     if (stakeSelected.has(address)) return;
-    if (stakeSelected.size >= 16) { showStakeError('You can nominate at most 16 validators per transaction.'); return; }
+    const maxNoms = stakeMaxNominations();
+    if (stakeSelected.size >= maxNoms) { showStakeError(`You can nominate at most ${maxNoms} validators per transaction.`); return; }
     const v = stakeValidators.find(x => x.address === address) || { address, name: null };
     stakeSelected.set(address, { address, name: v.name });
     renderStakeSelected();
@@ -9397,8 +9379,9 @@ function renderStakeSelected() {
     const countEl = document.getElementById('stake-selected-count');
     const headerCountEl = document.getElementById('stake-chosen-count');
     const n = stakeSelected.size;
-    if (countEl) countEl.textContent = `${n} / 16`;
-    if (headerCountEl) headerCountEl.textContent = `${n} / 16`;
+    const maxNoms = stakeMaxNominations();
+    if (countEl) countEl.textContent = `${n} / ${maxNoms}`;
+    if (headerCountEl) headerCountEl.textContent = `${n} / ${maxNoms}`;
     if (!el) return;
     if (!n) { el.innerHTML = '<div class="stake-empty">Pick validators from the list on the left.</div>'; return; }
     el.innerHTML = Array.from(stakeSelected.values()).map(v => {
@@ -9431,7 +9414,8 @@ async function submitStakeTx() {
     const hasAmount = amtStr !== '' && parseFloat(amtStr) > 0;
 
     if (!targets.length) return showStakeError('Select at least one validator before submitting.');
-    if (targets.length > 16) return showStakeError('At most 16 validators can be nominated.');
+    const maxNoms = stakeMaxNominations();
+    if (targets.length > maxNoms) return showStakeError(`At most ${maxNoms} validators can be nominated.`);
 
     const available = getStakeableBalance(data);
     const hasBond = ((data.staking && data.staking.totalStaked) || 0) > 0;

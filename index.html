@@ -836,6 +836,8 @@
                         </div>
                     </div>
 
+                    <div id="stake-filter-bar" class="stake-filter-bar" aria-label="Validator filters"></div>
+
                     <div class="stake-pickers">
                         <div class="stake-picker">
                             <div class="stake-picker-head">
@@ -854,6 +856,7 @@
                             <div id="stake-selected-list" class="stake-picker-list">
                                 <div class="stake-empty">Pick validators from the list on the left.</div>
                             </div>
+                            <div id="stake-spread-note" aria-live="polite"></div>
                         </div>
                     </div>
 
@@ -1345,6 +1348,7 @@
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_tour_seen_v1</code></td><td style="padding: 10px 12px;">A boolean flag once you've completed the onboarding tour.</td><td style="padding: 10px 12px;">So we don't pop the tour up again every visit.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_banner_dismissed</code></td><td style="padding: 10px 12px;">A flag set when you dismiss the storage notice banner.</td><td style="padding: 10px 12px;">So we don't show it again.</td></tr>
                                     
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_stake_filters_v1</code></td><td style="padding: 10px 12px;">The filters, APR window and sort order you last used in the Stake &amp; Nominate validator picker (no addresses, no amounts).</td><td style="padding: 10px 12px;">So the picker opens the way you left it.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_price_period</code></td><td style="padding: 10px 12px;">The time window you last picked on the full-screen <a href="/price" class="item-link">/price</a> chart (7 / 30 / 90 / 365 / 4000 days).</td><td style="padding: 10px 12px;">So your selection persists between visits.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_home_snapshot</code></td><td style="padding: 10px 12px;">A small JSON cache of the home-page stat values (price, market cap, total issuance, in-stake, AVG APY, era, validators, nominators, max active stake) plus a save timestamp.</td><td style="padding: 10px 12px;">So returning visitors see populated home-page cells instantly while live data loads in the background. Expires after 7 days.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_dashboard:&lt;address&gt;</code></td><td style="padding: 10px 12px;">One JSON snapshot of the My Account dashboard payload (balance, staking positions, recent activity, price history, reward history) per address you've viewed, plus a save timestamp.</td><td style="padding: 10px 12px;">So returning to the dashboard renders instantly while the live data refreshes in the background. Expires after 30 minutes.</td></tr>

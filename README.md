@@ -640,7 +640,7 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 | Tier | Used by | Header |
 |---|---|---|
-| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, the governance item endpoints (`/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id`; no-store for `?fresh=1` and 404), `/api/governance/latest`, `/api/state/*` at the current head | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
+| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, the governance item endpoints (`/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id`; no-store for `?fresh=1` and 404), `/api/governance/latest`, `/api/state/*` at the current head, `/api/staking/validator-choice` (no-store while initializing) | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
 | **Medium** | `/api/validators`, `/api/network-info`, `/api/holders`, `/api/price-latest`, `/api/staking-rewards-status`, `/api/discussions`, `/api/analytics/*`, `/api/labels/:address` (anonymous only), `/api/consts/*` + `/api/runtime` at head | `public, max-age=30, s-maxage=60, stale-while-revalidate=120` |
 | **Long** | `/api/price-history`, `/api/treasury`, `/api/democracy`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and any inspection route pinned to a past block with `?at=` | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
 
@@ -683,6 +683,7 @@ edge accordingly.
 - `GET /api/extrinsic/:block/:txHash` — single-extrinsic detail
 - `GET /api/extrinsic-by-hash/:txHash` — locate an extrinsic when you don't know its block, by scanning **recent blocks backwards from the head** (`?recent=` blocks, default 200 ≈ 40 min, max 2000 ≈ 6 h). Returns `{ found, block, txHash, scanned }` — a block number to feed to `/api/extrinsic/:block/:txHash`, not the extrinsic itself. `found: false` means "not in the scanned window", not "does not exist".
 - `GET /api/validators` — full validator set with stake + commission
+- `GET /api/staking/validator-choice` - every validator candidate (active and waiting) for the stake picker: realized nominator APR over 7 / 28 / 84 completed eras (past rewards, not a guarantee), reliability, self-stake, backers, exposure pages, blocked flag, identity facts, slash eras and commission track record. Short cache tier; `status: Initializing` with an empty list until the indexer's first build
 - `GET /api/validator/:address` — per-validator era history
 - `GET /api/holders` — top-balance accounts
 - `GET /api/account/:address` — account-level summary
@@ -1093,7 +1094,7 @@ topology where indexer stalls show up as request latency.
 
 | Tier | Headers | Endpoints |
 | --- | --- | --- |
-| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/technical-committee`, `/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id` (404s are no-store), `/api/governance/latest`, `/api/state/*` |
+| `cacheShort` | `max-age=5, s-maxage=10, stale-while-revalidate=30` | `/api/blocks`, `/api/events`, `/api/transactions`, `/api/council`, `/api/technical-committee`, `/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id` (404s are no-store), `/api/governance/latest`, `/api/state/*`, `/api/staking/validator-choice` |
 | `cacheMedium` | `max-age=30, s-maxage=60, stale-while-revalidate=120` | `/api/network-info`, `/api/validators`, `/api/holders`, `/api/price-latest`, `/api/discussions`, `/api/staking-rewards-status`, `/api/analytics/*`, `GET /api/labels/:address` (anonymous callers only) |
 | `cacheLong` | `max-age=300, s-maxage=600, stale-while-revalidate=3600` | `/api/treasury`, `/api/democracy`, `/api/price-history`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and inspection routes pinned to a past block with `?at=` |
 

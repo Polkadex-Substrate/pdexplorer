@@ -156,6 +156,16 @@ CREATE TABLE IF NOT EXISTS validator_triggers (
   timestamp INTEGER,
   PRIMARY KEY (address, era)
 );
+-- One row per completed era: the era's validator reward pool, total era points and, per elected validator,
+-- points / exposure total / commission as JSON. Feeds the stake picker's realized APR (lib/stake-apr.js).
+-- A completed era never changes, so rows are written once and pruned past HistoryDepth.
+CREATE TABLE IF NOT EXISTS era_reward_summary (
+  era INTEGER PRIMARY KEY,
+  reward REAL,
+  total_points INTEGER,
+  validators TEXT,
+  fetched_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS staking_rewards (
   id TEXT PRIMARY KEY,
   stash TEXT,
@@ -1332,6 +1342,26 @@ export function getCommissionHistoryByValidator() {
         });
     }
     return out;
+}
+
+// --- era reward summaries (stake picker APR) ---
+export function upsertEraRewardSummary(summary) {
+    if (!summary || !Number.isInteger(Number(summary.era))) return;
+    db.prepare('INSERT OR REPLACE INTO era_reward_summary(era,reward,total_points,validators,fetched_at) VALUES(?,?,?,?,?)')
+        .run(Number(summary.era), Number(summary.reward) || 0, Number(summary.totalPoints) || 0,
+            JSON.stringify(summary.validators || {}), Date.now());
+}
+export function getEraRewardSummaries(fromEra = 0) {
+    return db.prepare('SELECT era, reward, total_points AS totalPoints, validators FROM era_reward_summary WHERE era >= ? ORDER BY era ASC')
+        .all(Number(fromEra) || 0)
+        .map(r => {
+            let validators = {};
+            try { validators = JSON.parse(r.validators || '{}') || {}; } catch (e) { validators = {}; }
+            return { era: Number(r.era), reward: Number(r.reward), totalPoints: Number(r.totalPoints), validators };
+        });
+}
+export function pruneEraRewardSummaries(belowEra) {
+    db.prepare('DELETE FROM era_reward_summary WHERE era < ?').run(Number(belowEra) || 0);
 }
 
 // --- holders ---

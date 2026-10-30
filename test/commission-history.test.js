@@ -553,10 +553,13 @@ describe('the wiring: the list and the picker both show it', () => {
         // The list is where you browse; the picker is where you commit. The
         // complaint is about what happens after you nominate, so the warning
         // has to be on the screen where that decision is made.
-        const picker = scriptSrc.slice(
-            scriptSrc.indexOf('const isSelected = stakeSelected.has(v.address)'),
-            scriptSrc.indexOf('listEl.querySelectorAll(\'.stake-validator-item\')')
+        // The picker's rows moved to lib/stake-picker-view.js (validatorRowHtml).
+        const viewSrc = readFileSync(new URL('../lib/stake-picker-view.js', import.meta.url), 'utf8');
+        const picker = viewSrc.slice(
+            viewSrc.indexOf('export function validatorRowHtml('),
+            viewSrc.indexOf('function why(')
         );
+        assert.match(scriptSrc, /createStakePicker\(/, 'script.js no longer mounts the picker module');
         assert.match(picker, /v\.commissionHistory/,
             'the stake/nominate picker does not show the commission track record');
         assert.match(picker, /raisedRecently/);
