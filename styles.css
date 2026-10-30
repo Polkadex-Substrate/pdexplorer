@@ -29,6 +29,23 @@
     /* Transitions */
     --transition-fast: 0.2s ease;
     --transition-normal: 0.3s ease;
+
+    /* Dark-only site: tell the browser so native controls (select popups,
+       scrollbars, date pickers) use dark system colours. */
+    color-scheme: dark;
+}
+
+/* Native <select> popups on Windows Chrome/Edge paint the list with system
+   colours while options inherit the page's light text, giving white-on-white.
+   Give every option and group an explicit dark surface and light text. */
+select option,
+select optgroup {
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+}
+select option:disabled,
+select optgroup:disabled {
+    color: var(--text-muted);
 }
 
 * {
