@@ -19,7 +19,8 @@ const numOf = (h) => parseInt(h.slice(2), 16);
 // One extrinsic per block: bare v5 (0x05) under 392, signed v4 (0x84) under 373.
 const extrinsicFor = (spec) => (spec >= 392 ? '0x0c050000' : '0x0c840000');
 
-function mockNode({ head, upgradeAt = UPGRADE, headSpec = null }) {
+// prunedBelow: state_* calls at a block under this number fail, as on a pruned node.
+function mockNode({ head, upgradeAt = UPGRADE, headSpec = null, prunedBelow = 0 }) {
     const methods = [];
     const specOf = (n) => (headSpec !== null ? headSpec : n >= upgradeAt ? 392 : 373);
     const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
@@ -29,6 +30,9 @@ function mockNode({ head, upgradeAt = UPGRADE, headSpec = null }) {
         const reply = (result) => ws.send(JSON.stringify({ jsonrpc: '2.0', id, result }));
         const error = (message) => ws.send(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message } }));
         const at = (i) => (params[i] ? numOf(params[i]) : head);
+        if (method.startsWith('state_') && method !== 'state_call' && at(0) < prunedBelow) {
+            return error('State already discarded for BlockId::Hash(' + params[0] + ')');
+        }
         switch (method) {
             case 'chain_getFinalizedHead': return reply(hashOf(head));
             case 'chain_getBlockHash': return reply(params[0] <= head ? hashOf(params[0]) : null);
@@ -119,6 +123,23 @@ describe('scripts/fetch-metadata.mjs end to end', () => {
             assert.match(r.err, /FAILED: block #1100 runs spec 392, not 373\. Nothing written; pick a block before the 392 upgrade with --at373/);
             assert.equal(existsSync(join(out, 'metadata-373.json')), false);
         } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
+    });
+
+    test('state pruned at the target block: a clear error, nothing written', async () => {
+        const node = await mockNode({ head: 1200, prunedBelow: 995 });
+        const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
+        try {
+            const r = await runScript(['--only', '373', '--archive', node.url, '--at373', '990', '--out', out]);
+            assert.equal(r.code, 1);
+            assert.match(r.err, /FAILED: state at block #990 is not available on ws:\/\/127\.0\.0\.1:\d+: .*State already discarded.*pruned.*--archive.*rpc2\.polkadex\.ee.*Nothing written/);
+            assert.equal(existsSync(join(out, 'metadata-373.json')), false);
+        } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
+    });
+
+    test('rpc2.polkadex.ee stays the default archive endpoint and is documented as ours', () => {
+        const src = readFileSync(new URL('../scripts/fetch-metadata.mjs', import.meta.url), 'utf8');
+        assert.match(src, /opt\('archive', 'wss:\/\/rpc2\.polkadex\.ee'\)/);
+        assert.match(src, /rpc2\.polkadex\.ee is our own ARCHIVE node/);
     });
 
     test('only current, non-deprecated JSON-RPC methods are used', async () => {

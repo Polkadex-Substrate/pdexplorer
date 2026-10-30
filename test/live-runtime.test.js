@@ -111,6 +111,16 @@ describe('wiring', () => {
         assert.match(script, /networkStatusText\.innerText = 'Node out of date'/);
     });
 
+    test('browser: a provider reconnect re-runs the runtime check, and a good node clears the notice', () => {
+        const watch = script.slice(script.indexOf('function watchProviderReconnects'), script.indexOf('function adoptChainApi'));
+        assert.match(watch, /provider\.on\('connected'/);
+        assert.match(watch, /if \(!chainApiAdopted \|\| !globalApi\) return/);
+        assert.match(watch, /runLiveRuntimeCheck\(api\)/);
+        assert.match(script, /watchProviderReconnects\(wsProvider\)/);
+        const check = script.slice(script.indexOf('function runLiveRuntimeCheck'), script.indexOf('function setNodeConnectedStatus'));
+        assert.match(check, /=== 'Node out of date'\) setNodeConnectedStatus\(\)/);
+    });
+
     test('server: checked on connect, re-checked when the spec changes, on /api/version', () => {
         const connect = server.slice(server.indexOf('newApi = await ApiPromise.create'), server.indexOf("globalApi.on('disconnected'"));
         assert.match(connect, /runLiveRuntimeCheck\(newApi\)/);

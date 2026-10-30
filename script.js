@@ -758,7 +758,12 @@ function runLiveRuntimeCheck(api) {
     try {
         const status = liveRuntimeStatus(api);
         const { level, line } = describeLiveRuntime(status, 'browser');
-        if (level === 'log') { console.log(line); return true; }
+        if (level === 'log') {
+            console.log(line);
+            // A reconnect to an up-to-date node clears an earlier "out of date" notice.
+            if (networkStatusText.innerText === 'Node out of date') setNodeConnectedStatus();
+            return true;
+        }
         console.error(line);
         if (status.status === 'stale') {
             networkStatusText.innerText = 'Node out of date';
@@ -770,15 +775,32 @@ function runLiveRuntimeCheck(api) {
     } catch (e) { console.warn('[runtime] browser live runtime check could not run:', e && e.message ? e.message : e); return true; }
 }
 
+function setNodeConnectedStatus() {
+    networkStatusText.innerText = "Polkadex Connected";
+    networkStatusText.title = '';
+    statusIndicator.classList.add('live');
+    statusIndicator.style.background = 'var(--success)';
+}
+
+// The provider fires "connected" on every (re)connect. The first one lands
+// before adoptChainApi, which does the first check; later ones re-check, so a
+// reconnect to a node still below spec 392 shows "Node out of date" again
+// rather than leaving a stale "Polkadex Connected". Waits for the api to be
+// ready so the runtime version is the new link's.
+function watchProviderReconnects(provider) {
+    provider.on('connected', () => {
+        if (!chainApiAdopted || !globalApi) return;
+        const api = globalApi;
+        Promise.resolve(api.isReady).then(() => runLiveRuntimeCheck(api)).catch(() => {});
+    });
+}
+
 function adoptChainApi(api) {
     if (chainApiAdopted || !api) return;
     chainApiAdopted = true;
     globalApi = api;
 
-    networkStatusText.innerText = "Polkadex Connected";
-    networkStatusText.title = '';
-    statusIndicator.classList.add('live');
-    statusIndicator.style.background = 'var(--success)';
+    setNodeConnectedStatus();
     runLiveRuntimeCheck(api);
 
     // Chain-derived stat cards. These DO need the api.
@@ -877,6 +899,7 @@ async function init() {
         // Vite dev server; a production build always uses the mainnet LB.
         const wsEndpoint = (import.meta.env && import.meta.env.DEV && import.meta.env.VITE_POLKADEX_WS) || 'wss://rpc.polkadex.ee';
         const wsProvider = new WsProvider(wsEndpoint);
+        watchProviderReconnects(wsProvider);
         // F-063: `await ApiPromise.create(...)` does not REJECT when the
         // WebSocket cannot be established — WsProvider retries forever, so the
         // promise simply never settles. That is why the old ordering was so

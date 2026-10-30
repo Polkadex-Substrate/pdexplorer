@@ -136,6 +136,18 @@ describe('replacement 2: payment_queryInfo -> TransactionPaymentApi_query_info',
         await assert.rejects(queryInfoViaRuntimeApi({ call: {} }, ['0x00']), /TransactionPaymentApi\.query_info is not available on this runtime/);
     });
 
+    test('no api (node link down) is a 503 the server passes through, not a 400 about the runtime', async () => {
+        for (const params of [['0x00'], ['0x00', '0x' + 'ab'.repeat(32)]]) {
+            for (const api of [null, undefined]) {
+                await assert.rejects(queryInfoViaRuntimeApi(api, params), (e) => e.statusCode === 503 && !e.consoleParam && !/not available on this runtime/.test(e.message));
+            }
+        }
+        // Bad parameters are still the caller's 400, api or not.
+        await assert.rejects(queryInfoViaRuntimeApi(null, ['nothex']), (e) => e.consoleParam === true);
+        const server = stripComments(readFileSync(new URL('../server.js', import.meta.url), 'utf8'));
+        assert.match(server, /if \(err && err\.statusCode === 503 && err\.message\)/);
+    });
+
     test('the console entry names what it replaces', () => {
         assert.deepEqual(Object.keys(RUNTIME_API_CONSOLE), ['transactionPaymentApi_queryInfo']);
         assert.equal(RUNTIME_API_CONSOLE.transactionPaymentApi_queryInfo.replaces, 'payment_queryInfo');

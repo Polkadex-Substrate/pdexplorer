@@ -59,6 +59,9 @@ const TARGETS = [
     // The current runtime, at the finalized head.
     { label: '392', file: 'metadata-392.json', url: opt('mainnet', 'wss://rpc.polkadex.ee'), at: null, minSpec: MIN_LIVE_SPEC, network: 'mainnet' },
     // History: the runtime before the 392 upgrade, at a fixed block.
+    // rpc2.polkadex.ee is our own ARCHIVE node (it keeps old state), which is
+    // why it is the default here: the public load balancer prunes. Override
+    // with --archive if it moves.
     { label: '373', file: 'metadata-373.json', url: opt('archive', 'wss://rpc2.polkadex.ee'), at: AT_373, exactSpec: 373, network: 'mainnet' }
 ];
 const ONLY = opt('only', null);
@@ -122,6 +125,18 @@ function formatByte(hex) {
     return u8a[off];
 }
 
+// A node that has pruned the state at the target block answers state_* calls
+// there with an error ("State already discarded", "UnknownBlock", ...). Say
+// what that means and what to do, instead of a bare RPC error.
+function stateUnavailableMessage(e, t, blockNumber) {
+    const where = t.at === null ? `the finalized head (#${blockNumber})` : `block #${blockNumber}`;
+    return `state at ${where} is not available on ${t.url}: ${e.message}. The node has probably pruned it. `
+        + (t.at === null
+            ? 'Use another endpoint with --mainnet.'
+            : 'Use an archive node with --archive (rpc2.polkadex.ee is ours and keeps old state), or a more recent block with --at373 that is still before the 392 upgrade.')
+        + ' Nothing written.';
+}
+
 async function fetchTarget(t) {
     console.log(`\n[${t.network}] ${t.url}`);
     const { call, close } = rpcClient(t.url);
@@ -130,7 +145,12 @@ async function fetchTarget(t) {
         if (!blockHash) throw new Error(`block #${t.at} is not on ${t.url}.`);
         const header = await call('chain_getHeader', [blockHash]);
         const blockNumber = parseInt(header.number, 16);
-        const rv = await call('state_getRuntimeVersion', [blockHash]);
+        let rv;
+        try {
+            rv = await call('state_getRuntimeVersion', [blockHash]);
+        } catch (e) {
+            throw new Error(stateUnavailableMessage(e, t, blockNumber));
+        }
         const genesisHash = await call('chain_getBlockHash', [0]);
         console.log(`  ${t.at === null ? 'finalized' : 'block'} #${blockNumber} ${blockHash}, ${rv.specName} spec ${rv.specVersion} tx ${rv.transactionVersion}`);
         if (t.minSpec && rv.specVersion < t.minSpec) {
@@ -139,7 +159,12 @@ async function fetchTarget(t) {
         if (t.exactSpec && rv.specVersion !== t.exactSpec) {
             throw new Error(`block #${blockNumber} runs spec ${rv.specVersion}, not ${t.exactSpec}. Nothing written; pick a block before the 392 upgrade with --at373.`);
         }
-        const metadata = await call('state_getMetadata', [blockHash]);
+        let metadata;
+        try {
+            metadata = await call('state_getMetadata', [blockHash]);
+        } catch (e) {
+            throw new Error(stateUnavailableMessage(e, t, blockNumber));
+        }
         const versions = await metadataVersions(call, blockHash);
         const atVersion = {};
         for (const v of versions.filter(v => v >= 15)) {
