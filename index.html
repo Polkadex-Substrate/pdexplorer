@@ -884,6 +884,14 @@
                 </div>
             </div>
 
+            <div id="multisig-review-modal" class="modal multisig-modal" style="display:none;" role="dialog" aria-modal="false" aria-labelledby="multisig-review-title">
+                <div class="glass multisig-dialog">
+                    <button type="button" id="close-multisig-review" class="modal-close-btn" aria-label="Close multisig review"><i class='bx bx-x'></i></button>
+                    <h2 id="multisig-review-title">Review multisig transaction</h2>
+                    <div id="multisig-review-content"></div>
+                </div>
+            </div>
+
             <!-- Send PDEX Modal -->
             <div id="send-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
                 <div class="glass" style="width: 100%; max-width: 540px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
@@ -1340,6 +1348,8 @@
                                 </thead>
                                 <tbody>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_address</code></td><td style="padding: 10px 12px;">Connected wallet address.</td><td style="padding: 10px 12px;">So the My Account page works without re-connecting on every reload.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_multisigs_v1</code></td><td style="padding: 10px 12px;">Saved multisig names, public signer addresses, and approval thresholds.</td><td style="padding: 10px 12px;">So imported multisigs remain available in My Accounts. Kept until you clear site storage; no private keys are stored.</td></tr>
+                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_multisig_call:*</code></td><td style="padding: 10px 12px;">Reviewed call data and runtime version, keyed by network, multisig address, and call hash.</td><td style="padding: 10px 12px;">To review and complete pending multisig calls on this browser. Kept until you clear site storage.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_last_used_wallet_address</code></td><td style="padding: 10px 12px;">The most recently active address when your wallet has multiple accounts.</td><td style="padding: 10px 12px;">So we can default to the right account instead of always picking the first one.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_source</code></td><td style="padding: 10px 12px;">Which wallet extension (for example <code>polkadot-js</code>, <code>talisman</code> or <code>subwallet-js</code>) the connected account was chosen from.</td><td style="padding: 10px 12px;">So a signing request goes to the extension you picked when the same account exists in more than one.</td></tr>
                                     <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_disconnected</code></td><td style="padding: 10px 12px;">A flag set when you click Disconnect and cleared when you connect an account.</td><td style="padding: 10px 12px;">So we do not reconnect an account for you on the next visit; you see the account picker instead.</td></tr>
