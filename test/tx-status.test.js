@@ -428,8 +428,8 @@ describe('one model per card update', () => {
         assert.equal(m.tone, 'warn');
         assert.match(m.next, /Still waiting for finality.*block #5/);
     });
-    test('all 17 action keys have success copy and a pending title, with no hex', () => {
-        assert.equal(ACTION_KEYS.length, 17);
+    test('all 18 action keys have success copy and a pending title, with no hex', () => {
+        assert.equal(ACTION_KEYS.length, 18);
         for (const k of ACTION_KEYS) {
             assert.ok(PENDING_TITLE[k], `no pending title for ${k}`);
             const c = successCopy(k, { id: 1, idx: 1, n: 2, amount: '1', to: 'e' + 'x'.repeat(47), delegate: 'e' + 'y'.repeat(47), beneficiary: 'e' + 'z'.repeat(47), type: 'Any', stake: '1', ref: 1, conviction: 'Locked1x', lockPeriodDays: 30 }, {});

@@ -142,6 +142,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
         buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel,
+        multisigUI: { mountAccounts() {} },
         POLKADEX_SS58: 88,
         localStorage: profile.local, sessionStorage: session,
         navigator: { userAgent: 'test', clipboard: { writeText: async () => {} } },

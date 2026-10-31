@@ -4578,3 +4578,23 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .gd-facts .gd-fact strong { text-align: left; }
 }
 .gd-facts.wallet-stat-list { padding: 0; margin-top: 14px; }
+/* Multisig account import and transaction review. */
+.multisig-panel { padding: 20px; margin: 16px 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+.multisig-panel h3, .multisig-panel h4, .multisig-dialog h4 { margin: 12px 0; }
+.multisig-panel p, .multisig-dialog p { color: var(--text-secondary); font-size: .85rem; line-height: 1.6; margin: 12px 0; overflow-wrap: anywhere; }
+.multisig-panel summary { cursor: pointer; padding: 12px 0; color: var(--brand-secondary); }
+.multisig-saved-list { display: grid; gap: 10px; margin: 12px 0; }
+.multisig-import, .multisig-dialog label { display: grid; gap: 12px; }
+.multisig-import label { display: grid; gap: 6px; }
+.multisig-panel input, .multisig-panel textarea, .multisig-dialog select, .multisig-dialog textarea { width: 100%; box-sizing: border-box; padding: 10px; background: var(--bg-primary, #11121a); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font: inherit; }
+.multisig-panel textarea, .multisig-dialog textarea { resize: vertical; }
+.multisig-panel ul { padding-left: 20px; }
+.multisig-address { display: inline-block; max-width: 100%; overflow-wrap: anywhere; font-size: .8rem; }
+.multisig-pending-row { padding: 16px 0; border-bottom: 1px solid var(--border-color); }
+.multisig-panel button, .multisig-dialog button.staking-download-btn { margin: 6px 6px 6px 0; }
+.multisig-error:empty, #multisig-review-error:empty { display: none; }
+.multisig-modal { position: fixed; inset: 0; z-index: 1100; align-items: center; justify-content: center; background: rgba(0,0,0,.8); padding: 16px; }
+.multisig-dialog { position: relative; width: 100%; max-width: 680px; max-height: 90vh; overflow-y: auto; padding: 28px; border-radius: var(--radius-lg); }
+.multisig-dialog h2 { padding-right: 30px; margin-bottom: 16px; }
+.multisig-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: rgba(0,0,0,.3); font-size: .8rem; }
+.multisig-dialog button:disabled { opacity: .5; cursor: not-allowed; }

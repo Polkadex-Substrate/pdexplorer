@@ -4,6 +4,10 @@ A self-hosted block explorer and lightweight wallet UI for the [Polkadex](https:
 
 Live: **https://explorer.polkadex.ee/**
 
+Multisig wallets can be imported into My Account and used to initiate, approve,
+execute, or cancel transactions. See [the multisig wallet guide](docs/multisig-wallets.md)
+for setup, call-data sharing, and test-network verification.
+
 ---
 
 ## Features

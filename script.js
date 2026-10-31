@@ -51,6 +51,8 @@ import { createDemocracyView } from './lib/democracy-view.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from './lib/wallet-session.js';
 import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel } from './lib/wallet-picker.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
+import { createMultisigStore } from './lib/multisig.js';
+import { createMultisigUI } from './lib/multisig-view.js';
 import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
@@ -7934,6 +7936,15 @@ const walletSession = createWalletSession({
     revokeDiscuss: () => revokeDiscussSession(), onChange: () => onWalletChanged()
 });
 function getStoredWallet() { return walletSession.connected(); }
+const multisigStore = createMultisigStore(localStorage);
+const multisigUI = createMultisigUI({
+    store: multisigStore, storage: localStorage, api: () => globalApi,
+    accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
+    submit: submitSignedTx,
+    refresh: address => {
+        if (isSameAddress(getStoredWallet(), address) && isWalletRoute(readRouteFromLocation())) fetchWalletDashboard(address);
+    }
+});
 let walletMenu = null;   // the header My Account menu, wired once at the bottom of this file
 
 // The connected address just changed (switch, disconnect, or another tab).
@@ -8431,6 +8442,7 @@ async function renderWalletConnectPanel(root) {
                 <div id="wallet-accounts" style="display:flex; flex-direction:column; gap:10px;">
                     <div style="color: var(--text-muted); font-size: 0.85rem;">Looking for wallets…</div>
                 </div>
+                <div id="wallet-multisig-accounts"></div>
 
                 <div id="wallet-mobile-section" style="display:none; margin-top: 24px;">
                     <h3 style="font-size: 0.95rem; margin-bottom: 6px;">On mobile? Use a wallet's in-app browser</h3>
@@ -8456,6 +8468,7 @@ async function renderWalletConnectPanel(root) {
             </div>
         </div>`;
 
+    multisigUI.mountAccounts(document.getElementById('wallet-multisig-accounts'));
     const manualBtn = document.getElementById('wallet-manual-btn');
     const manualInput = document.getElementById('wallet-manual-input');
     const manualErr = document.getElementById('wallet-manual-error');
@@ -9079,6 +9092,13 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     // state, and the multisig calculator works without an active session.
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
+    const multisig = multisigStore.find(data.address);
+    if (multisig) {
+        const slot = document.createElement('div');
+        slot.className = 'list-container glass';
+        root.prepend(slot);
+        multisigUI.mountPending(slot, multisig);
+    }
     // Average APR card — runs after the rest of the dashboard so the
     // ranked widget order on slow connections is: balance/staking →
     // validators/recent → APR. The renderer reads `walletAprData`
@@ -10238,6 +10258,14 @@ function refreshSendFeeEstimate() {
             updateSendSignGate();
             return;
         }
+        if (multisigStore.find(data.address)) {
+            feeEl.textContent = 'Paid by signer — shown in multisig review';
+            sendLastFeePDEX = null;
+            sendFeeEstimateFailed = false;
+            updateSendSignGate();
+            if (recvPreviewEl) recvPreviewEl.textContent = stakingFormatPDEX(amt) + ' PDEX';
+            return;
+        }
         try {
             const tx = buildTransferTx(globalApi, to, pdexToPlanck(amtStr), !!(keepAliveEl && keepAliveEl.checked));
             const info = await tx.paymentInfo(data.address);
@@ -10523,7 +10551,7 @@ async function submitSendTx() {
     if (!Number.isFinite(amt) || amt <= 0) return showSendError('Enter a valid amount.');
 
     const available = getStakeableBalance(data);
-    const feeBuffer = (sendLastFeePDEX != null) ? Math.max(sendLastFeePDEX * 1.2, SEND_FEE_BUFFER / 5) : SEND_FEE_BUFFER;
+    const feeBuffer = multisigStore.find(data.address) ? 0 : (sendLastFeePDEX != null) ? Math.max(sendLastFeePDEX * 1.2, SEND_FEE_BUFFER / 5) : SEND_FEE_BUFFER;
     // Float-tolerance pad: the displayed "available" balance is a float that
     // can drift by a few ULPs from the on-chain u128. A user who types the
     // displayed value back in shouldn't get a false "exceeds balance"
@@ -10570,6 +10598,7 @@ async function submitSendTx() {
     closeOn('payout-modal', 'close-payout-modal');
     closeOn('unstake-modal', 'close-unstake-modal');
     closeOn('send-modal', 'close-send-modal');
+    closeOn('multisig-review-modal', 'close-multisig-review');
 
     const stakeMax = document.getElementById('stake-max-btn');
     if (stakeMax) stakeMax.addEventListener('click', () => {
@@ -10633,7 +10662,9 @@ async function submitSendTx() {
         // Reserve a small fee buffer — refined to the actual estimated fee
         // (×1.2 for safety) when paymentInfo has returned at least once.
         const available = getStakeableBalance(data);
-        const buffer = (sendLastFeePDEX != null) ? Math.max(sendLastFeePDEX * 1.2, SEND_FEE_BUFFER / 5) : SEND_FEE_BUFFER;
+        const buffer = multisigStore.find(data.address)
+            ? (document.getElementById('send-keep-alive')?.checked ? getExistentialDepositPDEX() : 0)
+            : (sendLastFeePDEX != null) ? Math.max(sendLastFeePDEX * 1.2, SEND_FEE_BUFFER / 5) : SEND_FEE_BUFFER;
         const usable = Math.max(0, available - buffer);
         const amtInput = document.getElementById('send-amount-input');
         if (amtInput) {
@@ -12750,8 +12781,8 @@ function requireWallet(actionPhrase) {
 
 // The connected wallet's injected account and signer, or null after telling
 // fail() why not. Split out of submitSignedTx so that function stays readable.
-async function resolveWalletSigner(fail) {
-    const address = getStoredWallet();
+async function resolveWalletSigner(fail, signingAccount = null) {
+    const address = signingAccount ? signingAccount.address : getStoredWallet();
     if (!address) return fail('Please connect your wallet first.');
     if (!globalApi) return fail('Blockchain connection is not ready yet. Please wait a moment and try again.');
     // Before the wallet is asked anything: the node must be on the runtime
@@ -12772,7 +12803,9 @@ async function resolveWalletSigner(fail) {
     // Match by underlying public key so an SS58-prefix mismatch between the
     // extension (often prefix 42) and the stored address (Polkadex prefix 88)
     // doesn't make the account look missing.
-    const account = pickSigningAccount(injected, address, walletSession.source(), isSameAddress);
+    const account = signingAccount
+        ? injected.find(a => isSameAddress(a.address, address) && a.source === signingAccount.source)
+        : pickSigningAccount(injected, address, walletSession.source(), isSameAddress);
     if (!account) return fail("This account isn't available in your connected wallet. Switch to the right account in your wallet extension (or reconnect) and try again.");
 
     let signer;
@@ -12789,7 +12822,7 @@ async function resolveWalletSigner(fail) {
 // dropped link) is lib/tx-submit.js, tested in test/tx-submit.test.js.
 // onError(text, model) keeps the modals' inline error lines; onStage(stage,
 // model) drives the motion cards. No alert popup anywhere on this path.
-async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage }) {
+async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet() }) {
     const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
     const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
     const fail = (m) => {
@@ -12797,8 +12830,20 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         stage(model.stage, model);
         if (onError) onError(m, model);
     };
-    const w = await resolveWalletSigner(fail);
+    const multisig = multisigStore.find(expectedWallet);
+    if (multisig && !multisigHandled) {
+        try {
+            if (!globalApi) throw new Error('The blockchain connection is not ready yet.');
+            const staleRuntime = liveRuntimeError(globalApi);
+            if (staleRuntime) throw new Error(staleRuntime);
+            const tx = await buildTx(globalApi);
+            if (!isSameAddress(expectedWallet, getStoredWallet())) throw new Error('The wallet changed. Open the action again.');
+            return await multisigUI.review({ multisig, callHex: tx.method.toHex(), onSuccess });
+        } catch (e) { return fail(e.message); }
+    }
+    const w = await resolveWalletSigner(fail, signingAccount);
     if (!w) return;
+    if (!isSameAddress(expectedWallet, getStoredWallet())) return fail('The wallet changed. Open the action again.');
     const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: stage, show: showTxStatus });
     run.start();
     try {
@@ -12806,6 +12851,7 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         // builder to read chain state (elections.candidates) at signing time,
         // and an un-awaited async builder would hand signAndSend a Promise.
         const tx = await buildTx(globalApi);
+        if (!isSameAddress(expectedWallet, getStoredWallet())) throw new Error('The wallet changed. Open the action again.');
         await run.send(tx, w.account.address, w.signer);   // never throws; reports its own errors
     } catch (e) {
         // Only buildTx gets here: the explorer's own guard (the keep-alive
@@ -13496,13 +13542,10 @@ function secondPublicProposal(idx, seconds) {
 //   (delegate, type, delay)`; remove via `proxy.removeProxy`. Proxy types
 //   come from /api/proxy-types (read off chain metadata).
 //
-//   Multisig. v1 ships read-only:
-//     - Address calculator. Given a list of signers + threshold, derives
-//       the deterministic multisig address client-side via createKeyMulti.
-//     - Pending approvals viewer. Renders entries from
-//       /api/multisigs/<addr> so a depositor can see what's outstanding.
-//   Approve / cancel signing flows are v2 (need timepoint/threshold
-//   tracking and call-decode UX).
+//   Multisig definitions are imported in the account picker and kept locally.
+//   lib/multisig-view.js reviews calls and selects an individual signer;
+//   lib/multisig.js derives the account and builds from live approval state.
+//   Unregistered addresses keep the calculator and read-only pending viewer.
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function renderWalletAdvancedSection(address, isOwnWallet) {
@@ -13541,7 +13584,7 @@ async function renderWalletAdvancedSection(address, isOwnWallet) {
     renderProxyList(address, isOwnWallet);
     if (isOwnWallet) renderAddProxyForm(address);
     renderMultisigCalculator();
-    renderMultisigPending(address);
+    if (!multisigStore.find(address)) renderMultisigPending(address);
 }
 
 // ── Proxies ─────────────────────────────────────────────────────────────────
@@ -13734,7 +13777,7 @@ async function renderMultisigPending(address) {
                         <td style="padding:8px 4px;text-align:right;font-size:0.78rem;color:var(--text-secondary);">${p.when ? `block ${stakingFormatNumber(p.when.height)}` : '—'}</td>
                     </tr>`).join('')}</tbody>
                 </table></div>
-                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:8px;">Approve / cancel signing is coming in a future update — for now, sign via Polkadot.js Apps with the call hash above.</div>`
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;">To approve, execute or cancel, use Switch wallet → Add an existing multisig and enter its full signer list and threshold.</div>`
             }`;
     } catch (e) {
         if (e && e.status === 501) {
