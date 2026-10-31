@@ -827,6 +827,7 @@ function adoptChainApi(api) {
         if (typeof refreshWithdrawableUnbonded === 'function'
             && currentWalletData && currentWalletData.address) {
             refreshWithdrawableUnbonded(currentWalletData.address);
+            refreshWalletMultisigs();
         }
     } catch (e) { /* best effort — the dashboard is already usable */ }
 }
@@ -7940,7 +7941,7 @@ const multisigStore = createMultisigStore(localStorage);
 const multisigUI = createMultisigUI({
     store: multisigStore, storage: localStorage, api: () => globalApi,
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
-    submit: submitSignedTx,
+    submit: submitSignedTx, fetchJson: fetchApiJson,
     refresh: address => {
         if (isSameAddress(getStoredWallet(), address) && isWalletRoute(readRouteFromLocation())) fetchWalletDashboard(address);
     }
@@ -8865,7 +8866,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     // every time the user clicks a different period.
     walletAprData = rewardsPayload || null;
     const isOwnWallet = isSameAddress(getStoredWallet(), data.address);
-    const identity = data.identity && data.identity !== 'Unknown' ? data.identity : null;
+    const identity = data.identity && data.identity !== 'Unknown' ? data.identity : multisigStore.find(data.address)?.name;
     const staking = data.staking || {};
     const rewards = data.rewards || {};
     const network = data.network || {};
@@ -8950,6 +8951,8 @@ function renderWalletDashboard(data, price, rewardsPayload) {
                 </button>
             </div>` : buildViewOnlyCallout()}
         </div>` : ''}
+
+        <div id="wallet-multisig-slot"></div>
 
         <div class="wallet-grid">
             <div class="list-container glass">
@@ -9092,19 +9095,22 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     // state, and the multisig calculator works without an active session.
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
-    const multisig = multisigStore.find(data.address);
-    if (multisig) {
-        const slot = document.createElement('div');
-        slot.className = 'list-container glass';
-        root.prepend(slot);
-        multisigUI.mountPending(slot, multisig);
-    }
+    refreshWalletMultisigs();
     // Average APR card — runs after the rest of the dashboard so the
     // ranked widget order on slow connections is: balance/staking →
     // validators/recent → APR. The renderer reads `walletAprData`
     // populated by fetchWalletDashboard and tolerates a null payload
     // (renders an unavailable state).
     renderWalletAprCard();
+}
+
+function refreshWalletMultisigs() {
+    const slot = document.getElementById('wallet-multisig-slot');
+    const address = currentWalletData?.address;
+    if (!slot || !address || !isSameAddress(getStoredWallet(), address)) return;
+    const multisig = multisigStore.find(address);
+    if (multisig) multisigUI.mountPending(slot, multisig);
+    else multisigUI.mountAccounts(slot, { address, relatedOnly: true });
 }
 
 // Wire up the four wallet action buttons. Idempotent — re-binding after a
