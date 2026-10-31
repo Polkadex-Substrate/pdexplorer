@@ -4584,6 +4584,11 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .multisig-panel p, .multisig-dialog p { color: var(--text-secondary); font-size: .85rem; line-height: 1.6; margin: 12px 0; overflow-wrap: anywhere; }
 .multisig-panel summary { cursor: pointer; padding: 12px 0; color: var(--brand-secondary); }
 .multisig-saved-list { display: grid; gap: 10px; margin: 12px 0; }
+.multisig-saved-list .wallet-account-addr { overflow-wrap: anywhere; white-space: normal; }
+.multisig-discovery-status, .multisig-steps { color: var(--text-secondary); font-size: .85rem; line-height: 1.6; }
+.multisig-panel .multisig-discovery-note { padding: 12px 16px; border-left: 3px solid var(--brand-secondary); background: var(--bg-primary); }
+.multisig-steps { padding-left: 22px; }
+.multisig-steps li { margin: 10px 0; }
 .multisig-import, .multisig-dialog label { display: grid; gap: 12px; }
 .multisig-import label { display: grid; gap: 6px; }
 .multisig-panel input, .multisig-panel textarea, .multisig-dialog select, .multisig-dialog textarea { width: 100%; box-sizing: border-box; padding: 10px; background: var(--bg-primary, #11121a); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font: inherit; }
