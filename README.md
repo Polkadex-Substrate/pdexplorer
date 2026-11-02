@@ -1286,6 +1286,11 @@ docker compose exec backend sqlite3 /app/data/explorer.db \
 
 ## Contributing
 
+All behavior changes use **strict test-driven development**: write and observe a
+failing test, implement the smallest passing change, then refactor with tests
+passing. Follow the [development workflow](./AGENTS.md) and include red/green
+evidence with your change.
+
 PRs welcome. Local dev:
 
 ```bash
@@ -1300,6 +1305,7 @@ The frontend has no build step in dev — Vite serves `script.js` directly with 
 
 Before submitting:
 
+- `npm test` — full unit, integration, and contract suite
 - `node --check server.js && node --check db.js` — no syntax errors
 - `npm run build` — frontend builds cleanly
 - If you touch the indexer, prefer extending the existing forward / backfill / gap-fill pattern in `syncChainIndex` rather than adding a separate crawler
