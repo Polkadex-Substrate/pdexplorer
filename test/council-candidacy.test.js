@@ -8,6 +8,7 @@ import { mockProvider } from './helpers/mock-provider.js';
 import { councilRole, readCouncilCandidacy, buildCouncilWithdrawal } from '../lib/council-candidacy.js';
 import { createCouncilCandidacyUI } from '../lib/council-candidacy-view.js';
 import { successCopy, buildTxModel, decodeDispatchError } from '../lib/tx-status.js';
+import { trackSignedTx } from '../lib/tx-submit.js';
 
 const address = (n, prefix = 88) => encodeAddress(new Uint8Array(32).fill(n), prefix);
 const A = address(1), B = address(2);
@@ -133,6 +134,7 @@ function uiWorld(role = 'Candidate', multisig = false) {
     const nodes = new Map([...html.matchAll(/id="((?:council-withdraw|close-council-withdraw|cancel-council-withdraw)[^"]*)"/g)].map(([, id]) => [id, {
         style: {}, textContent: '', innerHTML: '', disabled: false, checked: false, handlers: {},
         addEventListener(type, fn) { this.handlers[type] = fn; }, focus() {},
+        setAttribute() {}, removeAttribute() {},
         async fire(type = 'click') { await this.handlers[type]?.({ target: this }); }
     }]));
     const get = id => nodes.get(id);
@@ -155,6 +157,8 @@ test('a member must acknowledge immediate seat resignation before submitting', a
     assert.equal(w.get('council-withdraw-sign').disabled, false);
     await w.get('council-withdraw-sign').fire();
     assert.deepEqual(w.built, ['Member']);
+    assert.equal(w.get('council-withdraw-ack').disabled, true, 'confirmation is locked once the call is handed to the wallet');
+    assert.equal(w.get('cancel-council-withdraw').textContent, 'Close');
     assert.equal(w.submitted[0].expectedWallet, A);
     assert.equal(w.submitted[0].action.key, 'elections.withdraw');
 });
@@ -198,6 +202,43 @@ test('wallet changes while constructing the call prevent sending; failures requi
     assert.equal(w.get('council-withdraw-sign').disabled, true);
 });
 
+test('clearing the seat confirmation during the final read prevents signing', async () => {
+    const w = uiWorld('Member'); await w.ui.open();
+    w.get('council-withdraw-ack').checked = true;
+    let release, signed = 0;
+    w.beforeRead(() => new Promise(resolve => { release = resolve; }));
+    w.submitWith(async opts => { await opts.buildTx(w.api); signed++; });
+    const sending = w.get('council-withdraw-sign').fire();
+    await new Promise(resolve => setImmediate(resolve));
+    w.get('council-withdraw-ack').checked = false;
+    await w.get('council-withdraw-ack').fire('change');
+    release(); await sending;
+    assert.equal(signed, 0, 'cleared confirmation must not reach the signer');
+    assert.match(w.get('council-withdraw-error').textContent, /confirmation.*cleared/i);
+});
+
+test('a late failure from the real transaction tracker cannot enable a closed or reopened review', async () => {
+    for (const reopen of [false, true]) {
+        const w = uiWorld(); await w.ui.open();
+        let release, built = false;
+        w.beforeRead(() => new Promise(resolve => { release = resolve; }));
+        w.submitWith(async opts => {
+            const tracker = trackSignedTx({ ...opts, api: w.api, show: buildTxModel });
+            tracker.start();
+            try { await opts.buildTx(w.api); built = true; }
+            catch (e) { tracker.buildFailed(e); }
+        });
+        const sending = w.get('council-withdraw-sign').fire();
+        await new Promise(resolve => setImmediate(resolve));
+        w.ui.close();
+        if (reopen) await w.ui.open();
+        release(); await sending;
+        assert.equal(built, false, 'the closed review must fail before handing a call to the wallet');
+        assert.equal(w.get('council-withdraw-sign').disabled, true);
+        if (reopen) assert.doesNotMatch(w.get('council-withdraw-effect').textContent, /already in progress/);
+    }
+});
+
 test('normal success refreshes council data; multisig proposals wait for actual execution', async () => {
     const single = uiWorld(); await single.ui.open();
     single.submitWith(async opts => { await opts.buildTx(single.api); opts.onStage('finalized'); opts.onSuccess(); });
@@ -220,5 +261,7 @@ test('withdrawal status describes the actual role and explains runtime rejection
     for (const section of ['elections', 'electionsPhragmen', 'phragmenElection']) {
         const error = decodeDispatchError({ isModule: true, asModule: {} }, { findMetaError: () => ({ section, name: 'InvalidRenouncing', docs: [] }) });
         assert.match(error.text, /no longer has the council role/);
+        const witness = decodeDispatchError({ isModule: true, asModule: {} }, { findMetaError: () => ({ section, name: 'InvalidWitnessData', docs: [] }) });
+        assert.match(witness.text, /multisig needs a new proposal/);
     }
 });
