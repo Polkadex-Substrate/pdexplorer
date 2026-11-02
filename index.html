@@ -481,8 +481,9 @@
                 <div class="list-container glass">
                     <div class="list-header" style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 0; border-bottom: none;">
                         <h2>Council</h2>
-                        <div style="display: flex; gap: 10px;">
+                        <div class="council-header-actions" style="display: flex; gap: 10px; flex-wrap: wrap;">
                             <button id="council-submit-candidacy-btn" class="glass" style="padding: 8px 16px; border: 1px solid var(--border-color); background: rgba(255,255,255,0.05); color: var(--text-primary); cursor: pointer; border-radius: var(--radius-sm); transition: var(--transition-fast);">Submit Candidacy</button>
+                            <button id="council-withdraw-btn" class="glass council-withdraw-button" type="button">Withdraw candidacy</button>
                             <button id="council-vote-btn" class="glass" style="padding: 8px 16px; border: 1px solid var(--brand-primary); background: rgba(229, 39, 137, 0.1); color: var(--brand-primary); cursor: pointer; border-radius: var(--radius-sm); transition: var(--transition-fast); font-weight: 600;">Vote</button>
                         </div>
                     </div>
@@ -605,6 +606,27 @@
             </div>
 
             <!-- Modals (Hidden by default) -->
+            <div id="council-withdraw-modal" class="modal council-withdraw-modal" role="dialog" aria-modal="true" aria-labelledby="council-withdraw-title" style="display:none;">
+                <div class="glass council-withdraw-dialog">
+                    <button id="close-council-withdraw" data-modal-close class="council-withdraw-close" aria-label="Close" type="button"><i class='bx bx-x'></i></button>
+                    <h3 id="council-withdraw-title">Withdraw candidacy</h3>
+                    <p>Selected account</p>
+                    <div id="council-withdraw-address" class="council-withdraw-address"></div>
+                    <p id="council-withdraw-effect" role="status"></p>
+                    <div id="council-withdraw-connect"></div>
+                    <div id="council-withdraw-review" style="display:none;">
+                        <p>Your candidacy bond is released when the withdrawal succeeds. Your existing votes and voting locks are unchanged. A transaction fee applies.</p>
+                        <p id="council-withdraw-multisig" style="display:none;">This multisig withdraws only after enough signers approve and the transaction executes. If an election or the candidate list changes before execution, you may need to propose the withdrawal again.</p>
+                        <label id="council-withdraw-ack-label" class="council-withdraw-ack" style="display:none;"><input id="council-withdraw-ack" type="checkbox">I understand that this gives up my council seat immediately when executed.</label>
+                    </div>
+                    <div id="council-withdraw-error" class="staking-error" role="alert"></div>
+                    <div class="council-withdraw-actions">
+                        <button id="council-withdraw-retry" class="staking-download-btn" type="button">Refresh review</button>
+                        <button id="cancel-council-withdraw" class="staking-download-btn" type="button">Cancel</button>
+                        <button id="council-withdraw-sign" class="staking-download-btn" type="button" disabled>Sign &amp; withdraw candidacy</button>
+                    </div>
+                </div>
+            </div>
             <div id="council-candidacy-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
                 <div class="glass" style="width: 100%; max-width: 500px; padding: 30px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
                     <button id="close-candidacy-modal" data-modal-close aria-label="Close" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;"><i class='bx bx-x'></i></button>

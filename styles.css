@@ -4578,6 +4578,21 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .gd-facts .gd-fact strong { text-align: left; }
 }
 .gd-facts.wallet-stat-list { padding: 0; margin-top: 14px; }
+/* Council candidacy withdrawal review. */
+.council-withdraw-button { padding: 8px 16px; border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; border-radius: var(--radius-sm); }
+.council-withdraw-modal { position: fixed; inset: 0; z-index: 1000; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.8); backdrop-filter: blur(5px); }
+.council-withdraw-dialog { position: relative; width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; padding: 30px; border-radius: var(--radius-lg); }
+.council-withdraw-dialog h3 { padding-right: 28px; }
+.council-withdraw-dialog p { margin: 16px 0; color: var(--text-secondary); font-size: .9rem; line-height: 1.6; }
+.council-withdraw-address { overflow-wrap: anywhere; font-family: monospace; font-size: .85rem; }
+.council-withdraw-ack { gap: 10px; align-items: flex-start; margin: 16px 0; font-size: .9rem; line-height: 1.5; }
+.council-withdraw-ack input { margin-top: 4px; flex-shrink: 0; }
+.council-withdraw-close { position: absolute; top: 18px; right: 18px; border: none; background: none; color: var(--text-secondary); font-size: 24px; cursor: pointer; }
+.council-withdraw-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.council-withdraw-actions button:disabled { opacity: .5; cursor: not-allowed; }
+#council-withdraw-error:empty { display: none; }
+@media (max-width: 600px) { .council-page > .list-container > .list-header { flex-wrap: wrap; gap: 12px; } }
+
 /* Multisig account import and transaction review. */
 .multisig-panel { padding: 20px; margin: 16px 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
 .multisig-panel h3, .multisig-panel h4, .multisig-dialog h4 { margin: 12px 0; }

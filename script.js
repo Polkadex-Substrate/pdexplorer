@@ -53,6 +53,7 @@ import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHt
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
+import { createCouncilCandidacyUI } from './lib/council-candidacy-view.js';
 import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
@@ -7946,6 +7947,11 @@ const multisigUI = createMultisigUI({
         if (isSameAddress(getStoredWallet(), address) && isWalletRoute(readRouteFromLocation())) fetchWalletDashboard(address);
     }
 });
+const councilCandidacyUI = createCouncilCandidacyUI({
+    api: () => globalApi, selected: getStoredWallet,
+    isMultisig: address => !!multisigStore.find(address), submit: submitSignedTx,
+    refresh: () => fetchCouncilData({ fresh: true }), connectPrompt: buildWalletConnectPrompt
+});
 let walletMenu = null;   // the header My Account menu, wired once at the bottom of this file
 
 // The connected address just changed (switch, disconnect, or another tab).
@@ -7954,6 +7960,7 @@ let walletMenu = null;   // the header My Account menu, wired once at the bottom
 // Wallet routes are re-entered by their own navigation, so they are skipped.
 function isWalletRoute(r) { return /^(wallet|stake|staking)(\/|$)/.test(r || ''); }
 function onWalletChanged() {
+    councilCandidacyUI.accountChanged();
     walletActionsBlockedReason = null; currentWalletData = null; walletEntryIntent = null;
     if (_walletSigningRecheckTimer) { clearTimeout(_walletSigningRecheckTimer); _walletSigningRecheckTimer = null; }
     invalidateWalletFetch();
@@ -11650,6 +11657,7 @@ async function fetchCouncilData(opts) {
         if (data.error) throw new Error(data.error);
         if (data.pallet) councilPalletName = data.pallet;
         councilData = data;
+        councilCandidacyUI.refreshActions(data);
 
         const members = Array.isArray(data.members) ? data.members : [];
         const runnersUp = Array.isArray(data.runnersUp) ? data.runnersUp : [];
