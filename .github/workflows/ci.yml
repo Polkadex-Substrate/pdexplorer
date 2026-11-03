@@ -6,9 +6,8 @@
 # `deploy.sh` builds and restarts; nothing forces `npm test` to have passed
 # first. A suite nobody is obliged to run is documentation, not a gate.
 #
-# This is that gate. It is deliberately small and dependency-free: the tests use
-# node:test and node:sqlite from the standard library, so there is nothing to
-# install beyond the lockfile and nothing to keep current.
+# This is that gate. Tests use node:test and node:sqlite; responsive DOM/CSS
+# checks use Happy DOM. All dependencies are installed from the lockfile.
 name: CI
 
 on:
