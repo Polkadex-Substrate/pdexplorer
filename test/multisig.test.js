@@ -201,3 +201,28 @@ test('the multisig review dialog is modal, like the council dialog', () => {
     assert.match(tag, /aria-modal="true"/);
     assert.doesNotMatch(tag, /aria-modal="false"/);
 });
+
+test('an execute-kind call with no multisig event at all does not say "executed"', () => {
+    const m = modelFor('execute', []);
+    assert.doesNotMatch(m.title + m.body, /executed/i);
+    assert.match(m.title + m.body, /no multisig event found/i);
+});
+
+test('max_weight is capped by the normal-class maxExtrinsic when present, else maxBlock', async () => {
+    const num = (v) => ({ toString: () => String(v) });
+    const w5 = (r, p) => ({ refTime: num(r), proofSize: num(p) });
+    const maxWeightFor = async (blockWeights) => {
+        const w = world();
+        w.api.consts.system = { blockWeights };
+        w.setPending([A]);
+        const p = await w.prepare(B, { mode: 'approve' });
+        const mw = p.tx.method.args[4];
+        return { refTime: mw.refTime.toString(), proofSize: mw.proofSize.toString() };
+    };
+    const some = (v) => ({ isSome: true, isNone: false, unwrap: () => v });
+    const none = { isSome: false, isNone: true };
+    const maxBlock = w5('999999999999', '999999999999');
+    assert.deepEqual(await maxWeightFor({ maxBlock, perClass: { normal: { maxExtrinsic: some(w5('105000', '270')) } } }), { refTime: '105000', proofSize: '270' });
+    assert.deepEqual(await maxWeightFor({ maxBlock, perClass: { normal: { maxExtrinsic: none } } }), { refTime: '110000', proofSize: '282' });
+    assert.deepEqual(await maxWeightFor({ maxBlock: w5('105000', '270') }), { refTime: '105000', proofSize: '270' });
+});
