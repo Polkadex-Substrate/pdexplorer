@@ -208,6 +208,28 @@ test('an execute-kind call with no multisig event at all does not say "executed"
     assert.match(m.title + m.body, /no multisig event found/i);
 });
 
+const modelWith = (params, events) => buildTxModel({ key: 'multisig.transaction', params }, 'inBlock',
+    [...events, { event: { section: 'system', method: 'ExtrinsicSuccess', data: [] } }], null, { registry: chain.registry });
+
+test('threshold 1 (as_multi_threshold_1) with no multisig event and a successful extrinsic says executed', () => {
+    for (const threshold of [1, '1']) {
+        const m = modelWith({ kind: 'execute', threshold }, []);
+        assert.match(m.title, /executed/i);
+        assert.doesNotMatch(m.title + m.body, /no multisig event found/i);
+    }
+});
+
+test('threshold above 1 with no multisig event keeps the neutral message', () => {
+    const m = modelWith({ kind: 'execute', threshold: 2 }, []);
+    assert.match(m.title + m.body, /no multisig event found/i);
+    assert.doesNotMatch(m.title + m.body, /executed/i);
+});
+
+test('the review passes the approved multisig threshold into the status params', () => {
+    const src = readFileSync(new URL('../lib/multisig-view.js', import.meta.url), 'utf8');
+    assert.match(src, /params:\s*\{[^}]*threshold:\s*approvedReview\.multisig\.threshold/);
+});
+
 test('max_weight is capped by the normal-class maxExtrinsic when present, else maxBlock', async () => {
     const num = (v) => ({ toString: () => String(v) });
     const w5 = (r, p) => ({ refTime: num(r), proofSize: num(p) });
