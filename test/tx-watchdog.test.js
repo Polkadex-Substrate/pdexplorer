@@ -107,12 +107,30 @@ describe('buildTxModel: the confirmed, processed and silent-wallet cards', () =>
     const action = { id: 'w1', key: 'elections.withdraw', params: { role: 'Member' } };
 
     test('confirmed on chain uses the success copy, green, with the account link', () => {
-        const m = T.buildTxModel(action, 'confirmed', null, null, { txHash: HASH, address: ADDR });
+        const m = T.buildTxModel({ id: 'g1', key: 'system.remark', params: {} }, 'confirmed', null, null, { txHash: HASH, address: ADDR });
         assert.equal(m.stage, 'confirmed');
         assert.equal(m.tone, 'ok');
-        assert.equal(m.title, 'Council seat relinquished');
         assert.equal(m.stageText, 'Confirmed on chain');
         assert.ok(m.links.some(l => l.href === `/account/${ADDR}`));
+    });
+
+    // Fable review: the withdrawal check only sees that the seat is gone. An
+    // election can remove it while the withdrawal sits in the pool, so the card
+    // must not claim this transaction did it.
+    test('a council seat gone while the withdrawal was pending says it is no longer held, not "Confirmed"', () => {
+        const m = T.buildTxModel(action, 'confirmed', null, null, { txHash: HASH, address: ADDR });
+        assert.equal(m.stage, 'confirmed');
+        assert.equal(m.title, 'Your seat is no longer held (withdrawn or lost at an election)');
+        assert.doesNotMatch(m.stageText, /confirmed/i);
+        assert.doesNotMatch(m.title + ' ' + m.body, /relinquished/i);
+        assert.match(m.body, /election/i);
+        assert.ok(m.links.some(l => l.href === `/account/${ADDR}`));
+        for (const role of ['Candidate', 'RunnerUp']) {
+            const c = T.buildTxModel({ ...action, params: { role } }, 'confirmed', null, null, { address: ADDR });
+            assert.match(c.title, /no longer held/);
+            assert.match(c.title, /election/);
+            assert.doesNotMatch(c.stageText, /confirmed/i);
+        }
     });
 
     test('processed is neutral, says the result is not confirmed and links the account', () => {
@@ -146,8 +164,12 @@ function harness(opts = {}) {
         off: (e, f) => { listeners[e] = (listeners[e] || []).filter(x => x !== f); },
         rpc: {
             chain: { getHeader: () => Promise.resolve({ number: { toNumber: () => 42 } }) },
-            system: { accountNextIndex: opts.accountNextIndex || (async () => ({ toNumber: () => nonce })) }
-        }
+            // The pool-aware next index: counts transactions still waiting in
+            // the pool, so it must never decide "processed" (Fable review).
+            system: { accountNextIndex: async () => ({ toNumber: () => opts.poolNextIndex ?? nonce }) }
+        },
+        // The on-chain nonce: what the watchdog compares with the signed nonce.
+        query: { system: { account: opts.account || (async () => ({ nonce: { toNumber: () => nonce }, data: null })) } }
     };
     const shown = [];
     const show = opts.show || ((a, s, ev, err, ex) => { const m = T.buildTxModel(a, s, ev, err, ex); shown.push(m); return m; });
@@ -188,6 +210,7 @@ describe('the tracker never leaves a silent broadcast spinning', () => {
         h.setVerdict('applied');
         await tick(T.WATCHDOG_MS);
         assert.equal(h.last().stage, 'confirmed');
+        assert.match(h.last().title, /no longer held/);
         assert.equal(h.calls.onSuccess, 1);
         assert.deepEqual(h.calls.onError, []);
         assert.equal(h.button.disabled, false);
@@ -210,6 +233,28 @@ describe('the tracker never leaves a silent broadcast spinning', () => {
         assert.equal(h.calls.onSuccess, 0);
         assert.deepEqual(h.calls.onError, []);
         assert.equal(h.button.disabled, false);
+    });
+
+    test('a transaction still in the pool is not "processed": the pool-aware next index is not the on-chain nonce', async () => {
+        // accountNextIndex already counts this transaction while it waits in
+        // the pool (8 > 7), but the chain has not processed it (nonce 7).
+        const h = harness({ noVerify: true, poolNextIndex: 8 });
+        h.run.start();
+        await h.run.send(h.tx, ADDR, {});
+        await h.emit(READY);
+        await tick(T.WATCHDOG_MS);
+        await tick(T.WATCHDOG_MS);
+        assert.notEqual(h.last().stage, 'processed', 'pool-pending was reported as processed');
+        assert.equal(h.button.disabled, true, 'still in the pool: keep watching');
+        h.setNonce(8);
+        await tick(T.WATCHDOG_MS);
+        assert.equal(h.last().stage, 'processed');
+    });
+
+    test('the watchdog reads the on-chain nonce, not rpc.system.accountNextIndex', () => {
+        const src = stripComments(readFileSync(new URL('../lib/tx-submit.js', import.meta.url), 'utf8'));
+        assert.doesNotMatch(src, /accountNextIndex/);
+        assert.match(src, /query\.system\.account/);
     });
 
     test('without an action check the nonce alone settles it', async () => {
@@ -247,7 +292,7 @@ describe('the tracker never leaves a silent broadcast spinning', () => {
     });
 
     test('a check that throws or hangs leaves it watching, and the 90 s cap still ends it', async () => {
-        const h = harness({ accountNextIndex: () => new Promise(() => {}) });
+        const h = harness({ account: () => new Promise(() => {}) });
         h.setVerdict(new Error('RPC down'));
         h.run.start();
         await h.run.send(h.tx, ADDR, {});
