@@ -4,7 +4,8 @@ import { ApiPromise } from '@polkadot/api';
 import { encodeAddress, decodeAddress, blake2AsHex } from '@polkadot/util-crypto';
 import metadata from '@polkadot/types-support/metadata/static-substrate';
 import { mockProvider } from './helpers/mock-provider.js';
-import { normalizeMultisig, createMultisigStore, MULTISIG_STORAGE_KEY, decodeMultisigCall, prepareMultisig, recoverMultisigCall } from '../lib/multisig.js';
+import { normalizeMultisig, createMultisigStore, MULTISIG_STORAGE_KEY, decodeMultisigCall, prepareMultisig, recoverMultisigCall, weightWithHeadroom } from '../lib/multisig.js';
+import { readFileSync } from 'node:fs';
 import { evaluateEvents, successCopy, buildTxModel } from '../lib/tx-status.js';
 
 const addr = (n, prefix = 88) => encodeAddress(new Uint8Array(32).fill(n), prefix);
@@ -75,7 +76,7 @@ test('2-of-3: first approval reserves a signer deposit; second signer executes t
     assert.deepEqual(final.tx.method.args[2].unwrap().toJSON(), { height: 25, index: 3 });
     assert.equal(final.tx.method.args[3].toHex(), w.callHex);
     assert.equal(final.deposit, '0');
-    assert.deepEqual(final.tx.method.args[4].toJSON(), { refTime: 100000, proofSize: 256 });
+    assert.deepEqual(final.tx.method.args[4].toJSON(), { refTime: 110000, proofSize: 282 }, 'estimate plus 10%, rounded up');
     const decoded = chain.registry.createType('Call', final.tx.method.toHex());
     assert.equal(decoded.args[3].args[1].toString(), '1000000000000');
 });
@@ -153,4 +154,50 @@ test('outer success never hides a failed multisig inner call; approvals have dis
     assert.equal(buildTxModel({ key: 'multisig.transaction', params: { kind: 'execute' } }, 'inBlock', events, null, { registry: chain.registry }).stage, 'failed');
     assert.match(successCopy('multisig.transaction', { kind: 'approve' }).body, /has not executed/);
     assert.match(successCopy('multisig.transaction', { kind: 'cancel' }).title, /cancelled/);
+});
+
+// Review follow-ups: success copy is decided by the events, not by the kind
+// of call that was built.
+const msEvent = (method, data = []) => ({ event: { section: 'multisig', method, data } });
+const okResult = { isErr: false, isOk: true };
+const modelFor = (kind, events) => buildTxModel({ key: 'multisig.transaction', params: { kind } }, 'inBlock',
+    [...events, { event: { section: 'system', method: 'ExtrinsicSuccess', data: [] } }], null, { registry: chain.registry });
+
+test('an execute-kind call that only recorded an approval says so, not "executed"', () => {
+    for (const method of ['NewMultisig', 'MultisigApproval']) {
+        const m = modelFor('execute', [msEvent(method, [B, {}, multisig.address, '0x00'])]);
+        assert.match(m.title, /approval recorded/i, method);
+        assert.doesNotMatch(m.title + m.body, /executed from/i, method);
+    }
+});
+
+test('MultisigExecuted with an ok result says executed', () => {
+    const m = modelFor('approve', [msEvent('MultisigExecuted', [B, {}, multisig.address, '0x00', okResult])]);
+    assert.match(m.title, /executed/i);
+});
+
+test('MultisigExecuted carrying a dispatch error says the call ran but failed, with the decoded error', () => {
+    const err = { isErr: true, asErr: { isBadOrigin: true } };
+    const m = modelFor('execute', [msEvent('MultisigExecuted', [B, {}, multisig.address, '0x00', err])]);
+    assert.equal(m.stage, 'failed');
+    assert.match(m.text, /multisig/i);
+    assert.match(m.text, /ran|executed/i);
+    assert.match(m.text, /failed/i);
+    assert.doesNotMatch(m.title, /executed$/i);
+});
+
+test('max_weight carries 10% headroom, rounded up, capped at the block maximum', () => {
+    assert.deepEqual(weightWithHeadroom({ refTime: '100000', proofSize: '256' }), { refTime: '110000', proofSize: '282' });
+    assert.deepEqual(weightWithHeadroom({ refTime: 1, proofSize: 0 }), { refTime: '2', proofSize: '0' });
+    const max = { refTime: '105000', proofSize: '1000' };
+    assert.deepEqual(weightWithHeadroom({ refTime: '100000', proofSize: '256' }, max), { refTime: '105000', proofSize: '282' });
+    assert.deepEqual(weightWithHeadroom({ refTime: '100000', proofSize: '256' }, { refTime: '999', proofSize: '1' }), { refTime: '999', proofSize: '1' }, 'the cap wins even when below the estimate');
+    assert.deepEqual(weightWithHeadroom({ refTime: '5000000000000', proofSize: '1' }), { refTime: '5500000000000', proofSize: '2' });
+});
+
+test('the multisig review dialog is modal, like the council dialog', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const tag = html.match(/<div id="multisig-review-modal"[^>]*>/)[0];
+    assert.match(tag, /aria-modal="true"/);
+    assert.doesNotMatch(tag, /aria-modal="false"/);
 });
