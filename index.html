@@ -614,11 +614,12 @@
                     <p id="council-withdraw-effect" role="status"></p>
                     <div id="council-withdraw-connect"></div>
                     <div id="council-withdraw-review" style="display:none;">
-                        <p>Your candidacy bond is released when the withdrawal succeeds. Your existing votes and voting locks are unchanged. A transaction fee applies.</p>
+                        <p>Your candidacy bond is released only after the withdrawal succeeds, so it cannot pay this transaction fee. The fee is paid from this account's free PDEX, above the minimum balance. Your existing votes and voting locks are unchanged.</p>
                         <p id="council-withdraw-multisig" style="display:none;">This multisig withdraws only after enough signers approve and the transaction executes. If an election or the candidate list changes before execution, you may need to propose the withdrawal again.</p>
                         <label id="council-withdraw-ack-label" class="council-withdraw-ack" style="display:none;"><input id="council-withdraw-ack" type="checkbox">I understand that this gives up my council seat immediately when executed.</label>
                     </div>
                     <div id="council-withdraw-error" class="staking-error" role="alert"></div>
+                    <button id="council-withdraw-copy-address" class="staking-download-btn" type="button" style="display:none;">Copy address</button>
                     <div class="council-withdraw-actions">
                         <button id="council-withdraw-retry" class="staking-download-btn" type="button">Refresh review</button>
                         <button id="cancel-council-withdraw" class="staking-download-btn" type="button">Cancel</button>

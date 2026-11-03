@@ -7951,7 +7951,9 @@ const councilCandidacyUI = createCouncilCandidacyUI({
     api: () => globalApi, selected: getStoredWallet,
     isMultisig: address => !!multisigStore.find(address), submit: submitSignedTx,
     refresh: () => fetchCouncilData({ fresh: true }), connectPrompt: buildWalletConnectPrompt,
-    recheck: recheckSignedTxs
+    recheck: recheckSignedTxs,
+    // The fee preflight's "Copy address" (lib/fee-preflight.js).
+    copyText: text => navigator.clipboard.writeText(text)
 });
 // An iPhone that was locked, or a wallet's in-app browser sent to the
 // background, suspends timers and can lose the transaction status
