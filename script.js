@@ -55,7 +55,7 @@ import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
 import { createCouncilCandidacyUI } from './lib/council-candidacy-view.js';
 import { buildSecondTx } from './lib/democracy-patch.js';
-import { trackSignedTx } from './lib/tx-submit.js';
+import { trackSignedTx, recheckSignedTxs } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
@@ -7950,8 +7950,18 @@ const multisigUI = createMultisigUI({
 const councilCandidacyUI = createCouncilCandidacyUI({
     api: () => globalApi, selected: getStoredWallet,
     isMultisig: address => !!multisigStore.find(address), submit: submitSignedTx,
-    refresh: () => fetchCouncilData({ fresh: true }), connectPrompt: buildWalletConnectPrompt
+    refresh: () => fetchCouncilData({ fresh: true }), connectPrompt: buildWalletConnectPrompt,
+    recheck: recheckSignedTxs,
+    // The fee preflight's "Copy address" (lib/fee-preflight.js).
+    copyText: text => navigator.clipboard.writeText(text)
 });
+// An iPhone that was locked, or a wallet's in-app browser sent to the
+// background, suspends timers and can lose the transaction status
+// subscription. On return, ask the chain about every transaction still in
+// flight instead of leaving its button on Broadcasting (lib/tx-submit.js).
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') recheckSignedTxs(); });
+window.addEventListener('pageshow', () => recheckSignedTxs());
+window.addEventListener('online', () => recheckSignedTxs());
 let walletMenu = null;   // the header My Account menu, wired once at the bottom of this file
 
 // The connected address just changed (switch, disconnect, or another tab).
@@ -12836,7 +12846,7 @@ async function resolveWalletSigner(fail, signingAccount = null) {
 // dropped link) is lib/tx-submit.js, tested in test/tx-submit.test.js.
 // onError(text, model) keeps the modals' inline error lines; onStage(stage,
 // model) drives the motion cards. No alert popup anywhere on this path.
-async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet() }) {
+async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, verify, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet() }) {
     const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
     const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
     const fail = (m) => {
@@ -12858,7 +12868,9 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
     const w = await resolveWalletSigner(fail, signingAccount);
     if (!w) return;
     if (!isSameAddress(expectedWallet, getStoredWallet())) return fail('The wallet changed. Open the action again.');
-    const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: stage, show: showTxStatus });
+    // verify: the action's own chain check, used only if the status updates
+    // stop (see lib/tx-submit.js); every action also gets the nonce check.
+    const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: stage, show: showTxStatus, verify });
     run.start();
     try {
         // `await` even though most builders are synchronous: F-056 needs one
