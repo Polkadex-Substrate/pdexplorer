@@ -478,16 +478,15 @@
 
             <!-- Council Page -->
             <div class="council-page page-section" data-page="council" style="display: none;">
-                <div class="list-container glass">
-                    <div class="list-header" style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 0; border-bottom: none;">
-                        <h2>Council</h2>
-                        <div class="council-header-actions" style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <button id="council-submit-candidacy-btn" class="glass" style="padding: 8px 16px; border: 1px solid var(--border-color); background: rgba(255,255,255,0.05); color: var(--text-primary); cursor: pointer; border-radius: var(--radius-sm); transition: var(--transition-fast);">Submit Candidacy</button>
-                            <button id="council-withdraw-btn" class="glass council-withdraw-button" type="button">Withdraw candidacy</button>
-                            <button id="council-vote-btn" class="glass" style="padding: 8px 16px; border: 1px solid var(--brand-primary); background: rgba(229, 39, 137, 0.1); color: var(--brand-primary); cursor: pointer; border-radius: var(--radius-sm); transition: var(--transition-fast); font-weight: 600;">Vote</button>
-                        </div>
+                <div class="list-header council-page-header">
+                    <h2>Council</h2>
+                    <div class="council-header-actions" role="group" aria-label="Council actions">
+                        <button id="council-submit-candidacy-btn" class="glass council-action-button" type="button">Submit Candidacy</button>
+                        <button id="council-withdraw-btn" class="glass council-action-button" type="button">Withdraw candidacy</button>
+                        <button id="council-vote-btn" class="glass council-action-button council-vote-button" type="button">Vote</button>
                     </div>
-                    
+                </div>
+                <div class="list-container glass">
                     <div class="account-tabs" style="margin: 0 24px;">
                         <button class="account-tab active" data-tab="council-members">Members</button>
                         <button class="account-tab" data-tab="council-motions">Motions</button>
