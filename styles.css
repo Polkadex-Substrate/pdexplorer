@@ -4661,3 +4661,26 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .multisig-dialog h2 { padding-right: 30px; margin-bottom: 16px; }
 .multisig-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: rgba(0,0,0,.3); font-size: .8rem; }
 .multisig-dialog button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* One close control for every inner page and dialog (lib/close-control.js).
+   Same X as the account and block pages; 44px touch target. */
+.close-control {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px; padding: 0;
+    background: none; border: none; border-radius: 999px;
+    color: var(--text-secondary); font-size: 24px; line-height: 1; cursor: pointer; font-family: inherit;
+    flex-shrink: 0;
+}
+.close-control:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
+.close-control:focus-visible { outline: 2px solid var(--brand-secondary, #00c4ff); outline-offset: 2px; }
+.close-control--dialog { position: absolute; top: 8px; right: 8px; }
+.close-control-row { display: flex; justify-content: flex-end; }
+/* Every dialog's X, including the older hand-written ones, reaches 44px. */
+.modal [data-modal-close], .modal .modal-close-btn, .modal button[aria-label="Close"], .modal button[aria-label^="Close "] {
+    min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center;
+}
+@media (pointer: coarse) {
+    .tx-card-close { min-width: 44px; min-height: 44px; }
+}
+.help-breadcrumb { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.help-breadcrumb .close-control { margin-left: auto; }

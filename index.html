@@ -838,7 +838,7 @@
             <!-- Stake / Nominate Modal -->
             <div id="stake-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
                 <div class="glass stake-modal-body">
-                    <button id="close-stake-modal" class="modal-close-btn"><i class='bx bx-x'></i></button>
+                    <button type="button" id="close-stake-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Stake &amp; Nominate <a href="/help/nominating" class="help-inline-icon" title="Learn about staking" aria-label="Help: nominating a validator"><i class='bx bx-help-circle'></i></a></h3>
                     <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Add to your bond and pick the validators you want to back. Your nomination set is replaced with whatever appears in the &ldquo;Selected&rdquo; box on submit.</p>
 
@@ -890,7 +890,7 @@
             <!-- Payout Rewards Modal -->
             <div id="payout-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
                 <div class="glass" style="width: 100%; max-width: 540px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-payout-modal" class="modal-close-btn"><i class='bx bx-x'></i></button>
+                    <button type="button" id="close-payout-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Pay Out Rewards <a href="/help/claiming-rewards" class="help-inline-icon" title="Learn about claiming rewards" aria-label="Help: claiming rewards"><i class='bx bx-help-circle'></i></a></h3>
                     <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Triggers <code>staking.payoutStakers</code> for every unclaimed (era, validator) pair in one batch. Anyone can trigger a payout; the rewards always go to the nominator's stash regardless of who signs.</p>
 
@@ -908,7 +908,7 @@
 
             <div id="multisig-review-modal" class="modal multisig-modal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="multisig-review-title">
                 <div class="glass multisig-dialog">
-                    <button type="button" id="close-multisig-review" class="modal-close-btn" aria-label="Close multisig review"><i class='bx bx-x'></i></button>
+                    <button type="button" id="close-multisig-review" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <h2 id="multisig-review-title">Review multisig transaction</h2>
                     <div id="multisig-review-content"></div>
                 </div>
@@ -917,7 +917,7 @@
             <!-- Send PDEX Modal -->
             <div id="send-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
                 <div class="glass" style="width: 100%; max-width: 540px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-send-modal" class="modal-close-btn"><i class='bx bx-x'></i></button>
+                    <button type="button" id="close-send-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Send PDEX <a href="/help/sending-pdex" class="help-inline-icon" title="Learn about sending PDEX" aria-label="Help: sending PDEX"><i class='bx bx-help-circle'></i></a></h3>
                     <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Transfer PDEX from the connected wallet to any Polkadex address. The transaction is signed and submitted by your wallet extension.</p>
 
@@ -953,7 +953,7 @@
             <!-- Unstake Modal -->
             <div id="unstake-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
                 <div class="glass" style="width: 100%; max-width: 500px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-unstake-modal" class="modal-close-btn"><i class='bx bx-x'></i></button>
+                    <button type="button" id="close-unstake-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Unstake (Unbond) <a href="/help/unstaking" class="help-inline-icon" title="Learn about unstaking" aria-label="Help: unstaking"><i class='bx bx-help-circle'></i></a></h3>
                     <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Begin unbonding the amount below. Funds stay locked for the unbonding period, then become withdrawable from your wallet extension.</p>
 
@@ -993,7 +993,7 @@
                  identity exists; clearing the identity returns the deposit. -->
             <div id="identity-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
                 <div class="glass" style="width: 100%; max-width: 620px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1); max-height: 92vh; overflow-y: auto;">
-                    <button id="close-identity-modal" class="modal-close-btn"><i class='bx bx-x'></i></button>
+                    <button type="button" id="close-identity-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 6px; font-size: 1.3rem;">On-chain identity <a href="/help/identity" class="help-inline-icon" title="Learn about on-chain identity" aria-label="Help: on-chain identity"><i class='bx bx-help-circle'></i></a></h3>
                     <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Register a display name and contact handles for this address. The data is stored on chain so other Polkadex apps see it too — not just this explorer. A small refundable deposit is locked while the identity exists.</p>
 

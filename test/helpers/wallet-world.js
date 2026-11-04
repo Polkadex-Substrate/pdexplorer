@@ -18,6 +18,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { encodeAddress, decodeAddress } from '@polkadot/util-crypto';
 import { bodyOf } from './source.js';
+import { closeControlHtml } from '../../lib/close-control.js';
 import { isValidPolkadexAddress } from '../../lib/wallet-safety.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../../lib/wallet-session.js';
 import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel } from '../../lib/wallet-picker.js';
@@ -159,7 +160,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         spaNavDepth: 0,
         stakingEscapeHtml: escapeHtml,
         stakingShortAddress: (a) => String(a).slice(0, 6) + '...' + String(a).slice(-4),
-        helpIcon: () => '', detectInjectedWalletEnv: () => ({ id: 'test', name: 'Test wallet' }), isMobileDevice: () => false,
+        helpIcon: () => '', closeControlHtml, detectInjectedWalletEnv: () => ({ id: 'test', name: 'Test wallet' }), isMobileDevice: () => false,
         renderMobileWalletCards: () => '', updateSeoMeta() {}, setRouteJsonLd() {}, buildWalletConnectJsonLd: () => ({}),
         safeReturnPath: () => null, safeRouteToken: () => '',
         readRouteFromLocation: () => (ctx.window.location.pathname || '/').replace(/^\/+/, '').replace(/\/+$/, '') || 'home',
