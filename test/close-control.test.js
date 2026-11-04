@@ -66,8 +66,8 @@ describe('where a page closes to', () => {
         assert.equal(govParentRoute(undefined), 'home');
     });
     test('history.back() when the SPA pushed an entry in this tab, the parent for deep links', () => {
-        assert.deepEqual(resolveClose(2, 'council'), { action: 'back', depth: 1 });
-        assert.deepEqual(resolveClose(1, 'council'), { action: 'back', depth: 0 });
+        assert.deepEqual(resolveClose(2, 'council'), { action: 'back', depth: 2 });   // popstate, not the close, takes the entry off
+        assert.deepEqual(resolveClose(1, 'council'), { action: 'back', depth: 1 });
         assert.deepEqual(resolveClose(0, 'council'), { action: 'navigate', to: 'council', depth: 0 });
     });
     test('an empty parent falls back to home and the depth never goes negative', () => {
@@ -77,7 +77,7 @@ describe('where a page closes to', () => {
     test('closeToParent performs the move and returns the new depth', () => {
         const calls = [];
         const deps = { back: () => calls.push('back'), navigate: (p) => calls.push('nav:' + p) };
-        assert.equal(closeToParent({ depth: 3, parent: 'democracy', ...deps }), 2);
+        assert.equal(closeToParent({ depth: 3, parent: 'democracy', ...deps }), 3);
         assert.equal(closeToParent({ depth: 0, parent: 'democracy', ...deps }), 0);
         assert.deepEqual(calls, ['back', 'nav:democracy']);
     });
@@ -149,14 +149,15 @@ function world({ depth = 0, confirmAnswer = true } = {}) {
         back: () => { log.back++; }, navigate: (p) => log.nav.push(p),
         confirmFn: (m) => { log.asked.push(m); return confirmAnswer; }
     });
-    return { log, ctl, area, page, dlg, dlgClose, dlgField, dlgSubmit, doc, hidden: () => hid };
+    const popstate = () => { log.depth = Math.max(0, log.depth - 1); };
+    return { popstate, log, ctl, area, page, dlg, dlgClose, dlgField, dlgSubmit, doc, hidden: () => hid };
 }
 
 describe('wired behaviour', () => {
     test('clicking a page control goes back when there is a previous SPA entry', () => {
         const w = world({ depth: 2 });
         const ev = w.ctl.click();
-        assert.equal(w.log.back, 1); assert.deepEqual(w.log.nav, []); assert.equal(w.log.depth, 1);
+        assert.equal(w.log.back, 1); assert.deepEqual(w.log.nav, []); assert.equal(w.log.depth, 2, 'popstate owns the decrement');
         assert.equal(ev.defaultPrevented, true);
     });
     test('a deep link (no previous entry) goes to the parent route', () => {
@@ -174,6 +175,67 @@ describe('wired behaviour', () => {
         left.area.dispatch('input');
         left.ctl.click();
         assert.deepEqual(left.log.nav, ['discussions']);
+    });
+    test('two pages deep: repeated X presses keep going back, one entry per press, then the parent', () => {
+        const w = world({ depth: 2 });
+        w.ctl.click(); w.popstate();
+        assert.equal(w.log.back, 1); assert.equal(w.log.depth, 1);
+        w.ctl.click(); w.popstate();
+        assert.equal(w.log.back, 2); assert.equal(w.log.depth, 0);
+        w.ctl.click();
+        assert.equal(w.log.back, 2); assert.deepEqual(w.log.nav, ['discussions']);
+    });
+    test('a second press before popstate arrives does not use up an entry that was never there', () => {
+        const w = world({ depth: 1 });
+        w.ctl.click(); w.ctl.click();
+        assert.equal(w.log.depth, 1, 'close alone never changes the count');
+    });
+    test('a busy button elsewhere on a FULL page does not bypass the draft prompt', () => {
+        const w = world({ confirmAnswer: false });
+        w.page.add(new El('button', { 'aria-busy': 'true' }));
+        w.area.dispatch('input');
+        w.ctl.click();
+        assert.equal(w.log.asked.length, 1);
+        assert.deepEqual(w.log.nav, []);
+    });
+    test('a search box is not a draft: no unsent-text prompt', () => {
+        const w = world();
+        const s = field('abc', { tag: 'input', type: 'search' });
+        w.page.add(s); s.dispatch('input');
+        w.area.value = '';
+        w.ctl.click();
+        assert.equal(w.log.asked.length, 0);
+        assert.deepEqual(w.log.nav, ['discussions']);
+    });
+    test('an in-app confirm (a promise) holds the close until answered; yes closes, no keeps the draft', async () => {
+        for (const [answer, closes] of [[true, true], [false, false]]) {
+            let resolve; const log = { nav: [], back: 0 };
+            const ctl = new El('button', { 'data-close-detail': 'home' });
+            const area = field('x');
+            const page = new El('div', { class: 'page-section' }, [ctl, area]);
+            const doc = makeDoc(page);
+            wireCloseControls(doc, { getDepth: () => 0, setDepth() {}, back() { log.back++; }, navigate: (p) => log.nav.push(p), confirmFn: () => new Promise(r => { resolve = r; }) });
+            area.dispatch('input');
+            const ev = ctl.click();
+            assert.equal(ev.defaultPrevented, true); assert.deepEqual(log.nav, []);
+            resolve(answer); await new Promise(r => setImmediate(r));
+            assert.deepEqual(log.nav, closes ? ['home'] : []);
+            assert.equal(isDirty(page), !closes, 'declining keeps the draft');
+        }
+    });
+    test('an async confirm on a dialog: yes re-runs the close, no leaves it open', async () => {
+        for (const [answer, hid] of [[true, 1], [false, 0]]) {
+            let resolve; let hidden = 0;
+            const x = new El('button', { 'data-modal-close': '' }); const f = field('1', { tag: 'input' });
+            const dlg = new El('div', { class: 'modal' }, [x, f]);
+            const doc = makeDoc(dlg);
+            x.addEventListener('click', () => { hidden++; });
+            wireCloseControls(doc, { getDepth: () => 0, setDepth() {}, back() {}, navigate() {}, confirmFn: () => new Promise(r => { resolve = r; }) });
+            f.dispatch('input'); x.click();
+            assert.equal(hidden, 0, 'held while asking');
+            resolve(answer); await new Promise(r => setImmediate(r));
+            assert.equal(hidden, hid);
+        }
     });
     test('text that was never typed by the user does not trigger a prompt', () => {
         const w = world();
@@ -318,6 +380,17 @@ describe('every inner page and dialog has the control', () => {
         assert.match(fn('renderHelpArticle('), /closeControlHtml\(\{ parent: 'help' \}\)/);
         assert.match(fn('renderHelpLanding('), /closeControlHtml\(\{ parent: 'home' \}\)/);
         assert.match(fn('emailPrefsCard('), /closeControlHtml\(\{ parent: 'home' \}\)/);
+    });
+    test('a reopened Send or Payout dialog never re-enables a Sign button that is mid-signature', () => {
+        assert.match(fn('updateSendSignGate('), /btn\.disabled\s*=\s*sendFeeEstimateFailed\s*\|\|\s*btn\.getAttribute\('aria-busy'\)\s*===\s*'true'/);
+        const open = fn('openPayoutModal(');
+        assert.match(open, /submitBtn\.disabled\s*=\s*submitBtn\.getAttribute\('aria-busy'\)\s*===\s*'true'/);
+        assert.ok(!/submitBtn\.disabled\s*=\s*false;/.test(open), 'no unconditional re-enable');
+    });
+    test('script.js asks through the in-app dialog, not window.confirm, and popstate owns the depth', () => {
+        assert.ok(!/window\.confirm/.test(code));
+        assert.match(code, /createConfirmDialog\(document\)/);
+        assert.match(code, /spaNavDepth = Math\.max\(0, spaNavDepth - 1\)/);
     });
     test('script.js routes everything through the shared module and stays under its ceiling', () => {
         assert.match(SCRIPT, /from '\.\/lib\/close-control\.js'/);
