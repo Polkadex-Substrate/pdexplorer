@@ -24,6 +24,7 @@ import { mergeRows, blockRank, txRank, txIdentity } from './lib/merge-rows.js';
 import { safeReturnPath } from './lib/safe-return.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
+import { createConfirmDialog } from './lib/confirm-dialog.js';
 import { closeControlHtml, closeToParent, wireCloseControls, onDialogKeydown, createFocusReturn, clearDrafts } from './lib/close-control.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, renderEarlierDiscussion, wireEditing } from './lib/discussion-edit.js';
@@ -3366,7 +3367,7 @@ function closeDetailView(fallbackPath) {
 wireCloseControls(document, {
     getDepth: () => spaNavDepth, setDepth: (d) => { spaNavDepth = d; },
     back: () => history.back(), navigate: (p) => navigateTo(p),
-    confirmFn: (m) => window.confirm(m)
+    confirmFn: createConfirmDialog(document)
 });
 
 // Centralised /api error rendering — recognises the RPC_NOT_READY transient
@@ -4406,6 +4407,7 @@ function bootSeoRouter() {
         // version only ever incrementing — the count could exceed the real
         // back-stack, and closeDetailView would call history.back() into
         // nothing again, which is the very no-op it was written to avoid.
+        // popstate alone owns the decrement (the close control no longer takes one).
         spaNavDepth = Math.max(0, spaNavDepth - 1);
         routeTo(readRouteFromLocation());
     });
@@ -9586,7 +9588,7 @@ function openPayoutModal() {
             <div><span class="payout-era">Era ${stakingFormatNumber(e.era)}</span> <a href="/validator/${encodeURIComponent(e.validator)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">${stakingShortAddress(e.validator)}</a></div>
             <div class="payout-amt">${stakingFormatPDEX(e.amount)} PDEX</div>
         </div>`).join('');
-        if (submitBtn) submitBtn.disabled = false;
+        if (submitBtn) submitBtn.disabled = submitBtn.getAttribute('aria-busy') === 'true';   // not while a signature is pending
         // F-055 close test: "the claim UI shows 'first 30 of N'". Shown here,
         // on open, so the user sees it while reading the count — not after
         // they have clicked Sign.
@@ -10210,7 +10212,8 @@ let sendFeeEstimateFailed = false; // F-116: true while paymentInfo is failing
 function updateSendSignGate() {
     const btn = document.getElementById('submit-send-tx-btn');
     if (!btn) return;
-    btn.disabled = sendFeeEstimateFailed;
+    // A reopened dialog must not re-enable a Sign button that is mid-signature.
+    btn.disabled = sendFeeEstimateFailed || btn.getAttribute('aria-busy') === 'true';
     btn.title = sendFeeEstimateFailed
         ? 'Fee estimation is failing — the node is not responding. Edit any field to retry.'
         : '';

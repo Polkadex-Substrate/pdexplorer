@@ -4684,3 +4684,12 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 }
 .help-breadcrumb { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .help-breadcrumb .close-control { margin-left: auto; }
+
+/* In-app confirm for unsent text (lib/confirm-dialog.js). Not a .modal on purpose. */
+.confirm-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6); padding: 16px; }
+.confirm-dialog { background: var(--bg-card, #1a1a1f); color: var(--text-primary); border: 1px solid var(--border-color, rgba(255,255,255,0.12)); border-radius: var(--radius-sm); padding: 20px; max-width: 400px; width: 100%; }
+.confirm-dialog h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.confirm-dialog p { margin: 0 0 16px; color: var(--text-secondary); font-size: 0.9rem; }
+.confirm-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.confirm-dialog-actions button { min-height: 44px; padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-color, rgba(255,255,255,0.2)); background: transparent; color: var(--text-primary); font: inherit; cursor: pointer; }
+.confirm-dialog-actions .confirm-dialog-danger { background: var(--brand-primary); border-color: transparent; color: #fff; }
