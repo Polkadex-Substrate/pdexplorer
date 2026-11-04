@@ -78,3 +78,56 @@ describe('the in-app confirm dialog', () => {
         assert.equal(await a, false); assert.equal(await b, false);
     });
 });
+
+describe('the confirm stacked over a .modal', () => {
+    // A stand-in for script.js wireModalAccessibility: a page-level keydown
+    // listener that traps Tab into the open .modal and closes it on Escape.
+    function stacked() {
+        const doc = fakeDoc();
+        const modal = doc.createElement('div'); modal.setAttribute('class', 'modal');
+        const field = doc.createElement('input'); modal.appendChild(field);
+        doc.body.appendChild(modal);
+        field.focus();
+        const log = { modalCloses: 0, trapped: 0 };
+        doc.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') { log.trapped++; e.preventDefault(); field.focus(); }
+            else if (e.key === 'Escape') log.modalCloses++;
+        });
+        const ask = createConfirmDialog(doc);
+        return { doc, modal, field, log, ask };
+    }
+    test('Tab inside the confirm never reaches the page-level trap and focus stays in the confirm', () => {
+        const { doc, field, log, ask } = stacked();
+        ask('x');
+        const dlg = doc.querySelector('[role="alertdialog"]');
+        const bs = dlg.querySelectorAll('button');
+        for (const [from, shift, to] of [[bs[1], false, bs[0]], [bs[0], true, bs[1]], [bs[0], false, bs[0]]]) {
+            from.focus();
+            const ev = dlg.dispatch('keydown', { key: 'Tab', shiftKey: shift });
+            assert.equal(ev.stopped, true);
+        }
+        assert.equal(log.trapped, 0, 'the modal trap must not see the confirm Tab');
+        assert.notEqual(doc.activeElement, field);
+        assert.ok(dlg.contains(doc.activeElement), 'focus is still inside the confirm');
+    });
+    test('Escape closes only the confirm; Discard then closes the dialog behind exactly once', async () => {
+        const { doc, log, ask } = stacked();
+        let discarded = 0;
+        const close = async () => { if (await ask('unsent')) discarded++; };
+        let p = close();
+        let dlg = doc.querySelector('[role="alertdialog"]');
+        dlg.dispatch('keydown', { key: 'Tab' });
+        dlg.dispatch('keydown', { key: 'Escape' });
+        await p;
+        assert.equal(doc.querySelector('[role="alertdialog"]'), null);
+        assert.equal(log.modalCloses, 0, 'Escape in the confirm does not also close the modal');
+        assert.equal(discarded, 0);
+        p = close();
+        dlg = doc.querySelector('[role="alertdialog"]');
+        dlg.dispatch('keydown', { key: 'Tab' });
+        dlg.querySelectorAll('button').find(b => b.attrs['data-confirm'] === 'confirm').click();
+        await p;
+        assert.equal(discarded, 1);
+        assert.equal(log.modalCloses, 0);
+    });
+});
