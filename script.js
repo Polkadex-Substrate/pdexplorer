@@ -24,6 +24,8 @@ import { mergeRows, blockRank, txRank, txIdentity } from './lib/merge-rows.js';
 import { safeReturnPath } from './lib/safe-return.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
+import { createConfirmDialog } from './lib/confirm-dialog.js';
+import { closeControlHtml, closeToParent, wireCloseControls, onDialogKeydown, createFocusReturn, clearDrafts } from './lib/close-control.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, renderEarlierDiscussion, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
@@ -3353,28 +3355,19 @@ async function parseJsonResponse(response) {
 // page — history.back() is a silent no-op and the X button does nothing. The
 // only reliable signal is one we write ourselves: spaNavDepth counts pushes
 // THIS tab's SPA session has made.
+// The page close itself (history.back() or the parent route) lives in
+// lib/close-control.js; this keeps the old name for callers like the price page.
 function closeDetailView(fallbackPath) {
-    if (spaNavDepth > 0) {
-        spaNavDepth = Math.max(0, spaNavDepth - 1);
-        history.back();
-    } else {
-        navigateTo(fallbackPath || 'home');
-    }
+    spaNavDepth = closeToParent({ depth: spaNavDepth, parent: fallbackPath, back: () => history.back(), navigate: navigateTo });
 }
 
-// Global click delegate that picks up every X-icon close button on the
-// detail pages. The detail-page templates emit
-//   <a href="#" data-close-detail="<fallback-route>">…X icon…</a>
-// — we catch the click here once at the document level, prevent the
-// default # navigation, and hand off to closeDetailView(). Centralising
-// this means new detail pages only need to add the data attribute on
-// their close button; no per-page wiring required.
-document.addEventListener('click', (e) => {
-    const trigger = e.target && e.target.closest ? e.target.closest('[data-close-detail]') : null;
-    if (!trigger) return;
-    e.preventDefault();
-    e.stopPropagation();
-    closeDetailView(trigger.getAttribute('data-close-detail'));
+// Every X on every inner page and dialog is wired here, once, behind the
+// discard guard: pages carry data-close-detail="<parent route>", dialogs the
+// close control Esc presses. See lib/close-control.js for the rules.
+wireCloseControls(document, {
+    getDepth: () => spaNavDepth, setDepth: (d) => { spaNavDepth = d; },
+    back: () => history.back(), navigate: (p) => navigateTo(p),
+    confirmFn: createConfirmDialog(document)
 });
 
 // Centralised /api error rendering — recognises the RPC_NOT_READY transient
@@ -3823,7 +3816,7 @@ function renderHelpLanding(searchQuery = '') {
     nav.innerHTML = sidebarHtml;
 
     // Landing card list
-    let landingHtml = `<header class="help-article-header">
+    let landingHtml = `<div class="close-control-row">${closeControlHtml({ parent: 'home' })}</div><header class="help-article-header">
         <h1>Help center</h1>
         <p class="help-lead">A practical, end-to-end guide to the Polkadex Mainnet Explorer.
         Pick a topic from the sidebar, or browse by category below. Use the search box
@@ -3896,6 +3889,7 @@ function renderHelpArticle(slug) {
 
     article.innerHTML = `<nav class="help-breadcrumb">
             <a href="/help" class="item-link">Help</a> / <span>${stakingEscapeHtml(topic.title)}</span>
+            ${closeControlHtml({ parent: 'help' })}
         </nav>
         <header class="help-article-header">
             <h1>${stakingEscapeHtml(topic.title)}</h1>
@@ -4413,6 +4407,7 @@ function bootSeoRouter() {
         // version only ever incrementing — the count could exceed the real
         // back-stack, and closeDetailView would call history.back() into
         // nothing again, which is the very no-op it was written to avoid.
+        // popstate alone owns the decrement (the close control no longer takes one).
         spaNavDepth = Math.max(0, spaNavDepth - 1);
         routeTo(readRouteFromLocation());
     });
@@ -7032,7 +7027,7 @@ const EMAIL_PREF_GROUPS = [
 let emailPrefsLoaded = null;
 
 function emailPrefsCard(inner) {
-    return `<div class="cs-hero"><h1>Email alert preferences</h1></div>
+    return `<div class="cs-hero"><div class="close-control-row">${closeControlHtml({ parent: 'home' })}</div><h1>Email alert preferences</h1></div>
             <div class="cs-panel glass" style="max-width:640px;">${inner}</div>`;
 }
 
@@ -8447,7 +8442,7 @@ async function renderWalletConnectPanel(root) {
     const current = getStoredWallet();
     root.innerHTML = `
         <div class="list-container glass">
-            <div class="list-header"><h2>${current ? 'Switch Wallet' : 'Connect Wallet'} ${helpIcon('connecting-wallet', 'How to connect your wallet')}</h2></div>
+            <div class="list-header"><h2>${current ? 'Switch Wallet' : 'Connect Wallet'} ${helpIcon('connecting-wallet', 'How to connect your wallet')}</h2>${closeControlHtml({ parent: 'home' })}</div>
             <div style="padding: 24px;">
                 ${buildCurrentBannerHtml({ current, currentSource: walletSession.source(), esc: stakingEscapeHtml, shortAddr: stakingShortAddress })}
                 ${envBanner}
@@ -9593,7 +9588,7 @@ function openPayoutModal() {
             <div><span class="payout-era">Era ${stakingFormatNumber(e.era)}</span> <a href="/validator/${encodeURIComponent(e.validator)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">${stakingShortAddress(e.validator)}</a></div>
             <div class="payout-amt">${stakingFormatPDEX(e.amount)} PDEX</div>
         </div>`).join('');
-        if (submitBtn) submitBtn.disabled = false;
+        if (submitBtn) submitBtn.disabled = submitBtn.getAttribute('aria-busy') === 'true';   // not while a signature is pending
         // F-055 close test: "the claim UI shows 'first 30 of N'". Shown here,
         // on open, so the user sees it while reading the count — not after
         // they have clicked Sign.
@@ -10217,7 +10212,8 @@ let sendFeeEstimateFailed = false; // F-116: true while paymentInfo is failing
 function updateSendSignGate() {
     const btn = document.getElementById('submit-send-tx-btn');
     if (!btn) return;
-    btn.disabled = sendFeeEstimateFailed;
+    // A reopened dialog must not re-enable a Sign button that is mid-signature.
+    btn.disabled = sendFeeEstimateFailed || btn.getAttribute('aria-busy') === 'true';
     btn.title = sendFeeEstimateFailed
         ? 'Fee estimation is failing — the node is not responding. Edit any field to retry.'
         : '';
@@ -10388,26 +10384,10 @@ function topmostOpenModal() {
     }, open[0]);
 }
 
-function closeModalElement(modal) {
-    if (!modal) return;
-    // `data-modal-close` is the explicit opt-in for a close control that does
-    // not use the standard class or label. The onboarding tour's button is
-    // labelled "Skip tour" — a review caught that without this hook Escape fell
-    // through to the raw display:none below, which skips closeOnboardingTour()
-    // and therefore never writes TOUR_STORAGE_KEY: the tour would reopen on
-    // every single page load.
-    const btn = modal.querySelector('[data-modal-close], .modal-close-btn, [aria-label="Close"]');
-    if (btn) {
-        btn.click();          // runs the modal's real teardown
-        return;
-    }
-    modal.style.display = 'none';   // last resort for a modal with no close control
-}
-
 // Remember who had focus before a modal opened so it can be handed back —
 // otherwise focus falls to <body> on close and a keyboard user restarts their
 // tab journey from the top of the page.
-let modalFocusReturnEl = null;
+const modalFocus = createFocusReturn(document);
 
 function wireModalAccessibility() {
     document.addEventListener('keydown', (e) => {
@@ -10416,8 +10396,7 @@ function wireModalAccessibility() {
         if (!modal) return;
 
         if (e.key === 'Escape') {
-            e.preventDefault();
-            closeModalElement(modal);
+            onDialogKeydown(e, modal);
             return;
         }
 
@@ -10460,11 +10439,11 @@ function wireModalAccessibility() {
     // A capturing mousedown/keydown listener sees the activeElement while it is
     // still the button the user is about to activate.
     document.addEventListener('mousedown', () => {
-        if (!topmostOpenModal()) modalFocusReturnEl = document.activeElement;
+        if (!topmostOpenModal()) modalFocus.remember(document.activeElement);
     }, true);
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
-            if (!topmostOpenModal()) modalFocusReturnEl = document.activeElement;
+            if (!topmostOpenModal()) modalFocus.remember(document.activeElement);
         }
     }, true);
 
@@ -10491,14 +10470,8 @@ function wireModalAccessibility() {
                 el.setAttribute('aria-modal', 'true');
             } else {
                 el.setAttribute('aria-modal', 'false');
-                if (modalFocusReturnEl && !topmostOpenModal()) {
-                    // Only restore if the element is still focusable — it may
-                    // have been re-rendered away while the modal was open.
-                    try {
-                        if (document.contains(modalFocusReturnEl)) modalFocusReturnEl.focus();
-                    } catch (_) {}
-                    modalFocusReturnEl = null;
-                }
+                clearDrafts(el);   // a dialog hidden by any path forgets what was typed
+                if (!topmostOpenModal()) modalFocus.restore();
             }
         }
     });
@@ -11018,6 +10991,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
             <div class="list-header">
                 <h2 style="display:flex;align-items:center;gap:10px;">${opts.embedded ? 'Discussion' : stakingEscapeHtml(thread.title || thread.id)} ${badge} ${helpIcon('discussions', 'Posting, editing and linking to comments')}</h2>
                 <a href="/discussions${opts.embedded ? '/' + encodeURIComponent(thread.id) : ''}" class="item-link" style="color:var(--text-secondary);font-size:0.8rem;">${opts.embedded ? 'Open as a thread page' : 'All discussions'}</a>
+                ${opts.embedded ? '' : closeControlHtml({ parent: 'discussions' })}
             </div>
             ${opts.embedded ? '' : renderLifecycleLinks(thread.links, stakingEscapeHtml)}
             ${earlierHtml}

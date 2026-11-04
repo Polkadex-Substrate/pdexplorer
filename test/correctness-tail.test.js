@@ -704,16 +704,13 @@ describe('F-126 — Escape and focus trap for every modal', () => {
 
     test('Escape and Tab are both handled', () => {
         assert.match(layer, /e\.key !== 'Escape' && e\.key !== 'Tab'/);
-        assert.match(layer, /closeModalElement\(modal\)/);
+        assert.match(layer, /onDialogKeydown\(e, modal\)/);   // lib/close-control.js
     });
 
     test('closing goes through the modal\'s own close control', () => {
         // Setting display:none directly would skip each modal's teardown —
         // trading an accessibility bug for a state-leak bug.
-        const closer = scriptSrc.slice(
-            scriptSrc.indexOf('function closeModalElement(modal)'),
-            scriptSrc.indexOf('function closeModalElement(modal)') + 1400
-        );
+        const closer = readFileSync(new URL('../lib/close-control.js', import.meta.url), 'utf8');
         assert.match(closer, /data-modal-close/);
         assert.match(closer, /modal-close-btn/);
         assert.match(closer, /btn\.click\(\)/);
@@ -733,15 +730,16 @@ describe('F-126 — Escape and focus trap for every modal', () => {
         // after the open function has already focused a field inside the modal,
         // so the "return here on close" element was itself inside the modal and
         // focusing it did nothing.
-        assert.match(layer, /addEventListener\('mousedown'[\s\S]{0,160}modalFocusReturnEl = document\.activeElement[\s\S]{0,40}\}, true\)/,
+        assert.match(layer, /addEventListener\('mousedown'[\s\S]{0,160}modalFocus\.remember\(document\.activeElement\)[\s\S]{0,40}\}, true\)/,
             'the opener must be captured on a capturing listener, not in the observer');
         const observerPart = layer.slice(layer.indexOf('new MutationObserver'));
-        assert.ok(!/modalFocusReturnEl = document\.activeElement/.test(observerPart),
+        assert.ok(!/modalFocus\.remember\(/.test(observerPart),
             'the capture is back inside the observer, where it is always too late');
     });
 
     test('focus is only restored to an element still in the document', () => {
-        assert.match(layer, /document\.contains\(modalFocusReturnEl\)/);
+        assert.match(layer, /modalFocus\.restore\(\)/);
+        assert.match(readFileSync(new URL('../lib/close-control.js', import.meta.url), 'utf8'), /doc\.contains\(el\)/);
     });
 
     test('there is exactly ONE MutationObserver, scoped to the static modals', () => {
@@ -765,7 +763,7 @@ describe('F-126 — Escape and focus trap for every modal', () => {
     });
 
     test('focus returns to the opener on close', () => {
-        assert.match(layer, /modalFocusReturnEl/);
+        assert.match(layer, /modalFocus\.restore\(\)/);
     });
 
     test('no per-modal Escape handler survives anywhere', () => {
@@ -787,7 +785,7 @@ describe('F-126 — Escape and focus trap for every modal', () => {
         // hook — otherwise Escape hides the modal without writing the
         // "seen it" flag and the tour reopens forever.
         assert.match(htmlSrc, /id="close-onboarding-tour-modal" data-modal-close/);
-        assert.match(scriptSrc, /querySelector\('\[data-modal-close\], \.modal-close-btn/);
+        assert.match(readFileSync(new URL('../lib/close-control.js', import.meta.url), 'utf8'), /'\[data-modal-close\], \.modal-close-btn/);
     });
 
     test('every .modal in index.html has a close control the layer can find', () => {

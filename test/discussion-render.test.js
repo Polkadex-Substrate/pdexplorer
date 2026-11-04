@@ -17,6 +17,7 @@ import * as links from '../lib/discussion-links.js';
 import * as lifecycle from '../lib/discussion-lifecycle.js';
 import * as composer from '../lib/discussion-composer.js';
 import { escapeHtml } from '../lib/html-escape.js';
+import { closeControlHtml } from '../lib/close-control.js';
 import { itemPathForThread } from '../lib/gov-detail.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 
@@ -50,7 +51,7 @@ async function openThread(body, signedInAs, viewOpts = {}) {
     const fetches = [];
     const errors = [];
     const env = {
-        ...edit, ...links, ...lifecycle, ...composer, canEditPost: edit.canEdit, itemPathForThread,
+        closeControlHtml, ...edit, ...links, ...lifecycle, ...composer, canEditPost: edit.canEdit, itemPathForThread,
         document: { getElementById: id => (id === 'discussions-content' ? root : null) },
         window: { location: { search: '', hash: '', origin: 'https://explorer.polkadex.ee' } },
         localStorage: { getItem: k => store.get(k) ?? null, removeItem: k => store.delete(k) },
