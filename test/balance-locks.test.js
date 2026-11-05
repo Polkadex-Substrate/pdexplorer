@@ -16,12 +16,12 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import {
-    balanceBreakdown, accountBalances, lockIdText, describeAccountLocks, democracyLockPlan, blocksToDays, LOCK_HELP_SLUG
+    balanceBreakdown, accountBalances, lockIdText, describeAccountLocks, democracyLockPlan, blocksToDays, LOCK_HELP_SLUG, sendableBalance
 } from '../lib/balance-locks.js';
 import { readAccountLocks } from '../lib/balance-locks-chain.js';
 import { registerBalanceLocksRoute, LOCKS_ROUTE } from '../lib/balance-locks-api.js';
 import { renderBalanceLocks, mountBalanceLocks } from '../lib/balance-locks-view.js';
-import { feeShortfall, feeFloor, FEE_MARGIN } from '../lib/fee-preflight.js';
+import { feeShortfall, feeFloor, transferKeep, FEE_MARGIN } from '../lib/fee-preflight.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
 import { allRoutes } from '../lib/api-reference.js';
 import { registryFromMetadata, loadFixture } from './helpers/extrinsic-builders.js';
@@ -124,7 +124,7 @@ describe('Transferable when no fee can be paid (hold + lock larger than free)', 
         assert.equal(balanceBreakdown({ free: 300n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED }).transferable, 0n);
         assert.equal(balanceBreakdown({ free: ED, reserved: 0n, frozen: 0n, ed: ED }).canPayFee, false);
     });
-    test('free above the floor: unchanged, and canPayFee agrees with fee-preflight for a 1 planck fee', () => {
+    test('free above the floor: unchanged, and canPayFee agrees with fee-preflight for the FEE_MARGIN fee', () => {
         const cases = [
             { free: 301n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX },
             { free: 300n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX },
@@ -135,7 +135,7 @@ describe('Transferable when no fee can be paid (hold + lock larger than free)', 
         ];
         for (const c of cases) {
             const b = balanceBreakdown({ ...c, ed: ED });
-            assert.equal(b.canPayFee, feeShortfall({ fee: 1n, ...c, ed: ED }) === null, JSON.stringify(c, (k, v) => typeof v === 'bigint' ? v.toString() : v));
+            assert.equal(b.canPayFee, feeShortfall({ fee: FEE_MARGIN, ...c, ed: ED }) === null, JSON.stringify(c, (k, v) => typeof v === 'bigint' ? v.toString() : v));
             if (!b.canPayFee) assert.equal(b.transferable, 0n);
         }
         assert.equal(balanceBreakdown({ free: 301n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED }).transferable, 300n * PDEX);
@@ -168,6 +168,119 @@ describe('Transferable when no fee can be paid (hold + lock larger than free)', 
         assert.equal(m.balance.canPayFee, true);
         assert.equal(m.balance.feeTopUp, null);
         assert.doesNotMatch(renderBalanceLocks(m, { helpIcon: () => '' }), /cannot pay a (network )?fee/);
+    });
+});
+
+// Fable review round 2 (5 Nov 2026), LOW: canPayFee asked about a 1 planck
+// fee while Max and the top-up assume FEE_MARGIN (0.05 PDEX). An account with
+// free between frozen and frozen + margin showed a positive Transferable that
+// the fee preflight then refused. One margin now decides both.
+describe('Transferable and the fee preflight use the same margin', () => {
+    const FROZEN = 10n * PDEX;
+    const at = (free) => balanceBreakdown({ free, reserved: 0n, frozen: FROZEN, ed: ED });
+    test('free between frozen and frozen + margin: Transferable 0, with the top-up to the margin', () => {
+        const free = FROZEN + FEE_MARGIN / 2n;
+        const b = at(free);
+        assert.equal(b.canPayFee, false);
+        assert.equal(b.transferable, 0n);
+        assert.equal(b.feeTopUp, FEE_MARGIN / 2n);
+        assert.ok(feeShortfall({ fee: FEE_MARGIN, free, frozen: FROZEN, ed: ED }), 'the preflight refuses it too');
+    });
+    test('free exactly frozen + margin: payable, Transferable is the margin', () => {
+        const b = at(FROZEN + FEE_MARGIN);
+        assert.equal(b.canPayFee, true);
+        assert.equal(b.transferable, FEE_MARGIN);
+        assert.equal(b.feeTopUp, null);
+    });
+    test('across the boundary: a positive Transferable is never refused by the preflight at the margin', () => {
+        for (let free = FROZEN - 2n; free <= FROZEN + FEE_MARGIN + 2n; free += FEE_MARGIN / 8n) {
+            for (const f of [free, free + 1n, free - 1n]) {
+                const b = at(f);
+                if (b.transferable > 0n) assert.equal(feeShortfall({ fee: FEE_MARGIN, free: f, frozen: FROZEN, ed: ED }), null, String(f));
+            }
+        }
+    });
+    test('one constant: balanceBreakdown has no 1 planck fee left', () => {
+        const src = stripComments(readRepo('lib/balance-locks.js', import.meta.url));
+        assert.doesNotMatch(src, /fee: 1n/);
+        assert.match(src, /const short = feeShortfall\(\{ fee: FEE_MARGIN[^;]*\);\s*const canPayFee = short === null;/);
+    });
+});
+
+// Fable review round 2, MEDIUM: Transferable excludes the existential deposit,
+// and the Send guard applied it with Keep alive off too
+// (balances.transferAllowDeath), so an account could never be emptied.
+// pallet-balances 46, reducible_balance(Expendable, Polite): untouchable is
+// frozen - reserved, raised to the ED only when the account cannot be reaped
+// (can_dec_provider false: any lock, freeze or hold makes it a consumer).
+// So with Keep alive off the ED stays back only while something is locked or
+// reserved; the fee itself (Currency::withdraw, KeepAlive) is checked apart.
+describe('Keep alive off: the existential deposit only when nothing is locked or reserved', () => {
+    test('transferKeep: what a transfer must leave in free, per toggle', () => {
+        assert.equal(transferKeep({ frozen: 0n, reserved: 0n, ed: ED, keepAlive: true }), ED);
+        assert.equal(transferKeep({ frozen: 0n, reserved: 0n, ed: ED, keepAlive: false }), 0n, 'nothing locked: the account can be emptied');
+        assert.equal(transferKeep({ frozen: PDEX / 2n, reserved: 0n, ed: ED, keepAlive: false }), ED, 'a lock below the ED: cannot be reaped, the ED applies');
+        assert.equal(transferKeep({ frozen: 0n, reserved: 5n * PDEX, ed: ED, keepAlive: false }), ED, 'a hold or deposit: cannot be reaped');
+        assert.equal(transferKeep({ frozen: 80n * PDEX, reserved: 50n * PDEX, ed: ED, keepAlive: false }), 30n * PDEX);
+        assert.equal(transferKeep({ frozen: 80n * PDEX, reserved: 0n, ed: ED, keepAlive: true }), 80n * PDEX);
+    });
+    const cases = [
+        { name: 'nothing locked', c: { free: 100n * PDEX, reserved: 0n, frozen: 0n }, on: 99n * PDEX, off: 100n * PDEX },
+        { name: 'a lock below the ED', c: { free: 10n * PDEX, reserved: 0n, frozen: PDEX / 2n }, on: 9n * PDEX, off: 9n * PDEX },
+        { name: 'a deposit only', c: { free: 100n * PDEX, reserved: 5n * PDEX, frozen: 0n }, on: 99n * PDEX, off: 99n * PDEX },
+        { name: 'a large lock', c: { free: P(29865.4975), reserved: 0n, frozen: P(29245.5) }, on: P(619.9975), off: P(619.9975) },
+        { name: 'no fee payable', c: { free: 100n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX }, on: 0n, off: 0n }
+    ];
+    for (const { name, c, on, off } of cases) {
+        test(`${name}: Keep alive on ${on / PDEX}, off ${off / PDEX} (PDEX, whole part)`, () => {
+            const b = balanceBreakdown({ ...c, ed: ED });
+            assert.equal(b.transferable, on);
+            assert.equal(b.transferableAllowDeath, off);
+            if (b.canPayFee) {
+                assert.equal(feeShortfall({ fee: 0n, amount: off, keepAlive: false, ...c, ed: ED }), null, 'the preflight accepts the Keep alive off figure');
+                assert.notEqual(feeShortfall({ fee: 0n, amount: off + 1n, keepAlive: false, ...c, ed: ED }), null, 'and not one planck more');
+            }
+        });
+    }
+    test('the model carries both figures', () => {
+        const m = describeAccountLocks(snap());
+        assert.equal(m.balance.transferable, s(99n * PDEX));
+        assert.equal(m.balance.transferableAllowDeath, s(100n * PDEX));
+    });
+    test('sendableBalance: the wallet route figure for the toggle, the keep-alive one if the server is older', () => {
+        const data = { balance: { free: 100, transferable: 99, transferableAllowDeath: 100 } };
+        assert.equal(sendableBalance(data, true), 99);
+        assert.equal(sendableBalance(data, false), 100);
+        assert.equal(sendableBalance({ balance: { free: 100, transferable: 99 } }, false), 99);
+        assert.equal(sendableBalance({ balance: { free: 10, transferable: -1, transferableAllowDeath: -1 } }, false), 0);
+        assert.equal(sendableBalance({ balance: { free: 10 }, staking: { totalStaked: 4 } }, true), 6, 'no server figure: free less staked, as before');
+        assert.equal(sendableBalance(null, true), 0);
+    });
+    test('the panel note agrees: Keep alive off moves the ED only when nothing is locked or reserved', () => {
+        const free = renderBalanceLocks(describeAccountLocks(snap()), { helpIcon: () => '' });
+        assert.match(free, /Keep alive off/);
+        assert.match(free, /closes the account/);
+        const locked = renderBalanceLocks(describeAccountLocks(snap({ free: s(10n * PDEX), frozen: s(PDEX / 2n),
+            locks: [{ id: 'democrac', amount: s(PDEX / 2n), reasons: 'All' }] })), { helpIcon: () => '' });
+        assert.match(locked, /cannot be closed/);
+        assert.match(locked, /even with Keep alive off/);
+        assert.doesNotMatch(locked, /closes the account/);
+        const reserved = renderBalanceLocks(describeAccountLocks(snap({ reserved: s(5n * PDEX),
+            reserves: [{ id: '', amount: s(5n * PDEX) }] })), { helpIcon: () => '' });
+        assert.match(reserved, /cannot be closed/);
+    });
+    test('the Send dialog: the guard, Max and the shown figure follow the Keep alive toggle', () => {
+        const script = stripComments(readRepo('script.js', import.meta.url));
+        const start = script.indexOf('async function submitSendTx(');
+        const guard = script.slice(start, script.indexOf('await submitSignedTx(', start));
+        assert.match(guard, /const available = sendableBalance\(data, keepAlive\);/);
+        assert.doesNotMatch(guard, /getStakeableBalance/);
+        const max = script.slice(script.indexOf("getElementById('send-max-btn')"), script.indexOf("getElementById('submit-send-tx-btn')", script.indexOf("getElementById('send-max-btn')")));
+        assert.match(max, /sendableBalance\(data, /);
+        assert.doesNotMatch(max, /getExistentialDepositPDEX/, 'Transferable already leaves the ED; Max does not take it twice');
+        assert.match(script, /sendKeep\.addEventListener\('change', \(\) => \{[^}]*sendableBalance\(/);
+        const server = stripComments(readRepo('server.js', import.meta.url));
+        assert.match(server, /transferableAllowDeath: balanceToPDEX\(\w+\.transferableAllowDeath\)/);
     });
 });
 
@@ -691,7 +804,7 @@ describe('wiring: server, docs, help, both pages', () => {
     test('one Transferable: the wallet route takes balance.transferable from balanceBreakdown', () => {
         assert.match(server, /import \{[^}]*balanceBreakdown[^}]*\} from '\.\/lib\/balance-locks\.js'/);
         assert.doesNotMatch(server, /transferable:\s*Math\.max\(0,\s*free\s*-\s*totalStaked\)/);
-        assert.match(server, /balance: \{ free, reserved, total: free \+ reserved, transferable: balanceToPDEX\(\w+\.transferable\) \}/);
+        assert.match(server, /balance: \{ free, reserved, total: free \+ reserved, transferable: balanceToPDEX\(\w+\.transferable\)[, }]/);
         assert.match(server, /balanceBreakdown\(accountBalances\(accountInfo\.data, globalApi\.consts\.balances/);
         assert.match(script, /data\.balance\.transferable/, 'Send, Stake and Max read the server figure');
     });

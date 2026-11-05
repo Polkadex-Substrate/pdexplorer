@@ -44,6 +44,16 @@ test('a multisig action opens review and never attempts to sign with the multisi
     assert.equal(w.sent.length, 0);
 });
 
+// Fable review round 2, MEDIUM: the multisig hand-off passed no way to hear
+// how the review ended, so a caller that holds its buttons (the balance
+// breakdown panel) never released them after a close or an approval.
+test('a multisig action hands the caller\'s onMultisigEnd to the review as onEnd', async () => {
+    const w = setup(); const ended = () => {};
+    await w.submit({ buildTx: () => ({ method: { toHex: () => '0x1234' } }), onMultisigEnd: ended });
+    assert.equal(w.reviewed.length, 1);
+    assert.equal(w.reviewed[0].onEnd, ended);
+});
+
 test('reviewed approvals sign with the chosen individual account and leave the selected multisig intact', async () => {
     const w = setup(); const tx = {};
     await w.submit({ signingAccount: { address: B, source: 'talisman' }, multisigHandled: true, buildTx: () => tx });

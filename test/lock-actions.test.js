@@ -638,6 +638,54 @@ describe('GET /api/account/:address/locks carries the actions', () => {
     });
 });
 
+// Fable review round 2, MEDIUM: for a multisig wallet submitSignedTx hands
+// the call to the multisig review, which reported no stage and no error when
+// it was closed or when it only recorded an approval. hold(true) was never
+// released and every button in the panel stayed dead. The review now reports
+// its end (lib/multisig-view.js onEnd, passed through as onMultisigEnd).
+describe('a multisig review releases the panel hold however it ends', () => {
+    const orphanModel = { actions: { orphan: { stash: ME, amount: s(60n * PDEX) } } };
+    const msgEl = () => ({ textContent: '', className: '' });
+    const run = async (submit) => {
+        const holds = [], msg = msgEl(); let refreshed = 0;
+        await runLockAction('migrate-currency', { model: orphanModel, address: ME, button: {}, msg,
+            deps: { submit, connected: () => OTHER, isSame: same, api: () => fakeTxApi({ locksAfter: [] }), hold: (on) => holds.push(on), refresh: () => { refreshed++; } } });
+        return { holds, msg, refreshed: () => refreshed };
+    };
+    test('submit passes onMultisigEnd', async () => {
+        const r = await run(async (o) => { assert.equal(typeof o.onMultisigEnd, 'function'); });
+        assert.deepEqual(r.holds, [true], 'still held while the review is open');
+    });
+    test('the review closed without signing: released, nothing claimed', async () => {
+        const r = await run(async (o) => { o.onMultisigEnd('closed', { stage: 'closed', text: '' }); });
+        assert.equal(r.holds[r.holds.length - 1], false);
+        assert.equal(r.msg.textContent, '');
+        assert.equal(r.refreshed(), 0);
+    });
+    test('an approval recorded (not executed): released, and says it waits for the other signers', async () => {
+        const r = await run(async (o) => { o.onMultisigEnd('approved', { stage: 'approved', text: 'Approval submitted; waiting for the other signers.' }); });
+        assert.equal(r.holds[r.holds.length - 1], false);
+        assert.match(r.msg.textContent, /[Aa]pproval submitted; waiting for (the )?other signers/);
+        assert.match(r.msg.className, /ok/);
+        assert.equal(r.refreshed(), 0, 'nothing changed on chain for this account yet');
+    });
+    test('an approval with no text from the review still says so', async () => {
+        const r = await run(async (o) => { o.onMultisigEnd('approved'); });
+        assert.match(r.msg.textContent, /waiting for (the )?other signers/);
+    });
+    test('executed: onSuccess takes over (chain check, refresh); the end report does not release early', async () => {
+        const r = await run(async (o) => { o.onMultisigEnd('executed', { stage: 'executed' }); await o.onSuccess(); });
+        assert.equal(r.holds.includes(false), false);
+        assert.equal(r.refreshed(), 1);
+    });
+    test('a terminal stage of the signer transaction releases it too', async () => {
+        for (const stage of ['failed', 'cancelled', 'waiting', 'unconfirmed']) {
+            const r = await run(async (o) => { o.onStage(stage); });
+            assert.equal(r.holds[r.holds.length - 1], false, stage);
+        }
+    });
+});
+
 describe('the status card knows the new actions', () => {
     const KEYS = ['staking.migrateCurrency', 'democracy.unlock', 'democracy.removeVote', 'democracy.undelegate', 'elections.removeVoter'];
     test('each has a pending title and success copy with no dashes', () => {
