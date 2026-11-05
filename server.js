@@ -6675,7 +6675,9 @@ app.get('/api/wallet/:address', async (req, res) => {
             // part of free) subtracted the stake a second time. F-136 note:
             // reserved is NOT part of `free` on Substrate, so it is never
             // subtracted from free directly; it only offsets frozen.
-            balance: { free, reserved, total: free + reserved, transferable: balanceToPDEX(spendable.transferable) },
+            balance: { free, reserved, total: free + reserved, transferable: balanceToPDEX(spendable.transferable),
+                // Keep alive off (transferAllowDeath): the ED drops out only when nothing is locked or reserved.
+                transferableAllowDeath: balanceToPDEX(spendable.transferableAllowDeath) },
             staking: {
                 isStaker: totalStaked > 0,
                 isValidator: sessionValAddrs.includes(address),
