@@ -34,6 +34,7 @@ import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, 
     lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
+import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
@@ -6597,6 +6598,9 @@ app.get('/api/wallet/:address', async (req, res) => {
         ]);
         const free = balanceToPDEX(accountInfo.data.free);
         const reserved = balanceToPDEX(accountInfo.data.reserved);
+        // The one Transferable: the rule the balance breakdown panel shows
+        // (lib/balance-locks.js), so Send, Stake and both Max buttons agree with it.
+        const spendable = balanceBreakdown(accountBalances(accountInfo.data, globalApi.consts.balances && globalApi.consts.balances.existentialDeposit));
 
         // Bonded ledger (total staked).
         let totalStaked = 0, activeStaked = 0, unlocking = 0;
@@ -6662,19 +6666,16 @@ app.get('/api/wallet/:address', async (req, res) => {
         res.json({
             address,
             identity,
-            // `free` is the non-reserved balance, but on Substrate it still
-            // includes bonded/staked tokens (they're locked, not reserved).
-            // `transferable` excludes the staked amount so the staking UI can
-            // show what's actually available to bond on top of the current stake.
-            // F-136 note: the audit's close test asks transferable to also
-            // subtract `reserved`, but on Substrate reserved is NOT part of
-            // `free` — locks (staking) live inside free, reserves live beside
-            // it — so `free - staked` is the correct spendable figure and
-            // subtracting reserved again would understate it. The real F-136
-            // defect was /api/account LABELLING reserved as "frozen", fixed
-            // there. Left as a comment so the next reader doesn't "fix" this
-            // into a double subtraction.
-            balance: { free, reserved, total: free + reserved, transferable: Math.max(0, free - totalStaked) },
+            // `transferable` is the balance breakdown's figure (the same
+            // number the locks panel shows): free minus whichever is larger,
+            // frozen less reserved or the existential deposit, and 0 when no
+            // fee can be paid (lib/balance-locks.js balanceBreakdown). It
+            // replaced `free - totalStaked`, which ignored vote locks, and
+            // since staking moved to a hold (staked PDEX is reserved, not
+            // part of free) subtracted the stake a second time. F-136 note:
+            // reserved is NOT part of `free` on Substrate, so it is never
+            // subtracted from free directly; it only offsets frozen.
+            balance: { free, reserved, total: free + reserved, transferable: balanceToPDEX(spendable.transferable) },
             staking: {
                 isStaker: totalStaked > 0,
                 isValidator: sessionValAddrs.includes(address),
