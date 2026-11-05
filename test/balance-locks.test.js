@@ -318,6 +318,20 @@ describe('democracyLockPlan: when the democracy lock can come off', () => {
             democracy: { delegating: true, target: OTHER, conviction: 'Locked3x', balance: s(PDEX), prior: { until: 0, amount: '0' }, lockingPeriod: 216000 } }));
         assert.match(item(m, i => i.id === 'democrac').unlock, /undelegate/);
     });
+    test('no current block (system.number failed): no made-up "locked until" day count', () => {
+        const m = describeAccountLocks(snap({ block: null, frozen: s(PDEX), locks: [{ id: 'democrac', amount: s(PDEX), reasons: 'All' }],
+            democracy: { ...base, votes: [{ index: 1, aye: true, conviction: 'Locked1x', balance: s(PDEX) }], referenda: { 1: { finished: true, approved: true, end: 1000 } } } }));
+        const r = item(m, i => i.id === 'democrac');
+        assert.doesNotMatch(r.unlock, /days/);
+        assert.match(r.unlock, /democracy\.unlock/);
+    });
+    test('only a prior lock, expired: just democracy.unlock, no "remove each vote"', () => {
+        const m = describeAccountLocks(snap({ frozen: s(PDEX), locks: [{ id: 'democrac', amount: s(PDEX), reasons: 'All' }],
+            democracy: { ...base, votes: [], prior: { until: 10, amount: s(PDEX) }, referenda: {} } }));
+        const r = item(m, i => i.id === 'democrac');
+        assert.match(r.unlock, /democracy\.unlock/);
+        assert.doesNotMatch(r.unlock, /removeVote/);
+    });
     test('blocksToDays', () => {
         assert.equal(blocksToDays(7200, 12000), 1);
         assert.equal(blocksToDays(216000 * 2, 12000), 60);

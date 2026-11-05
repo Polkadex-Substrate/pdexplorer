@@ -4693,3 +4693,26 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .confirm-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .confirm-dialog-actions button { min-height: 44px; padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-color, rgba(255,255,255,0.2)); background: transparent; color: var(--text-primary); font: inherit; cursor: pointer; }
 .confirm-dialog-actions .confirm-dialog-danger { background: var(--brand-primary); border-color: transparent; color: #fff; }
+
+/* Balance breakdown panel (lib/balance-locks-view.js): wallet dashboard and account page. */
+.balance-locks { margin-bottom: 20px; }
+.balance-locks .staking-summary-card .label { display: flex; align-items: center; gap: 4px; }
+.balance-locks-note { margin: 0; padding: 10px 24px 0; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; }
+.balance-locks-note:last-of-type { padding-bottom: 10px; }
+.balance-locks-table-wrap { overflow-x: auto; }
+.balance-locks-table td { vertical-align: top; line-height: 1.45; }
+.balance-locks-table td.balance-locks-amount { white-space: nowrap; font-weight: 600; }
+.balance-locks-id { margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }
+.balance-locks-id code { white-space: pre; }
+.balance-locks-refs { margin-top: 6px; font-size: 0.78rem; color: var(--text-secondary); }
+.balance-locks-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
+.balance-locks-orphan { background: rgba(245, 166, 35, 0.15); color: #f5a623; }
+.balance-locks-legacy { background: rgba(245, 166, 35, 0.1); color: #f5a623; }
+.balance-locks-unknown { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary); }
+.balance-locks-empty { padding: 16px 24px; color: var(--text-muted); font-size: 0.85rem; }
+@media (max-width: 640px) {
+    .balance-locks-table thead { display: none; }
+    .balance-locks-table, .balance-locks-table tbody, .balance-locks-table tr, .balance-locks-table td { display: block; width: 100%; }
+    .balance-locks-table tr { border-bottom: 1px solid var(--border-color); padding: 8px 0; }
+    .balance-locks-table tbody td { border-bottom: none; padding: 4px 16px; }
+}

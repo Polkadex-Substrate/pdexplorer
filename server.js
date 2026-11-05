@@ -33,6 +33,7 @@ import { reconcileThreads, proposalReadTrusted, motionReadTrusted, nextHighWater
 import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, referendumThreadId, externalTitle, referendumTitle,
     lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
+import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { readEraSummary, missingEras, buildChoiceSnapshot, readConst, FALLBACK_HISTORY_DEPTH } from './lib/stake-choice-sync.js';
@@ -2996,6 +2997,7 @@ const SITEMAP_STATIC_ROUTES = [
     { path: '/help/choosing-validators',      changefreq: 'monthly', priority: '0.6' },
     { path: '/help/claiming-rewards',         changefreq: 'monthly', priority: '0.6' },
     { path: '/help/unstaking',                changefreq: 'monthly', priority: '0.6' },
+    { path: '/help/locked-balance',           changefreq: 'monthly', priority: '0.6' },
     { path: '/help/staking-rewards-page',     changefreq: 'monthly', priority: '0.6' },
     { path: '/help/governance-overview',      changefreq: 'monthly', priority: '0.6' },
     { path: '/help/democracy-and-voting',     changefreq: 'monthly', priority: '0.6' },
@@ -4377,6 +4379,9 @@ app.get('/api/account/:address/history', (req, res) => {
         res.json({ list, ...page });
     } catch (err) { serverError(res, err, req.path); }
 });
+
+// Locked / transferable breakdown and why each lock exists (lib/balance-locks-api.js).
+registerBalanceLocksRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, serverError });
 
 // --- STAKING REWARDS ENDPOINTS ---
 app.get('/api/staking-rewards-status', (req, res) => {

@@ -691,6 +691,7 @@ edge accordingly.
 - `GET /api/validator/:address` — per-validator era history
 - `GET /api/holders` — top-balance accounts
 - `GET /api/account/:address` — account-level summary
+- `GET /api/account/:address/locks` - live balance breakdown (total, transferable, locked, reserved, existential deposit, as planck strings) and one row per lock, freeze, hold and known deposit: source, reason, how to release it, and a status (`active`, `orphan`, `legacy`, `unknown`). Locks overlap, so `locked` is the largest lock, not the sum. Short cache tier.
 - `GET /api/account/:address/history?list=transactions|events&before=<block>:<rowId>` - older pages of the indexed transactions or events of an address, 200 per page, newest first, read from the index (no RPC). Start from `index.next` in `/api/account/:address`, then follow the `next` of each page; `next: null` means nothing older.
 - `GET /api/network-info` — home-page network metrics
 - `GET /api/search/:query` — **live-RPC** block-hash / block-number / account lookup. Does *not* query the SQLite index and does *not* resolve extrinsic hashes — see the note below.

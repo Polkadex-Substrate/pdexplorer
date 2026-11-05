@@ -61,6 +61,7 @@ import { trackSignedTx, recheckSignedTxs } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
+import { mountBalanceLocks } from './lib/balance-locks-view.js';
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -6264,7 +6265,7 @@ async function fetchAccountDetails(address) {
                     </tr>
                 </table>
             </div>
-            
+            <div id="account-locks-slot" style="margin-bottom: 20px;"></div>
             <div style="margin-bottom: 20px;">
                 <div class="account-tabs" style="padding: 0 20px; margin-bottom: 15px;">
                     <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transfers (${tabCount('transactions')})</button>
@@ -6281,6 +6282,7 @@ async function fetchAccountDetails(address) {
             </div>
         `;
         accountDetailsContainer.innerHTML = html;
+        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon });
 
         // Audit F-122: bind copy with addEventListener and read the address
         // from the already-escaped data-address attribute. An inline
@@ -8937,6 +8939,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
             </div>
         </div>
 
+        <div id="wallet-locks-slot"></div>
         ${isOwnWallet ? `
         <div id="wallet-actions-slot">
             ${hasInjectedWalletNow() ? `
@@ -9106,6 +9109,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     // ownership — proxies that delegate FROM this address are public chain
     // state, and the multisig calculator works without an active session.
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
+    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon });
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
     refreshWalletMultisigs();
     // Average APR card — runs after the rest of the dashboard so the
