@@ -137,8 +137,11 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         assert.equal(r.status, 'orphan');
         assert.match(r.reason, /[Ll]eftover staking lock/);
         assert.match(r.reason, /392/);
-        assert.match(r.unlock, /cannot be removed by you today/);
-        assert.match(r.unlock, /preparing a fix/);
+        // Since staking.migrateCurrency was confirmed permissionless for an
+        // unbonded stash (pallet-staking 45.1.0), the row offers the fix.
+        assert.match(r.unlock, /Remove leftover staking lock/);
+        assert.match(r.unlock, /refunded/);
+        assert.doesNotMatch(r.unlock, /preparing a fix/);
         assert.equal(r.link.href, `/help/${LOCK_HELP_SLUG}`);
         assert.equal(m.balance.transferable, s(P(619.9975)));
         assert.equal(m.balance.locked, s(P(29245.5)));
@@ -354,7 +357,7 @@ describe('renderBalanceLocks: the panel', () => {
         })), { helpIcon: help });
         assert.match(html, /29,245\.5 PDEX/);
         assert.match(html, /619\.9975 PDEX/);
-        assert.match(html, /cannot be removed by you today/);
+        assert.match(html, /Leftover lock/);
         assert.match(html, /href="\/help\/locked-balance"/);
     });
     test('the overlap note appears when two locks overlap', () => {
