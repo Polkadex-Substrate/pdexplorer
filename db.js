@@ -1743,6 +1743,16 @@ export function getEventsByAddress(address, limit, before = null) {
     const q = accountEventsQuery(address, limit, before);
     return db.prepare(q.sql).all(...q.args).map(mapEventRow);
 }
+// Recent offline reports and slashes naming a validator (lib/nomination-status-chain.js): imOnline.SomeOffline links
+// only the offline validators (lib/account-links.js rule 4), SlashReported and Slashed link the staker. One seek on the
+// event_accounts primary key (address, block), newest first.
+export function getValidatorIncidents(address, sinceBlock = 0, limit = 20) {
+    return db.prepare(`SELECT l.block AS block, e.section || '.' || e.method AS kind
+        FROM event_accounts l JOIN events e ON e.rowid = l.event_rowid AND e.hash = l.event_hash
+        WHERE l.address = ? AND l.block >= ?
+          AND ((e.section = 'imOnline' AND e.method = 'SomeOffline') OR (e.section = 'staking' AND e.method IN ('SlashReported', 'Slashed')))
+        ORDER BY l.block DESC, l.event_rowid DESC LIMIT ?`).all(address, sinceBlock, limit).map(r => ({ block: r.block, kind: r.kind }));
+}
 // Two index counts: this sum assumes the two sets are disjoint, i.e. that the signer is never linked.
 export function countEventsByAddress(address) {
     return db.prepare('SELECT (SELECT COUNT(*) FROM events WHERE signer_address = ?) + (SELECT COUNT(*) FROM event_accounts WHERE address = ?) AS n')

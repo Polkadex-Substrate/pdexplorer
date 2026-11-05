@@ -61,6 +61,11 @@ import { trackSignedTx, recheckSignedTxs } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
+import { mountBalanceLocks } from './lib/balance-locks-view.js';
+import { sendableBalance } from './lib/balance-locks.js';
+import { mountNominationStatus } from './lib/nomination-status-view.js';
+// The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
+const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -6264,7 +6269,8 @@ async function fetchAccountDetails(address) {
                     </tr>
                 </table>
             </div>
-            
+            <div id="account-locks-slot" style="margin-bottom: 20px;"></div>
+            <div id="account-nominations-slot" style="margin-bottom: 20px;"></div>
             <div style="margin-bottom: 20px;">
                 <div class="account-tabs" style="padding: 0 20px; margin-bottom: 15px;">
                     <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transfers (${tabCount('transactions')})</button>
@@ -6281,6 +6287,8 @@ async function fetchAccountDetails(address) {
             </div>
         `;
         accountDetailsContainer.innerHTML = html;
+        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+        mountNominationStatus(document.getElementById('account-nominations-slot'), data.account, { fetchJson: fetchApiJson, helpIcon });
 
         // Audit F-122: bind copy with addEventListener and read the address
         // from the already-escaped data-address attribute. An inline
@@ -8937,6 +8945,8 @@ function renderWalletDashboard(data, price, rewardsPayload) {
             </div>
         </div>
 
+        <div id="wallet-locks-slot"></div>
+        <div id="wallet-nominations-slot"></div>
         ${isOwnWallet ? `
         <div id="wallet-actions-slot">
             ${hasInjectedWalletNow() ? `
@@ -9106,6 +9116,9 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     // ownership — proxies that delegate FROM this address are public chain
     // state, and the multisig calculator works without an active session.
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
+    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+    mountNominationStatus(document.getElementById('wallet-nominations-slot'), data.address, { fetchJson: fetchApiJson, helpIcon,
+        canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), data.address), openPicker: (keep) => openStakeModal(keep) });
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
     refreshWalletMultisigs();
     // Average APR card — runs after the rest of the dashboard so the
@@ -9376,7 +9389,7 @@ function clearStakeError() {
     if (el) { el.textContent = ''; el.style.display = 'none'; }
 }
 
-async function openStakeModal() {
+async function openStakeModal(keep) {
     const data = currentWalletData;
     if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const modal = document.getElementById('stake-modal');
@@ -9394,8 +9407,10 @@ async function openStakeModal() {
     document.getElementById('stake-minimum').textContent = stakingFormatPDEX(data.network && data.network.minStake) + ' PDEX';
 
     // Pre-fill selected with the current nominations so the user can curate.
+    // keep (from "Change validators"): only those; a click event prefills all.
     stakeSelected = new Map();
     for (const v of (data.staking && data.staking.nominating) || []) {
+        if (Array.isArray(keep) && !keep.some(k => isSameAddress(k, v.address))) continue;
         stakeSelected.set(v.address, { address: v.address, name: v.name });
     }
     renderStakeSelected();
@@ -10511,7 +10526,7 @@ function openSendModal() {
     const hintEl = document.getElementById('send-to-hint');
     if (hintEl) { hintEl.textContent = 'Paste a valid Polkadex (SS58 prefix 88) address.'; hintEl.style.color = ''; }
 
-    const available = getStakeableBalance(data);
+    const available = sendableBalance(data, document.getElementById('send-keep-alive')?.checked !== false);
     const availEl = document.getElementById('send-available');
     if (availEl) availEl.textContent = stakingFormatPDEX(available);
     const feeEl = document.getElementById('send-fee');
@@ -10546,7 +10561,7 @@ async function submitSendTx() {
     const amt = parseFloat(amtStr);
     if (!Number.isFinite(amt) || amt <= 0) return showSendError('Enter a valid amount.');
 
-    const available = getStakeableBalance(data);
+    const available = sendableBalance(data, keepAlive);
     const feeBuffer = multisigStore.find(data.address) ? 0 : (sendLastFeePDEX != null) ? Math.max(sendLastFeePDEX * 1.2, SEND_FEE_BUFFER / 5) : SEND_FEE_BUFFER;
     // Float-tolerance pad: the displayed "available" balance is a float that
     // can drift by a few ULPs from the on-chain u128. A user who types the
@@ -10657,9 +10672,9 @@ async function submitSendTx() {
         if (!data) return;
         // Reserve a small fee buffer — refined to the actual estimated fee
         // (×1.2 for safety) when paymentInfo has returned at least once.
-        const available = getStakeableBalance(data);
-        const buffer = multisigStore.find(data.address)
-            ? (document.getElementById('send-keep-alive')?.checked ? getExistentialDepositPDEX() : 0)
+        // Transferable already leaves the ED (and Keep alive off may move it).
+        const available = sendableBalance(data, document.getElementById('send-keep-alive')?.checked !== false);
+        const buffer = multisigStore.find(data.address) ? 0
             : (sendLastFeePDEX != null) ? Math.max(sendLastFeePDEX * 1.2, SEND_FEE_BUFFER / 5) : SEND_FEE_BUFFER;
         const usable = Math.max(0, available - buffer);
         const amtInput = document.getElementById('send-amount-input');
@@ -10675,7 +10690,11 @@ async function submitSendTx() {
     const sendAmt = document.getElementById('send-amount-input');
     if (sendAmt) sendAmt.addEventListener('input', refreshSendFeeEstimate);
     const sendKeep = document.getElementById('send-keep-alive');
-    if (sendKeep) sendKeep.addEventListener('change', refreshSendFeeEstimate);
+    if (sendKeep) sendKeep.addEventListener('change', () => {
+        const el = document.getElementById('send-available');
+        if (el && currentWalletData) el.textContent = stakingFormatPDEX(sendableBalance(currentWalletData, sendKeep.checked));
+        refreshSendFeeEstimate();
+    });
 })();
 
 // --- Donate Page ---
@@ -12820,7 +12839,8 @@ async function resolveWalletSigner(fail, signingAccount = null) {
 // dropped link) is lib/tx-submit.js, tested in test/tx-submit.test.js.
 // onError(text, model) keeps the modals' inline error lines; onStage(stage,
 // model) drives the motion cards. No alert popup anywhere on this path.
-async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, verify, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet() }) {
+// onMultisigEnd(outcome, model): how a multisig review ended (lib/multisig-view.js).
+async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, onMultisigEnd, verify, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet() }) {
     const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
     const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
     const fail = (m) => {
@@ -12836,7 +12856,7 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
             if (staleRuntime) throw new Error(staleRuntime);
             const tx = await buildTx(globalApi);
             if (!isSameAddress(expectedWallet, getStoredWallet())) throw new Error('The wallet changed. Open the action again.');
-            return await multisigUI.review({ multisig, callHex: tx.method.toHex(), onSuccess });
+            return await multisigUI.review({ multisig, callHex: tx.method.toHex(), onSuccess, onEnd: onMultisigEnd });
         } catch (e) { return fail(e.message); }
     }
     const w = await resolveWalletSigner(fail, signingAccount);
