@@ -40,7 +40,7 @@ import {
 import { describeAccountLocks } from '../lib/balance-locks.js';
 import { readAccountLocks } from '../lib/balance-locks-chain.js';
 import { registerBalanceLocksRoute } from '../lib/balance-locks-api.js';
-import { renderBalanceLocks, runLockAction } from '../lib/balance-locks-view.js';
+import { renderBalanceLocks, runLockAction, mountBalanceLocks } from '../lib/balance-locks-view.js';
 import { successCopy, PENDING_TITLE, ERROR_COPY, ACTION_KEYS } from '../lib/tx-status.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
 import { registryFromMetadata, loadFixture } from './helpers/extrinsic-builders.js';
@@ -316,6 +316,23 @@ describe('lockActionSpec: the call each button signs, and who may sign it', () =
         const t = await spec.buildTx(fakeTxApi());
         assert.deepEqual(t.args[0].map(x => x.call), ['democracy.unlock', 'democracy.removeVote', 'democracy.unlock']);
     });
+    // Fable review, MEDIUM: with an expired larger prior, removeVote's
+    // PriorLock::accumulate carries that amount forward to the new block, so
+    // the leading unlock (rejig) must go first even when the final unlock is
+    // not needed.
+    test('democracy: an expired prior is cleared first even when no final unlock is needed (unlock, removes)', async () => {
+        const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: false, rejigFirst: true }), ME, { connected: ME, isSame: same });
+        const t = await spec.buildTx(fakeTxApi());
+        assert.equal(t.call, 'utility.batchAll');
+        assert.deepEqual(t.args[0].map(x => x.call), ['democracy.unlock', 'democracy.removeVote']);
+    });
+    test('democracy: without a final unlock the label and params do not promise one', () => {
+        const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: false }), ME, { connected: ME, isSame: same });
+        assert.doesNotMatch(spec.label, /[Uu]nlock/);
+        assert.equal(spec.params.unlock, false);
+        const withUnlock = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: true, freed: '5' }), ME, { connected: ME, isSame: same });
+        assert.equal(withUnlock.params.unlock, true);
+    });
     test('democracy: removes without an unlock (the lock stays) still record the removals', async () => {
         const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: false }), ME, { connected: ME, isSame: same });
         assert.deepEqual(await spec.buildTx(fakeTxApi()), { call: 'democracy.removeVote', args: [4] });
@@ -422,6 +439,72 @@ describe('runLockAction: the click path (submitSignedTx, then the chain check)',
             deps: { submit: async () => { submitted++; }, connected: () => null, isSame: same, api: () => fakeTxApi() } });
         assert.equal(submitted, 0);
         assert.match(msg.textContent, /[Cc]onnect/);
+    });
+});
+
+// Fable review, MEDIUM: lib/tx-submit.js re-enables the clicked button at
+// InBlock (restore, then onSuccess) but the panel only re-reads the chain
+// about 2.5 s later. Every action button in the panel stays disabled from
+// submit until that refresh has re-rendered it, so a second click cannot
+// sign against the old model.
+describe('the panel holds its action buttons from submit until the refresh', () => {
+    const orphanModel = { actions: { orphan: { stash: ME, amount: s(60n * PDEX) } } };
+    const msgEl = () => ({ textContent: '', className: '' });
+    const base = (on) => ({ submit: on, connected: () => OTHER, isSame: same, api: () => fakeTxApi({ locksAfter: [] }) });
+    test('hold(true) before submit; success keeps it held (the refresh releases it)', async () => {
+        const holds = [];
+        await runLockAction('migrate-currency', { model: orphanModel, address: ME, button: {}, msg: msgEl(),
+            deps: { ...base(async (o) => { assert.deepEqual(holds, [true], 'held before the wallet is asked'); await o.onSuccess(); }), hold: (on) => holds.push(on), refresh: () => {} } });
+        assert.equal(holds.includes(false), false, 'not released before the refresh');
+        assert.equal(holds[holds.length - 1], true, 're-held after tx-submit restored the button');
+    });
+    test('a failure, a waiting card, or a failed chain check releases the hold', async () => {
+        for (const run of [
+            async (o) => { o.onStage && o.onStage('failed'); o.onError('Nope.'); },
+            async (o) => { o.onStage('waiting'); },
+            async (o) => { await o.onSuccess(); }
+        ]) {
+            const holds = [];
+            const api = () => fakeTxApi({ locksAfter: [{ id: 'staking ' }] });
+            await runLockAction('migrate-currency', { model: orphanModel, address: ME, button: {}, msg: msgEl(),
+                deps: { ...base(run), api, hold: (on) => holds.push(on), refresh: () => {} } });
+            assert.equal(holds[0], true);
+            assert.equal(holds[holds.length - 1], false, String(run));
+        }
+    });
+    test('mountBalanceLocks: a click disables every action button until the refreshed panel is rendered', async (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const model = { address: ME, ...describeAccountLocks(snap({ locks: [lock('staking ', 60n * PDEX), lock('phrelect', 10n * PDEX)], frozen: s(60n * PDEX),
+            elections: { voter: { votes: 1, stake: s(10n * PDEX), deposit: s(PDEX) }, candidacy: null } })) };
+        let buttons = [], handler = null, fetches = 0;
+        const btnOf = (action) => ({ disabled: false, textContent: action, getAttribute: (k) => (k === 'data-lock-action' ? action : null), closest() { return this; } });
+        const el = {
+            isConnected: true,
+            set innerHTML(h) { this._h = h; buttons = [...h.matchAll(/data-lock-action="([^"]+)"/g)].map(m => btnOf(m[1])); },
+            get innerHTML() { return this._h; },
+            addEventListener: (type, fn) => { if (type === 'click') handler = fn; },
+            querySelectorAll: (sel) => (sel === '[data-lock-action]' ? buttons : []),
+            querySelector: () => msgEl()
+        };
+        const submits = [];
+        await mountBalanceLocks(el, ME, { fetchJson: async () => { fetches++; return model; }, helpIcon: () => '',
+            actions: { submit: async (o) => { submits.push(o); }, connected: () => ME, isSame: same, api: () => fakeTxApi() } });
+        assert.ok(buttons.length >= 2, 'the panel renders at least two action buttons');
+        const clicked = buttons.find(b => b.getAttribute('data-lock-action') === 'elections-remove');
+        handler({ target: clicked });
+        await new Promise(r => setImmediate(r));
+        assert.equal(submits.length, 1);
+        assert.ok(buttons.every(b => b.disabled), 'every action button is disabled from submit');
+        handler({ target: buttons.find(b => b !== clicked) });
+        await new Promise(r => setImmediate(r));
+        assert.equal(submits.length, 1, 'a second click while held signs nothing');
+        clicked.disabled = false;                 // tx-submit restore() at InBlock
+        await submits[0].onSuccess();
+        assert.ok(buttons.every(b => b.disabled), 'still held after InBlock, until the refresh');
+        t.mock.timers.tick(2500);
+        for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+        assert.equal(fetches, 2, 'the refresh re-read the model');
+        assert.ok(buttons.length && buttons.every(b => !b.disabled), 'the refreshed panel is enabled again');
     });
 });
 
@@ -565,6 +648,14 @@ describe('the status card knows the new actions', () => {
             assert.ok(c.title && c.body, k);
             assert.ok(!/[\u2013\u2014]/.test(c.title + c.body + c.next), k);
         }
+    });
+    // Fable review, LOW: the title said "unlocked" when the batch had no unlock.
+    test('democracy.unlock without an unlock call: the title and pending title do not say unlocked', () => {
+        const c = successCopy('democracy.unlock', { n: 2, unlock: false, freed: null }, {});
+        assert.doesNotMatch(c.title, /[Uu]nlock/);
+        assert.doesNotMatch(c.body, /is unlocked/);
+        assert.match(successCopy('democracy.unlock', { n: 2, unlock: true, freed: '5' }, {}).title, /unlocked/);
+        assert.doesNotMatch(PENDING_TITLE['democracy.unlock'], /[Uu]nlocking/);
     });
     test('the errors these calls can return read as sentences', () => {
         for (const k of ['staking.AlreadyMigrated', 'staking.IncorrectSlashingSpans', 'democracy.NotVoter', 'democracy.NotDelegating', 'elections.MustBeVoter']) {

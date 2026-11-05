@@ -16,12 +16,12 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import {
-    balanceBreakdown, lockIdText, describeAccountLocks, democracyLockPlan, blocksToDays, LOCK_HELP_SLUG
+    balanceBreakdown, accountBalances, lockIdText, describeAccountLocks, democracyLockPlan, blocksToDays, LOCK_HELP_SLUG
 } from '../lib/balance-locks.js';
 import { readAccountLocks } from '../lib/balance-locks-chain.js';
 import { registerBalanceLocksRoute, LOCKS_ROUTE } from '../lib/balance-locks-api.js';
 import { renderBalanceLocks, mountBalanceLocks } from '../lib/balance-locks-view.js';
-import { feeShortfall } from '../lib/fee-preflight.js';
+import { feeShortfall, feeFloor, FEE_MARGIN } from '../lib/fee-preflight.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
 import { allRoutes } from '../lib/api-reference.js';
 import { registryFromMetadata, loadFixture } from './helpers/extrinsic-builders.js';
@@ -99,6 +99,78 @@ describe('balanceBreakdown: Total, Transferable, Locked, Reserved', () => {
     });
 });
 
+// Fable review (5 Nov 2026), HIGH: Transferable used the fungible rule
+// free - max(frozen - reserved, ED), but the fee goes through
+// Currency::withdraw, which needs free - fee >= ALL of frozen. With a hold
+// and a lock larger than free (staked via hold, then voted with more than
+// free) the card showed a positive figure while no fee was payable, so
+// nothing could actually be sent. Both modules now share lib/fee-preflight.js
+// feeFloor/feeShortfall, so they cannot disagree again.
+describe('Transferable when no fee can be paid (hold + lock larger than free)', () => {
+    const HOLD_LOCK = { free: 100n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED };
+    test('free 100, held 500, locked 300: transferable is 0, not 99', () => {
+        const b = balanceBreakdown(HOLD_LOCK);
+        assert.equal(b.transferable, 0n);
+        assert.equal(b.canPayFee, false);
+    });
+    test('the top-up is max(frozen, ED) - free + the fee margin, the same figure fee-preflight gives', () => {
+        const b = balanceBreakdown(HOLD_LOCK);
+        assert.equal(b.feeTopUp, 300n * PDEX - 100n * PDEX + FEE_MARGIN);
+        const pre = feeShortfall({ fee: FEE_MARGIN, ...HOLD_LOCK });
+        assert.ok(pre, 'fee-preflight refuses it too');
+        assert.equal(pre.topUp, b.feeTopUp);
+    });
+    test('free exactly at max(frozen, ED): no fee is payable, transferable 0', () => {
+        assert.equal(balanceBreakdown({ free: 300n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED }).transferable, 0n);
+        assert.equal(balanceBreakdown({ free: ED, reserved: 0n, frozen: 0n, ed: ED }).canPayFee, false);
+    });
+    test('free above the floor: unchanged, and canPayFee agrees with fee-preflight for a 1 planck fee', () => {
+        const cases = [
+            { free: 301n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX },
+            { free: 300n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX },
+            { free: 100n * PDEX, reserved: 50n * PDEX, frozen: 80n * PDEX },
+            { free: P(29865.4975), reserved: 0n, frozen: P(29245.5) },
+            { free: ED, reserved: 0n, frozen: 0n },
+            { free: PDEX / 2n, reserved: 0n, frozen: 0n }
+        ];
+        for (const c of cases) {
+            const b = balanceBreakdown({ ...c, ed: ED });
+            assert.equal(b.canPayFee, feeShortfall({ fee: 1n, ...c, ed: ED }) === null, JSON.stringify(c, (k, v) => typeof v === 'bigint' ? v.toString() : v));
+            if (!b.canPayFee) assert.equal(b.transferable, 0n);
+        }
+        assert.equal(balanceBreakdown({ free: 301n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED }).transferable, 300n * PDEX);
+    });
+    test('feeFloor: all of frozen, and the ED unless the account is already below it', () => {
+        assert.equal(feeFloor({ free: 100n * PDEX, frozen: 300n * PDEX, ed: ED }), 300n * PDEX);
+        assert.equal(feeFloor({ free: 100n * PDEX, frozen: 0n, ed: ED }), ED);
+        assert.equal(feeFloor({ free: PDEX / 2n, frozen: 0n, ed: ED }), 0n);
+    });
+    test('one rule: lib/balance-locks.js takes the fee floor from lib/fee-preflight.js', () => {
+        const src = stripComments(readRepo('lib/balance-locks.js', import.meta.url));
+        assert.match(src, /import \{[^}]*feeShortfall[^}]*\} from '\.\/fee-preflight\.js'/);
+        const pre = stripComments(readRepo('lib/fee-preflight.js', import.meta.url));
+        assert.match(pre, /feeFloor\(/, 'feeShortfall uses the shared floor');
+    });
+    test('the model and the panel: Transferable 0 and a note with the top-up', () => {
+        const m = describeAccountLocks(snap({ free: s(100n * PDEX), reserved: s(500n * PDEX), frozen: s(300n * PDEX),
+            locks: [{ id: 'democrac', amount: s(300n * PDEX), reasons: 'All' }], holds: [{ id: 'Staking.Staking', amount: s(500n * PDEX) }],
+            staking: { bonded: true, total: s(500n * PDEX), active: s(500n * PDEX), unlocking: '0' } }));
+        assert.equal(m.balance.transferable, '0');
+        assert.equal(m.balance.canPayFee, false);
+        assert.equal(m.balance.feeTopUp, s(200n * PDEX + FEE_MARGIN));
+        const html = renderBalanceLocks(m, { helpIcon: () => '' });
+        assert.match(html, /cannot pay a (network )?fee/);
+        assert.match(html, /200\.05 PDEX/);
+        assert.ok(!/[\u2013\u2014]/.test(html));
+    });
+    test('an account that can pay shows no fee note', () => {
+        const m = describeAccountLocks(snap());
+        assert.equal(m.balance.canPayFee, true);
+        assert.equal(m.balance.feeTopUp, null);
+        assert.doesNotMatch(renderBalanceLocks(m, { helpIcon: () => '' }), /cannot pay a (network )?fee/);
+    });
+});
+
 describe('lockIdText', () => {
     test('8 ASCII bytes become the id string, padding kept', () => {
         assert.equal(lockIdText([0x73, 0x74, 0x61, 0x6b, 0x69, 0x6e, 0x67, 0x20]), 'staking ');
@@ -136,7 +208,8 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         const r = item(m, i => i.id === 'staking ');
         assert.equal(r.status, 'orphan');
         assert.match(r.reason, /[Ll]eftover staking lock/);
-        assert.match(r.reason, /392/);
+        assert.match(r.reason, /runtime upgrade/);
+        assert.doesNotMatch(r.reason, /\b39\d\b/, 'version-neutral: no spec number in user copy');
         // Since staking.migrateCurrency was confirmed permissionless for an
         // unbonded stash (pallet-staking 45.1.0), the row offers the fix.
         assert.match(r.unlock, /Remove leftover staking lock/);
@@ -210,6 +283,7 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         const m = describeAccountLocks(snap({ frozen: s(5n * PDEX), locks: [{ id: 'vesting ', amount: s(5n * PDEX), reasons: 'Misc' }] }));
         const r = item(m, i => i.id === 'vesting ');
         assert.equal(r.status, 'legacy');
+        assert.doesNotMatch(r.reason, /\b39\d\b/, 'version-neutral: no spec number in user copy');
         assert.doesNotMatch(r.unlock, /^Call vesting/);
     });
     for (const id of ['ormlvest', 'pdexlock', 'pdexmigr', 'REWARDID']) {
@@ -217,7 +291,8 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
             const m = describeAccountLocks(snap({ frozen: s(PDEX), locks: [{ id, amount: s(PDEX), reasons: 'All' }] }));
             const r = item(m, i => i.id === id);
             assert.equal(r.status, 'legacy');
-            assert.match(r.reason, /392/);
+            assert.match(r.reason, /removed from the runtime/);
+            assert.doesNotMatch(r.reason, /\b39\d\b/, 'version-neutral: no spec number in user copy');
             assert.match(r.unlock, /cannot remove it yourself/);
         });
     }
@@ -604,9 +679,27 @@ describe('wiring: server, docs, help, both pages', () => {
     test('a help article for locks, in the sitemap', () => {
         const t = HELP_TOPICS.find(x => x.slug === LOCK_HELP_SLUG);
         assert.ok(t, 'no help article');
-        for (const word of ['Transferable', 'existential deposit', 'overlap', 'staking ', 'democracy.unlock', 'removeVoter', '392']) assert.ok(t.body.includes(word), `article lacks "${word}"`);
+        for (const word of ['Transferable', 'existential deposit', 'overlap', 'staking ', 'democracy.unlock', 'removeVoter', 'runtime upgrade']) assert.ok(t.body.includes(word), `article lacks "${word}"`);
+        assert.doesNotMatch(t.body, /\b39\d\b/, 'version-neutral: no spec number in the article');
         assert.ok(!/[–—]/.test(t.body + t.title), 'em or en dash in the article');
         assert.match(server, new RegExp(`path: '/help/${LOCK_HELP_SLUG}'`));
+    });
+    // Fable review, MEDIUM: the dashboard had two Transferable figures; the
+    // Send dialog (and Stake, and both Max buttons, via getStakeableBalance)
+    // used free - totalStaked, which ignores vote locks and holds. The wallet
+    // route now takes it from the same balanceBreakdown as the locks panel.
+    test('one Transferable: the wallet route takes balance.transferable from balanceBreakdown', () => {
+        assert.match(server, /import \{[^}]*balanceBreakdown[^}]*\} from '\.\/lib\/balance-locks\.js'/);
+        assert.doesNotMatch(server, /transferable:\s*Math\.max\(0,\s*free\s*-\s*totalStaked\)/);
+        assert.match(server, /balance: \{ free, reserved, total: free \+ reserved, transferable: balanceToPDEX\(\w+\.transferable\) \}/);
+        assert.match(server, /balanceBreakdown\(accountBalances\(accountInfo\.data, globalApi\.consts\.balances/);
+        assert.match(script, /data\.balance\.transferable/, 'Send, Stake and Max read the server figure');
+    });
+    test('accountBalances: frozen, or the larger of miscFrozen and feeFrozen before the freeze rework', () => {
+        assert.deepEqual(accountBalances({ free: '5', reserved: '1', frozen: '3' }, '2'), { free: 5n, reserved: 1n, frozen: 3n, ed: 2n });
+        assert.deepEqual(accountBalances({ free: '5', reserved: '0', miscFrozen: '1', feeFrozen: '4' }, null), { free: 5n, reserved: 0n, frozen: 4n, ed: 0n });
+        const b = balanceBreakdown(accountBalances({ free: s(100n * PDEX), reserved: s(500n * PDEX), frozen: s(300n * PDEX) }, s(ED)));
+        assert.equal(b.transferable, 0n, 'the hold + lock case reaches the Send dialog as 0');
     });
     test('both pages mount the panel', () => {
         assert.match(script, /import \{ mountBalanceLocks \} from '\.\/lib\/balance-locks-view\.js'/);

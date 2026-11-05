@@ -46,7 +46,7 @@ const FULL = 1_000_000_000;   // Perbill 100%
 
 const tgt = (address, over = {}) => ({ address, name: null, intent: true, commission: 50_000_000, blocked: false, elected: true,
     inSession: true, heartbeat: true, blocks: 3, disabled: false, lastSlashEra: null, incidents: [], ...over });
-const ctx = (over = {}) => ({ activeEra: 500, sessionProgress: 0.9, imOnline: true, slashRecentEras: 28, ...over });
+const ctx = (over = {}) => ({ activeEra: 500, sessionProgress: 0.9, imOnline: true, slashRecentEras: 28, sessionStartBlock: 989_000, ...over });
 const flags = (t, c) => classifyTarget(t, ctx(c)).flags;
 
 describe('classifyTarget: one validator, from the nominator\'s side', () => {
@@ -99,6 +99,18 @@ describe('classifyTarget: one validator, from the nominator\'s side', () => {
         assert.ok(r.flags.includes('reported-offline'));
         assert.ok(r.notes.some(n => /990,000|990000/.test(n)));
     });
+    // Fable review, LOW: a SomeOffline from before the current session is
+    // history, not a warning; it alone must not raise the offline banner.
+    test('a SomeOffline older than the current session is history: shown, but not "reported-offline"', () => {
+        const r = classifyTarget(tgt(V1, { incidents: [{ block: 980_000, kind: 'imOnline.SomeOffline' }] }), ctx({ sessionStartBlock: 989_000 }));
+        assert.ok(!r.flags.includes('reported-offline'));
+        assert.ok(r.flags.includes('reported-offline-earlier'));
+        assert.ok(r.notes.some(n => /980,000/.test(n) && /earlier/.test(n)));
+    });
+    test('session start unknown: a SomeOffline cannot be dated, so it is not a current warning', () => {
+        const r = classifyTarget(tgt(V1, { incidents: [{ block: 990_000, kind: 'imOnline.SomeOffline' }] }), ctx({ sessionStartBlock: null }));
+        assert.ok(!r.flags.includes('reported-offline'));
+    });
     test('slashed recently: SlashingSpans.lastNonzeroSlash within the lookback, or a slash event', () => {
         assert.ok(flags(tgt(V1, { lastSlashEra: 480 })).includes('slashed'));
         assert.ok(!flags(tgt(V1, { lastSlashEra: 400 })).includes('slashed'), 'older than the lookback');
@@ -109,7 +121,7 @@ describe('classifyTarget: one validator, from the nominator\'s side', () => {
 
 function snap(targets, over = {}) {
     return { address: ME, nominating: true, submittedIn: 400, activeEra: 500, currentEra: 500, sessionIndex: 3000,
-        sessionProgress: 0.9, validatorCount: 20, imOnline: true, bondingDuration: 28, block: 1_000_000, targets, ...over };
+        sessionProgress: 0.9, validatorCount: 20, imOnline: true, bondingDuration: 28, block: 1_000_000, sessionStartBlock: 998_900, targets, ...over };
 }
 
 describe('nominationModel: banners', () => {
@@ -156,6 +168,11 @@ describe('nominationModel: banners', () => {
     test('reported offline at a recent session end also counts', () => {
         const m = nominationModel(snap([tgt(V1), tgt(V4, { incidents: [{ block: 999_000, kind: 'imOnline.SomeOffline' }] })]));
         assert.deepEqual(m.banners.find(x => x.kind === 'offline').keep, [V1]);
+    });
+    test('a stale SomeOffline alone raises no offline banner', () => {
+        const m = nominationModel(snap([tgt(V1), tgt(V4, { incidents: [{ block: 990_000, kind: 'imOnline.SomeOffline' }] })], { sessionStartBlock: 998_900 }));
+        assert.equal(m.banners.some(x => x.kind === 'offline'), false);
+        assert.ok(m.targets.find(t => t.address === V4).flags.includes('reported-offline-earlier'));
     });
     test('no offline source: the model says detection is unavailable', () => {
         const m = nominationModel(snap([tgt(V1, { heartbeat: null, blocks: null })], { imOnline: false }));
@@ -227,6 +244,25 @@ describe('readNominationStatus: the chain reads', () => {
         assert.deepEqual(by[V4].incidents, [{ block: 990_000, kind: 'imOnline.SomeOffline' }]);
         const m = nominationModel(r);
         assert.deepEqual(m.banners.find(b => b.kind === 'offline').keep, [V1, V2]);
+    });
+    // Fable review, LOW: a heartbeat read that fails is unknown, not offline.
+    test('a failed heartbeat or blocks read is unknown (null), never offline', async () => {
+        const api = fakeApi();
+        api.query.imOnline.receivedHeartbeats = async () => { throw new Error('rpc down'); };
+        api.query.imOnline.authoredBlocks = async () => { throw new Error('rpc down'); };
+        const r = await readNominationStatus(api, ME);
+        const v4 = r.targets.find(t => t.address === V4);
+        assert.equal(v4.heartbeat, null);
+        assert.equal(v4.blocks, null);
+        const c = nominationModel(r).targets.find(t => t.address === V4);
+        assert.ok(!c.flags.includes('offline'));
+        assert.ok(!c.flags.includes('not-seen-yet'));
+    });
+    test('the session start block comes from Babe.EpochStart (a session is one epoch)', async () => {
+        const api = fakeApi();
+        api.query.babe.epochStart = async () => [{ toNumber: () => 997_700, toString: () => '997700' }, { toNumber: () => 998_900, toString: () => '998900' }];
+        assert.equal((await readNominationStatus(api, ME)).sessionStartBlock, 998_900);
+        assert.equal((await readNominationStatus(fakeApi(), ME)).sessionStartBlock, null, 'no EpochStart: unknown');
     });
     test('no imOnline pallet: heartbeat and blocks are null and imOnline false', async () => {
         const r = await readNominationStatus(fakeApi({ imOnline: false }), ME);
@@ -391,7 +427,7 @@ describe('spec 392 metadata: the storage the status reads', { skip: fx392 ? fals
     test('every item exists', () => {
         for (const [p, i] of [['Staking', 'Nominators'], ['Staking', 'Validators'], ['Staking', 'ErasStakersOverview'], ['Staking', 'SlashingSpans'], ['Staking', 'ActiveEra'],
             ['Session', 'Validators'], ['Session', 'CurrentIndex'], ['Session', 'DisabledValidators'], ['ImOnline', 'ReceivedHeartbeats'], ['ImOnline', 'AuthoredBlocks'],
-            ['Babe', 'EpochIndex'], ['Babe', 'GenesisSlot'], ['Babe', 'CurrentSlot']]) assert.ok(storage(p, i), `${p}.${i}`);
+            ['Babe', 'EpochIndex'], ['Babe', 'GenesisSlot'], ['Babe', 'CurrentSlot'], ['Babe', 'EpochStart']]) assert.ok(storage(p, i), `${p}.${i}`);
     });
     test('real codecs through the reader', async () => {
         const T = (p, item, v) => {
