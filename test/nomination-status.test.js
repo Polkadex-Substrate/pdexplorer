@@ -364,7 +364,7 @@ describe('wiring: server, docs, help, both pages, the picker', () => {
         const t = HELP_TOPICS.find(x => x.slug === 'staking-status');
         assert.ok(t);
         for (const w of ['You are earning no rewards this era', 'Waiting', 'Chilled', 'heartbeat', 'offline', 'slash', 'Change validators', '100%']) assert.ok(t.body.includes(w), `article lacks "${w}"`);
-        assert.ok(!/[–—]/.test(t.body + t.title));
+        assert.ok(!/[\u2013\u2014]/.test(t.body + t.title));
         assert.match(server, /path: '\/help\/staking-status'/);
     });
     test('both pages mount the panel; the wallet one can open the picker', () => {

@@ -563,13 +563,13 @@ describe('the status card knows the new actions', () => {
             assert.ok(PENDING_TITLE[k], k);
             const c = successCopy(k, { freed: '5', n: 2, ref: 9, target: OTHER }, {});
             assert.ok(c.title && c.body, k);
-            assert.ok(!/[–—]/.test(c.title + c.body + c.next), k);
+            assert.ok(!/[\u2013\u2014]/.test(c.title + c.body + c.next), k);
         }
     });
     test('the errors these calls can return read as sentences', () => {
         for (const k of ['staking.AlreadyMigrated', 'staking.IncorrectSlashingSpans', 'democracy.NotVoter', 'democracy.NotDelegating', 'elections.MustBeVoter']) {
             assert.ok(ERROR_COPY[k], k);
-            assert.ok(!/[–—]/.test(ERROR_COPY[k]), k);
+            assert.ok(!/[\u2013\u2014]/.test(ERROR_COPY[k]), k);
         }
     });
 });
@@ -581,7 +581,7 @@ describe('help: /help/locked-balance explains the buttons', () => {
             assert.ok(t.body.includes(w), `article lacks "${w}"`);
         }
         assert.doesNotMatch(t.body, /preparing a fix/);
-        assert.ok(!/[–—]/.test(t.body));
+        assert.ok(!/[\u2013\u2014]/.test(t.body));
     });
 });
 

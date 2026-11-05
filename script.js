@@ -62,6 +62,9 @@ import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
+import { mountNominationStatus } from './lib/nomination-status-view.js';
+// The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
+const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
 
 // Polkadex chain SS58 prefix. Addresses encoded with this prefix all start
 // with the character "e", which is what we want to show the user — even
@@ -6266,6 +6269,7 @@ async function fetchAccountDetails(address) {
                 </table>
             </div>
             <div id="account-locks-slot" style="margin-bottom: 20px;"></div>
+            <div id="account-nominations-slot" style="margin-bottom: 20px;"></div>
             <div style="margin-bottom: 20px;">
                 <div class="account-tabs" style="padding: 0 20px; margin-bottom: 15px;">
                     <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transfers (${tabCount('transactions')})</button>
@@ -6282,7 +6286,8 @@ async function fetchAccountDetails(address) {
             </div>
         `;
         accountDetailsContainer.innerHTML = html;
-        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon });
+        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+        mountNominationStatus(document.getElementById('account-nominations-slot'), data.account, { fetchJson: fetchApiJson, helpIcon });
 
         // Audit F-122: bind copy with addEventListener and read the address
         // from the already-escaped data-address attribute. An inline
@@ -8940,6 +8945,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
         </div>
 
         <div id="wallet-locks-slot"></div>
+        <div id="wallet-nominations-slot"></div>
         ${isOwnWallet ? `
         <div id="wallet-actions-slot">
             ${hasInjectedWalletNow() ? `
@@ -9109,7 +9115,9 @@ function renderWalletDashboard(data, price, rewardsPayload) {
     // ownership — proxies that delegate FROM this address are public chain
     // state, and the multisig calculator works without an active session.
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
-    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon });
+    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+    mountNominationStatus(document.getElementById('wallet-nominations-slot'), data.address, { fetchJson: fetchApiJson, helpIcon,
+        canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), data.address), openPicker: (keep) => openStakeModal(keep) });
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
     refreshWalletMultisigs();
     // Average APR card — runs after the rest of the dashboard so the
@@ -9380,7 +9388,7 @@ function clearStakeError() {
     if (el) { el.textContent = ''; el.style.display = 'none'; }
 }
 
-async function openStakeModal() {
+async function openStakeModal(keep) {
     const data = currentWalletData;
     if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const modal = document.getElementById('stake-modal');
@@ -9398,8 +9406,10 @@ async function openStakeModal() {
     document.getElementById('stake-minimum').textContent = stakingFormatPDEX(data.network && data.network.minStake) + ' PDEX';
 
     // Pre-fill selected with the current nominations so the user can curate.
+    // keep (from "Change validators"): only those; a click event prefills all.
     stakeSelected = new Map();
     for (const v of (data.staking && data.staking.nominating) || []) {
+        if (Array.isArray(keep) && !keep.some(k => isSameAddress(k, v.address))) continue;
         stakeSelected.set(v.address, { address: v.address, name: v.name });
     }
     renderStakeSelected();

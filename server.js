@@ -34,6 +34,7 @@ import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, 
     lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
+import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { readEraSummary, missingEras, buildChoiceSnapshot, readConst, FALLBACK_HISTORY_DEPTH } from './lib/stake-choice-sync.js';
@@ -2998,6 +2999,7 @@ const SITEMAP_STATIC_ROUTES = [
     { path: '/help/claiming-rewards',         changefreq: 'monthly', priority: '0.6' },
     { path: '/help/unstaking',                changefreq: 'monthly', priority: '0.6' },
     { path: '/help/locked-balance',           changefreq: 'monthly', priority: '0.6' },
+    { path: '/help/staking-status',           changefreq: 'monthly', priority: '0.6' },
     { path: '/help/staking-rewards-page',     changefreq: 'monthly', priority: '0.6' },
     { path: '/help/governance-overview',      changefreq: 'monthly', priority: '0.6' },
     { path: '/help/democracy-and-voting',     changefreq: 'monthly', priority: '0.6' },
@@ -4382,6 +4384,9 @@ app.get('/api/account/:address/history', (req, res) => {
 
 // Locked / transferable breakdown and why each lock exists (lib/balance-locks-api.js).
 registerBalanceLocksRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, serverError });
+// A nominator's validators this era: active, waiting, offline, slashed (lib/nomination-status-api.js).
+registerStakingStatusRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, serverError,
+    incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address) });
 
 // --- STAKING REWARDS ENDPOINTS ---
 app.get('/api/staking-rewards-status', (req, res) => {

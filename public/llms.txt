@@ -67,7 +67,13 @@ Access notes:
 - GET /api/account/:address/locks - live balance breakdown (total, transferable,
   locked, reserved, existential deposit; planck strings) and one row per lock,
   freeze, hold and known deposit with source, reason, how to release it and a
-  status (active, orphan, legacy, unknown). locked is the largest lock, not the sum
+  status (active, orphan, legacy, unknown). locked is the largest lock, not the sum.
+  actions: what can be released now (withdraw, democracy remove/unlock or
+  undelegate, council vote, leftover staking lock via staking.migrateCurrency)
+- GET /api/account/:address/staking-status - for a nominator, each nominated
+  validator this era (active, waiting, not-validator; offline, disabled,
+  reported-offline, commission100, blocked, slashed) and banners (no-rewards,
+  offline). nominating:false for other accounts
 - GET /api/account/:address/history?list=transactions|events&before=<block>:<rowId>
   - older pages of the indexed transactions or events of an address, 200 per
   page, newest first, read from the index (no RPC). Start from index.next in
