@@ -11,11 +11,25 @@
 name: CI
 
 on:
+  # main only. A branch with an open PR is already covered by the pull_request
+  # trigger; `push: ['**']` ran every job twice for every PR commit.
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
-  # Lets an operator confirm a red main before deploying, without a push.
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Lets an operator confirm a red main before deploying, without a push. Also
+  # the way to run the FULL mutation set on demand.
   workflow_dispatch:
+  # Full mutation run every night, so PRs never have to carry it alone.
+  schedule:
+    - cron: '17 3 * * *'
+
+# A newer push to the same PR/branch makes the older run pointless; do not pay
+# for it. (The nightly run has its own ref and is never cancelled by a push.)
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  # Only PRs are cancelled when superseded; a push to main must always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -64,14 +78,54 @@ jobs:
             bash -n "$f" || { echo "::error file=$f::bash -n failed"; exit 1; }
           done
 
-  # Separate job: mutation runs rewrite files in place and take minutes. Keeping
-  # them out of the fast path means a normal push still gets a quick answer,
-  # while a regression in the *tests themselves* is still caught before release.
-  mutation:
+  # Mutation harnesses rewrite files in place and each mutant needs a test run.
+  # They used to run one after another in a single job (about 90 mutants, each
+  # followed by the whole suite). Now:
+  #   plan            decides whether to run and lists the harnesses
+  #   mutation-shard  one job per harness, in parallel (a harness only mutates
+  #                   its own checkout, so shards cannot interfere)
+  #   mutation        the single gate; keeps the old required-check name
+  # Inside a shard tools/lib/suite-runner.mjs runs only the tests that mention
+  # the mutated file, in parallel, stopping at the first red one; a survivor is
+  # still confirmed against the whole suite before it is reported.
+  plan:
     runs-on: ubuntu-latest
-    # Only where it is worth the minutes — these are the assertions protecting
-    # the fixes that have most often been reintroduced.
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    outputs:
+      run: ${{ steps.p.outputs.run }}
+      harnesses: ${{ steps.p.outputs.harnesses }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: p
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          echo "harnesses=$(ls tools/mutation-*.mjs | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+          run=true
+          if [ "$EVENT" = pull_request ]; then
+            if [ "$DRAFT" = true ]; then
+              echo "Draft PR: mutation waits for ready-for-review."
+              run=false
+            else
+              # Docs-only change cannot move a mutant verdict.
+              code=$(git diff --name-only "$BASE" HEAD | grep -Ev '^(docs/|.*\.md$)' || true)
+              if [ -z "$code" ]; then echo "Docs-only PR: nothing to mutate."; run=false; fi
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  mutation-shard:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: ${{ fromJSON(needs.plan.outputs.harnesses) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -79,13 +133,11 @@ jobs:
           node-version: '22.11'
           cache: npm
       - run: npm ci
-      - name: Mutation harnesses
+      - name: Mutation harness
         run: |
+          echo "=== ${{ matrix.harness }} ==="
           fail=0
-          for h in tools/mutation-*.mjs; do
-            echo "=== $h ==="
-            node "$h" || fail=1
-          done
+          node "${{ matrix.harness }}" || fail=1
           # Every harness restores the file it mutated; if one crashed midway,
           # say so loudly rather than leaving a rewritten tree behind.
           if ! git diff --quiet; then
@@ -94,3 +146,20 @@ jobs:
             exit 1
           fi
           exit $fail
+
+  mutation:
+    needs: [plan, mutation-shard]
+    # Not always(): a superseded (cancelled) run must not show a red check.
+    # Any failed harness still fails the gate below.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate
+        env:
+          PLAN: ${{ needs.plan.result }}
+          RUN: ${{ needs.plan.outputs.run }}
+          SHARDS: ${{ needs.mutation-shard.result }}
+        run: |
+          [ "$PLAN" = success ] || { echo "::error::plan job: $PLAN"; exit 1; }
+          if [ "$RUN" != true ]; then echo "mutation skipped by plan"; exit 0; fi
+          [ "$SHARDS" = success ] || { echo "::error::mutation shards: $SHARDS"; exit 1; }

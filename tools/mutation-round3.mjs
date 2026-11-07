@@ -3,7 +3,7 @@
 // Three of the five are defects in my own round-2 remediation, so these mutants
 // mostly revert a fix to the exact broken form the audit found.
 import { readFileSync, writeFileSync, copyFileSync, rmSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { suiteMustPass } from './lib/suite-runner.mjs';
 
 const M = [
   // F-196
@@ -77,7 +77,7 @@ for (const [file, from, to, label] of M) {
   // pin 22.11, where it is REQUIRED. Without it every test run dies at import,
   // the grep for '# fail 0' never matches, and EVERY mutant is reported KILLED —
   // a harness that can only return success. Verified against a real 22.11.
-  try { execSync("node --experimental-sqlite --test 'test/**/*.test.js' 2>&1 | grep -q '# fail 0'", { stdio: 'pipe' }); }
+  try { suiteMustPass(file); }
   catch { caught = true; }
   copyFileSync(`${file}.bak`, file); rmSync(`${file}.bak`, { force: true });
   if (caught) console.log(`KILLED   ${label}`);
