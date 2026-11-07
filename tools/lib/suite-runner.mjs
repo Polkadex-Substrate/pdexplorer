@@ -25,6 +25,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, join } from 'node:path';
 
+import { restoreStaleBackups } from './restore-bak.mjs';
+
 const FIRST_FAIL = new URL('./first-fail.mjs', import.meta.url).pathname;
 
 // Local escape hatch only (CI never sets it): a regex of test paths to leave out,
@@ -53,11 +55,32 @@ function testsMentioning(file) {
 // Throws when the suite does not pass cleanly (mutant killed); returns when it
 // does (mutant survived).
 export function suiteMustPass(mutatedFile) {
-  const run = (files) => execFileSync('node', [FIRST_FAIL, ...files], { stdio: 'pipe' });
+  const run = (files) => {
+    try { return execFileSync('node', [FIRST_FAIL, ...files], { stdio: 'pipe' }); }
+    catch (e) {
+      // The child died from a signal (Ctrl-C, CI cancel): this is not a kill.
+      // Put the tree back and stop, never record a verdict.
+      if (e && (e.signal === 'SIGINT' || e.signal === 'SIGTERM')) {
+        restoreStaleBackups();
+        process.exit(e.signal === 'SIGINT' ? 130 : 143);
+      }
+      throw e;
+    }
+  };
   const subset = testsMentioning(mutatedFile);
   if (subset.length) run(subset);
   run(listTests());
 }
+
+// A previous run that was killed mid-mutant leaves <file>.bak holding the
+// ORIGINAL. Restore it before anything copies the (mutated) file over it, then
+// install handlers so this run cannot leave a mutated tree either.
+restoreStaleBackups();
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { restoreStaleBackups(); process.exit(sig === 'SIGINT' ? 130 : 143); });
+}
+process.on('uncaughtException', (e) => { console.error(e); restoreStaleBackups(); process.exit(1); });
+process.on('exit', () => restoreStaleBackups());
 
 // A red baseline makes every mutant look KILLED (the trap described above,
 // reached by a different road). ES imports run before the harness body, so

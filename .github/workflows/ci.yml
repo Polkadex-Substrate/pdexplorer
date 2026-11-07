@@ -28,7 +28,8 @@ on:
 # for it. (The nightly run has its own ref and is never cancelled by a push.)
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  # Only PRs are cancelled when superseded; a push to main must always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -148,7 +149,9 @@ jobs:
 
   mutation:
     needs: [plan, mutation-shard]
-    if: always()
+    # Not always(): a superseded (cancelled) run must not show a red check.
+    # Any failed harness still fails the gate below.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Gate
