@@ -12933,7 +12933,7 @@ function renderTreasury() {
                 <h2>Treasury</h2>
                 <div style="display:flex;gap:14px;align-items:center;">
                     <span style="color:var(--text-secondary);font-size:0.78rem;">${stakingFormatNumber(d.proposalCount)} lifetime proposals</span>
-                    <button id="treasury-submit-btn" class="staking-download-btn"><i class='bx bx-plus-circle'></i> Submit proposal</button>
+                    <span style="color:var(--text-muted);font-size:0.78rem;">New spends closed on this runtime ${helpIcon('treasury', 'Why the treasury takes no new spends')}</span>
                 </div>
             </div>
             <div class="account-tabs" style="margin:0 24px;">
@@ -12952,8 +12952,6 @@ function renderTreasury() {
     root.querySelectorAll('[data-treastab]').forEach(btn => {
         btn.addEventListener('click', () => { treasuryTab = btn.getAttribute('data-treastab'); renderTreasury(); });
     });
-    const submitBtn = document.getElementById('treasury-submit-btn');
-    if (submitBtn) submitBtn.addEventListener('click', openTreasurySubmitModal);
 }
 
 // Banner shown while the governance history crawler is still backfilling.
@@ -13112,72 +13110,6 @@ function mountTreasuryHistoryTable(list) {
         columns: buildTreasuryColumns('outcome')
     });
 }
-
-function openTreasurySubmitModal() {
-    const modal = document.getElementById('treasury-submit-modal');
-    if (!modal) return;
-    const stored = getStoredWallet();
-    const warn = document.getElementById('treasury-modal-wallet-warning');
-    const activeEl = document.getElementById('treasury-active-wallet');
-    const errEl = document.getElementById('treasury-modal-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-    if (warn) {
-        if (stored) {
-            warn.style.display = 'none';
-        } else {
-            // Inject the actionable connect-wallet link with returnTo so
-            // the user lands back on /treasury after connecting.
-            warn.innerHTML = buildWalletConnectPrompt();
-            warn.style.display = 'block';
-        }
-    }
-    if (activeEl) activeEl.textContent = stored || '--';
-    modal.style.display = 'flex';
-}
-
-async function submitTreasuryProposal() {
-    const errEl = document.getElementById('treasury-modal-error');
-    const showErr = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } };
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-
-    const amtInput = document.getElementById('treasury-amount-input');
-    const benInput = document.getElementById('treasury-beneficiary-input');
-    const amtStr = (amtInput ? amtInput.value : '').trim();
-    const beneficiary = (benInput ? benInput.value : '').trim();
-
-    if (!isPositiveNumberInput(amtStr)) return showErr('Enter a valid PDEX amount greater than zero.');
-    if (!beneficiary) return showErr('Enter a beneficiary address.');
-    if (!isValidPolkadexAddress(beneficiary)) return showErr('That beneficiary address is not a valid Polkadex address.');
-
-    // Audit F-011: decimal-string conversion — Number*1e12 signs a planck
-    // value that can differ from what the proposer typed.
-    const valuePlanck = pdexToPlanck(amtStr);
-    await submitSignedTx({
-        buildTx: (api) => api.tx.treasury.proposeSpend(valuePlanck, beneficiary),
-        label: 'Treasury proposal',
-        action: { key: 'treasury.propose', params: { value: amtStr, beneficiary } },
-        button: document.getElementById('submit-treasury-tx-btn'),
-        busyText: 'Signing…',
-        idleText: 'Sign & Submit Proposal',
-        onError: showErr,
-        onSuccess: () => {
-            const modal = document.getElementById('treasury-submit-modal');
-            if (modal) modal.style.display = 'none';
-            if (amtInput) amtInput.value = '';
-            if (benInput) benInput.value = '';
-            setTimeout(fetchTreasuryData, 2000);
-        }
-    });
-}
-
-(function wireTreasuryModal() {
-    const modal = document.getElementById('treasury-submit-modal');
-    const closeBtn = document.getElementById('close-treasury-modal');
-    const submitTxBtn = document.getElementById('submit-treasury-tx-btn');
-    if (closeBtn && modal) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
-    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
-    if (submitTxBtn) submitTxBtn.addEventListener('click', submitTreasuryProposal);
-})();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Governance detail modal — unified view for treasury proposals, council
