@@ -11606,7 +11606,7 @@ let councilData = null;
 //   open_voting | open_approved | open_rejected | open_expired
 //   res_executed | res_approved | res_disapproved | res_closed | (or 'all')
 let councilMotionsFilter = 'all';
-// Call-type filter (e.g. 'treasury.approveProposal'), 'unknown', or 'all'.
+// Call-type filter (e.g. 'treasury.spend'), 'unknown', or 'all'.
 let councilCallFilter = 'all';
 
 // Two collectives share the motion UI: the council and the technical
@@ -11618,7 +11618,7 @@ const COLLECTIVE_VIEWS = {
     council: {
         key: 'council', rootId: 'council-motions-content', tabId: 'council-motions',
         label: 'Council', bodyNoun: 'the council', memberRole: 'Council member', seatLabel: 'Council Seats',
-        motionLabel: 'Council Motion', canPropose: true,
+        motionLabel: 'Council Motion',
         get filter() { return councilMotionsFilter; }, set filter(v) { councilMotionsFilter = v; },
         get callFilter() { return councilCallFilter; }, set callFilter(v) { councilCallFilter = v; },
         getData: () => councilData, refresh: (o) => fetchCouncilData(o)
@@ -11626,7 +11626,7 @@ const COLLECTIVE_VIEWS = {
     technicalCommittee: {
         key: 'technicalCommittee', rootId: 'tc-motions-content', tabId: 'council-tc',
         label: 'Technical Committee', bodyNoun: 'the technical committee', memberRole: 'Technical committee member', seatLabel: 'Members',
-        motionLabel: 'Technical Committee Motion', canPropose: false,
+        motionLabel: 'Technical Committee Motion',
         filter: 'all', callFilter: 'all',
         getData: () => tcData, refresh: (o) => fetchTechnicalCommitteeData(o)
     }
@@ -11826,22 +11826,10 @@ function renderCollectiveMotions(view, data = view.getData()) {
         .filter(m => m.status && m.status !== 'proposed')
         .map(m => ({ ...m, __statusKey: 'res_' + m.status, __call: callKeyOf(m) }));
 
-    // CTA to table a new motion (e.g. a treasury approval). Shown to everyone
-    // for discoverability; the modal + submit path prompt to connect and
-    // enforce council membership at action time.
-    // Council only: the Propose modal builds treasury approvals, which are the
-    // council's business. Technical committee motions (fast-tracks, emergency
-    // cancellations) are proposed from polkadot.js apps.
-    const proposeBtn = view.canPropose
-        ? `<button type="button" class="reward-filter-btn" id="open-propose-motion-btn" style="border-color:var(--brand-primary);color:var(--brand-primary);font-weight:600;"><i class='bx bx-plus-circle'></i> Propose motion</button>${helpIcon('council-and-motions', 'How to propose, vote on, and close motions')}`
-        : '';
-
-    // Nothing on chain at all — still surface the Propose action so a council
-    // member can open the first motion (the common "empty page" case).
+    // Nothing on chain at all.
     if (annotatedOpen.length + resolved.length === 0) {
         root.__motionRender = null;
         root.innerHTML = summary
-            + (proposeBtn ? `<div class="staking-toolbar" style="margin-bottom:14px;"><div class="reward-filter">${proposeBtn}</div></div>` : '')
             + governanceIndexNote(data.history, 'motions')
             + `<div style="padding:28px;text-align:center;color:var(--text-muted);">No motions are currently open before ${stakingEscapeHtml(view.bodyNoun)}.</div>`;
         wireMotionControls(root, view);
@@ -11887,13 +11875,12 @@ function renderCollectiveMotions(view, data = view.getData()) {
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                 <label for="${view.key}-motion-call-filter" style="font-size:0.8rem;color:var(--text-muted);">Call type</label>
                 <select id="${view.key}-motion-call-filter" class="motion-call-select" style="padding:6px 10px;border-radius:var(--radius-sm);background:rgba(0,0,0,0.3);color:var(--text-primary);border:1px solid var(--border-color);font-size:0.82rem;">${callOptions}</select>
-                ${proposeBtn}
             </div>
         </div>`;
 
     const roleNote = isCouncilMember
-        ? `<div style="margin-bottom:16px;color:var(--text-secondary);font-size:0.82rem;">You are a ${stakingEscapeHtml(view.memberRole.toLowerCase())} — you can ${view.canPropose ? 'propose, ' : ''}vote on, and close motions.</div>`
-        : `<div style="margin-bottom:16px;color:var(--text-muted);font-size:0.82rem;">Anyone can view and explore motions. ${view.canPropose ? 'Proposing, voting' : 'Voting'} and closing require a seat on ${stakingEscapeHtml(view.bodyNoun)} — ${stored ? 'your connected wallet does not hold one.' : 'connect a member wallet to act.'}</div>`;
+        ? `<div style="margin-bottom:16px;color:var(--text-secondary);font-size:0.82rem;">You are a ${stakingEscapeHtml(view.memberRole.toLowerCase())} — you can vote on, and close motions.</div>`
+        : `<div style="margin-bottom:16px;color:var(--text-muted);font-size:0.82rem;">Anyone can view and explore motions. Voting and closing require a seat on ${stakingEscapeHtml(view.bodyNoun)} — ${stored ? 'your connected wallet does not hold one.' : 'connect a member wallet to act.'}</div>`;
 
     // A motion is visible when it passes BOTH the status and call-type filters.
     const matches = (m) => (view.filter === 'all' || m.__statusKey === view.filter)
@@ -12023,9 +12010,8 @@ function wireMotionActionButtons(scope, view) {
     scope.querySelectorAll('.motion-close-btn').forEach(b => b.addEventListener('click', () => councilMotionClose(b.getAttribute('data-hash'), b.getAttribute('data-index'), view.key)));
 }
 
-// Wire the filter controls, Propose button, and per-motion action buttons.
-// Shared by every render path (including the empty state) so the Propose
-// action is always live for council members.
+// Wire the filter controls and per-motion action buttons.
+// Shared by every render path, including the empty state.
 function wireMotionControls(root, view = COLLECTIVE_VIEWS.council) {
     root.querySelectorAll('[data-motionfilter]').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -12038,8 +12024,6 @@ function wireMotionControls(root, view = COLLECTIVE_VIEWS.council) {
         view.callFilter = callSel.value;
         renderCollectiveMotions(view);
     });
-    const proposeBtn = view.canPropose ? root.querySelector('#open-propose-motion-btn') : null;
-    if (proposeBtn) proposeBtn.addEventListener('click', () => openProposeMotionModal());
     wireMotionActionButtons(root, view);
 }
 
@@ -12214,167 +12198,6 @@ function motionStage(view, hash, kind) {
         renderCollectiveMotions(view);
     };
 }
-
-// --- Propose a council motion -------------------------------------------------
-// The collective takes a *call* to dispatch if the motion passes. We currently
-// support the two treasury approvals a council most often tables — approve and
-// reject a pending treasury proposal — built as treasury.approveProposal(id) /
-// treasury.rejectProposal(id) and wrapped in <pallet>.propose(threshold, call,
-// lengthBound). Threshold defaults to a simple majority of the current seats.
-// Seats come from the live council (3 of 5 today); with no council data there
-// is no default at all, never 1 (a threshold of 1 runs the call with no vote).
-let proposeModalLoading = false;
-async function ensureCouncilData() {
-    if (councilData && councilData.collectivePallet && Array.isArray(councilData.members)) return councilData;
-    try {
-        const data = await parseJsonResponse(await fetch('/api/council', { cache: 'no-store' }));
-        if (data && !data.error) { if (data.pallet) councilPalletName = data.pallet; councilData = data; }
-    } catch (e) { console.warn('[propose] could not load council data', e && e.message); }
-    return councilData;
-}
-
-// One place decides the warning, the confirm box and whether Submit is live:
-// disabled while loading, while signing, and whenever the error line shows.
-function syncProposeModal() {
-    const btn = document.getElementById('submit-propose-tx-btn');
-    const errEl = document.getElementById('propose-modal-error');
-    const confirmEl = document.getElementById('propose-threshold-confirm');
-    const seats = (councilData && Array.isArray(councilData.members)) ? councilData.members.length : 0;
-    const raw = (document.getElementById('propose-threshold') || {}).value || '';
-    const chk = checkThreshold(raw, seats, !!(confirmEl && confirmEl.checked));
-    if (errEl && chk.error && raw.trim() && !proposeModalLoading) { errEl.textContent = chk.error; errEl.style.display = 'block'; }
-    const warnBox = document.getElementById('propose-threshold-warning');
-    if (warnBox) warnBox.style.display = chk.warning ? 'block' : 'none';
-    const warnText = document.getElementById('propose-threshold-warning-text');
-    if (warnText) warnText.textContent = chk.warning || '';
-    const confirmRow = document.getElementById('propose-threshold-confirm-row');
-    if (confirmRow) confirmRow.style.display = chk.needsConfirm ? 'flex' : 'none';
-    if (!btn || btn.getAttribute('aria-busy') === 'true') return chk;
-    const errShowing = !!(errEl && errEl.style.display !== 'none' && errEl.textContent);
-    btn.disabled = proposeModalLoading || errShowing || !chk.canSubmit || !seats;
-    btn.textContent = proposeModalLoading ? 'Loading council...' : 'Sign & Submit Motion';
-    return chk;
-}
-
-async function openProposeMotionModal(prefill) {
-    const modal = document.getElementById('council-propose-modal');
-    if (!modal) return;
-    // Guard against being passed a DOM Event when used directly as a click
-    // handler — only a plain {callType, proposalId} object is treated as prefill.
-    const pf = (prefill && typeof prefill === 'object' && !(prefill instanceof Event)) ? prefill : null;
-    // Never carry a threshold or a confirmation over from an earlier open.
-    const thInput = document.getElementById('propose-threshold');
-    if (thInput) thInput.value = '';
-    const confirmEl = document.getElementById('propose-threshold-confirm');
-    if (confirmEl) confirmEl.checked = false;
-    const errEl = document.getElementById('propose-modal-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-    // Prefill from a treasury proposal ("convert to motion") if provided.
-    if (pf && pf.callType) {
-        const sel = document.getElementById('propose-call-type');
-        if (sel) sel.value = pf.callType;
-    }
-    if (pf && pf.proposalId != null && pf.proposalId !== '') {
-        const idEl = document.getElementById('propose-proposal-id');
-        if (idEl) idEl.value = String(pf.proposalId);
-    }
-    const seatHint = document.getElementById('propose-threshold-hint');
-    // Opened from Treasury, the council page has never loaded: load it first.
-    proposeModalLoading = !(councilData && councilData.collectivePallet && Array.isArray(councilData.members));
-    if (proposeModalLoading && seatHint) seatHint.textContent = 'Loading council...';
-    modal.style.display = 'flex';
-    syncProposeModal();
-    if (proposeModalLoading) { await ensureCouncilData(); proposeModalLoading = false; }
-
-    const stored = getStoredWallet();
-    const members = (councilData && Array.isArray(councilData.members)) ? councilData.members : [];
-    const isMember = !!stored && members.some(m => isSameAddress(m.address, stored));
-    const warn = document.getElementById('propose-modal-wallet-warning');
-    if (warn) {
-        if (!stored) { warn.innerHTML = buildWalletConnectPrompt(); warn.style.display = 'block'; }
-        else if (!isMember) { warn.textContent = 'Only council members can propose a motion.'; warn.style.display = 'block'; }
-        else { warn.style.display = 'none'; warn.textContent = ''; }
-    }
-    const activeEl = document.getElementById('propose-active-wallet');
-    if (activeEl) activeEl.textContent = stored || '--';
-    const def = defaultThreshold(members.length);
-    if (thInput && !thInput.value && def) thInput.value = String(def);
-    if (seatHint) seatHint.textContent = def ? `Council has ${members.length} seats; a majority is ${def}.` : 'Council data could not be loaded. Close this window and try again.';
-    if (!def && errEl) { errEl.textContent = 'Council data is not ready yet. Close this window and try again in a moment.'; errEl.style.display = 'block'; }
-    syncProposeModal();
-}
-
-async function submitProposeMotion() {
-    const errEl = document.getElementById('propose-modal-error');
-    const showErr = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } syncProposeModal(); };
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-
-    if (!councilData || !councilData.collectivePallet) return showErr('Council data is not ready yet — try again in a moment.');
-    const stored = getStoredWallet();
-    const members = Array.isArray(councilData.members) ? councilData.members : [];
-    if (!stored) return showErr('Please connect your wallet first.');
-    if (!members.some(m => isSameAddress(m.address, stored))) return showErr('Only council members can propose a motion.');
-
-    const callType = (document.getElementById('propose-call-type') || {}).value || 'treasury.approveProposal';
-    const proposalId = parseInt((document.getElementById('propose-proposal-id') || {}).value, 10);
-    const chk = syncProposeModal();
-
-    if (!Number.isInteger(proposalId) || proposalId < 0) return showErr('Enter a valid treasury proposal # (a whole number).');
-    if (chk.error) return showErr(chk.error);
-    if (!chk.canSubmit) return showErr('Tick the box to confirm a threshold of 1, or raise the threshold.');
-    const threshold = chk.value;
-    const seats = members.length;
-
-    const pallet = councilData.collectivePallet;
-    await submitSignedTx({
-        buildTx: (api) => {
-            if (!api.tx.treasury || (!api.tx.treasury.approveProposal && !api.tx.treasury.rejectProposal)) {
-                throw new Error('The treasury pallet is not available on this runtime.');
-            }
-            const inner = callType === 'treasury.rejectProposal'
-                ? api.tx.treasury.rejectProposal(proposalId)
-                : api.tx.treasury.approveProposal(proposalId);
-            // length_bound must be >= the SCALE-encoded length of the proposed
-            // call. Pass the Call (inner.method), not the wrapping extrinsic.
-            const proposalCall = inner.method;
-            return api.tx[pallet].propose(threshold, proposalCall, proposalCall.encodedLength);
-        },
-        label: `Propose ${callType}(#${proposalId})`,
-        action: { key: 'council.propose', params: { id: proposalId, callType, threshold, seats } },
-        button: document.getElementById('submit-propose-tx-btn'),
-        busyText: 'Signing…',
-        idleText: 'Sign & Submit Motion',
-        // A declined signature is not an error; the neutral card says so.
-        onError: (t, m) => (m && m.stage === 'cancelled' ? syncProposeModal() : showErr(t)),
-        onSuccess: () => {
-            const modal = document.getElementById('council-propose-modal');
-            if (modal) modal.style.display = 'none';
-            const idEl = document.getElementById('propose-proposal-id');
-            if (idEl) idEl.value = '';
-            fetchCouncilData({ fresh: true });
-            setTimeout(() => fetchCouncilData({ fresh: true }), 6000);
-        }
-    });
-}
-
-(function wireProposeMotionModal() {
-    const modal = document.getElementById('council-propose-modal');
-    if (!modal) return;
-    const closeBtn = document.getElementById('close-propose-modal');
-    const submitBtn = document.getElementById('submit-propose-tx-btn');
-    if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
-    modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
-    if (submitBtn) submitBtn.addEventListener('click', submitProposeMotion);
-    // Any edit clears the error line and re-checks; Submit follows.
-    ['propose-threshold', 'propose-proposal-id', 'propose-call-type', 'propose-threshold-confirm'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) ['input', 'change'].forEach(t => el.addEventListener(t, () => {
-            const e = document.getElementById('propose-modal-error');
-            if (e) { e.style.display = 'none'; e.textContent = ''; }
-            syncProposeModal();
-        }));
-    });
-})();
 
 // Tab switching
 const councilTabs = document.querySelectorAll('.council-page .account-tab');
@@ -12933,7 +12756,7 @@ function renderTreasury() {
                 <h2>Treasury</h2>
                 <div style="display:flex;gap:14px;align-items:center;">
                     <span style="color:var(--text-secondary);font-size:0.78rem;">${stakingFormatNumber(d.proposalCount)} lifetime proposals</span>
-                    <button id="treasury-submit-btn" class="staking-download-btn"><i class='bx bx-plus-circle'></i> Submit proposal</button>
+                    <span style="color:var(--text-muted);font-size:0.78rem;">New spends closed on this runtime ${helpIcon('treasury', 'Why the treasury takes no new spends')}</span>
                 </div>
             </div>
             <div class="account-tabs" style="margin:0 24px;">
@@ -12952,8 +12775,6 @@ function renderTreasury() {
     root.querySelectorAll('[data-treastab]').forEach(btn => {
         btn.addEventListener('click', () => { treasuryTab = btn.getAttribute('data-treastab'); renderTreasury(); });
     });
-    const submitBtn = document.getElementById('treasury-submit-btn');
-    if (submitBtn) submitBtn.addEventListener('click', openTreasurySubmitModal);
 }
 
 // Banner shown while the governance history crawler is still backfilling.
@@ -13051,15 +12872,6 @@ function buildTreasuryColumns(showStatus, opts = {}) {
             sort: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
             filter: { type: 'select', options: ['proposed', 'approved', 'awarded', 'rejected'] },
             format: row => treasuryStatusBadge(row.status)
-        }] : []),
-        // Optional per-row council action (open proposals tab). Visible to all;
-        // the delegated handler prompts to connect and the modal enforces
-        // council membership. Only meaningful for still-open ('proposed') rows.
-        ...(opts.proposeAction ? [{
-            key: '__propose', label: 'Action',
-            format: row => row.status === 'proposed'
-                ? `<button type="button" class="treasury-propose-row-btn reward-filter-btn" data-proposal-id="${stakingEscapeHtml(String(row.id))}" style="padding:4px 10px;font-size:0.76rem;border-color:var(--brand-primary);color:var(--brand-primary);white-space:nowrap;"><i class='bx bx-plus-circle'></i> Propose motion</button>`
-                : '<span style="color:var(--text-muted);">—</span>'
         }] : [])
     ];
 }
@@ -13087,7 +12899,7 @@ function mountTreasuryProposalsTable(list) {
         defaultSort: { key: 'id', dir: 'desc' },
         globalSearch: true, summarySuffix: 'proposals',
         emptyMessage: 'No open proposals.',
-        columns: buildTreasuryColumns(false, { proposeAction: true })
+        columns: buildTreasuryColumns(false)
     });
 }
 function mountTreasuryApprovedTable(list) {
@@ -13112,72 +12924,6 @@ function mountTreasuryHistoryTable(list) {
         columns: buildTreasuryColumns('outcome')
     });
 }
-
-function openTreasurySubmitModal() {
-    const modal = document.getElementById('treasury-submit-modal');
-    if (!modal) return;
-    const stored = getStoredWallet();
-    const warn = document.getElementById('treasury-modal-wallet-warning');
-    const activeEl = document.getElementById('treasury-active-wallet');
-    const errEl = document.getElementById('treasury-modal-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-    if (warn) {
-        if (stored) {
-            warn.style.display = 'none';
-        } else {
-            // Inject the actionable connect-wallet link with returnTo so
-            // the user lands back on /treasury after connecting.
-            warn.innerHTML = buildWalletConnectPrompt();
-            warn.style.display = 'block';
-        }
-    }
-    if (activeEl) activeEl.textContent = stored || '--';
-    modal.style.display = 'flex';
-}
-
-async function submitTreasuryProposal() {
-    const errEl = document.getElementById('treasury-modal-error');
-    const showErr = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } };
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-
-    const amtInput = document.getElementById('treasury-amount-input');
-    const benInput = document.getElementById('treasury-beneficiary-input');
-    const amtStr = (amtInput ? amtInput.value : '').trim();
-    const beneficiary = (benInput ? benInput.value : '').trim();
-
-    if (!isPositiveNumberInput(amtStr)) return showErr('Enter a valid PDEX amount greater than zero.');
-    if (!beneficiary) return showErr('Enter a beneficiary address.');
-    if (!isValidPolkadexAddress(beneficiary)) return showErr('That beneficiary address is not a valid Polkadex address.');
-
-    // Audit F-011: decimal-string conversion — Number*1e12 signs a planck
-    // value that can differ from what the proposer typed.
-    const valuePlanck = pdexToPlanck(amtStr);
-    await submitSignedTx({
-        buildTx: (api) => api.tx.treasury.proposeSpend(valuePlanck, beneficiary),
-        label: 'Treasury proposal',
-        action: { key: 'treasury.propose', params: { value: amtStr, beneficiary } },
-        button: document.getElementById('submit-treasury-tx-btn'),
-        busyText: 'Signing…',
-        idleText: 'Sign & Submit Proposal',
-        onError: showErr,
-        onSuccess: () => {
-            const modal = document.getElementById('treasury-submit-modal');
-            if (modal) modal.style.display = 'none';
-            if (amtInput) amtInput.value = '';
-            if (benInput) benInput.value = '';
-            setTimeout(fetchTreasuryData, 2000);
-        }
-    });
-}
-
-(function wireTreasuryModal() {
-    const modal = document.getElementById('treasury-submit-modal');
-    const closeBtn = document.getElementById('close-treasury-modal');
-    const submitTxBtn = document.getElementById('submit-treasury-tx-btn');
-    if (closeBtn && modal) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
-    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
-    if (submitTxBtn) submitTxBtn.addEventListener('click', submitTreasuryProposal);
-})();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Governance detail modal — unified view for treasury proposals, council
@@ -13222,22 +12968,6 @@ function renderTreasuryDetail(row) {
     // can pivot to live at the proposed/resolved block links.
     const heading = `Treasury Proposal #${stakingEscapeHtml(String(row.id))}`;
 
-    // "Convert to motion" — a standing open (status 'proposed') treasury
-    // proposal is approved/rejected by the council via a motion, not directly.
-    // We surface that action on every open proposal (for ALL viewers, so the
-    // path is discoverable) — the Propose Motion modal prompts to connect and
-    // enforces council membership at submit, so it's safe to show broadly.
-    // Opens the modal pre-filled with this proposal's id and the chosen call.
-    const isOpen = row.status === 'proposed';
-    const proposeActions = isOpen ? `
-        <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--border-color);">
-            <div style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:10px;">Council action ${helpIcon('council-and-motions', 'How treasury proposals are approved via council motions')}</div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;">
-                <button type="button" class="treasury-propose-motion-btn" data-proposal-id="${stakingEscapeHtml(String(row.id))}" data-call="treasury.approveProposal" style="padding:10px 16px;background:var(--brand-primary);color:#fff;border:none;border-radius:var(--radius-sm);font-weight:600;cursor:pointer;"><i class='bx bx-check-circle'></i> Propose approval motion</button>
-                <button type="button" class="treasury-propose-motion-btn" data-proposal-id="${stakingEscapeHtml(String(row.id))}" data-call="treasury.rejectProposal" style="padding:10px 16px;background:rgba(255,255,255,0.05);color:var(--text-primary);border:1px solid var(--border-color);border-radius:var(--radius-sm);font-weight:600;cursor:pointer;"><i class='bx bx-x-circle'></i> Propose rejection motion</button>
-            </div>
-        </div>` : '';
-
     return `<h2 style="margin:0 0 8px 0;font-size:1.4rem;">${heading}</h2>
         <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
             On-chain treasury spend request. Click the block links below to view the extrinsic that proposed or resolved it.
@@ -13250,8 +12980,7 @@ function renderTreasuryDetail(row) {
         ${govDetailRow('Proposed at block', formatGovBlockLink(row.proposedBlock))}
         ${govDetailRow('Proposed at', formatGovTime(row.proposedAt))}
         ${govDetailRow('Resolved at block', formatGovBlockLink(row.resolvedBlock))}
-        ${govDetailRow('Resolved at', formatGovTime(row.resolvedAt))}
-        ${proposeActions}`;
+        ${govDetailRow('Resolved at', formatGovTime(row.resolvedAt))}`;
 }
 
 function openGovernanceDetailModal({ kind, row, returnPage, returnTab }) {
@@ -13269,17 +12998,6 @@ function openGovernanceDetailModal({ kind, row, returnPage, returnTab }) {
         else body = '<div style="color:var(--text-muted);">Unknown proposal kind.</div>';
         content.innerHTML = body;
 
-        // Wire the council-member "convert to motion" buttons on treasury
-        // detail. Close this modal (without a page re-render — we're staying
-        // put) and open the Propose Motion modal pre-filled with the id + call.
-        content.querySelectorAll('.treasury-propose-motion-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const proposalId = btn.getAttribute('data-proposal-id');
-                const callType = btn.getAttribute('data-call');
-                closeGovernanceDetailModal({ restorePage: false });
-                openProposeMotionModal({ proposalId, callType });
-            });
-        });
     };
 
     renderBody();
@@ -13538,17 +13256,6 @@ function secondPublicProposal(idx, seconds) {
         openGovernanceDetailModal({ kind, row, returnPage, returnTab });
     });
 
-    // Delegated handler for the per-row "Propose motion" button on the open
-    // treasury proposals table. Opens the Propose Motion modal pre-filled with
-    // the proposal id (defaulting to an approval); the modal handles connect +
-    // council-membership gating.
-    document.addEventListener('click', (e) => {
-        const btn = e.target && e.target.closest ? e.target.closest('.treasury-propose-row-btn') : null;
-        if (!btn) return;
-        e.preventDefault();
-        const proposalId = btn.getAttribute('data-proposal-id');
-        openProposeMotionModal({ proposalId, callType: 'treasury.approveProposal' });
-    });
 })();
 
 // ─────────────────────────────────────────────────────────────────────────────
