@@ -97,9 +97,19 @@ describe('every path that runs tests passes --experimental-sqlite', () => {
             const src = fs.readFileSync(new URL(h, dir), 'utf8');
             assert.ok(!/node --test /.test(src),
                 `${h} shells out to a flagless \`node --test\` — on the pinned Node it reports every mutant killed`);
-            assert.match(src, /node --experimental-sqlite --test /,
-                `${h} does not pass --experimental-sqlite`);
+            // Harnesses either spell the flagged command out themselves or go
+            // through the shared runner, which is checked below.
+            assert.ok(/node --experimental-sqlite --test /.test(src) || /from '\.\/lib\/suite-runner\.mjs'/.test(src),
+                `${h} neither passes --experimental-sqlite nor uses tools/lib/suite-runner.mjs`);
         }
+        // The shared runner: the flag, and a baseline check so a red unmutated
+        // suite cannot turn every mutant into a false KILLED.
+        const ff = fs.readFileSync(new URL('lib/first-fail.mjs', dir), 'utf8');
+        assert.match(ff, /'--experimental-sqlite', '--test'/, 'first-fail.mjs omits --experimental-sqlite');
+        assert.ok(!/'--test'/.test(ff.replace(/'--experimental-sqlite', '--test'/g, '')),
+            'first-fail.mjs has a flagless --test invocation');
+        const sr = fs.readFileSync(new URL('lib/suite-runner.mjs', dir), 'utf8');
+        assert.match(sr, /BASELINE RED/, 'suite-runner.mjs lost its baseline check');
     });
 
     test('CI does not re-add a flagless test invocation', () => {
