@@ -18,7 +18,7 @@ import { MOTION_TEMPLATES, REMOVED_CALLS, isRemovedCall, missingFromMetadata } f
 import { renderCall } from '../lib/gov-detail-view.js';
 
 const fx = loadFixture('metadata-392.json');
-const snake = (s) => s.replace(/([A-Z])/g, '_$1').toLowerCase();
+const snake = (s) => s.replace(/([A-Z]|\d+)/g, '_$1').toLowerCase();
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function callIndex(metadataHex) {
@@ -55,7 +55,7 @@ describe('motion templates exist in the spec 393 metadata', { skip: fx ? false :
         const found = [];
         for (const f of files) {
             const src = stripComments(readRepo(f, import.meta.url));
-            for (const m of src.matchAll(/api\.tx\.([a-zA-Z]+)\.([a-zA-Z]+)/g)) found.push({ file: f, pallet: m[1], method: m[2] });
+            for (const m of src.matchAll(/api\.tx\.([a-zA-Z]+)\.([a-zA-Z0-9]+)/g)) found.push({ file: f, pallet: m[1], method: m[2] });
         }
         assert.ok(found.length > 10, 'the scan found almost nothing; the pattern has rotted');
         const missing = found.filter(c => !index.get(cap(c.pallet))?.has(snake(c.method))).map(c => `${c.file}: ${c.pallet}.${c.method}`);

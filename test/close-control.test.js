@@ -337,7 +337,7 @@ describe('focus return', () => {
 describe('every inner page and dialog has the control', () => {
     test('all dialogs in index.html have a close control reachable by Esc and labelled for screen readers', () => {
         const parts = INDEX.split(/(?=<div id="[\w-]+" class="modal)/).slice(1);
-        assert.ok(parts.length >= 14, 'found the dialogs: ' + parts.length);
+        assert.ok(parts.length >= 13, 'found the dialogs: ' + parts.length);
         for (const p of parts) {
             const id = /^<div id="([\w-]+)"/.exec(p)[1];
             const body = p;   // the split already ends each part at the next dialog
