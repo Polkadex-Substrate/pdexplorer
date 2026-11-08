@@ -145,7 +145,7 @@ function viewWorld({ members = [A, B, C, D, E], connected = A } = {}) {
         submit: (opts) => w.submitWith(opts), connectPrompt: () => '<a>Connect wallet</a>',
         document: { getElementById: (id) => nodes.get(id) },
         motion: {
-            readSeats: async () => { w.reads++; const s = w.seats; if (w.gate) await w.gate; return s; },
+            readSeats: async () => { w.reads++; const s = w.seats; if (w.gate) await w.gate; if (w.fail) throw new Error(w.fail); return s; },
             build: (_, pallet, v) => { w.built.push({ pallet, ...v }); return { method: { toHex: () => JSON.stringify(v) } }; },
             decode: () => ({ hash: '0x' + '12'.repeat(32), motion: { section: 'council', method: 'propose', args: [] }, spend: { section: 'treasury', method: 'spend', args: [] } })
         }
@@ -176,6 +176,16 @@ describe('the Propose a spend action', () => {
         assert.equal(m.get('threshold').value, '3', 'the default is the minimum');
         assert.deepEqual([m.get('threshold').attrs.min, m.get('threshold').attrs.max], ['3', '5']);
         assert.match(m.get('threshold-hint').textContent, /three fifths of all 5 seats/);
+    });
+    test('a failed seat read says so, and the next render reads again', async () => {
+        const w = viewWorld();
+        w.fail = 'node unreachable';
+        w.ui.mount(w.slot); await tick();
+        assert.match(w.slot.innerHTML, /id="treasury-spend-open"[^>]* disabled/);
+        assert.match(w.slot.innerHTML, /Could not read the council seats: node unreachable/);
+        w.fail = null;
+        w.ui.mount(w.slot); await tick();
+        assert.doesNotMatch(w.slot.innerHTML, / disabled/, 'a tab switch re-renders the header and retries the read');
     });
     test('the dialog itself refuses a non-member: no form, nothing to review', async () => {
         const w = viewWorld({ connected: OUTSIDER });
