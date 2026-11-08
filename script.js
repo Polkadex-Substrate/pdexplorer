@@ -63,6 +63,8 @@ import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
+import { lockPeriodDays, labelConvictions } from './lib/conviction-lock.js';
+import { SPEND_RULE_TEXT } from './lib/treasury-spend.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
 // The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
 const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
@@ -12756,7 +12758,7 @@ function renderTreasury() {
                 <h2>Treasury</h2>
                 <div style="display:flex;gap:14px;align-items:center;">
                     <span style="color:var(--text-secondary);font-size:0.78rem;">${stakingFormatNumber(d.proposalCount)} lifetime proposals</span>
-                    <span style="color:var(--text-muted);font-size:0.78rem;">New spends closed on this runtime ${helpIcon('treasury', 'Why the treasury takes no new spends')}</span>
+                    <span style="color:var(--text-muted);font-size:0.78rem;">${SPEND_RULE_TEXT} ${helpIcon('treasury', 'Who can spend from the treasury')}</span>
                 </div>
             </div>
             <div class="account-tabs" style="margin:0 24px;">
@@ -13100,11 +13102,11 @@ function openReferendumVoteModal(refIndex, side) {
 
     // Reset the amount field on each open so a stale value doesn't carry over
     // from an earlier proposal. Conviction default stays at Locked1x (the
-    // most common case for an engaged voter).
+    // most common case for an engaged voter); its options show the lock in days.
     const amt = document.getElementById('referendum-vote-amount');
     if (amt) amt.value = '';
     const conv = document.getElementById('referendum-vote-conviction');
-    if (conv) conv.value = 'Locked1x';
+    if (conv) { conv.value = 'Locked1x'; labelConvictions(conv, lockPeriodDays(globalApi)); }
 
     modal.style.display = 'flex';
 }
@@ -13146,7 +13148,7 @@ async function submitReferendumVote() {
             }
         }),
         label: `Referendum #${refIndex} ${aye ? 'aye' : 'nay'} vote`,
-        action: { key: 'democracy.vote', params: { aye, ref: refIndex, amount: amtStr, conviction, lockPeriodDays: globalApi && globalApi.consts.democracy && globalApi.consts.democracy.voteLockingPeriod ? Number(globalApi.consts.democracy.voteLockingPeriod) * 12 / 86400 : null } },
+        action: { key: 'democracy.vote', params: { aye, ref: refIndex, amount: amtStr, conviction, lockPeriodDays: lockPeriodDays(globalApi) } },
         button: document.getElementById('submit-referendum-vote-btn'),
         busyText: 'Signing…',
         idleText: 'Sign & Submit Vote',
@@ -14556,7 +14558,7 @@ const GLOSSARY = {
     nomination:    'A stake-weighted vote for a validator. Each era the chain picks the highest-stake validators from across all nominations.',
     slash:         'A penalty deducted from a validator (and their nominators) for misbehaviour such as equivocation or extended downtime.',
     referendum:    'A public vote on a runtime change or treasury action. Outcomes are binding once enacted.',
-    conviction:    'A multiplier you attach to a referendum vote. Higher conviction = more voting weight, in exchange for a longer post-enactment lock.',
+    conviction:    'A multiplier you attach to a referendum vote. Higher conviction = more voting weight, in exchange for a longer lock after the referendum ends, if your side wins.',
     motion:        'A proposal voted on by the Council collective. If approved, the underlying call is dispatched.',
     council:       'A small body of elected accounts that can fast-track proposals, manage the treasury, and veto runtime changes.',
     treasury:      'An on-chain pot of PDEX funded by transaction fees and slashed stake. Spent on community proposals approved by Council and (sometimes) public referenda.',
