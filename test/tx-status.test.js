@@ -270,10 +270,11 @@ describe('council inner call results', () => {
         assert.match(successCopy('council.close', { idx: 4 }, exec).body, /closed and executed/);
         const dis = evaluateEvents([ev('council', 'Disapproved')], REG, {});
         assert.match(successCopy('council.close', { idx: 4 }, dis).body, /without enough Ayes/);
-        const tabled = successCopy('council.propose', { id: 72, callType: 'treasury.rejectProposal', threshold: 3, seats: 5 }, evaluateEvents([ev('council', 'Proposed')], REG, {}));
+        const spend = { amount: '10', beneficiary: 'e' + 'z'.repeat(47) };
+        const tabled = successCopy('council.propose', { ...spend, threshold: 3, seats: 5 }, evaluateEvents([ev('council', 'Proposed')], REG, {}));
         assert.equal(tabled.title, 'Motion tabled');
-        assert.match(tabled.body, /Treasury proposal #72 will be rejected if 3 of 5 council members vote Aye/);
-        const ran = successCopy('council.propose', { id: 72, callType: 'treasury.approveProposal', threshold: 1, seats: 5 }, evaluateEvents([ev('council', 'MemberExecuted', ['0xabc', ok])], REG, {}));
+        assert.match(tabled.body, /The spend of 10 PDEX to \S+ is approved if 3 of 5 council members vote Aye/);
+        const ran = successCopy('council.propose', { ...spend, threshold: 1, seats: 1 }, evaluateEvents([ev('council', 'MemberExecuted', ['0xabc', ok])], REG, {}));
         assert.equal(ran.title, 'Motion executed');
     });
 });

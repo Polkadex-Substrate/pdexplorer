@@ -35,6 +35,13 @@ describe('pdexToPlanck — audit F-011 (signed amount must equal typed amount)',
         assert.equal(PDEX_DECIMALS, 12);
     });
 
+    test('the chain decimals, when given, set the scale (default 12)', () => {
+        assert.equal(pdexToPlanck('1.5', 10), '15000000000');
+        assert.equal(pdexToPlanck('1.5', 12), pdexToPlanck('1.5'));
+        assert.equal(pdexToPlanck('7', 0), '7');
+        assert.equal(pdexToPlanck('0.123', 2), '12', 'digits past the scale are cut, as at 12');
+    });
+
     test('decimals are exact', () => {
         assert.equal(pdexToPlanck('1.1'), '1100000000000');
         assert.equal(pdexToPlanck('0.000000000001'), '1');       // one planck
