@@ -731,7 +731,7 @@
                 <div class="glass" style="width: 100%; max-width: 520px; padding: 30px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
                     <button id="close-referendum-vote-modal" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;" aria-label="Close"><i class='bx bx-x'></i></button>
                     <h3 style="margin-bottom: 8px; font-size: 1.3rem;">Vote on Referendum <span id="referendum-vote-modal-idx"></span> <a href="/help/democracy-and-voting" class="help-inline-icon" title="Learn about referendum voting" aria-label="Help: referendum voting"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.9rem;">Lock PDEX behind your vote — higher conviction multiplies your vote weight but extends the lock period after enactment.</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.9rem;">Lock PDEX behind your vote. Higher conviction multiplies your vote weight and keeps your PDEX locked longer after the referendum ends, if your side wins.</p>
 
                     <div id="referendum-vote-modal-wallet-warning" style="color: var(--error); margin-bottom: 15px; font-size: 0.9rem; display: none;">Please connect your wallet first.</div>
 
@@ -749,17 +749,17 @@
                     </div>
 
                     <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Conviction (vote weight × lock period)</label>
+                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Conviction (vote weight and lock)</label>
                         <select id="referendum-vote-conviction" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit;">
-                            <option value="None">0.1× weight — no lock</option>
-                            <option value="Locked1x" selected>1× weight — 1 lock period</option>
-                            <option value="Locked2x">2× weight — 2 lock periods</option>
-                            <option value="Locked3x">3× weight — 4 lock periods</option>
-                            <option value="Locked4x">4× weight — 8 lock periods</option>
-                            <option value="Locked5x">5× weight — 16 lock periods</option>
-                            <option value="Locked6x">6× weight — 32 lock periods</option>
+                            <option value="None">0.1× weight, no lock</option>
+                            <option value="Locked1x" selected>1× weight, locked 1 lock period if your side wins</option>
+                            <option value="Locked2x">2× weight, locked 2 lock periods if your side wins</option>
+                            <option value="Locked3x">3× weight, locked 4 lock periods if your side wins</option>
+                            <option value="Locked4x">4× weight, locked 8 lock periods if your side wins</option>
+                            <option value="Locked5x">5× weight, locked 16 lock periods if your side wins</option>
+                            <option value="Locked6x">6× weight, locked 32 lock periods if your side wins</option>
                         </select>
-                        <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px;">A lock period is set by the chain's <code>VoteLockingPeriod</code>. Lock starts only after the referendum passes; failed votes don't extend any lock.</div>
+                        <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px;">Every vote keeps its PDEX locked until the referendum ends. After that only the winning side stays locked, for the time shown, counted from the referendum's end; a lock period is the chain's <code>VoteLockingPeriod</code>. A vote on the losing side, or at 0.1×, can be unlocked as soon as the referendum ends.</div>
                     </div>
 
                     <div style="margin-bottom: 18px;">

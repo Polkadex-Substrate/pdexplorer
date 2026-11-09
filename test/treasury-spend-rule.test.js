@@ -5,16 +5,16 @@
 // Runtime 392 (pallet-treasury 44.0.0) removed propose_spend, approve_proposal
 // and reject_proposal; the only ways to create a spend are treasury.spend and
 // treasury.spend_local, and both start with T::SpendOrigin::ensure_origin.
-// The Polkadex runtime sets SpendOrigin = NeverEnsureOrigin<u128>
-// (polkadex-node runtimes/mainnet/src/lib.rs, impl pallet_treasury::Config),
-// which refuses every origin: signed, council motion, and Root alike. So the
-// old form fails on every node, and a council-motion replacement would table
-// motions whose execution can only end in BadOrigin.
+// The Polkadex runtime (polkadex-node, branch mainnet, runtimes/mainnet/src/
+// lib.rs, impl pallet_treasury::Config) sets SpendOrigin to Root with no cap,
+// or EnsureProportionAtLeast<_, CouncilCollective, 3, 5> with CouncilSpendCap
+// (50,000 PDEX) per spend. A council motion executes as Members(ayes, seats),
+// so it needs Ayes from at least three fifths of all seats.
 //
 // These tests pin: (1) the 392/393 call surface the page depends on, from the
 // metadata fixture; (2) that no proposeSpend path or proposal-bond copy is left
-// in the shipped sources; (3) that the page and the help article say plainly
-// that new spends are closed on this runtime.
+// in the shipped sources; (3) that the page and the help state that rule, and
+// that no copy of the old "spends are closed" claim is left.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -23,8 +23,10 @@ import { registryFromMetadata, loadFixture } from './helpers/extrinsic-builders.
 import { readRepo, stripComments } from './helpers/source.js';
 import { ERROR_COPY, ACTION_KEYS, PENDING_TITLE } from '../lib/tx-status.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
+import { COUNCIL_SPEND_CAP_PDEX, SPEND_RULE_TEXT } from '../lib/treasury-spend.js';
 
 const fx = loadFixture('metadata-392.json');
+const libFiles = readdirSync(new URL('../lib/', import.meta.url)).filter(f => f.endsWith('.js')).map(f => `lib/${f}`);
 
 describe('runtime 392/393 treasury call surface (metadata fixture)', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
     const registry = fx ? registryFromMetadata(fx.metadata) : null;
@@ -60,12 +62,11 @@ describe('runtime 392/393 treasury call surface (metadata fixture)', { skip: fx 
         for (const c of ['ProposalBond', 'ProposalBondMinimum', 'ProposalBondMaximum']) assert.ok(!consts.includes(c), `${c} still present`);
         const errors = registry.lookup.getSiType(pallet.errors.unwrap().type).def.asVariant.variants.map(v => v.name.toString());
         assert.ok(!errors.includes('InsufficientProposersBalance'));
-        assert.ok(errors.includes('InsufficientPermission'), 'spend/spend_local still check SpendOrigin');
+        assert.ok(errors.includes('InsufficientPermission'), 'spend/spend_local still check the amount against the SpendOrigin cap');
     });
 });
 
 describe('no proposeSpend path is left in the shipped sources', () => {
-    const libFiles = readdirSync(new URL('../lib/', import.meta.url)).filter(f => f.endsWith('.js')).map(f => `lib/${f}`);
     const files = ['script.js', 'index.html', 'server.js', ...libFiles];
     const BANNED = [/proposeSpend/, /propose_spend/, /submitTreasuryProposal/, /openTreasurySubmitModal/, /treasury-submit-modal/, /treasury-submit-btn/, /submit-treasury-tx-btn/];
 
@@ -92,25 +93,62 @@ describe('no proposal-bond copy', () => {
     });
 });
 
-describe('the page and the help say new spends are closed', () => {
-    const topic = HELP_TOPICS.find(t => t.slug === 'treasury');
+describe('the page and the help state who can spend', () => {
+    const topic = (slug) => HELP_TOPICS.find(t => t.slug === slug);
+    const RULE = [/at least three fifths of all council seats/, /up to 50,000 PDEX per spend/, /referendum/];
+    const CLOSED = /spends are closed|spends closed|accepts no caller|no caller at all|needs a runtime upgrade|could never execute|origin the runtime does not grant/i;
 
-    test('help article: no Submit proposal button, no burnt deposit, says why spends are closed', () => {
-        assert.ok(topic, 'treasury help topic missing');
-        assert.doesNotMatch(topic.body, /Submit proposal/);
-        assert.doesNotMatch(topic.body, /deposit is required|burn the deposit/i);
-        assert.match(topic.body, /treasury\.spend/);
-        assert.match(topic.body, /SpendOrigin/);
-        assert.match(topic.body, /runtime upgrade/i);
-        assert.match(topic.keywords, /spend/);
+    test('treasury help: a council motion with three fifths of the seats up to 50,000 PDEX, or a referendum with no cap', () => {
+        const t = topic('treasury');
+        assert.ok(t, 'treasury help topic missing');
+        for (const rx of RULE) assert.match(t.body, rx);
+        assert.match(t.body, /treasury\.spend/);
+        assert.match(t.body, /SpendOrigin/);
+        assert.match(t.body, /no cap/);
+        assert.match(t.body, /fails as not allowed/, 'says what happens to a motion that passes its own threshold with too few Ayes');
+        assert.doesNotMatch(t.body, CLOSED);
+        assert.doesNotMatch(t.body, /Submit proposal/);
+        assert.doesNotMatch(t.body, /deposit is required|burn the deposit/i);
+        assert.match(t.keywords, /spend/);
+        assert.doesNotMatch(t.keywords, /closed/);
     });
 
-    test('Treasury header shows a closed-spends note with a help icon instead of the form button', () => {
+    test('council help: a spend motion executes under the same rule and links the treasury article', () => {
+        const t = topic('council-and-motions');
+        assert.doesNotMatch(t.body, CLOSED);
+        assert.match(t.body, /at least three fifths of all council seats/);
+        assert.match(t.body, /50,000 PDEX/);
+        assert.match(t.body, /href="\/help\/treasury"/);
+    });
+
+    test('Treasury header states the rule in a few words, with a help icon', () => {
+        assert.equal(SPEND_RULE_TEXT, 'Spends by council motion (at least 3/5 of seats, up to 50,000 PDEX) or referendum');
         const script = stripComments(readRepo('script.js', import.meta.url));
         const fn = script.slice(script.indexOf('function renderTreasury()'), script.indexOf('function governanceIndexNote'));
         assert.ok(fn.length > 0);
-        assert.match(fn, /New spends closed/);
-        assert.match(fn, /helpIcon\('treasury'/);
-        assert.doesNotMatch(fn, /Submit proposal/);
+        assert.match(fn, /\$\{SPEND_RULE_TEXT\} \$\{helpIcon\('treasury', 'Who can spend from the treasury'\)\}/);
+        assert.doesNotMatch(fn, /New spends closed|takes no new spends|Submit proposal/);
     });
+
+    test('the cap is one named constant whose comment names CouncilSpendCap on the mainnet branch', () => {
+        assert.equal(COUNCIL_SPEND_CAP_PDEX, 50000);
+        const src = readRepo('lib/treasury-spend.js', import.meta.url);
+        assert.match(src, /CouncilSpendCap/);
+        assert.match(src, /branch mainnet/);
+    });
+
+    test('a council motion that fails with BadOrigin is explained by the spend rule', () => {
+        const text = ERROR_COPY['system.BadOrigin'];
+        assert.match(text, /at least three fifths of all council seats/);
+        assert.doesNotMatch(text, /more than half/);
+    });
+});
+
+describe('no copy of the old spend and lock claims is left', () => {
+    const OLD = /NeverEnsureOrigin|admits no origin|accepts no caller|spends closed|takes no new spends|32 eras|eras after the referendum|post-enactment lock|lock period after enactment|Lock starts only after the referendum passes/i;
+    for (const file of ['script.js', 'index.html', 'server.js', 'README.md', 'test/motion-templates.test.js', ...libFiles]) {
+        test(`${file}, comments included`, () => {
+            assert.doesNotMatch(readRepo(file, import.meta.url), OLD);
+        });
+    }
 });

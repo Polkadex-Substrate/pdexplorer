@@ -147,10 +147,11 @@ describe('dispatch error decoding', () => {
         assert.match(d.text, /did not add up/);
         assert.match(decodeDispatchError(arithErr('Overflow'), REG).text, /did not add up/);
     });
-    test('BadOrigin explains the treasury majority rule', () => {
+    test('BadOrigin explains the treasury spend rule (three fifths of all seats)', () => {
         const d = decodeDispatchError(badOrigin, REG);
         assert.equal(d.key, 'system.BadOrigin');
-        assert.match(d.text, /more than half of all seats/);
+        assert.match(d.text, /at least three fifths of all council seats/);
+        assert.doesNotMatch(d.text, /more than half/);
     });
     test('never prints hex, even when the metadata docs contain it', () => {
         const outs = [
@@ -246,7 +247,7 @@ describe('council inner call results', () => {
         assert.equal(r.ok, false);
         assert.equal(r.executed, 'err');
         assert.match(r.text, /passed but the proposed call failed/);
-        assert.match(r.text, /more than half of all seats/);
+        assert.match(r.text, /at least three fifths of all council seats/);
     });
     test('MemberExecuted with Err (threshold 1 propose) is a failure', () => {
         const events = [ev('council', 'MemberExecuted', ['0xabc', err(moduleErr('notMember'))])];

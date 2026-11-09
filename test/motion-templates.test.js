@@ -2,9 +2,9 @@
 // the spec 393 metadata fixture.
 //
 // The motion form used to offer treasury.approveProposal / rejectProposal.
-// Runtime 392 removed both (and SpendOrigin admits no origin), so a motion built
-// from them could never execute. Nothing caught that because nothing compared
-// the page's builders to the runtime. These tests do: every template in
+// Runtime 392 removed both, so a motion built from them could never execute.
+// Nothing caught that because nothing compared the page's builders to the
+// runtime. These tests do: every template in
 // lib/motion-templates.js, and every `api.tx.<pallet>.<method>` written in the
 // shipped sources, must exist in the metadata fixture; and the two removed
 // treasury builders must not come back.
