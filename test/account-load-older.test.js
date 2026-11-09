@@ -25,6 +25,12 @@ describe('message wording', () => {
             'No matching events in all 1,462 events');
     });
 
+    test('a single row is worded in the singular', () => {
+        assert.equal(loadedMessage({ added: 1, loaded: 201, total: 201, noun: 'events' }), 'Loaded 1 older event (201 of 201)');
+        assert.equal(loadedMessage({ added: 1, loaded: 201, total: null, noun: 'transfers' }), 'Loaded 1 older transfer (201 loaded)');
+        assert.equal(emptyFilteredMessage({ loaded: 1, total: 1, noun: 'events', complete: true }), 'No matching events in all 1 event');
+    });
+
     test('progressMessage', () => {
         assert.equal(progressMessage({ loaded: 1200, total: 1462 }), 'Searched 1,200 of 1,462');
         assert.equal(progressMessage({ loaded: 1200, total: null }), 'Searched 1,200');
@@ -80,6 +86,15 @@ describe('searchAll loop', () => {
         assert.equal(out.next, 'c0');
     });
 
+    test('a page that lands after the view went stale is dropped, not appended, and the loop stops', async () => {
+        let stale = false;
+        const r = run([false, false, false], { isStale: () => stale, onProgress: () => { stale = true; } });
+        const out = await r.p;
+        assert.equal(out.reason, 'stale');
+        assert.equal(r.calls.length, 2, 'the request in flight when the view changed is the last one');
+        assert.equal(r.rows().length, 1, 'the late page was not appended');
+    });
+
     test('a failed page stops the loop with the error and the cursor to retry from', async () => {
         const boom = new Error('busy');
         let n = 0;
@@ -94,7 +109,7 @@ describe('searchAll loop', () => {
 });
 
 // A fake DOM bar. Every selector gives a stable element; the table is a stub with makeTable's filter surface.
-function mount({ next = '9:1', total = 600, loadedRows = 200, filters = false, matchFn = r => r.hit, pages = [], noun = 'events' } = {}) {
+function mount({ next = '9:1', total = 600, loadedRows = 200, filters = false, matchFn = r => r.hit, pages = [], noun = 'events', isCurrent } = {}) {
     const mk = () => {
         const attrs = {}, listeners = {};
         return { textContent: '', innerHTML: '', disabled: false, style: {}, attrs, listeners,
@@ -103,7 +118,7 @@ function mount({ next = '9:1', total = 600, loadedRows = 200, filters = false, m
     };
     const els = {};
     const ui = { els, urls: [], inFlight: [], el: s => els[s] || (els[s] = mk()) };
-    ui.tab = { insertAdjacentHTML(where, html) { ui.inserted = [where, html]; }, querySelector: s => ui.el(s) };
+    ui.tab = { isConnected: true, insertAdjacentHTML(where, html) { ui.inserted = [where, html]; }, querySelector: s => ui.el(s) };
     const rows = Array.from({ length: loadedRows }, (_, i) => ({ id: i, hit: false }));
     ui.table = {
         hooks: null, filters,
@@ -123,7 +138,7 @@ function mount({ next = '9:1', total = 600, loadedRows = 200, filters = false, m
         if (page instanceof Error) throw page;
         return page;
     };
-    mountAccountLoadOlder(ui.tab, { address: 'es1', list: 'events', noun, table: ui.table, rows, next, total, fetchJson });
+    mountAccountLoadOlder(ui.tab, { address: 'es1', list: 'events', noun, table: ui.table, rows, next, total, fetchJson, isCurrent });
     ui.button = ui.el('.js-older-btn');
     ui.status = ui.el('.js-older-status');
     ui.done = ui.el('.js-older-done');
@@ -202,6 +217,78 @@ describe('button states', () => {
     });
 });
 
+describe('singular wording in the bar', () => {
+    test('one older event loaded says "1 older event"', async () => {
+        const ui = mount({ total: 201, pages: [page(1, '8:1')] });
+        await ui.click();
+        assert.equal(ui.status.textContent, 'Loaded 1 older event (201 of 201)');
+    });
+
+    test('a history of one transfer reads "All 1 transfer loaded" and "Showing 1 of 1 transfer"', async () => {
+        const ui = mount({ noun: 'transfers', total: 1, loadedRows: 0, pages: [page(1, null)] });
+        await ui.click();
+        assert.equal(ui.done.textContent, 'All 1 transfer loaded');
+        assert.equal(ui.el('.js-older-count').textContent, 'Showing 1 of 1 transfer');
+    });
+});
+
+describe('stale guard: nothing lands after the user leaves the account', () => {
+    // Old code keeps requesting held pages forever; give up after a moment instead of hanging the run.
+    const settle = p => Promise.race([p, new Promise(r => setTimeout(r, 50))]);
+    test('Load older: a page that resolves after the bar was removed from the page is not rendered', async () => {
+        const ui = mount({ total: 1462, pages: [page(200, '8:1')] });
+        ui.hold = true;
+        const run = ui.click();
+        ui.tab.isConnected = false;
+        ui.release();
+        await run;
+        assert.equal(ui.table.rows, undefined, 'setData ran for a detached account page');
+        assert.equal(ui.status.textContent, '');
+        assert.equal(ui.el('.js-older-count').textContent, 'Showing 200 of 1,462 events');
+    });
+
+    test('Load older: a page that resolves after navigating to another account is not rendered', async () => {
+        let current = true;
+        const ui = mount({ total: 1462, pages: [page(200, '8:1')], isCurrent: () => current });
+        ui.hold = true;
+        const run = ui.click();
+        current = false;
+        ui.release();
+        await run;
+        assert.equal(ui.table.rows, undefined);
+        assert.equal(ui.status.textContent, '');
+    });
+
+    test('Search all stops fetching once the account changes, and drops the page in flight', async () => {
+        let current = true;
+        const ui = mount({ filters: true, total: 2000, isCurrent: () => current,
+            pages: [page(200, 'a'), page(200, 'b'), page(200, 'c'), page(200, 'd')] });
+        ui.hold = true;
+        const run = ui.searchClick();
+        ui.release();
+        await new Promise(r => setImmediate(r));
+        assert.equal(ui.urls.length, 2, 'second request in flight');
+        const shown = ui.table.rows.length;
+        current = false;
+        ui.release();
+        await settle(run);
+        assert.equal(ui.urls.length, 2, 'kept fetching after navigating away');
+        assert.equal(ui.table.rows.length, shown, 'the late page rendered into the table');
+        assert.equal(ui.status.textContent, 'Searched 400 of 2,000', 'status was rewritten after leaving');
+    });
+
+    test('Search all stops once the bar is detached from the page', async () => {
+        const ui = mount({ filters: true, total: 2000, pages: [page(200, 'a'), page(200, 'b'), page(200, 'c')] });
+        ui.hold = true;
+        const run = ui.searchClick();
+        ui.tab.isConnected = false;
+        ui.release();
+        await settle(run);
+        assert.equal(ui.urls.length, 1);
+        assert.equal(ui.table.rows, undefined);
+    });
+});
+
 describe('filtered empty state and Search all', () => {
     test('the table is given a provider for its filtered-empty text, reflecting what is loaded', () => {
         const ui = mount({ filters: true, loadedRows: 600, total: 1462 });
@@ -274,5 +361,10 @@ describe('wiring in script.js', () => {
         assert.match(script, /setHooks\s*\(/);
         assert.match(script, /hooks\.filteredEmpty/);
         assert.match(script, /hooks\.onRender/);
+    });
+
+    test('every navigation bumps a route generation and the account bar is told whether it is still current', () => {
+        assert.match(script, /function routeTo\(target\)\s*\{[^}]*routeGeneration\+\+/);
+        assert.match(script, /mountAccountLoadOlder\([^;]*isCurrent:\s*\(\)\s*=>\s*\w+\s*===\s*routeGeneration/);
     });
 });
