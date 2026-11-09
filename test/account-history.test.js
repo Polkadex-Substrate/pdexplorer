@@ -182,11 +182,11 @@ describe('the cursor helpers', () => {
 
 // Run mountAccountLoadOlder with the DOM, the table and fetchApiJson stubbed.
 function mount({ next = '9:1', total = 3, pages = [] } = {}) {
-    const el = () => ({ textContent: '', innerHTML: '', disabled: false, style: {} });
+    const el = () => ({ textContent: '', innerHTML: '', disabled: false, style: {}, setAttribute() {}, addEventListener() {} });
     const ui = { count: el(), button: el(), error: el(), urls: [], disabledDuringFetch: [] };
     ui.button.addEventListener = (type, fn) => { ui.click = fn; };
     const parts = { '.js-older-count': ui.count, '.js-older-btn': ui.button, '.js-older-error': ui.error };
-    ui.tab = { insertAdjacentHTML(where, html) { ui.inserted = [where, html]; }, querySelector: s => parts[s] };
+    ui.tab = { insertAdjacentHTML(where, html) { ui.inserted = [where, html]; }, querySelector: s => parts[s] || (parts[s] = el()) };
     ui.table = { setData(rows) { this.rows = rows; } };
     const fetchApiJson = async url => {
         ui.urls.push(url);

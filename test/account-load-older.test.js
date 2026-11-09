@@ -34,14 +34,14 @@ describe('message wording', () => {
 describe('searchAll loop', () => {
     // Pages of one row each; matches are rows with hit:true.
     const pagesOf = hits => hits.map((hit, i) => ({ rows: [{ id: i, hit }], next: i < hits.length - 1 ? `c${i}` : null }));
-    const run = (hits, extra = {}) => {
+    const run = (hits, extra = {}, base = 0) => {
         const pages = pagesOf(hits), calls = [], progress = [];
         const fetchPage = async cursor => { calls.push(cursor); return pages[calls.length - 1]; };
         let rows = [];
         const p = searchAll({
             next: 'c-1', fetchPage,
             append: page => { rows = rows.concat(page.rows); },
-            countMatches: () => rows.filter(r => r.hit).length,
+            countMatches: () => base + rows.filter(r => r.hit).length,
             loaded: () => rows.length,
             onProgress: n => progress.push(n),
             ...extra
@@ -65,7 +65,7 @@ describe('searchAll loop', () => {
     });
 
     test('a match already loaded does not stop the search; only a new one does', async () => {
-        const r = run([false, true], { countMatches: () => 1 + r.rows().filter(x => x.hit).length });
+        const r = run([false, true], {}, 1);
         assert.equal((await r.p).reason, 'found');
         assert.equal(r.calls.length, 2);
     });

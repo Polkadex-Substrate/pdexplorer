@@ -300,6 +300,9 @@ function makeTable(config) {
     let sortDir = config.defaultSort ? (config.defaultSort.dir || 'asc') : 'asc';
     const colFilters = {};
     let globalSearch = '';
+    // Set by the Load older bar (lib/account-load-older.js): filteredEmpty() words the "filters match nothing" row,
+    // onRender() runs after every render so the bar can follow the filters.
+    let hooks = {};
     // config.state, a previous instance's getState(), carries sort, search and filters over a rebuild.
     if (config.state) {
         sortKey = config.state.sortKey || null; sortDir = config.state.sortDir || 'asc';
@@ -550,7 +553,7 @@ function makeTable(config) {
         const shown = visible.length;
         let bodyHTML = '';
         if (!shown) {
-            bodyHTML = `<tr><td colspan="${columns.length}" class="table-empty-row">${stakingEscapeHtml(total === 0 ? emptyMessage : 'No rows match the current filters.')}</td></tr>`;
+            bodyHTML = `<tr><td colspan="${columns.length}" class="table-empty-row">${stakingEscapeHtml(total === 0 ? emptyMessage : (hooks.filteredEmpty && hooks.filteredEmpty()) || 'No rows match the current filters.')}</td></tr>`;
         } else {
             for (const row of visible) {
                 const rc = rowClass ? rowClass(row) : '';
@@ -632,6 +635,7 @@ function makeTable(config) {
         });
 
         restoreFocus(focusSnap);
+        if (hooks.onRender) hooks.onRender();
     }
 
     render();
@@ -657,6 +661,12 @@ function makeTable(config) {
             render();
         },
         refresh()        { render(); },
+        // What the filters leave of the loaded rows.
+        getInfo() {
+            const filtersActive = !!globalSearch.trim() || Object.values(colFilters).some(Boolean);
+            return { matched: applyFilters(rows).length, total: rows.length, filtersActive };
+        },
+        setHooks(h)      { hooks = h || {}; render(); },
         getState()       { return { sortKey, sortDir, colFilters: { ...colFilters }, globalSearch }; }
     };
 }
