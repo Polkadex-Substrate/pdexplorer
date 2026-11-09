@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mountAccountLoadOlder, loadedMessage, emptyFilteredMessage, progressMessage, searchAll } from '../lib/account-load-older.js';
+import { mountAccountLoadOlder, loadedMessage, emptyFilteredMessage, progressMessage, stuckMessage, searchAll } from '../lib/account-load-older.js';
 import { readRepo, stripComments } from './helpers/source.js';
 
 describe('message wording', () => {
@@ -351,6 +351,74 @@ describe('filtered empty state and Search all', () => {
         assert.equal(ui.error.innerHTML, 'timeout');
         assert.equal(ui.button.textContent, 'Retry');
         assert.equal(ui.search.textContent, 'Search all');
+    });
+});
+
+describe('Search all stops when a page does not advance', () => {
+    const loop = (pages, start = 'c0') => {
+        const calls = [];
+        let rows = [];
+        const p = searchAll({
+            next: start,
+            fetchPage: async cursor => { calls.push(cursor); const page = pages.shift(); if (!page) throw new Error('fetched past the script'); return page; },
+            append: page => { rows = rows.concat(page.rows); },
+            countMatches: () => rows.filter(r => r.hit).length,
+            loaded: () => rows.length
+        });
+        return { p, calls, rows: () => rows };
+    };
+
+    test('a page whose next cursor equals the cursor it was fetched with stops the loop, unappended', async () => {
+        const r = loop([{ rows: [{ id: 1 }, { id: 2 }], next: 'c0' }]);
+        const out = await r.p;
+        assert.equal(out.reason, 'stuck');
+        assert.equal(out.next, 'c0', 'resume from the cursor that did not advance');
+        assert.equal(r.calls.length, 1);
+        assert.equal(r.rows().length, 0, 'a repeated page is not appended twice');
+    });
+
+    test('an empty page with the cursor unchanged stops the loop instead of spinning', async () => {
+        const r = loop([{ rows: [], next: 'c0' }]);
+        const out = await r.p;
+        assert.equal(out.reason, 'stuck');
+        assert.equal(r.calls.length, 1);
+    });
+
+    test('a page that leads back to a cursor already visited (the same oldest row again) stops the loop', async () => {
+        const r = loop([{ rows: [{ id: 1 }], next: 'c1' }, { rows: [{ id: 2 }], next: 'c0' }]);
+        const out = await r.p;
+        assert.equal(out.reason, 'stuck');
+        assert.equal(r.calls.length, 2);
+        assert.equal(r.rows().length, 1);
+        assert.equal(out.next, 'c1');
+    });
+
+    test('normal progress is unaffected, including an empty page that does advance the cursor', async () => {
+        const r = loop([{ rows: [{ id: 1 }], next: 'c1' }, { rows: [], next: 'c2' }, { rows: [{ id: 3 }], next: 'c3' }, { rows: [{ id: 4, hit: true }], next: null }]);
+        const out = await r.p;
+        assert.equal(out.reason, 'found');
+        assert.deepEqual(r.calls, ['c0', 'c1', 'c2', 'c3']);
+        assert.equal(r.rows().length, 3);
+    });
+
+    test('the message names where it stopped', () => {
+        assert.equal(stuckMessage({ loaded: 400, total: 1462 }), 'The server returned the same page twice; stopped at 400 of 1,462');
+        assert.equal(stuckMessage({ loaded: 400, total: null }), 'The server returned the same page twice; stopped at 400');
+    });
+
+    test('in the bar: the message shows with Retry, the controls come back, and Retry fetches again', async () => {
+        const ui = mount({ filters: true, total: 1462, pages: [page(200, 'a'), page(200, 'a'), page(200, 'b', true)] });
+        await ui.searchClick();
+        assert.equal(ui.urls.length, 2);
+        assert.equal(ui.error.innerHTML, 'The server returned the same page twice; stopped at 400 of 1,462');
+        assert.equal(ui.button.textContent, 'Retry');
+        assert.equal(ui.button.disabled, false);
+        assert.equal(ui.search.textContent, 'Search all');
+        assert.equal(ui.el('.js-older-count').textContent, 'Showing 400 of 1,462 events', 'the repeated page was not appended');
+        await ui.click();
+        assert.equal(ui.urls.length, 3);
+        assert.match(ui.urls[2], /before=a$/);
+        assert.equal(ui.error.innerHTML, '');
     });
 });
 
