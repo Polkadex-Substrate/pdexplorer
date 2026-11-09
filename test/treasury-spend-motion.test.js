@@ -12,7 +12,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiPromise } from '@polkadot/api';
 import { encodeAddress } from '@polkadot/util-crypto';
-import { spendThresholdRange, checkSpendForm, buildSpendMotion, decodeSpendMotion, readCouncilSeats, SPEND_CAP_ERROR } from '../lib/treasury-spend.js';
+import { spendThresholdRange, checkSpendForm, readHeadNumber, buildSpendMotion, decodeSpendMotion, readCouncilSeats, SPEND_CAP_ERROR } from '../lib/treasury-spend.js';
 import { createSpendMotionUI } from '../lib/treasury-spend-view.js';
 import { MOTION_TEMPLATES } from '../lib/motion-templates.js';
 import { successCopy, evaluateEvents } from '../lib/tx-status.js';
@@ -37,14 +37,23 @@ describe('threshold bounds', () => {
             assert.ok(min * 5 >= seats * 3 && (min - 1) * 5 < seats * 3, `seats ${seats}`);
         }
     });
+    test('threshold 1 with one seat: propose runs the spend at once as Members(1, 1), which 3/5 accepts; with more seats nothing below 2 is offered, and Members(1, seats) would fail', () => {
+        assert.deepEqual(spendThresholdRange(1), { min: 1, max: 1 });
+        assert.ok(1 * 5 >= 3 * 1);
+        for (let seats = 2; seats <= 12; seats++) {
+            assert.ok(1 * 5 < 3 * seats, `Members(1, ${seats}) fails 3/5`);
+            assert.ok(spendThresholdRange(seats).min >= 2, `seats ${seats}`);
+        }
+    });
     test('no range while the seats are unknown', () => {
         for (const s of [0, null, undefined, NaN, -1, 2.5, '']) assert.equal(spendThresholdRange(s), null, String(s));
     });
 });
 
 describe('the form fields', () => {
-    const check = (over = {}, seats = 5, decimals = 12) =>
-        checkSpendForm({ beneficiary: BEN, amount: '1500', validFrom: '', threshold: '3', ...over }, { seats, decimals });
+    const check = (over = {}, seats = 5, decimals = 12, chain = {}) =>
+        checkSpendForm({ beneficiary: BEN, amount: '1500', validFrom: '', threshold: '3', ...over }, { seats, decimals, head: 1000, ...chain });
+    const OTHER_NETWORK = /^This is not a Polkadex address \(it starts with the prefix of another network\)/;
 
     test('a complete form gives the call arguments', () => {
         assert.deepEqual(check(), { ok: true, errors: {}, values: { beneficiary: BEN, planck: '1500000000000000', validFrom: null, threshold: 3 } });
@@ -71,10 +80,37 @@ describe('the form fields', () => {
         }
         assert.equal(check({ beneficiary: ` ${BEN} ` }).values.beneficiary, BEN);
     });
+    test('a valid address of another network (Polkadot 0, generic 42) is refused, with its own message', () => {
+        for (const prefix of [0, 2, 42]) {
+            const r = check({ beneficiary: encodeAddress(new Uint8Array(32).fill(9), prefix) });
+            assert.equal(r.ok, false, `prefix ${prefix}`);
+            assert.match(r.errors.beneficiary, OTHER_NETWORK, `prefix ${prefix}`);
+        }
+        assert.doesNotMatch(check({ beneficiary: 'not-an-address' }).errors.beneficiary, OTHER_NETWORK);
+    });
+    test('the prefix is the chain\'s (from the api registry) when given', () => {
+        const generic = encodeAddress(new Uint8Array(32).fill(9), 42);
+        assert.equal(check({ beneficiary: generic }, 5, 12, { ss58Prefix: 42 }).ok, true);
+        assert.match(check({ beneficiary: BEN }, 5, 12, { ss58Prefix: 42 }).errors.beneficiary, OTHER_NETWORK);
+    });
     test('valid-from is optional: empty is none, otherwise a whole block number', () => {
         assert.equal(check({ validFrom: '' }).values.validFrom, null);
         assert.equal(check({ validFrom: ' 123456 ' }).values.validFrom, 123456);
         for (const validFrom of ['abc', '-5', '1.5', '4294967296']) assert.ok(check({ validFrom }).errors.validFrom, validFrom);
+    });
+    test('valid-from must be after the current block: head + 1 or later; empty still means immediate', () => {
+        for (const validFrom of ['0', '999', '1000']) {
+            const r = check({ validFrom });
+            assert.equal(r.ok, false, validFrom);
+            assert.match(r.errors.validFrom, /block 1001 or later/, validFrom);
+            assert.match(r.errors.validFrom, /currently at block 1000/, validFrom);
+        }
+        assert.equal(check({ validFrom: '1001' }).values.validFrom, 1001);
+        assert.equal(check({ validFrom: '' }).values.validFrom, null);
+    });
+    test('a valid-from block cannot be checked without the current block; empty needs no head', () => {
+        assert.match(check({ validFrom: '5000' }, 5, 12, { head: undefined }).errors.validFrom, /current block is not known/);
+        assert.equal(check({ validFrom: '' }, 5, 12, { head: undefined }).ok, true);
     });
     test('the threshold must lie between the minimum and the seat count', () => {
         assert.match(check({ threshold: '2' }).errors.threshold, /three fifths/);
@@ -85,6 +121,11 @@ describe('the form fields', () => {
 });
 
 const fx = loadFixture('metadata-392.json');
+test('readHeadNumber reads the best block number from the header', async () => {
+    const api = { rpc: { chain: { getHeader: async () => ({ number: { toNumber: () => 4321 } }) } } };
+    assert.equal(await readHeadNumber(api), 4321);
+});
+
 describe('the built motion on the real codec (metadata fixture)', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
     let api;
     const values = { beneficiary: BEN, planck: '1500000000000000', validFrom: null, threshold: 3 };
@@ -136,7 +177,7 @@ function viewWorld({ members = [A, B, C, D, E], connected = A } = {}) {
         addEventListener(type, fn) { this.handlers[type] = fn; }, setAttribute(k, v) { this.attrs[k] = String(v); }, focus() {},
         async fire(type = 'click') { await this.handlers[type]?.({ target: this }); } });
     const nodes = new Map([...html.matchAll(/id="(treasury-spend-[\w-]+)"/g)].map(([, id]) => [id, node()]));
-    const w = { slot: node(), submitted: [], built: [], reads: 0, gate: null, selected: connected, seats: { pallet: 'council', members } };
+    const w = { slot: node(), submitted: [], built: [], reads: 0, gate: null, selected: connected, seats: { pallet: 'council', members }, head: 1000, headFail: null };
     const api = { registry: { chainDecimals: [12] } };
     w.api = api;
     w.submitWith = async (opts) => { w.submitted.push(opts); return opts.buildTx(api); };
@@ -146,6 +187,7 @@ function viewWorld({ members = [A, B, C, D, E], connected = A } = {}) {
         document: { getElementById: (id) => nodes.get(id) },
         motion: {
             readSeats: async () => { w.reads++; const s = w.seats; if (w.gate) await w.gate; if (w.fail) throw new Error(w.fail); return s; },
+            readHead: async () => { if (w.headFail) throw new Error(w.headFail); return w.head; },
             build: (_, pallet, v) => { w.built.push({ pallet, ...v }); return { method: { toHex: () => JSON.stringify(v) } }; },
             decode: () => ({ hash: '0x' + '12'.repeat(32), motion: { section: 'council', method: 'propose', args: [] }, spend: { section: 'treasury', method: 'spend', args: [] } })
         }
@@ -218,7 +260,8 @@ describe('review, then sign', () => {
     test('an invalid field blocks the review; nothing is built or signed', async () => {
         const w = viewWorld();
         await w.open();
-        for (const [field, value, rx] of [['amount', '50001', /needs a referendum/], ['beneficiary', 'nope', /Polkadex address/], ['valid-from', 'soon', /block number/], ['threshold', '2', /three fifths/]]) {
+        for (const [field, value, rx] of [['amount', '50001', /needs a referendum/], ['beneficiary', 'nope', /Polkadex address/], ['valid-from', 'soon', /block number/], ['threshold', '2', /three fifths/],
+            ['beneficiary', encodeAddress(new Uint8Array(32).fill(9), 0), /prefix of another network/], ['valid-from', '1000', /block 1001 or later/]]) {
             w.fill(); w.get('threshold').value = '3';
             w.get(field).value = value;
             await w.get(field).fire('input');
@@ -229,6 +272,45 @@ describe('review, then sign', () => {
         await w.get('sign').fire();
         assert.equal(w.built.length, 0);
         assert.equal(w.submitted.length, 0);
+    });
+    test('the address prefix comes from the api registry (chainSS58)', async () => {
+        const w = viewWorld();
+        w.api.registry.chainSS58 = 42;
+        await w.open();
+        w.fill({ beneficiary: encodeAddress(new Uint8Array(32).fill(9), 42) });
+        await w.get('check').fire();
+        assert.equal(w.get('sign').disabled, false, w.get('error').textContent);
+        w.fill();
+        await w.get('beneficiary').fire('input');
+        await w.get('check').fire();
+        assert.match(w.get('error').textContent, /prefix of another network/);
+    });
+    test('a future valid-from block reviews; an unreadable head blocks the review and says why', async () => {
+        const w = viewWorld();
+        await w.open();
+        w.fill({ 'valid-from': '1001' });
+        await w.get('check').fire();
+        assert.equal(w.get('sign').disabled, false, w.get('error').textContent);
+        assert.equal(w.built.at(-1).validFrom, 1001);
+        w.headFail = 'node unreachable';
+        w.fill({ 'valid-from': '2000' });
+        await w.get('valid-from').fire('input');
+        await w.get('check').fire();
+        assert.match(w.get('error').textContent, /Could not read the current block: node unreachable/);
+        assert.equal(w.get('sign').disabled, true);
+    });
+    test('if the chain passes the valid-from block between review and signing, nothing is signed', async () => {
+        const w = viewWorld();
+        await w.open();
+        w.fill({ 'valid-from': '1005' });
+        await w.get('check').fire();
+        assert.equal(w.get('sign').disabled, false);
+        w.head = 1005;
+        let rejected = null;
+        w.submitWith = async (opts) => { w.submitted.push(opts); try { await opts.buildTx(w.api); } catch (e) { rejected = e; opts.onError(e.message); } };
+        await w.get('sign').fire(); await tick();
+        assert.match(String(rejected && rejected.message), /block 1006 or later/);
+        assert.equal(w.built.length, 1, 'no call is built for the wallet');
     });
     test('editing a field after the review needs a new review', async () => {
         const w = viewWorld();
@@ -322,6 +404,8 @@ describe('help', () => {
         assert.match(t, /<b>Propose a spend<\/b>/);
         assert.match(t, /beneficiary/);
         assert.match(t, /valid-from block/);
+        assert.match(t, /another network's format is refused/);
+        assert.match(t, /valid-from block after the current one/);
         assert.match(t, /the threshold starts at, and cannot go below, three fifths of the seats/i);
         assert.match(t, /needs a referendum/);
         assert.match(t, /<b>Review motion<\/b>/);
