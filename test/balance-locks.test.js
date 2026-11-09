@@ -846,7 +846,9 @@ describe('wiring: server, docs, help, both pages', () => {
         assert.deepEqual(accountBalances({ free: '5', reserved: '1', frozen: '3' }, '2'), { free: 5n, reserved: 1n, frozen: 3n, ed: 2n });
         assert.deepEqual(accountBalances({ free: '5', reserved: '0', miscFrozen: '1', feeFrozen: '4' }, null), { free: 5n, reserved: 0n, frozen: 4n, ed: 0n });
         const b = balanceBreakdown(accountBalances({ free: s(100n * PDEX), reserved: s(500n * PDEX), frozen: s(300n * PDEX) }, s(ED)));
-        assert.equal(b.transferable, 0n, 'the hold + lock case reaches the Send dialog as 0');
+        assert.equal(b.transferable, 99n * PDEX, 'a hold covering the lock reaches the Send dialog as free less the ED (spec 393)');
+        const short = balanceBreakdown(accountBalances({ free: s(100n * PDEX), reserved: s(50n * PDEX), frozen: s(300n * PDEX) }, s(ED)));
+        assert.equal(short.transferable, 0n, 'a lock larger than hold plus free reaches the Send dialog as 0');
     });
     test('both pages mount the panel', () => {
         assert.match(script, /import \{ mountBalanceLocks \} from '\.\/lib\/balance-locks-view\.js'/);
