@@ -99,75 +99,108 @@ describe('balanceBreakdown: Total, Transferable, Locked, Reserved', () => {
     });
 });
 
-// Fable review (5 Nov 2026), HIGH: Transferable used the fungible rule
-// free - max(frozen - reserved, ED), but the fee goes through
-// Currency::withdraw, which needs free - fee >= ALL of frozen. With a hold
-// and a lock larger than free (staked via hold, then voted with more than
-// free) the card showed a positive figure while no fee was payable, so
-// nothing could actually be sent. Both modules now share lib/fee-preflight.js
-// feeFloor/feeShortfall, so they cannot disagree again.
-describe('Transferable when no fee can be paid (hold + lock larger than free)', () => {
-    const HOLD_LOCK = { free: 100n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED };
-    test('free 100, held 500, locked 300: transferable is 0, not 99', () => {
-        const b = balanceBreakdown(HOLD_LOCK);
-        assert.equal(b.transferable, 0n);
-        assert.equal(b.canPayFee, false);
+// Fable review (5 Nov 2026), HIGH, REVERSED 8 Nov 2026: the review said the
+// fee goes through Currency::withdraw (all of frozen kept), so a hold plus a
+// lock larger than free made every fee unpayable and Transferable was forced
+// to 0. That was CurrencyAdapter (spec 392). Spec 393 charges the fee through
+// FungibleAdapter: fungible withdraw(Exact, Preserve, Polite), the same
+// reducible_balance rule as a transfer, free - max(frozen - reserved, ED).
+// The CEO's stake update (free 286.5486, held 17,225.7803, vote lock
+// 14,423.8901) was refused by our preflight although the chain takes the fee.
+// Both modules still share lib/fee-preflight.js, so they cannot disagree.
+describe('the fee follows reducible_balance: a hold covers a lock (spec 393 FungibleAdapter)', () => {
+    const SCREENSHOT = { free: P(286.5486), reserved: P(17225.7803), frozen: P(14423.8901), ed: ED };
+    test('the screenshot account: can pay, Transferable is free less the ED', () => {
+        const b = balanceBreakdown(SCREENSHOT);
+        assert.equal(b.canPayFee, true);
+        assert.equal(b.feeTopUp, null);
+        assert.equal(b.transferable, P(285.5486));
+        assert.equal(feeShortfall({ fee: FEE_MARGIN, ...SCREENSHOT }), null, 'fee-preflight agrees');
     });
-    test('the top-up is max(frozen, ED) - free + the fee margin, the same figure fee-preflight gives', () => {
+    const HOLD_LOCK = { free: 100n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED };
+    test('free 100, held 500, locked 300: transferable is 99, not 0', () => {
         const b = balanceBreakdown(HOLD_LOCK);
-        assert.equal(b.feeTopUp, 300n * PDEX - 100n * PDEX + FEE_MARGIN);
-        const pre = feeShortfall({ fee: FEE_MARGIN, ...HOLD_LOCK });
+        assert.equal(b.transferable, 99n * PDEX);
+        assert.equal(b.canPayFee, true);
+    });
+    const SHORT = { free: 100n * PDEX, reserved: 50n * PDEX, frozen: 300n * PDEX, ed: ED };
+    test('a lock larger than hold plus free: no fee payable, Transferable 0, top-up = frozen - reserved - free + margin', () => {
+        const b = balanceBreakdown(SHORT);
+        assert.equal(b.canPayFee, false);
+        assert.equal(b.transferable, 0n);
+        assert.equal(b.feeTopUp, 250n * PDEX - 100n * PDEX + FEE_MARGIN);
+        const pre = feeShortfall({ fee: FEE_MARGIN, ...SHORT });
         assert.ok(pre, 'fee-preflight refuses it too');
         assert.equal(pre.topUp, b.feeTopUp);
     });
-    test('free exactly at max(frozen, ED): no fee is payable, transferable 0', () => {
-        assert.equal(balanceBreakdown({ free: 300n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED }).transferable, 0n);
+    test('free exactly at max(frozen - reserved, ED): no fee is payable, transferable 0', () => {
+        assert.equal(balanceBreakdown({ free: 250n * PDEX, reserved: 50n * PDEX, frozen: 300n * PDEX, ed: ED }).transferable, 0n);
+        assert.equal(balanceBreakdown({ free: ED, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED }).canPayFee, false);
         assert.equal(balanceBreakdown({ free: ED, reserved: 0n, frozen: 0n, ed: ED }).canPayFee, false);
     });
-    test('free above the floor: unchanged, and canPayFee agrees with fee-preflight for the FEE_MARGIN fee', () => {
-        const cases = [
-            { free: 301n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX },
-            { free: 300n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX },
-            { free: 100n * PDEX, reserved: 50n * PDEX, frozen: 80n * PDEX },
-            { free: P(29865.4975), reserved: 0n, frozen: P(29245.5) },
-            { free: ED, reserved: 0n, frozen: 0n },
-            { free: PDEX / 2n, reserved: 0n, frozen: 0n }
-        ];
-        for (const c of cases) {
-            const b = balanceBreakdown({ ...c, ed: ED });
-            assert.equal(b.canPayFee, feeShortfall({ fee: FEE_MARGIN, ...c, ed: ED }) === null, JSON.stringify(c, (k, v) => typeof v === 'bigint' ? v.toString() : v));
-            if (!b.canPayFee) assert.equal(b.transferable, 0n);
+    test('canPayFee agrees with fee-preflight for the FEE_MARGIN fee, across a grid', () => {
+        const vals = [0n, PDEX / 2n, ED, ED + FEE_MARGIN - 1n, ED + FEE_MARGIN, 50n * PDEX, 300n * PDEX, 500n * PDEX, P(29865.4975)];
+        for (const free of vals) for (const reserved of vals) for (const frozen of vals) {
+            const c = { free, reserved, frozen, ed: ED };
+            const b = balanceBreakdown(c);
+            const label = JSON.stringify(c, (k, v) => typeof v === 'bigint' ? v.toString() : v);
+            assert.equal(b.canPayFee, feeShortfall({ fee: FEE_MARGIN, ...c }) === null, label);
+            const floor = frozen > reserved + ED ? frozen - reserved : ED;
+            assert.equal(b.canPayFee, free >= floor + FEE_MARGIN, label);
+            assert.equal(b.transferable, b.canPayFee ? free - floor : 0n, label);
         }
-        assert.equal(balanceBreakdown({ free: 301n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX, ed: ED }).transferable, 300n * PDEX);
     });
-    test('feeFloor: all of frozen, and the ED unless the account is already below it', () => {
+    test('feeFloor: frozen less reserved, at least the ED (Preserve), whatever free is', () => {
         assert.equal(feeFloor({ free: 100n * PDEX, frozen: 300n * PDEX, ed: ED }), 300n * PDEX);
+        assert.equal(feeFloor({ free: 100n * PDEX, frozen: 300n * PDEX, reserved: 500n * PDEX, ed: ED }), ED);
+        assert.equal(feeFloor({ free: 100n * PDEX, frozen: 300n * PDEX, reserved: 50n * PDEX, ed: ED }), 250n * PDEX);
         assert.equal(feeFloor({ free: 100n * PDEX, frozen: 0n, ed: ED }), ED);
-        assert.equal(feeFloor({ free: PDEX / 2n, frozen: 0n, ed: ED }), 0n);
+        assert.equal(feeFloor({ free: PDEX / 2n, frozen: 0n, ed: ED }), ED, 'below the ED: Preserve still keeps it, so no fee');
     });
-    test('one rule: lib/balance-locks.js takes the fee floor from lib/fee-preflight.js', () => {
+    test('one rule: the fee floor is the keep-alive transfer floor, and balance-locks takes both from fee-preflight', () => {
+        for (const frozen of [0n, PDEX / 2n, 80n * PDEX, 300n * PDEX]) for (const reserved of [0n, 50n * PDEX, 500n * PDEX]) {
+            assert.equal(feeFloor({ frozen, reserved, ed: ED }), transferKeep({ frozen, reserved, ed: ED, keepAlive: true }));
+        }
         const src = stripComments(readRepo('lib/balance-locks.js', import.meta.url));
         assert.match(src, /import \{[^}]*feeShortfall[^}]*\} from '\.\/fee-preflight\.js'/);
         const pre = stripComments(readRepo('lib/fee-preflight.js', import.meta.url));
         assert.match(pre, /feeFloor\(/, 'feeShortfall uses the shared floor');
     });
-    test('the model and the panel: Transferable 0 and a note with the top-up', () => {
-        const m = describeAccountLocks(snap({ free: s(100n * PDEX), reserved: s(500n * PDEX), frozen: s(300n * PDEX),
-            locks: [{ id: 'democrac', amount: s(300n * PDEX), reasons: 'All' }], holds: [{ id: 'Staking.Staking', amount: s(500n * PDEX) }],
-            staking: { bonded: true, total: s(500n * PDEX), active: s(500n * PDEX), unlocking: '0' } }));
+    test('the model and the panel: Transferable 0 and a note with the top-up that never says reserved or locked PDEX cannot pay', () => {
+        const m = describeAccountLocks(snap({ free: s(100n * PDEX), reserved: s(50n * PDEX), frozen: s(300n * PDEX),
+            locks: [{ id: 'democrac', amount: s(300n * PDEX), reasons: 'All' }], holds: [{ id: 'Staking.Staking', amount: s(50n * PDEX) }],
+            staking: { bonded: true, total: s(50n * PDEX), active: s(50n * PDEX), unlocking: '0' } }));
         assert.equal(m.balance.transferable, '0');
         assert.equal(m.balance.canPayFee, false);
-        assert.equal(m.balance.feeTopUp, s(200n * PDEX + FEE_MARGIN));
+        assert.equal(m.balance.feeTopUp, s(150n * PDEX + FEE_MARGIN));
         const html = renderBalanceLocks(m, { helpIcon: () => '' });
         assert.match(html, /cannot pay a (network )?fee/);
-        assert.match(html, /200\.05 PDEX/);
+        assert.match(html, /150\.05 PDEX/);
+        assert.match(html, /reserved PDEX \(50 PDEX\) counts toward the lock/);
+        assert.doesNotMatch(html, /whole locked part/);
         assert.ok(!/[\u2013\u2014]/.test(html));
+    });
+    test('the screenshot account in the panel: no fee note, Transferable 285.5486', () => {
+        const m = describeAccountLocks(snap({ free: s(P(286.5486)), reserved: s(P(17225.7803)), frozen: s(P(14423.8901)),
+            locks: [{ id: 'democrac', amount: s(P(14423.8901)), reasons: 'All' }], holds: [{ id: 'Staking.Staking', amount: s(P(17225.7803)) }],
+            staking: { bonded: true, total: s(P(17225.7803)), active: s(P(17225.7803)), unlocking: '0' } }));
+        assert.equal(m.balance.canPayFee, true);
+        assert.equal(m.balance.transferable, s(P(285.5486)));
+        assert.doesNotMatch(renderBalanceLocks(m, { helpIcon: () => '' }), /cannot pay a (network )?fee/);
     });
     test('an account that can pay shows no fee note', () => {
         const m = describeAccountLocks(snap());
         assert.equal(m.balance.canPayFee, true);
         assert.equal(m.balance.feeTopUp, null);
         assert.doesNotMatch(renderBalanceLocks(m, { helpIcon: () => '' }), /cannot pay a (network )?fee/);
+    });
+    test('help and the pool error copy describe the overlap rule, not "locked PDEX cannot pay"', () => {
+        const all = HELP_TOPICS.map(t => String(t.body || t.html || t.content || '')).join('\n')
+            + readRepo('lib/tx-status.js', import.meta.url);
+        assert.doesNotMatch(all, /whole locked part/);
+        assert.doesNotMatch(all, /locked PDEX cannot pay/);
+        assert.doesNotMatch(all, /and locked PDEX cannot pay/);
+        assert.doesNotMatch(all, /reserved PDEX \(deposits, bonds\) and locked PDEX cannot/);
     });
 });
 
@@ -214,7 +247,7 @@ describe('Transferable and the fee preflight use the same margin', () => {
 // frozen - reserved, raised to the ED only when the account cannot be reaped
 // (can_dec_provider false: any lock, freeze or hold makes it a consumer).
 // So with Keep alive off the ED stays back only while something is locked or
-// reserved; the fee itself (Currency::withdraw, KeepAlive) is checked apart.
+// reserved; the fee itself (fungible withdraw, Preserve) always keeps the ED.
 describe('Keep alive off: the existential deposit only when nothing is locked or reserved', () => {
     test('transferKeep: what a transfer must leave in free, per toggle', () => {
         assert.equal(transferKeep({ frozen: 0n, reserved: 0n, ed: ED, keepAlive: true }), ED);
@@ -229,7 +262,8 @@ describe('Keep alive off: the existential deposit only when nothing is locked or
         { name: 'a lock below the ED', c: { free: 10n * PDEX, reserved: 0n, frozen: PDEX / 2n }, on: 9n * PDEX, off: 9n * PDEX },
         { name: 'a deposit only', c: { free: 100n * PDEX, reserved: 5n * PDEX, frozen: 0n }, on: 99n * PDEX, off: 99n * PDEX },
         { name: 'a large lock', c: { free: P(29865.4975), reserved: 0n, frozen: P(29245.5) }, on: P(619.9975), off: P(619.9975) },
-        { name: 'no fee payable', c: { free: 100n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX }, on: 0n, off: 0n }
+        { name: 'a hold covering the lock', c: { free: 100n * PDEX, reserved: 500n * PDEX, frozen: 300n * PDEX }, on: 99n * PDEX, off: 99n * PDEX },
+        { name: 'no fee payable', c: { free: 100n * PDEX, reserved: 50n * PDEX, frozen: 300n * PDEX }, on: 0n, off: 0n }
     ];
     for (const { name, c, on, off } of cases) {
         test(`${name}: Keep alive on ${on / PDEX}, off ${off / PDEX} (PDEX, whole part)`, () => {

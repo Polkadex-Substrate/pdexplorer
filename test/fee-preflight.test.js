@@ -4,9 +4,14 @@
 // member whose account held 1 PDEX free (exactly the existential deposit) and
 // 119.59 PDEX reserved (the candidacy bond and other deposits). Fees are paid
 // from free balance with Preservation::Preserve: the account must keep the
-// existential deposit, and reserved or frozen PDEX cannot pay. So the pool
-// refused the transaction ("Inability to pay some fees") and nothing the user
-// saw said why.
+// existential deposit. So the pool refused the transaction ("Inability to pay
+// some fees") and nothing the user saw said why.
+//
+// The rule (spec 393): OnChargeTransaction = FungibleAdapter<Balances, ..>,
+// which takes the fee with fungible withdraw(Exact, Preserve, Polite). That
+// needs fee <= reducible_balance(Preserve, Polite) = free - max(frozen -
+// reserved, ED). A freeze applies to the total, so reserved PDEX covers it
+// first; the pool check (can_withdraw) asks the same.
 //
 // Now every signed action (lib/tx-submit.js, used by submitSignedTx for the
 // council withdrawal, votes, staking, multisig, transfers) estimates the fee
@@ -40,9 +45,59 @@ const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => s
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const REPORTED = { free: PDEX, reserved: RESERVED, frozen: 0n, ed: PDEX };
-const REPORTED_TEXT = 'This account needs at least 1.0153 PDEX free to pay the network fee. It has 1 PDEX free; 119.59 PDEX is reserved (deposits, bonds) and cannot pay fees. As it is, the network would accept the transaction but it would never be included. Send at least 0.0153 PDEX to this account and try again.';
+const REPORTED_TEXT = 'This account needs at least 1.0153 PDEX free to pay the network fee. It has 1 PDEX free, and 1 PDEX of that must stay in the account: the existential deposit (1 PDEX) keeps it open. Send at least 0.0153 PDEX to this account and try again.';
 
-describe('feeShortfall: what the account can spend on a fee (spec 392 rules)', () => {
+// pallet-balances 46 reducible_balance(Preserve, Polite), line for line:
+// untouchable = frozen - reserved (saturating), raised to the ED (Preserve);
+// liquid = free - untouchable (saturating). The fee is payable iff fee <= liquid.
+const P = (x) => BigInt(Math.round(x * 1e4)) * 10n ** 8n;
+const reducible = ({ free, reserved = 0n, frozen = 0n, ed }) => {
+    let untouchable = frozen > reserved ? frozen - reserved : 0n;
+    if (untouchable < ed) untouchable = ed;
+    return free > untouchable ? free - untouchable : 0n;
+};
+
+// CEO report, 8 Nov 2026: "Updating your stake" (nominate 3 validators) was
+// refused by this preflight. Staked PDEX is on a hold after migrateCurrency
+// (reserved 17,225.7803) and a vote lock of 14,423.8901 covers less than the
+// hold, so on spec 393 none of the free balance is frozen: the fee is payable.
+const SCREENSHOT = { free: P(286.5486), reserved: P(17225.7803), frozen: P(14423.8901), ed: PDEX };
+
+describe('feeShortfall: the screenshot account (hold larger than the vote lock)', () => {
+    test('passes the preflight: the lock overlaps the hold, so free above the ED pays', () => {
+        for (const fee of [FEE, 20000000000n, P(1)]) assert.equal(F.feeShortfall({ ...SCREENSHOT, fee }), null, String(fee));
+    });
+    test('the most it can pay is free less the ED, the same as reducible_balance', () => {
+        const most = reducible(SCREENSHOT);
+        assert.equal(most, P(285.5486));
+        assert.equal(F.feeShortfall({ ...SCREENSHOT, fee: most }), null);
+        assert.ok(F.feeShortfall({ ...SCREENSHOT, fee: most + 1n }));
+    });
+    test('feeFloor is the lock less the hold, raised to the ED', () => {
+        assert.equal(F.feeFloor(SCREENSHOT), PDEX);
+        assert.equal(F.feeFloor({ frozen: 50n * PDEX, reserved: 20n * PDEX, ed: PDEX }), 30n * PDEX);
+        assert.equal(F.feeFloor({ frozen: 0n, reserved: 0n, ed: PDEX }), PDEX);
+    });
+});
+
+describe('feeShortfall agrees with reducible_balance(Preserve, Polite) across a grid', () => {
+    test('payable iff fee <= free - max(frozen - reserved, ED), for every combination', () => {
+        const vals = [0n, PDEX / 2n, PDEX, PDEX + FEE - 1n, PDEX + FEE, 30n * PDEX, 50n * PDEX, 100n * PDEX];
+        for (const free of vals) for (const reserved of vals) for (const frozen of vals) {
+            const c = { free, reserved, frozen, ed: PDEX };
+            const want = FEE <= reducible(c);
+            const s = F.feeShortfall({ ...c, fee: FEE });
+            assert.equal(s === null, want, JSON.stringify(c, (k, v) => typeof v === 'bigint' ? v.toString() : v));
+            if (s) {
+                const floor = frozen > reserved + PDEX ? frozen - reserved : PDEX;
+                assert.equal(s.topUp, FEE + floor - free);
+                assert.doesNotMatch(F.feeShortText(s), /cannot pay fees|never be included/);
+            }
+        }
+    });
+});
+
+describe('feeShortfall: what the account can spend on a fee (spec 393 rules)', () => {
     test('the reported account: free equal to the existential deposit cannot pay any fee', () => {
         const s = F.feeShortfall({ ...REPORTED, fee: FEE });
         assert.ok(s, 'free == ED must be short');
@@ -57,60 +112,67 @@ describe('feeShortfall: what the account can spend on a fee (spec 392 rules)', (
         assert.ok(F.feeShortfall({ ...REPORTED, free: PDEX + FEE - 1n, fee: FEE }));
     });
 
-    test('reserved PDEX never counts, however large', () => {
-        assert.ok(F.feeShortfall({ free: PDEX, reserved: 1000000n * PDEX, frozen: 0n, ed: PDEX, fee: 1n }));
-    });
-
-    // Fable review: spec 392 charges fees through CurrencyAdapter, i.e.
-    // Currency::withdraw(KeepAlive) (polkadex-node runtimes/mainnet/src/lib.rs
-    // OnChargeTransaction): free - fee must stay at or above ALL of frozen
-    // (no reserved discount) and at or above ED unless free is already below ED.
-    test('the fee: frozen counts in full, reserved does not reduce it, and ED is the floor', () => {
-        // frozen 50, reserved 20: all 50 stays untouchable for the fee.
-        assert.ok(F.feeShortfall({ free: 31n * PDEX, reserved: 20n * PDEX, frozen: 50n * PDEX, ed: PDEX, fee: FEE }));
-        const s = F.feeShortfall({ free: 50n * PDEX, reserved: 20n * PDEX, frozen: 50n * PDEX, ed: PDEX, fee: FEE });
+    test('reserved PDEX does not pay the fee itself, however large: free must keep the ED', () => {
+        const s = F.feeShortfall({ free: PDEX, reserved: 1000000n * PDEX, frozen: 0n, ed: PDEX, fee: 1n });
         assert.ok(s);
-        assert.equal(s.needed, 50n * PDEX + FEE);
-        assert.equal(s.topUp, FEE);
-        assert.match(F.feeShortText(s), /50 PDEX is locked/);
-        assert.equal(F.feeShortfall({ free: 50n * PDEX + FEE, reserved: 20n * PDEX, frozen: 50n * PDEX, ed: PDEX, fee: FEE }), null);
-        // frozen below ED: the ED is the floor.
-        assert.equal(F.feeShortfall({ free: PDEX + FEE, reserved: 20n * PDEX, frozen: PDEX / 2n, ed: PDEX, fee: FEE }), null);
-        assert.ok(F.feeShortfall({ free: PDEX + FEE - 1n, reserved: 20n * PDEX, frozen: PDEX / 2n, ed: PDEX, fee: FEE }));
+        assert.equal(s.topUp, 1n);
     });
 
-    test('staking: a fully staked account cannot pay; one with a little unstaked free can', () => {
+    // Spec 393 charges fees through FungibleAdapter: fungible
+    // withdraw(Exact, Preserve, Polite) (polkadex-node runtimes/mainnet/src/
+    // lib.rs, OnChargeTransaction). reducible_balance discounts the hold from
+    // the freeze: free - fee must stay at or above max(frozen - reserved, ED).
+    test('the fee: a freeze is covered by reserved first, and ED is the floor', () => {
+        // frozen 50, reserved 20: 30 of free stays untouchable for the fee.
+        assert.equal(F.feeShortfall({ free: 31n * PDEX, reserved: 20n * PDEX, frozen: 50n * PDEX, ed: PDEX, fee: FEE }), null);
+        assert.equal(F.feeShortfall({ free: 30n * PDEX + FEE, reserved: 20n * PDEX, frozen: 50n * PDEX, ed: PDEX, fee: FEE }), null);
+        const s = F.feeShortfall({ free: 30n * PDEX + FEE - 1n, reserved: 20n * PDEX, frozen: 50n * PDEX, ed: PDEX, fee: FEE });
+        assert.ok(s);
+        assert.equal(s.needed, 30n * PDEX + FEE);
+        assert.equal(s.topUp, 1n);
+        const text = F.feeShortText(s);
+        assert.match(text, /50 PDEX is locked \(staking, votes, vesting\) and 20 PDEX is reserved \(deposits, bonds\)/);
+        assert.match(text, /reserved PDEX counts toward the lock, so free PDEX must cover the other 30 PDEX/);
+        assert.doesNotMatch(text, /cannot pay/);
+        // frozen below or at reserved: the ED is the floor.
+        assert.equal(F.feeShortfall({ free: PDEX + FEE, reserved: 20n * PDEX, frozen: 20n * PDEX, ed: PDEX, fee: FEE }), null);
+        assert.ok(F.feeShortfall({ free: PDEX + FEE - 1n, reserved: 20n * PDEX, frozen: 20n * PDEX, ed: PDEX, fee: FEE }));
+        // frozen exactly reserved + ED: the same floor either way.
+        assert.equal(F.feeShortfall({ free: PDEX + FEE, reserved: 20n * PDEX, frozen: 21n * PDEX, ed: PDEX, fee: FEE }), null);
+        assert.ok(F.feeShortfall({ free: PDEX + FEE - 1n, reserved: 20n * PDEX, frozen: 21n * PDEX, ed: PDEX, fee: FEE }));
+    });
+
+    test('staking: a fully staked account (lock, no hold) cannot pay; with a hold under the lock only the rest is kept', () => {
         const staked = { reserved: 0n, ed: PDEX, fee: FEE };
         const s = F.feeShortfall({ ...staked, free: 100n * PDEX, frozen: 100n * PDEX });
         assert.ok(s, 'all free balance is staked');
         assert.equal(s.needed, 100n * PDEX + FEE);
         assert.equal(s.topUp, FEE);
-        assert.match(F.feeShortText(s), /100 PDEX is locked \(staking/);
-        assert.doesNotMatch(F.feeShortText(s), /would be accepted|would accept/, 'the pool refuses this one itself');
+        assert.match(F.feeShortText(s), /100 PDEX of that must stay in the account: 100 PDEX is locked \(staking, votes, vesting\)\./);
         assert.equal(F.feeShortfall({ ...staked, free: 100n * PDEX, frozen: 99n * PDEX }), null);
-        // Staked with a bond also reserved: the reserve does not free any of the lock.
-        assert.ok(F.feeShortfall({ ...staked, free: 100n * PDEX, reserved: 50n * PDEX, frozen: 100n * PDEX }));
+        // A hold of 50 under a lock of 100: only 50 of free stays.
+        assert.equal(F.feeShortfall({ ...staked, free: 100n * PDEX, reserved: 50n * PDEX, frozen: 100n * PDEX }), null);
+        assert.ok(F.feeShortfall({ ...staked, free: 50n * PDEX, reserved: 50n * PDEX, frozen: 100n * PDEX }));
     });
 
-    test('an account already below ED may spend to zero, but not into its locks', () => {
-        assert.equal(F.feeShortfall({ free: PDEX / 2n, reserved: 0n, frozen: 0n, ed: PDEX, fee: FEE }), null);
-        assert.equal(F.feeShortfall({ free: FEE, reserved: 0n, frozen: 0n, ed: PDEX, fee: FEE }), null);
-        const s = F.feeShortfall({ free: FEE - 1n, reserved: 0n, frozen: 0n, ed: PDEX, fee: FEE });
-        assert.ok(s);
-        assert.equal(s.needed, FEE);
+    test('an account below the ED cannot pay any fee (Preserve keeps the ED; the pool says ReducedToZero)', () => {
+        for (const free of [FEE, PDEX / 2n, PDEX - 1n, PDEX]) {
+            const s = F.feeShortfall({ free, reserved: 0n, frozen: 0n, ed: PDEX, fee: FEE });
+            assert.ok(s, String(free));
+            assert.equal(s.needed, PDEX + FEE);
+        }
         const f = F.feeShortfall({ free: PDEX / 2n, reserved: 0n, frozen: PDEX / 2n, ed: PDEX, fee: FEE });
         assert.ok(f);
-        assert.equal(f.needed, PDEX / 2n + FEE);
+        assert.equal(f.needed, PDEX + FEE);
     });
 
-    test('only the existential-deposit case says the network would accept it and never include it', () => {
-        assert.match(F.feeShortText(F.feeShortfall({ ...REPORTED, fee: FEE })), /network would accept the transaction but it would never be included/);
-        const broke = F.feeShortfall({ free: FEE - 1n, reserved: 0n, frozen: 0n, ed: PDEX, fee: FEE });
-        assert.doesNotMatch(F.feeShortText(broke), /never be included/);
+    test('no "never included" claim: on spec 393 the pool check and the block check agree', () => {
+        assert.doesNotMatch(F.feeShortText(F.feeShortfall({ ...REPORTED, fee: FEE })), /never be included/);
+        assert.equal('neverIncluded' in F.feeShortfall({ ...REPORTED, fee: FEE }), false);
     });
 
-    test('a transfer amount still uses the fungible rule: frozen less reserved, at least ED', () => {
-        // free 10, reserved 5, frozen 8: the fee needs free - fee >= 8; the
+    test('a transfer amount uses the same fungible rule: frozen less reserved, at least ED', () => {
+        // free 10, reserved 5, frozen 8: the fee needs free - fee >= 3; the
         // amount may leave max(8 - 5, ED) = 3 behind after the fee.
         const base = { free: 10n * PDEX, reserved: 5n * PDEX, frozen: 8n * PDEX, ed: PDEX, fee: FEE, keepAlive: true };
         assert.equal(F.feeShortfall({ ...base, amount: 6n * PDEX }), null);
@@ -308,7 +370,8 @@ describe('the tracker checks the fee before the wallet is asked', () => {
         assert.equal(m.stage, 'failed');
         assert.equal(m.key, 'pool.Payment');
         assert.match(m.body, /network fee/);
-        assert.match(m.body, /reserved/i, 'say that reserved PDEX cannot pay');
+        assert.match(m.body, /reserved PDEX does not cover/i, 'say what free must keep: the ED and the lock not covered by reserved');
+        assert.doesNotMatch(m.body, /cannot pay/i, 'locked PDEX can pay when a hold covers the lock (spec 393)');
         assert.equal(h.calls.onError.length, 1);
         assert.equal(h.button.disabled, false);
         mock.timers.tick(T.WATCHDOG_MS * 6); await flush();
