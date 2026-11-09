@@ -17,6 +17,7 @@ import {
     pdexToPlanck,
     isPositiveNumberInput,
     isValidPolkadexAddress,
+    isPolkadexPrefixedAddress,
     buildTransferTx,
     PDEX_DECIMALS
 } from '../lib/wallet-safety.js';
@@ -99,6 +100,28 @@ describe('pdexToPlanck — audit F-011 (signed amount must equal typed amount)',
 
     test('returns a string (BigInt or Number would break signAndSend)', () => {
         assert.equal(typeof pdexToPlanck('1.5'), 'string');
+    });
+});
+
+describe('isPolkadexPrefixedAddress: the strict check for a treasury beneficiary', () => {
+    const polkadotAddr = encodeAddress(new Uint8Array(32).fill(1), 0);
+    test('accepts only an address encoded with the chain prefix (88 by default)', () => {
+        assert.equal(isPolkadexPrefixedAddress(validPolkadexAddr), true);
+        assert.equal(isPolkadexPrefixedAddress(` ${validPolkadexAddr} `), true);
+        assert.equal(isPolkadexPrefixedAddress(validGenericAddr), false, 'generic prefix 42');
+        assert.equal(isPolkadexPrefixedAddress(polkadotAddr), false, 'Polkadot prefix 0');
+    });
+    test('the prefix can come from the api registry', () => {
+        assert.equal(isPolkadexPrefixedAddress(validGenericAddr, 42), true);
+        assert.equal(isPolkadexPrefixedAddress(validPolkadexAddr, 42), false);
+    });
+    test('everything isValidPolkadexAddress rejects stays rejected', () => {
+        for (const bad of ['', null, '0x' + 'ab'.repeat(32), validPolkadexAddr.slice(0, 20), 'not an address at all, obviously']) {
+            assert.equal(isPolkadexPrefixedAddress(bad), false, String(bad));
+        }
+    });
+    test('isValidPolkadexAddress itself still accepts any prefix (search, wallet pickers, multisig signers rely on it)', () => {
+        assert.equal(isValidPolkadexAddress(polkadotAddr), true);
     });
 });
 
