@@ -45,7 +45,7 @@ const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => s
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const REPORTED = { free: PDEX, reserved: RESERVED, frozen: 0n, ed: PDEX };
-const REPORTED_TEXT = 'This account needs at least 1.0153 PDEX free to pay the network fee. It has 1 PDEX free, and 1 PDEX of that must stay in the account: the existential deposit (1 PDEX) keeps it open. Send at least 0.0153 PDEX to this account and try again.';
+const REPORTED_TEXT = 'This account needs at least 1.0153 PDEX free to pay the network fee. It has 1 PDEX free and must keep 1 PDEX free: the existential deposit (1 PDEX) keeps the account open. Send at least 0.0153 PDEX to this account and try again.';
 
 // pallet-balances 46 reducible_balance(Preserve, Polite), line for line:
 // untouchable = frozen - reserved (saturating), raised to the ED (Preserve);
@@ -134,6 +134,10 @@ describe('feeShortfall: what the account can spend on a fee (spec 393 rules)', (
         assert.match(text, /50 PDEX is locked \(staking, votes, vesting\) and 20 PDEX is reserved \(deposits, bonds\)/);
         assert.match(text, /reserved PDEX counts toward the lock, so free PDEX must cover the other 30 PDEX/);
         assert.doesNotMatch(text, /cannot pay/);
+        // keep larger than free: no "of that" wording that implies free holds it.
+        const big = F.feeShortText(F.feeShortfall({ free: 100n * PDEX, reserved: 50n * PDEX, frozen: 300n * PDEX, ed: PDEX, fee: FEE }));
+        assert.match(big, /It has 100 PDEX free and must keep 250 PDEX free: 300 PDEX is locked/);
+        assert.match(big, /Send at least 150\.0153 PDEX/);
         // frozen below or at reserved: the ED is the floor.
         assert.equal(F.feeShortfall({ free: PDEX + FEE, reserved: 20n * PDEX, frozen: 20n * PDEX, ed: PDEX, fee: FEE }), null);
         assert.ok(F.feeShortfall({ free: PDEX + FEE - 1n, reserved: 20n * PDEX, frozen: 20n * PDEX, ed: PDEX, fee: FEE }));
@@ -148,7 +152,7 @@ describe('feeShortfall: what the account can spend on a fee (spec 393 rules)', (
         assert.ok(s, 'all free balance is staked');
         assert.equal(s.needed, 100n * PDEX + FEE);
         assert.equal(s.topUp, FEE);
-        assert.match(F.feeShortText(s), /100 PDEX of that must stay in the account: 100 PDEX is locked \(staking, votes, vesting\)\./);
+        assert.match(F.feeShortText(s), /It has 100 PDEX free and must keep 100 PDEX free: 100 PDEX is locked \(staking, votes, vesting\)\./);
         assert.equal(F.feeShortfall({ ...staked, free: 100n * PDEX, frozen: 99n * PDEX }), null);
         // A hold of 50 under a lock of 100: only 50 of free stays.
         assert.equal(F.feeShortfall({ ...staked, free: 100n * PDEX, reserved: 50n * PDEX, frozen: 100n * PDEX }), null);
