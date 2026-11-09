@@ -778,7 +778,7 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 - `GET /api/council` — council members, motions, runners-up
 - `GET /api/technical-committee` — technical committee members (with prime), open motions with live votes, and full motion history
 - `GET /api/treasury` — treasury balance, proposals (open + historical)
-- `GET /api/treasury/spends` - approved treasury spends live from the node (amount in planck, beneficiary, valid-from and expiry blocks, status) with the action each allows in the next block (payout, checkStatus or none); at most 500, `truncated` when there may be more; short tier, `?fresh=1` no-store
+- `GET /api/treasury/spends` - approved treasury spends live from the node (amount in planck, beneficiary, valid-from and expiry blocks, status) with the action each allows in the next block (payout, checkStatus or none; no payout when the treasury `pot` cannot cover the amount or in the last block before expiry), and `pot` (free balance and `available` = free less max(existential deposit, frozen), planck strings); at most 500, `truncated` when more exist; short tier, `?fresh=1` no-store
 - `GET /api/democracy` — referenda + public proposals
 - `GET /api/governance/latest` — most-recent OPEN referendum / proposal (drives homepage banner; only ongoing events)
 - `GET /api/governance/calendar` — unified timeline across referenda + motions + treasury for `/calendar`

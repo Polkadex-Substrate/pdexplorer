@@ -300,6 +300,11 @@ function makeTable(config) {
     let sortDir = config.defaultSort ? (config.defaultSort.dir || 'asc') : 'asc';
     const colFilters = {};
     let globalSearch = '';
+    // config.state, a previous instance's getState(), carries sort, search and filters over a rebuild.
+    if (config.state) {
+        sortKey = config.state.sortKey || null; sortDir = config.state.sortDir || 'asc';
+        Object.assign(colFilters, config.state.colFilters || {}); globalSearch = String(config.state.globalSearch || '');
+    }
 
     const showGlobalSearch = config.globalSearch !== false;
     const emptyMessage = config.emptyMessage || 'No matching rows.';
