@@ -25,7 +25,7 @@ import express from 'express';
 import { ApiPromise } from '@polkadot/api';
 import { encodeAddress } from '@polkadot/util-crypto';
 import {
-    classifySpend, formatSpendAmount, blockEta, buildSpendTx, readSpends, readSpend, spendVerdict, spendFromChain,
+    classifySpend, formatSpendAmount, blockEta, buildSpendTx, readSpends, readSpend, readPot, treasuryPotAccount, spendVerdict, spendFromChain,
     PAYOUT_FEE_TEXT, CHECK_FEE_TEXT
 } from '../lib/treasury-payout.js';
 import { registerTreasurySpendsRoute, SPENDS_ROUTE } from '../lib/treasury-payout-api.js';
@@ -57,8 +57,14 @@ describe('what a spend allows in the block a transaction would run in', () => {
         assert.equal(c.actionLabel, 'Pay out');
         assert.equal(c.phase, 'payable');
     });
-    test('the last block before expire_at: still Pay out (expire_at > now)', () => {
-        assert.equal(at(1999).action, 'payout');
+    test('the last block before expire_at: no button, "Expires next block" (a transaction that slips one block lands at expire_at and fails)', () => {
+        for (const status of ['Pending', 'Failed']) {
+            const c = at(1999, { status });
+            assert.equal(c.phase, 'expiring', status);
+            assert.equal(c.action, null, status);
+            assert.equal(c.note, 'Expires next block; paying now may fail', status);
+        }
+        assert.equal(at(1998).action, 'payout', 'two blocks before expire_at is still payable');
     });
     test('at expire_at: expired, and nothing can be submitted yet (check_status needs now > expire_at)', () => {
         const c = at(2000);
@@ -81,6 +87,19 @@ describe('what a spend allows in the block a transaction would run in', () => {
             assert.equal(c.action, 'checkStatus');
             assert.equal(c.actionLabel, 'Check status');
         }
+    });
+    test('the treasury pot cannot cover the amount: no button, "unfunded", the pot in the note (PayFromAccount::pay would fail with PayoutError and the fee is kept)', () => {
+        for (const status of ['Pending', 'Failed']) {
+            const c = classifySpend(spend({ status }), 1500, { pot: '1000000000000000' });
+            assert.equal(c.phase, 'unfunded', status);
+            assert.equal(c.action, null, status);
+            assert.equal(c.note, 'The treasury holds 1,000 PDEX, less than this spend; it cannot be paid until the pot is refilled', status);
+        }
+        assert.equal(classifySpend(spend(), 1500, { pot: '1500000000000000' }).action, 'payout', 'a pot of exactly the amount pays it');
+        assert.equal(classifySpend(spend(), 1500, { pot: null }).action, 'payout', 'an unknown pot does not hold the button');
+        assert.match(classifySpend(spend(), 1500, { pot: '15000000000000', decimals: 10 }).note, /holds 1,500 PDEX/);
+        assert.equal(classifySpend(spend(), 999, { pot: '0' }).phase, 'scheduled', 'scheduled before valid_from whatever the pot');
+        assert.equal(classifySpend(spend({ status: 'Attempted' }), 1500, { pot: '0' }).action, 'checkStatus', 'a paid spend is checked whatever the pot');
     });
     test('Failed: retried with payout inside the window, expired after it', () => {
         assert.equal(at(1500, { status: 'Failed' }).action, 'payout');
@@ -134,15 +153,25 @@ const some = (v) => ({ isSome: true, isNone: false, unwrap: () => v });
 const NONE = { isSome: false, isNone: true, unwrap: () => { throw new Error('none'); } };
 
 // A fake api with a spends map; entriesPaged pages by index order.
-function fakeChain({ head = 1500, count = 9, spends = [spend()], blockTime = 12000 } = {}) {
-    const calls = { pages: [] };
+const PALLET_ID = new Uint8Array([...'py/trsry'].map(ch => ch.charCodeAt(0)));
+const accountData = ({ free, frozen, miscFrozen, feeFrozen }) => ({ data: {
+    free: { toString: () => free }, reserved: { toString: () => '0' },
+    ...(frozen != null ? { frozen: { toString: () => frozen } } : {}),
+    ...(miscFrozen != null ? { miscFrozen: { toString: () => miscFrozen }, feeFrozen: { toString: () => feeFrozen } } : {})
+} });
+function fakeChain({ head = 1500, count = 9, spends = [spend()], blockTime = 12000, pot = { free: '1000000000000000000' }, ed = '1000000000000' } = {}) {
+    const calls = { pages: [], accounts: [] };
     const byIndex = new Map(spends.map(s => [s.index, s]));
     const key = (i) => ({ args: [{ toNumber: () => i }], toHex: () => '0x' + i.toString(16).padStart(8, '0') });
     const api = {
         registry: { chainDecimals: [12] },
-        consts: { babe: { expectedBlockTime: { toNumber: () => blockTime } }, treasury: { payoutPeriod: { toNumber: () => 172800 } } },
+        consts: {
+            babe: { expectedBlockTime: { toNumber: () => blockTime } },
+            treasury: { payoutPeriod: { toNumber: () => 172800 }, palletId: { toU8a: () => PALLET_ID } },
+            balances: { existentialDeposit: { toString: () => ed } }
+        },
         query: {
-            system: { number: async () => ({ toNumber: () => head }) },
+            system: { number: async () => ({ toNumber: () => head }), account: async (who) => { calls.accounts.push(who); return accountData(c.pot); } },
             treasury: {
                 spendCount: async () => ({ toNumber: () => count }),
                 spends: Object.assign(async (i) => byIndex.has(Number(i)) ? some(codecSpend(byIndex.get(Number(i)))) : NONE, {
@@ -157,7 +186,8 @@ function fakeChain({ head = 1500, count = 9, spends = [spend()], blockTime = 120
         },
         tx: { treasury: { payout: (i) => ({ method: { toHex: () => `payout(${i})` } }), checkStatus: (i) => ({ method: { toHex: () => `check(${i})` } }) } }
     };
-    return { api, calls, byIndex, set head(h) { head = h; } };
+    const c = { api, calls, byIndex, pot, set head(h) { head = h; } };
+    return c;
 }
 
 describe('reading the spends from the chain', () => {
@@ -175,6 +205,7 @@ describe('reading the spends from the chain', () => {
         assert.equal(r.blockTimeMs, 12000);
         assert.equal(r.decimals, 12);
         assert.equal(r.truncated, false);
+        assert.deepEqual(r.pot, { free: '1000000000000000000', available: '999999000000000000' }, 'the pot: free balance less the existential deposit');
         assert.deepEqual(r.spends.map(s => s.index), [8, 5, 2]);
         assert.deepEqual(r.spends.map(s => [s.phase, s.action]), [['paid', 'checkStatus'], ['scheduled', null], ['expired', null]],
             'classified for block 2000, where expire_at 2000 is already past payout');
@@ -185,19 +216,62 @@ describe('reading the spends from the chain', () => {
         const r = await readSpends(c.api, { pageSize: 5, maxEntries: 10 });
         assert.equal(r.spends.length, 10);
         assert.equal(r.truncated, true);
-        assert.equal(c.calls.pages.length, 2);
+        assert.ok(c.calls.pages.length <= 3, 'one page past the cap at most');
         assert.ok(c.calls.pages.every(p => p.pageSize === 5));
         const all = await readSpends(fakeChain({ spends: many.slice(0, 7) }).api, { pageSize: 5, maxEntries: 10 });
         assert.equal(all.spends.length, 7);
         assert.equal(all.truncated, false);
+    });
+    test('truncated only when entries exist beyond the cap: exactly maxEntries in storage is not truncated', async () => {
+        const many = (n) => Array.from({ length: n }, (_, i) => spend({ index: i }));
+        for (const [n, pageSize] of [[10, 5], [10, 10], [10, 3]]) {
+            const r = await readSpends(fakeChain({ spends: many(n) }).api, { pageSize, maxEntries: 10 });
+            assert.equal(r.spends.length, 10, `${n}/${pageSize}`);
+            assert.equal(r.truncated, false, `${n} spends, pages of ${pageSize}, cap 10`);
+        }
+        for (const [n, pageSize] of [[11, 5], [11, 10], [11, 3], [11, 11]]) {
+            const r = await readSpends(fakeChain({ spends: many(n) }).api, { pageSize, maxEntries: 10 });
+            assert.equal(r.spends.length, 10, `${n}/${pageSize}`);
+            assert.equal(r.truncated, true, `${n} spends, pages of ${pageSize}, cap 10`);
+        }
+    });
+    test('the treasury pot: the pallet account (modl + palletId, zero padded), free less max(existential deposit, frozen)', async () => {
+        const c = fakeChain();
+        assert.deepEqual(await readPot(c.api), { free: '1000000000000000000', available: '999999000000000000' });
+        const want = new Uint8Array(32); want.set([109, 111, 100, 108]); want.set(PALLET_ID, 4);
+        assert.deepEqual([...c.calls.accounts[0]], [...want]);
+        assert.deepEqual([...treasuryPotAccount(c.api)], [...want]);
+        c.pot = { free: '5000000000000', frozen: '3000000000000' };
+        assert.deepEqual(await readPot(c.api), { free: '5000000000000', available: '2000000000000' }, 'a freeze above the deposit is kept back');
+        c.pot = { free: '5000000000000', miscFrozen: '4000000000000', feeFrozen: '0' };
+        assert.deepEqual(await readPot(c.api), { free: '5000000000000', available: '1000000000000' }, 'older AccountData: miscFrozen / feeFrozen');
+        c.pot = { free: '500000000000' };
+        assert.deepEqual(await readPot(c.api), { free: '500000000000', available: '0' }, 'never below zero');
+    });
+    test('the pot unknown (no palletId, no system.account, or a failed read) is null and holds nothing', async () => {
+        const c = fakeChain();
+        delete c.api.consts.treasury.palletId;
+        assert.equal(await readPot(c.api), null);
+        const d = fakeChain();
+        d.api.query.system.account = async () => { throw new Error('rpc gone'); };
+        assert.equal(await readPot(d.api), null);
+        const r = await readSpends(d.api);
+        assert.equal(r.pot, null);
+        assert.equal(r.spends[0].action, 'payout');
+    });
+    test('readSpends classifies against the pot: a spend larger than it is unfunded', async () => {
+        const c = fakeChain({ spends: [spend({ index: 1, amount: '1000000000000' }), spend({ index: 2, amount: '1500000000000000' })], pot: { free: '101000000000000' } });
+        const r = await readSpends(c.api);
+        assert.deepEqual(r.spends.map(s => [s.index, s.phase, s.action]), [[2, 'unfunded', null], [1, 'payable', 'payout']]);
     });
     test('a runtime without spends says so', async () => {
         await assert.rejects(readSpends({ query: { treasury: {} } }), /not available on this runtime/);
     });
     test('readSpend: one spend and the block a transaction would run in', async () => {
         const c = fakeChain({ head: 1200 });
-        assert.deepEqual(await readSpend(c.api, 7), { next: 1201, spend: spend() });
-        assert.deepEqual(await readSpend(c.api, 99), { next: 1201, spend: null });
+        const pot = { free: '1000000000000000000', available: '999999000000000000' };
+        assert.deepEqual(await readSpend(c.api, 7), { next: 1201, spend: spend(), pot });
+        assert.deepEqual(await readSpend(c.api, 99), { next: 1201, spend: null, pot });
     });
     test('the watchdog verdict: payout is on chain once Attempted (or gone), check_status once gone', () => {
         assert.equal(spendVerdict('payout', spend()), 'pending');
@@ -228,6 +302,9 @@ describe('the calls on the real codec (spec 393 metadata fixture)', { skip: fx ?
         const t = api.registry.createType('PalletTreasurySpendStatus');
         assert.equal(t.assetKind.toRawType(), 'Null');
         assert.deepEqual(api.registry.createType('PalletTreasuryPaymentState').defKeys, ['Pending', 'Attempted', 'Failed']);
+    });
+    test('the pot account derived from the metadata palletId is the Polkadex treasury account', () => {
+        assert.equal(encodeAddress(treasuryPotAccount(api), 88), 'esoEt6uZ9vs23yW8aqTACLf1tViGpSLZKnhPXt5Nq7vQwHGew');
     });
     test('the module errors decode to the page\'s copy', () => {
         const err = (n) => api.registry.createType('DispatchError', { Module: { index: 16, error: `0x${n.toString(16).padStart(2, '0')}000000` } });
@@ -336,6 +413,7 @@ describe(`GET ${'/api/treasury/spends'}`, () => {
         assert.equal(r.body.nextBlock, 1500);
         assert.equal(r.body.spendCount, 9);
         assert.equal(r.body.truncated, false);
+        assert.deepEqual(r.body.pot, { free: '1000000000000000000', available: '999999000000000000' }, 'the treasury pot, planck strings');
         assert.deepEqual(r.body.spends.map(s => [s.index, s.status, s.phase, s.action]), [[4, 'Attempted', 'paid', 'checkStatus'], [3, 'Pending', 'payable', 'payout']]);
         assert.equal(r.body.spends[0].beneficiary, 'n:' + BEN, 'beneficiaries are normalised to the Polkadex prefix');
         assert.equal(r.body.spends[0].amount, '1500000000000000', 'planck strings, never floats');
@@ -357,7 +435,7 @@ describe(`GET ${'/api/treasury/spends'}`, () => {
 });
 
 describe('the Spends table cells', () => {
-    const deps = (over = {}) => ({ connected: true, held: new Set(), data: { block: 1499, nextBlock: 1500, blockTimeMs: 12000, decimals: 12 }, fetchedAt: 1_000_000, formatTime: (ms) => `T${ms}`, ...over });
+    const deps = (over = {}) => ({ connected: true, held: new Set(), data: { block: 1499, nextBlock: 1500, blockTimeMs: 12000, decimals: 12, pot: { free: '9000000000000000', available: '8000000000000000' } }, fetchedAt: 1_000_000, formatTime: (ms) => `T${ms}`, ...over });
     const cells = (row, over) => Object.fromEntries(spendColumns(deps(over)).map(c => [c.key, c.format(row)]));
     test('index, amount, linked beneficiary, blocks with estimated dates, status, action', () => {
         const c = cells({ ...spend(), phase: 'payable', action: 'payout' });
@@ -377,6 +455,15 @@ describe('the Spends table cells', () => {
         assert.doesNotMatch(cells({ ...spend({ validFrom: 100, expireAt: 1500 }) }).action, /<button/);
         assert.match(cells({ ...spend({ status: 'Attempted' }) }).status, /Paid/);
         assert.match(cells({ ...spend({ status: 'Attempted' }) }).action, />Check status</);
+    });
+    test('a spend the pot cannot cover, or one in its last block, shows why instead of a button', () => {
+        const poor = cells(spend(), { data: { ...deps().data, pot: { free: '1000000000000000', available: '999000000000000' } } });
+        assert.match(poor.action, /The treasury holds 999 PDEX, less than this spend; it cannot be paid until the pot is refilled/);
+        assert.doesNotMatch(poor.action, /<button/);
+        const last = cells(spend({ expireAt: 1501 }));
+        assert.match(last.action, /Expires next block; paying now may fail/);
+        assert.doesNotMatch(last.action, /<button/);
+        assert.match(cells(spend(), { data: { ...deps().data, pot: null } }).action, /<button[^>]*>Pay out</, 'no pot in the response: the button stays');
     });
     test('buttons are disabled without a wallet and while a submission for that spend is held', () => {
         assert.match(cells(spend(), { connected: false }).action, /disabled/);
@@ -399,13 +486,19 @@ function spendsWorld({ connected = ME, rows = [spend()], head = 1499 } = {}) {
     const chain = fakeChain({ head, spends: rows.map(r => ({ ...r })) });
     const el = { innerHTML: '', handlers: {}, addEventListener(t, fn) { this.handlers[t] = fn; }, querySelector() { return table; } };
     const table = { innerHTML: '' };
-    const w = { chain, el, table, selected: connected, fetches: [], submitted: [], api: chain.api, multisig: false };
+    const w = { chain, el, table, selected: connected, fetches: [], submitted: [], api: chain.api, multisig: false, tables: [] };
     w.respond = async (url) => { w.fetches.push(url); return readSpends(chain.api).then(r => JSON.parse(JSON.stringify(r))); };
     w.submitWith = async (opts) => { w.submitted.push(opts); w.lastTx = await opts.buildTx(chain.api); };
     w.ui = createSpendPayoutUI({
         api: () => w.api, selected: () => w.selected, isMultisig: () => w.multisig,
         submit: (o) => w.submitWith(o), fetchJson: (u) => w.respond(u),
-        makeTable: ({ container, rows: rs, columns }) => { container.innerHTML = rs.map(r => columns.map(c => c.format(r)).join(' | ')).join('\n'); },
+        makeTable: (config) => {
+            const { container, rows: rs, columns } = config;
+            container.innerHTML = rs.map(r => columns.map(c => c.format(r)).join(' | ')).join('\n');
+            const t = { config, state: config.state ? { ...config.state } : { sortKey: 'index', sortDir: 'desc', colFilters: {}, globalSearch: '' } };   // like makeTable: starts from config.state
+            w.tables.push(t);
+            return { getState: () => ({ ...t.state, colFilters: { ...t.state.colFilters } }), setData() {}, refresh() {} };
+        },
         formatTime: (ms) => `T${ms}`, helpIcon: () => '<i>?</i>'
     });
     const button = (index, action) => ({ disabled: false, getAttribute: (k) => ({ 'data-spend-index': String(index), 'data-spend-action': action })[k] });
@@ -464,6 +557,66 @@ describe('the Spends tab', () => {
         assert.equal(w.submitted.length, 1, 'a click while the refresh runs submits nothing');
         release(); await tick(); await tick();
         assert.match(w.table.innerHTML, /data-spend-action="checkStatus"[^>]*data-spend-index="7"(?![^>]*disabled)/);
+    });
+    test('settle re-renders at once, before the fresh read: the button submit restored is disabled again in the same tick', async () => {
+        const w = spendsWorld();
+        await w.ui.mount(w.el);
+        w.respond = async (url) => { w.fetches.push(url); await new Promise(() => {}); };   // the fresh read never answers
+        await w.click(7);
+        for (const fire of [(s) => s.onStage('waiting'), (s) => s.onStage('processed'), (s) => s.onSuccess()]) {
+            w.table.innerHTML = '<button data-spend-action="payout" data-spend-index="7">Pay out</button>';   // submit's restore()
+            fire(w.submitted[0]);
+            assert.match(w.table.innerHTML, /data-spend-index="7"[^>]*disabled/, 'held, synchronously');
+        }
+    });
+    test('sort, search and filters survive every re-render (hold, settle, wallet change)', async () => {
+        const w = spendsWorld({ rows: [spend(), spend({ index: 8 })] });
+        await w.ui.mount(w.el);
+        const first = w.tables[w.tables.length - 1];
+        first.state = { sortKey: 'amount', sortDir: 'asc', colFilters: { beneficiary: 'es' }, globalSearch: '#8' };
+        w.submitWith = async (opts) => { w.submitted.push(opts); };
+        await w.click(7);
+        const held = w.tables[w.tables.length - 1];
+        assert.notEqual(held, first, 'the hold re-rendered');
+        assert.deepEqual(held.config.state, { sortKey: 'amount', sortDir: 'asc', colFilters: { beneficiary: 'es' }, globalSearch: '#8' });
+        held.state = { sortKey: 'expireAt', sortDir: 'desc', colFilters: {}, globalSearch: 'x' };
+        w.submitted[0].onSuccess();
+        await tick(); await tick();
+        const settled = w.tables[w.tables.length - 1];
+        assert.deepEqual(settled.config.state, { sortKey: 'expireAt', sortDir: 'desc', colFilters: {}, globalSearch: 'x' });
+        w.ui.accountChanged();
+        assert.deepEqual(w.tables[w.tables.length - 1].config.state, { sortKey: 'expireAt', sortDir: 'desc', colFilters: {}, globalSearch: 'x' });
+    });
+    test('the first render has no carried state', async () => {
+        const w = spendsWorld();
+        await w.ui.mount(w.el);
+        assert.equal(w.tables[0].config.state, undefined);
+    });
+    test('a spend the pot no longer covers at signing is refused before the wallet is asked', async () => {
+        const w = spendsWorld();
+        await w.ui.mount(w.el);
+        w.chain.pot = { free: '1000000000000000' };
+        let thrown = null;
+        w.submitWith = async (opts) => { w.submitted.push(opts); try { await opts.buildTx(w.chain.api); } catch (e) { thrown = e; opts.onError(e.message); } };
+        await w.click(7);
+        assert.match(String(thrown && thrown.message), /Spend #7 cannot be paid out now: The treasury holds 999 PDEX, less than this spend/);
+    });
+    test('a spend in its last block at signing is refused before the wallet is asked', async () => {
+        const w = spendsWorld();
+        await w.ui.mount(w.el);
+        w.chain.head = 1998;   // signed now, it runs in 1999, the last block before expire_at 2000
+        let thrown = null;
+        w.submitWith = async (opts) => { w.submitted.push(opts); try { await opts.buildTx(w.chain.api); } catch (e) { thrown = e; opts.onError(e.message); } };
+        await w.click(7);
+        assert.match(String(thrown && thrown.message), /Spend #7 cannot be paid out now: Expires next block; paying now may fail/);
+    });
+    test('an unfunded spend has no button and a click submits nothing', async () => {
+        const w = spendsWorld({ rows: [spend()] });
+        w.chain.pot = { free: '1000000000000' };
+        await w.ui.mount(w.el);
+        assert.match(w.table.innerHTML, /less than this spend/);
+        await w.click(7);
+        assert.equal(w.submitted.length, 0);
     });
     test('an error releases the button for a retry', async () => {
         const w = spendsWorld();
@@ -546,6 +699,15 @@ describe('wiring', () => {
         assert.match(fn, /tabBtn\('spends'/);
         assert.match(fn, /spendPayoutUI\.mount\(/);
         assert.match(bodyOf(script, 'onWalletChanged'), /spendPayoutUI\.accountChanged\(\)/);
+    });
+    test('makeTable starts from config.state (a previous getState()) so a rebuilt table keeps sort, search and filters', () => {
+        const fn = bodyOf(script, 'makeTable');
+        assert.match(fn, /config\.state/);
+        assert.match(fn, /sortKey = [^;]*config\.state\.sortKey/);
+        assert.match(fn, /sortDir = [^;]*config\.state\.sortDir/);
+        assert.match(fn, /globalSearch = [^;]*config\.state\.globalSearch/);
+        assert.match(fn, /Object\.assign\(colFilters, [^)]*config\.state\.colFilters/);
+        assert.match(fn, /getState\(\)\s*\{ return \{ sortKey, sortDir, colFilters: \{ \.\.\.colFilters \}, globalSearch \}; \}/);
     });
     test('server.js registers the route with requireRpc, cacheShort, isFreshRequest and serverError', () => {
         assert.match(server, /registerTreasurySpendsRoute\(app, \{[^}]*requireRpc[^}]*cacheShort[^}]*isFreshRequest[^}]*serverError[^}]*\}\)/s);
