@@ -65,6 +65,7 @@ import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
 import { lockPeriodDays, labelConvictions } from './lib/conviction-lock.js';
 import { SPEND_RULE_TEXT } from './lib/treasury-spend.js';
+import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
 // The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
 const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
@@ -827,6 +828,7 @@ function adoptChainApi(api) {
     runAssetFeeSelfCheck(api);
     if (councilPollTimer) startCouncilLive();   // the Council page opened before the node link was up
     if (democracyView.active()) democracyView.start();   // same for Democracy
+    spendMotionUI.refresh();                              // and the Treasury page's spend action
 
     // F-063 review catch: anything that no-opped because globalApi was null
     // during the pre-handshake window has to be re-driven here, or it stays
@@ -7960,6 +7962,11 @@ const councilCandidacyUI = createCouncilCandidacyUI({
     // The fee preflight's "Copy address" (lib/fee-preflight.js).
     copyText: text => navigator.clipboard.writeText(text)
 });
+// Propose a spend on the Treasury page: a council motion wrapping treasury.spend.
+const spendMotionUI = createSpendMotionUI({
+    api: () => globalApi, selected: getStoredWallet, isMultisig: address => !!multisigStore.find(address),
+    submit: submitSignedTx, connectPrompt: buildWalletConnectPrompt
+});
 // An iPhone that was locked, or a wallet's in-app browser sent to the
 // background, suspends timers and can lose the transaction status
 // subscription. On return, ask the chain about every transaction still in
@@ -7976,6 +7983,7 @@ let walletMenu = null;   // the header My Account menu, wired once at the bottom
 function isWalletRoute(r) { return /^(wallet|stake|staking)(\/|$)/.test(r || ''); }
 function onWalletChanged() {
     councilCandidacyUI.accountChanged();
+    spendMotionUI.accountChanged();
     walletActionsBlockedReason = null; currentWalletData = null; walletEntryIntent = null;
     if (_walletSigningRecheckTimer) { clearTimeout(_walletSigningRecheckTimer); _walletSigningRecheckTimer = null; }
     invalidateWalletFetch();
@@ -12756,9 +12764,10 @@ function renderTreasury() {
         <div class="list-container glass">
             <div class="list-header">
                 <h2>Treasury</h2>
-                <div style="display:flex;gap:14px;align-items:center;">
+                <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
                     <span style="color:var(--text-secondary);font-size:0.78rem;">${stakingFormatNumber(d.proposalCount)} lifetime proposals</span>
                     <span style="color:var(--text-muted);font-size:0.78rem;">${SPEND_RULE_TEXT} ${helpIcon('treasury', 'Who can spend from the treasury')}</span>
+                    <span id="treasury-spend-action"></span>
                 </div>
             </div>
             <div class="account-tabs" style="margin:0 24px;">
@@ -12767,6 +12776,7 @@ function renderTreasury() {
             <div style="padding:24px;">${governanceIndexNote(d.history, 'proposals')}${body}</div>
         </div>`;
 
+    spendMotionUI.mount(root.querySelector('#treasury-spend-action'));
     // Tables are mounted AFTER the outer innerHTML lands so their container
     // divs exist in the DOM. Each mount-* is a no-op when its target div isn't
     // in the current tab.

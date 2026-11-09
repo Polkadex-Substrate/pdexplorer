@@ -696,7 +696,39 @@
                 <div id="treasury-content"></div>
             </div>
 
-            <!-- Treasury Submit Proposal Modal -->
+            <!-- Propose a spend: a council motion wrapping treasury.spend,
+                 reviewed as decoded call bytes before the wallet is asked
+                 (lib/treasury-spend-view.js). -->
+            <div id="treasury-spend-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="treasury-spend-title" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
+                <div class="glass" style="width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
+                    <button type="button" id="treasury-spend-close" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
+                    <h3 id="treasury-spend-title" style="margin-bottom: 6px; font-size: 1.3rem;">Propose a spend <a href="/help/treasury" class="help-inline-icon" title="Learn about treasury spends" aria-label="Help: treasury spends"><i class='bx bx-help-circle'></i></a></h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 12px; font-size: 0.88rem;">Tables a council motion that runs <code>treasury.spend</code> once enough members vote Aye.</p>
+                    <div class="stake-hint">Account: <span id="treasury-spend-account" style="font-family: monospace; overflow-wrap: anywhere;">--</span></div>
+                    <p id="treasury-spend-effect" role="status" style="margin: 12px 0; color: var(--text-secondary); font-size: 0.88rem;"></p>
+                    <div id="treasury-spend-connect"></div>
+                    <div id="treasury-spend-form" style="display: none;">
+                        <label class="stake-label" for="treasury-spend-beneficiary">Beneficiary</label>
+                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-beneficiary" placeholder="es… Polkadex address" autocomplete="off" spellcheck="false"></div>
+                        <label class="stake-label" for="treasury-spend-amount" style="margin-top: 12px;">Amount (PDEX)</label>
+                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-amount" placeholder="0.0" inputmode="decimal" autocomplete="off"></div>
+                        <div class="stake-hint" id="treasury-spend-cap"></div>
+                        <label class="stake-label" for="treasury-spend-valid-from" style="margin-top: 12px;">Valid from block (optional)</label>
+                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-valid-from" placeholder="Empty: claimable as soon as the motion runs" inputmode="numeric" autocomplete="off"></div>
+                        <label class="stake-label" for="treasury-spend-threshold" style="margin-top: 12px;">Threshold (Ayes needed)</label>
+                        <div class="stake-amount-wrap"><input type="number" id="treasury-spend-threshold" step="1"></div>
+                        <div class="stake-hint" id="treasury-spend-threshold-hint"></div>
+                    </div>
+                    <div id="treasury-spend-review" style="display: none; margin-top: 14px;"></div>
+                    <div id="treasury-spend-error" class="staking-error" role="alert" style="display: none; margin-top: 14px;"></div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px;">
+                        <button type="button" id="treasury-spend-edit" class="staking-download-btn" style="display: none;">Edit</button>
+                        <button type="button" id="treasury-spend-check" class="staking-download-btn" disabled>Review motion</button>
+                        <button type="button" id="treasury-spend-sign" class="staking-download-btn" disabled>Sign &amp; table motion</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Governance detail modal — opens when the user clicks a
                  proposal #, motion #, or referendum # in treasury / democracy /
                  council tables. Renders the proposal's lifecycle (blocks,
