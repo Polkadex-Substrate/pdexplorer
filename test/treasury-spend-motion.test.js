@@ -187,7 +187,7 @@ function viewWorld({ members = [A, B, C, D, E], connected = A } = {}) {
         document: { getElementById: (id) => nodes.get(id) },
         motion: {
             readSeats: async () => { w.reads++; const s = w.seats; if (w.gate) await w.gate; if (w.fail) throw new Error(w.fail); return s; },
-            readHead: async () => { if (w.headFail) throw new Error(w.headFail); return w.head; },
+            readHead: async () => { w.headReads = (w.headReads || 0) + 1; if (w.headGate) await w.headGate; if (w.headFail) throw new Error(w.headFail); return w.head; },
             build: (_, pallet, v) => { w.built.push({ pallet, ...v }); return { method: { toHex: () => JSON.stringify(v) } }; },
             decode: () => ({ hash: '0x' + '12'.repeat(32), motion: { section: 'council', method: 'propose', args: [] }, spend: { section: 'treasury', method: 'spend', args: [] } })
         }
@@ -329,6 +329,60 @@ describe('review, then sign', () => {
         await w.get('sign').fire(); await tick();
         assert.equal(w.built.length, 1, 'no call is built for the wallet');
         assert.match(w.get('error').textContent, /council seats changed/);
+    });
+});
+
+describe('Review motion runs one check at a time', () => {
+    const held = (w) => { let release; w.headGate = new Promise(r => { release = r; }); return () => { w.headGate = null; release(); }; };
+    test('a second click while the current block is being read is ignored; the review is built once', async () => {
+        const w = viewWorld();
+        await w.open();
+        w.fill({ 'valid-from': '1001' });
+        const release = held(w);
+        const first = w.get('check').fire();
+        assert.equal(w.get('check').disabled, true, 'disabled while checking');
+        assert.equal(w.get('check').attrs['aria-busy'], 'true');
+        await w.get('check').fire();
+        assert.equal(w.headReads, 1, 'the second click started no second read');
+        release();
+        await first; await tick();
+        assert.equal(w.built.length, 1, 'the review was built once');
+        assert.equal(w.get('sign').disabled, false);
+        assert.equal(w.get('check').disabled, false, 'released on success');
+        assert.equal(w.get('check').attrs['aria-busy'], 'false');
+    });
+    test('a failed read releases the button, and the next click checks again', async () => {
+        const w = viewWorld();
+        await w.open();
+        w.fill({ 'valid-from': '1001' });
+        w.headFail = 'node unreachable';
+        await w.get('check').fire();
+        assert.match(w.get('error').textContent, /node unreachable/);
+        assert.equal(w.get('check').disabled, false, 'released on error');
+        assert.equal(w.get('check').attrs['aria-busy'], 'false');
+        w.headFail = null;
+        await w.get('check').fire();
+        assert.equal(w.headReads, 2);
+        assert.equal(w.get('sign').disabled, false, w.get('error').textContent);
+    });
+    test('closing the dialog mid-check releases the guard; the late read builds nothing and a reopened dialog can check', async () => {
+        const w = viewWorld();
+        await w.open();
+        w.fill({ 'valid-from': '1001' });
+        const release = held(w);
+        const first = w.get('check').fire();
+        w.ui.close();
+        assert.equal(w.get('check').attrs['aria-busy'], 'false', 'released on close');
+        release();
+        await first; await tick();
+        assert.equal(w.built.length, 0, 'the late read built no review');
+        assert.equal(w.get('sign').disabled, true);
+        await w.open();
+        w.fill({ 'valid-from': '1001' });
+        await w.get('check').fire();
+        assert.equal(w.headReads, 2, 'the reopened dialog was not locked out by the old check');
+        assert.equal(w.built.length, 1);
+        assert.equal(w.get('check').attrs['aria-busy'], 'false');
     });
 });
 
