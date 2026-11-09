@@ -36,6 +36,7 @@ import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-de
 import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
 import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
+import { registerTreasurySpendsRoute } from './lib/treasury-payout-api.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { readEraSummary, missingEras, buildChoiceSnapshot, readConst, FALLBACK_HISTORY_DEPTH } from './lib/stake-choice-sync.js';
@@ -4665,6 +4666,8 @@ app.get('/api/treasury', (req, res) => {
         res.status(500).json({ error: 'Failed to fetch treasury data' });
     }
 });
+// Approved spends and what can be done with each now, live from the node (lib/treasury-payout-api.js).
+registerTreasurySpendsRoute(app, { api: () => globalApi, ready: requireRpc, cacheShort, isFresh: isFreshRequest, serverError, normalize: normalizeAddress });
 
 // Each referendum row carries its discussion thread id when one exists (the
 // Democracy page's Discuss link; lib/discussion-lifecycle.js).

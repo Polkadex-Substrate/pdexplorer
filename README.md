@@ -644,7 +644,7 @@ Hot endpoints carry `Cache-Control` headers in three tiers — clients (mobile, 
 
 | Tier | Used by | Header |
 |---|---|---|
-| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, the governance item endpoints (`/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id`; no-store for `?fresh=1` and 404), `/api/governance/latest`, `/api/state/*` at the current head, `/api/staking/validator-choice` (no-store while initializing) | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
+| **Short** | High-velocity feeds: `/api/blocks`, `/api/transactions`, `/api/events`, `/api/council`, `/api/technical-committee`, `/api/treasury/spends` (no-store for `?fresh=1`), the governance item endpoints (`/api/democracy/referendum/:index`, `/api/democracy/proposal/:index`, `/api/democracy/external/:hash`, `/api/council/motion/:id`, `/api/technical-committee/motion/:id`; no-store for `?fresh=1` and 404), `/api/governance/latest`, `/api/state/*` at the current head, `/api/staking/validator-choice` (no-store while initializing) | `public, max-age=5, s-maxage=10, stale-while-revalidate=30` |
 | **Medium** | `/api/validators`, `/api/network-info`, `/api/holders`, `/api/price-latest`, `/api/staking-rewards-status`, `/api/discussions`, `/api/analytics/*`, `/api/labels/:address` (anonymous only), `/api/consts/*` + `/api/runtime` at head | `public, max-age=30, s-maxage=60, stale-while-revalidate=120` |
 | **Long** | `/api/price-history`, `/api/treasury`, `/api/democracy`, `/api/governance/calendar`, `/api/rpc/metadata`, `/api/decode/:block`, `/api/proxy-types`, `GET /api/rpc/call`, and any inspection route pinned to a past block with `?at=` | `public, max-age=300, s-maxage=600, stale-while-revalidate=3600` |
 
@@ -778,6 +778,7 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 - `GET /api/council` — council members, motions, runners-up
 - `GET /api/technical-committee` — technical committee members (with prime), open motions with live votes, and full motion history
 - `GET /api/treasury` — treasury balance, proposals (open + historical)
+- `GET /api/treasury/spends` - approved treasury spends live from the node (amount in planck, beneficiary, valid-from and expiry blocks, status) with the action each allows in the next block (payout, checkStatus or none); at most 500, `truncated` when there may be more; short tier, `?fresh=1` no-store
 - `GET /api/democracy` — referenda + public proposals
 - `GET /api/governance/latest` — most-recent OPEN referendum / proposal (drives homepage banner; only ongoing events)
 - `GET /api/governance/calendar` — unified timeline across referenda + motions + treasury for `/calendar`

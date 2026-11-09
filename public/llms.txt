@@ -212,6 +212,7 @@ is CoinGecko (keyless public API).
 - GET /api/council — council members, motions, runners-up
 - GET /api/technical-committee — technical committee members (with prime), open motions with live votes, and full motion history
 - GET /api/treasury — treasury balance and proposals (open + historical)
+- GET /api/treasury/spends - approved treasury spends live from the node: amount (planck string), beneficiary, validFrom, expireAt, status, and the action each allows in the next block (payout, checkStatus or null)
 - GET /api/democracy — referenda and public proposals
 - GET /api/governance/latest — most-recent OPEN referendum / proposal
 - GET /api/governance/calendar — unified governance timeline

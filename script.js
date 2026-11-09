@@ -66,6 +66,7 @@ import { sendableBalance } from './lib/balance-locks.js';
 import { lockPeriodDays, labelConvictions } from './lib/conviction-lock.js';
 import { SPEND_RULE_TEXT } from './lib/treasury-spend.js';
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
+import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
 // The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
 const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
@@ -7967,6 +7968,12 @@ const spendMotionUI = createSpendMotionUI({
     api: () => globalApi, selected: getStoredWallet, isMultisig: address => !!multisigStore.find(address),
     submit: submitSignedTx, connectPrompt: buildWalletConnectPrompt
 });
+// The Treasury page's Spends tab: Pay out and Check status for approved spends, any connected wallet.
+const spendPayoutUI = createSpendPayoutUI({
+    selected: getStoredWallet, isMultisig: address => !!multisigStore.find(address), submit: submitSignedTx, makeTable,
+    fetchJson: async (url) => { const res = await fetch(url); const d = await parseJsonResponse(res); if (!res.ok || d.error) throw new Error(d.error || ('Request failed (' + res.status + ')')); return d; },
+    formatTime: formatLocalDateTime, helpIcon
+});
 // An iPhone that was locked, or a wallet's in-app browser sent to the
 // background, suspends timers and can lose the transaction status
 // subscription. On return, ask the chain about every transaction still in
@@ -7984,6 +7991,7 @@ function isWalletRoute(r) { return /^(wallet|stake|staking)(\/|$)/.test(r || '')
 function onWalletChanged() {
     councilCandidacyUI.accountChanged();
     spendMotionUI.accountChanged();
+    spendPayoutUI.accountChanged();
     walletActionsBlockedReason = null; currentWalletData = null; walletEntryIntent = null;
     if (_walletSigningRecheckTimer) { clearTimeout(_walletSigningRecheckTimer); _walletSigningRecheckTimer = null; }
     invalidateWalletFetch();
@@ -12758,6 +12766,7 @@ function renderTreasury() {
     if (treasuryTab === 'proposals') body = renderTreasuryProposals(openProposals);
     else if (treasuryTab === 'approved') body = renderTreasuryApproved(approvedProposals);
     else if (treasuryTab === 'history') body = renderTreasuryHistory(historyProposals);
+    else if (treasuryTab === 'spends') body = '<div id="treasury-spends"></div>';
     else body = renderTreasuryOverview(d, openProposals.length, approvedProposals.length, historyProposals);
 
     root.innerHTML = `
@@ -12771,7 +12780,7 @@ function renderTreasury() {
                 </div>
             </div>
             <div class="account-tabs" style="margin:0 24px;">
-                ${tabBtn('overview', 'Overview')}${tabBtn('proposals', `Open (${openProposals.length})`)}${tabBtn('approved', `Approved (${approvedProposals.length})`)}${tabBtn('history', `History (${historyProposals.length})`)}
+                ${tabBtn('overview', 'Overview')}${tabBtn('proposals', `Open (${openProposals.length})`)}${tabBtn('approved', `Approved (${approvedProposals.length})`)}${tabBtn('history', `History (${historyProposals.length})`)}${tabBtn('spends', 'Spends')}
             </div>
             <div style="padding:24px;">${governanceIndexNote(d.history, 'proposals')}${body}</div>
         </div>`;
@@ -12783,6 +12792,7 @@ function renderTreasury() {
     if (treasuryTab === 'proposals')      mountTreasuryProposalsTable(openProposals);
     else if (treasuryTab === 'approved')  mountTreasuryApprovedTable(approvedProposals);
     else if (treasuryTab === 'history')   mountTreasuryHistoryTable(historyProposals);
+    else if (treasuryTab === 'spends')    spendPayoutUI.mount(root.querySelector('#treasury-spends'));
 
     root.querySelectorAll('[data-treastab]').forEach(btn => {
         btn.addEventListener('click', () => { treasuryTab = btn.getAttribute('data-treastab'); renderTreasury(); });
