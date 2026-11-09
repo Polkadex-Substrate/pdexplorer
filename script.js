@@ -65,6 +65,7 @@ import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
 import { lockPeriodDays, labelConvictions } from './lib/conviction-lock.js';
 import { SPEND_RULE_TEXT } from './lib/treasury-spend.js';
+import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipientRefusal } from './lib/recipient-network.js';
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
@@ -10376,15 +10377,14 @@ function validateSendRecipient() {
         if (hintEl) { hintEl.textContent = 'Paste a valid Polkadex (SS58 prefix 88) address.'; hintEl.style.color = ''; }
         return;
     }
-    if (!isValidPolkadexAddress(v)) {
-        sendValidRecipient = false;
-        if (hintEl) { hintEl.textContent = 'That address is not valid on Polkadex.'; hintEl.style.color = 'var(--error)'; }
-        return;
-    }
     const data = currentWalletData;
-    if (data && isSameAddress(v, data.address)) {
+    const problem = sendRecipientProblem(v, { own: data && data.address, isSame: isSameAddress, live: true, ss58Prefix: ss58PrefixOf(globalApi) });
+    if (problem) {
         sendValidRecipient = false;
-        if (hintEl) { hintEl.textContent = 'Cannot send to yourself.'; hintEl.style.color = 'var(--error)'; }
+        if (hintEl) {
+            if (problem.refusal) renderRecipientRefusal(hintEl, problem.refusal); else hintEl.textContent = problem.text;
+            hintEl.style.color = 'var(--error)';
+        }
         return;
     }
     sendValidRecipient = true;
@@ -10593,8 +10593,12 @@ async function submitSendTx() {
     const keepAlive = !!document.getElementById('send-keep-alive').checked;
 
     if (!to) return showSendError('Enter a recipient address.');
-    if (!isValidPolkadexAddress(to)) return showSendError('That recipient address is not valid on Polkadex.');
-    if (isSameAddress(to, data.address)) return showSendError('You cannot send to your own address.');
+    const recipientProblem = sendRecipientProblem(to, { own: data.address, isSame: isSameAddress, ss58Prefix: ss58PrefixOf(globalApi) });
+    if (recipientProblem && recipientProblem.refusal) {
+        showSendError(recipientProblem.text);
+        return renderRecipientRefusal(document.getElementById('send-modal-error'), recipientProblem.refusal);
+    }
+    if (recipientProblem) return showSendError(recipientProblem.text);
     if (!isPositiveNumberInput(amtStr)) return showSendError('Enter an amount greater than zero.');
     const amt = parseFloat(amtStr);
     if (!Number.isFinite(amt) || amt <= 0) return showSendError('Enter a valid amount.');
@@ -13388,6 +13392,8 @@ async function renderProxyList(address, isOwnWallet) {
                 const delegate = btn.getAttribute('data-delegate');
                 const proxyType = btn.getAttribute('data-proxy-type');
                 const delay = parseInt(btn.getAttribute('data-delay'), 10) || 0;
+                const delegateProblem = proxyDelegateProblem(delegate, { ss58Prefix: ss58PrefixOf(globalApi) });
+                if (delegateProblem) { alert(delegateProblem.text); return; }
                 if (!confirm(`Remove proxy ${stakingShortAddress(delegate)} (${proxyType})?`)) return;
                 submitSignedTx({
                     buildTx: api => api.tx.proxy.removeProxy(delegate, proxyType, delay),
@@ -13446,7 +13452,8 @@ async function renderAddProxyForm(address) {
         const delegate = (delegateInput && delegateInput.value || '').trim();
         const proxyType = (typeInput && typeInput.value || 'Any').trim();
         const delay = parseInt(delayInput && delayInput.value || '0', 10) || 0;
-        if (!isValidPolkadexAddress(delegate)) return showErr('Delegate address is not a valid Polkadex address.');
+        const delegateProblem = proxyDelegateProblem(delegate, { ss58Prefix: ss58PrefixOf(globalApi) });
+        if (delegateProblem) { showErr(delegateProblem.text); if (delegateProblem.refusal) renderRecipientRefusal(errEl, delegateProblem.refusal); return; }
         if (delay < 0 || delay > 10_000_000) return showErr('Delay looks unreasonable.');
         if (errEl) errEl.style.display = 'none';
         submitSignedTx({
