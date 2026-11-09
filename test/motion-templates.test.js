@@ -63,8 +63,10 @@ describe('motion templates exist in the spec 393 metadata', { skip: fx ? false :
     });
 });
 
-describe('the council motion form is gone with its only two templates', () => {
-    test('no templates are left', () => assert.deepEqual(MOTION_TEMPLATES, []));
+describe('the old council motion form is gone with its two removed templates', () => {
+    test('the only template left is the treasury spend the Treasury page builds', () => {
+        assert.deepEqual(MOTION_TEMPLATES, [{ key: 'treasury.spend', pallet: 'treasury', method: 'spend' }]);
+    });
 
     const files = ['script.js', 'index.html', ...readdirSync(new URL('../lib/', import.meta.url)).filter(f => f.endsWith('.js') && f !== 'motion-templates.js' && f !== 'tx-status.js' && f !== 'gov-detail-view.js' && f !== 'help-topics.js').map(f => `lib/${f}`)];
     const BANNED = [/approveProposal/, /rejectProposal/, /approve_proposal/, /reject_proposal/, /council-propose-modal/, /propose-call-type/, /openProposeMotionModal/, /submitProposeMotion/, /open-propose-motion-btn/, /treasury-propose-/];

@@ -145,6 +145,8 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel,
         multisigUI: { mountAccounts() {} },
         councilCandidacyUI: { accountChanged() {} },
+        spendMotionUI: { accountChanged() {} },
+        spendPayoutUI: { accountChanged() {} },
         POLKADEX_SS58: 88,
         localStorage: profile.local, sessionStorage: session,
         navigator: { userAgent: 'test', clipboard: { writeText: async () => {} } },
