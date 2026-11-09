@@ -12,7 +12,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiPromise } from '@polkadot/api';
 import { encodeAddress } from '@polkadot/util-crypto';
-import { spendThresholdRange, checkSpendForm, buildSpendMotion, decodeSpendMotion, readCouncilSeats, SPEND_CAP_ERROR } from '../lib/treasury-spend.js';
+import { spendThresholdRange, checkSpendForm, readHeadNumber, buildSpendMotion, decodeSpendMotion, readCouncilSeats, SPEND_CAP_ERROR } from '../lib/treasury-spend.js';
 import { createSpendMotionUI } from '../lib/treasury-spend-view.js';
 import { MOTION_TEMPLATES } from '../lib/motion-templates.js';
 import { successCopy, evaluateEvents } from '../lib/tx-status.js';
@@ -121,6 +121,11 @@ describe('the form fields', () => {
 });
 
 const fx = loadFixture('metadata-392.json');
+test('readHeadNumber reads the best block number from the header', async () => {
+    const api = { rpc: { chain: { getHeader: async () => ({ number: { toNumber: () => 4321 } }) } } };
+    assert.equal(await readHeadNumber(api), 4321);
+});
+
 describe('the built motion on the real codec (metadata fixture)', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
     let api;
     const values = { beneficiary: BEN, planck: '1500000000000000', validFrom: null, threshold: 3 };
@@ -399,6 +404,8 @@ describe('help', () => {
         assert.match(t, /<b>Propose a spend<\/b>/);
         assert.match(t, /beneficiary/);
         assert.match(t, /valid-from block/);
+        assert.match(t, /another network's format is refused/);
+        assert.match(t, /valid-from block after the current one/);
         assert.match(t, /the threshold starts at, and cannot go below, three fifths of the seats/i);
         assert.match(t, /needs a referendum/);
         assert.match(t, /<b>Review motion<\/b>/);
