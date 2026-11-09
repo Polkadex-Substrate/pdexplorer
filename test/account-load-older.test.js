@@ -422,6 +422,28 @@ describe('Search all stops when a page does not advance', () => {
     });
 });
 
+describe('plain Load older stops when a page does not advance', () => {
+    test('a page whose next equals the cursor just fetched is not appended; message with Retry', async () => {
+        const ui = mount({ total: 1462, pages: [page(200, '8:1'), page(200, '8:1'), page(200, '8:1')] });
+        await ui.click();
+        assert.equal(ui.el('.js-older-count').textContent, 'Showing 400 of 1,462 events');
+        await ui.click();
+        assert.equal(ui.urls.length, 2);
+        assert.match(ui.urls[1], /before=8%3A1$/);
+        assert.equal(ui.error.innerHTML, 'The server returned the same page twice; stopped at 400 of 1,462');
+        assert.equal(ui.button.textContent, 'Retry');
+        assert.equal(ui.button.disabled, false);
+        assert.equal(ui.el('.js-older-count').textContent, 'Showing 400 of 1,462 events', 'repeated page appended');
+    });
+
+    test('the count never exceeds the total however many times the server repeats', async () => {
+        const ui = mount({ total: 600, pages: Array.from({ length: 6 }, () => page(200, 'x')) });
+        for (let i = 0; i < 6; i++) await ui.click();
+        const shown = Number(ui.el('.js-older-count').textContent.match(/Showing ([\d,]+)/)[1].replace(/,/g, ''));
+        assert.ok(shown <= 600, 'shown ' + shown);
+    });
+});
+
 describe('wiring in script.js', () => {
     const script = stripComments(readRepo('script.js', import.meta.url));
     test('makeTable exposes getInfo and setHooks and uses the filteredEmpty hook for the empty row', () => {

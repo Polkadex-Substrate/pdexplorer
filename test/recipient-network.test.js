@@ -7,8 +7,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
-import { encodeAddress, randomAsU8a, cryptoWaitReady } from '@polkadot/util-crypto';
-import { checkRecipient, otherNetworkMessage, ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipientRefusal } from '../lib/recipient-network.js';
+import { encodeAddress, decodeAddress, randomAsU8a, cryptoWaitReady } from '@polkadot/util-crypto';
+import { checkRecipient, otherNetworkMessage, ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipientRefusal, chainDelegate } from '../lib/recipient-network.js';
 import { readRepo, stripComments } from './helpers/source.js';
 
 await cryptoWaitReady();
@@ -134,7 +134,29 @@ describe('wiring in script.js', () => {
         const add = script.slice(script.indexOf("getElementById('proxy-add-delegate')"), script.indexOf('api.tx.proxy.addProxy('));
         assert.match(add, /proxyDelegateProblem\(delegate,\s*\{\s*ss58Prefix:\s*ss58PrefixOf\(globalApi\)/);
         assert.match(add, /renderRecipientRefusal\(/);
+    });
+    test('Proxy remove: a chain-read delegate is re-encoded to the chain prefix, never run through the strict check', () => {
         const remove = script.slice(script.indexOf(".proxy-remove-btn').forEach"), script.indexOf('api.tx.proxy.removeProxy('));
-        assert.match(remove, /proxyDelegateProblem\(delegate,\s*\{\s*ss58Prefix:\s*ss58PrefixOf\(globalApi\)/);
+        assert.match(remove, /chainDelegate\(\w+,\s*ss58PrefixOf\(globalApi\)\)/);
+        assert.doesNotMatch(remove, /proxyDelegateProblem\(/);
+        assert.match(script.slice(script.indexOf('api.tx.proxy.removeProxy(')), /^api\.tx\.proxy\.removeProxy\(chainDelegate|^api\.tx\.proxy\.removeProxy\(\w*[dD]elegate/);
+    });
+});
+
+describe('chainDelegate (proxy remove)', () => {
+    test('a delegate string encoded with prefix 42 is re-encoded to the chain prefix, same account bytes', () => {
+        const out = chainDelegate(at(42), 88);
+        assert.equal(out, PDEX);
+        assert.deepEqual(decodeAddress(out), key);
+    });
+    test('honours a non-88 chain prefix, and leaves a chain-encoded address unchanged', () => {
+        assert.equal(chainDelegate(PDEX, 42), at(42));
+        assert.equal(chainDelegate(PDEX, 88), PDEX);
+    });
+    test('never blocks: other-network prefixes all come through', () => {
+        for (const [prefix] of OTHERS) assert.equal(chainDelegate(at(prefix), 88), PDEX);
+    });
+    test('proxy add still refuses a typed other-network delegate', () => {
+        assert.equal(proxyDelegateProblem(at(42)).refusal.reason, 'other-network');
     });
 });
