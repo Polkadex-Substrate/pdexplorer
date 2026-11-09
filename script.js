@@ -4557,7 +4557,10 @@ function stopCouncilPolling() {
     if (councilPollTimer) { clearInterval(councilPollTimer); councilPollTimer = null; }
 }
 
+// Bumped on every route change, so async work started for one page can tell it is no longer on screen.
+let routeGeneration = 0;
 function routeTo(target) {
+    routeGeneration++;
     stopCouncilPolling(); democracyView.stop(); govDetailPage.stop();
     if (!target) target = 'home';
     // /democracy?ref=N and friends (emails, calendar, bookmarks) -> the item's own page.
@@ -6210,6 +6213,7 @@ window.switchAccountTab = function (tabName) {
 };
 
 async function fetchAccountDetails(address) {
+    const generation = routeGeneration;
     if (accountDetailsContainer) accountDetailsContainer.innerHTML = '<div style="text-align:center; padding: 20px;">Fetching account details...</div>';
     const shortAddr = address ? (address.substring(0, 8) + '…' + address.substring(address.length - 6)) : '';
     updateSeoMeta('account-details', {
@@ -6392,7 +6396,8 @@ async function fetchAccountDetails(address) {
         });
         for (const [list, table, noun] of [['transactions', txTable, 'transfers'], ['events', evTable, 'events']]) {
             mountAccountLoadOlder(document.getElementById(`account-tab-${list}`), { address: data.account, list, noun, table,
-                rows: data[list] || [], next: data.index?.next?.[list], total: data.index?.totals?.[list], fetchJson: fetchApiJson });
+                rows: data[list] || [], next: data.index?.next?.[list], total: data.index?.totals?.[list], fetchJson: fetchApiJson,
+                isCurrent: () => generation === routeGeneration });
         }
     } catch (e) {
         renderApiError(accountDetailsContainer, e, () => fetchAccountDetails(address));
