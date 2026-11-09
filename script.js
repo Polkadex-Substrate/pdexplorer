@@ -65,7 +65,7 @@ import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
 import { lockPeriodDays, labelConvictions } from './lib/conviction-lock.js';
 import { SPEND_RULE_TEXT } from './lib/treasury-spend.js';
-import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipientRefusal } from './lib/recipient-network.js';
+import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipientRefusal, chainDelegate } from './lib/recipient-network.js';
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
@@ -13389,11 +13389,11 @@ async function renderProxyList(address, isOwnWallet) {
         // Remove handlers — each row's button fires proxy.removeProxy(delegate, type, delay).
         if (isOwnWallet) {
             el.querySelectorAll('.proxy-remove-btn').forEach(btn => btn.addEventListener('click', () => {
-                const delegate = btn.getAttribute('data-delegate');
                 const proxyType = btn.getAttribute('data-proxy-type');
                 const delay = parseInt(btn.getAttribute('data-delay'), 10) || 0;
-                const delegateProblem = proxyDelegateProblem(delegate, { ss58Prefix: ss58PrefixOf(globalApi) });
-                if (delegateProblem) { alert(delegateProblem.text); return; }
+                // Chain-read, not typed: re-encode to the chain prefix and never block the removal.
+                let delegate = btn.getAttribute('data-delegate');
+                try { delegate = chainDelegate(delegate, ss58PrefixOf(globalApi)); } catch (_) { /* keep the chain's own string */ }
                 if (!confirm(`Remove proxy ${stakingShortAddress(delegate)} (${proxyType})?`)) return;
                 submitSignedTx({
                     buildTx: api => api.tx.proxy.removeProxy(delegate, proxyType, delay),
