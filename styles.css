@@ -4761,14 +4761,14 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-account-main .wallet-account-name, .wallet-account-main .wallet-account-addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wallet-account-name { display: flex; align-items: center; min-width: 0; }
 .wallet-account-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wallet-account-btn .bx-chevron-right { color: var(--text-muted); font-size: 1.2rem; flex-shrink: 0; }
+.wallet-account-btn .bx-chevron-right { color: var(--text-secondary); font-size: 1.2rem; flex-shrink: 0; }
 .wallet-account-btn:focus-visible { outline: 2px solid var(--brand-secondary); outline-offset: 2px; }
 .wallet-account-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--brand-secondary, #00E676); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.03); color: var(--text-primary); cursor: default; }
 .wallet-account-badge { flex-shrink: 0; }
 .wallet-disconnect-link { flex-shrink: 0; min-height: 36px; padding: 0 6px; background: none; border: 0; color: var(--text-secondary); font: inherit; font-size: 0.82rem; cursor: pointer; border-radius: var(--radius-sm); }
 .wallet-disconnect-link:hover, .wallet-disconnect-link:focus-visible { color: var(--error); outline: none; text-decoration: underline; }
 .wallet-skel-account { height: 56px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.04); }
-.wallet-picker-status { margin: 8px 0 0; color: var(--text-muted); font-size: 0.85rem; }
+.wallet-picker-status { margin: 8px 0 0; color: var(--text-secondary); font-size: 0.85rem; }
 .wallet-picker-status:empty { display: none; }
 .wallet-picker-nomatch { color: var(--text-secondary); font-size: 0.88rem; }
 .wp-link, .wallet-picker-clear-link { padding: 0; background: none; border: 0; color: var(--brand-secondary); font: inherit; cursor: pointer; text-decoration: underline; }
@@ -4784,7 +4784,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-picker-disclosure[hidden] { display: none; }
 .wallet-picker-disclosure > summary { display: flex; align-items: center; gap: 6px; min-height: 36px; cursor: pointer; color: var(--text-secondary); font-size: 0.88rem; list-style: none; }
 .wallet-picker-disclosure > summary::-webkit-details-marker { display: none; }
-.wallet-picker-disclosure > summary::before { content: '\203A'; display: inline-block; width: 12px; color: var(--text-muted); transition: transform var(--transition-fast); }
+.wallet-picker-disclosure > summary::before { content: '\203A'; display: inline-block; width: 12px; color: var(--text-secondary); transition: transform var(--transition-fast); }
 .wallet-picker-disclosure[open] > summary::before { transform: rotate(90deg); }
 .wallet-picker-disclosure > summary:hover, .wallet-picker-disclosure > summary:focus-visible { color: var(--text-primary); }
 .wallet-picker-disclosure-body { padding: 4px 0 6px 18px; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.6; }
@@ -4792,10 +4792,11 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-picker-disclosure-body ol { margin: 6px 0; padding-left: 20px; }
 .wallet-picker-divider { margin: 16px 0 6px; border: 0; border-top: 1px solid var(--border-color); }
 .wallet-picker-hint { margin: 0 0 8px; }
-.wallet-picker-footnote { margin: 20px 0 0; color: var(--text-muted); font-size: 0.78rem; line-height: 1.5; }
+.wallet-picker-footnote { margin: 20px 0 0; color: var(--text-secondary); font-size: 0.78rem; line-height: 1.5; }
 .wallet-picker-footnote[hidden] { display: none; }
 .wallet-picker .wallet-create-line { margin-top: 8px; }
 .ms-compact-wrap { position: relative; }
+.ms-checking { color: var(--text-secondary); font-size: 0.8rem; font-weight: 400; }
 .ms-compact > summary .wp-help-btn { min-width: 28px; min-height: 28px; padding: 0; background: none; border: 0; color: var(--text-muted); font-size: 1rem; cursor: pointer; border-radius: 999px; }
 .ms-compact > summary .wp-help-btn:focus-visible { outline: 2px solid var(--brand-secondary); }
 .wp-popover { margin: 4px 0 8px 18px; padding: 10px 12px; max-width: 420px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface, #12121A); color: var(--text-secondary); font-size: 0.82rem; line-height: 1.5; }
@@ -4816,7 +4817,10 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .wallet-picker .list-header, .wallet-picker .wallet-picker-body { padding-left: 16px; padding-right: 16px; }
     .wallet-picker .wp-icon-btn, .wallet-picker .wallet-disconnect-link, .wallet-picker .wp-help-btn, .wallet-picker-disclosure > summary { min-height: 44px; min-width: 44px; }
     .wallet-picker .wallet-account-row { flex-wrap: wrap; }
-    .wallet-picker .wallet-account-row .wallet-disconnect-link { flex-basis: 100%; text-align: right; margin: 0 -14px -8px; padding: 0 14px; border-top: 1px solid var(--border-color); border-radius: 0; }
+    /* Disconnect takes a full-bleed line of its own: its outer size (basis plus the
+       -14px side margins) must be at least 100%, or it shares the first line and
+       squeezes the name column to nothing. */
+    .wallet-picker .wallet-account-row .wallet-disconnect-link { flex-basis: calc(100% + 28px); text-align: right; margin: 0 -14px -8px; padding: 0 14px; border-top: 1px solid var(--border-color); border-radius: 0; }
     .wallet-picker .wallet-picker-search input { font-size: 16px; }
     .wallet-picker .wp-popover { margin-left: 0; max-width: none; }
 }
