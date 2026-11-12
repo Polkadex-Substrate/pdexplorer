@@ -1,5 +1,5 @@
 // Review findings on the human-readable call arguments, each pinned with REAL
-// codecs: the Polkadex spec 393 metadata fixture (test/fixtures/metadata-392.json),
+// codecs: the Polkadex spec 393 metadata fixture (test/fixtures/metadata-testnet-393.json),
 // the spec 373 one for the pallets that left the runtime since (OCEX,
 // CrowdSourceLMP, OrmlVesting), and Substrate's own metadata only for the
 // pallets Polkadex does not run (vesting, nominationPools).
@@ -36,26 +36,23 @@ const arg = (tree, name) => tree.args.find(a => a.name === name);
 
 function chain(file, version) {
     const fx = loadFixture(file);
-    if (!fx) return null;
     const registry = registryFromMetadata(fx.metadata);
     registry.setChainProperties(registry.createType('ChainProperties', { ss58Format: 88, tokenDecimals: 12, tokenSymbol: 'PDEX' }));
     return { registry, ex: decorateExtrinsics(registry, registry.metadata, version), decode: (c) => registry.createType('Call', c.toHex()) };
 }
-const p392 = chain('metadata-392.json', 15);
-const p373 = chain('metadata-373.json', 14);
+const p392 = chain('metadata-testnet-393.json', 15);
+const p373 = chain('metadata-mainnet-373.json', 14);
 const sub = (() => {
     const registry = registryFromMetadata(substrateMetadata);
     return { registry, ex: decorateExtrinsics(registry, registry.metadata, 15), decode: (c) => registry.createType('Call', c.toHex()) };
 })();
-const skip392 = p392 ? false : 'test/fixtures/metadata-392.json absent';
-const skip373 = p373 ? false : 'test/fixtures/metadata-373.json absent';
 
 const motionPage = (call, over = {}) => ({
     kind: 'motion', collective: 'council', id: '0xaa', index: 142, hash: '0x' + 'aa'.repeat(32), title: 'Council Motion #142: treasury.spend', status: 'executed',
     proposer: null, call, threshold: 3, seats: 5, ayes: 3, nays: 0, currentBlock: 1000, blockMs: 12000, now: 1e12, timeline: [], sources: { chain: true }, ...over
 });
 
-describe('1. council motion 142: treasury.spend with Polkadex\'s () asset kind', { skip: skip392 }, () => {
+describe('1. council motion 142: treasury.spend with Polkadex\'s () asset kind', () => {
     // council.propose(3, treasury.spend((), 1035759400000000, Id(B), None), len), as tabled.
     const proposal = () => {
         const { ex, decode } = p392;
@@ -90,7 +87,7 @@ describe('1. council motion 142: treasury.spend with Polkadex\'s () asset kind',
 });
 
 describe('2. pallets whose Balance is not PDEX', () => {
-    test('assetConversion.swapExactTokensForTokens: amounts are raw units, never PDEX, even with Native in the path', { skip: skip392 }, () => {
+    test('assetConversion.swapExactTokensForTokens: amounts are raw units, never PDEX, even with Native in the path', () => {
         const { ex, decode } = p392;
         const t = callToTree(decode(ex.assetConversion.swapExactTokensForTokens(['Native', { WithId: 1 }], 5n * PDEX, 4n * PDEX, A, false)));
         const html = renderCallHtml(t, {});
@@ -100,7 +97,7 @@ describe('2. pallets whose Balance is not PDEX', () => {
         assert.doesNotMatch(callSummaryText(t), /PDEX/);
     });
 
-    test('assetConversion.addLiquidity: all four amounts are raw units', { skip: skip392 }, () => {
+    test('assetConversion.addLiquidity: all four amounts are raw units', () => {
         const { ex, decode } = p392;
         const t = callToTree(decode(ex.assetConversion.addLiquidity('Native', { WithId: 1 }, 7n * PDEX, 8n, 6n * PDEX, 7n, A)));
         const html = renderCallHtml(t, { assets: { 1: { symbol: 'USDT', decimals: 6 } } });
@@ -115,7 +112,7 @@ describe('2. pallets whose Balance is not PDEX', () => {
         }
     });
 
-    test('every pallet in the 392 and 373 metadata whose calls name an asset (other than treasury) is an asset pallet', { skip: skip392 || skip373 }, () => {
+    test('every pallet in the 392 and 373 metadata whose calls name an asset (other than treasury) is an asset pallet', () => {
         const missing = [];
         for (const { registry } of [p392, p373]) {
             for (const p of registry.metadata.pallets) {
@@ -130,7 +127,7 @@ describe('2. pallets whose Balance is not PDEX', () => {
         assert.deepEqual([...new Set(missing)], []);
     });
 
-    test('ocex.deposit (373): raw units even when the asset\'s decimals are known (OCEX keeps its own 12-decimal convention)', { skip: skip373 }, () => {
+    test('ocex.deposit (373): raw units even when the asset\'s decimals are known (OCEX keeps its own 12-decimal convention)', () => {
         const { ex, decode } = p373;
         assert.ok(RAW_UNIT_PALLETS.has('ocex'));
         const t = callToTree(decode(ex.ocex.deposit({ Asset: 1 }, 2_500_000n)));
@@ -139,14 +136,14 @@ describe('2. pallets whose Balance is not PDEX', () => {
         assert.doesNotMatch(html, /USDC|PDEX/);
     });
 
-    test('crowdSourceLMP.removeLiquidity (373): shares are not PDEX', { skip: skip373 }, () => {
+    test('crowdSourceLMP.removeLiquidity (373): shares are not PDEX', () => {
         const { ex, decode } = p373;
         const t = callToTree(decode(ex.crowdSourceLMP.removeLiquidity({ base: 'Polkadex', quote: { Asset: 1 } }, A, 9n * PDEX)));
         assert.doesNotMatch(renderCallHtml(t, {}), /PDEX/);
     });
 });
 
-describe('3. long hex values count their bytes from the full value', { skip: skip392 }, () => {
+describe('3. long hex values count their bytes from the full value', () => {
     const code = (n) => { const { ex, decode } = p392; return callToTree(decode(ex.system.setCode('0x' + 'ab'.repeat(n)))); };
 
     test('system.setCode with 1,000 bytes: the node keeps the byte count, the page shows "1,000 bytes" and a short preview', () => {
@@ -172,7 +169,7 @@ describe('3. long hex values count their bytes from the full value', { skip: ski
 });
 
 describe('4. native balances nested in structs and enum variants', () => {
-    test('democracy.vote Standard { balance } (393): 5 PDEX', { skip: skip392 }, () => {
+    test('democracy.vote Standard { balance } (393): 5 PDEX', () => {
         const { ex, decode } = p392;
         const t = callToTree(decode(ex.democracy.vote(1, { Standard: { vote: { aye: true, conviction: 'Locked1x' }, balance: 5n * PDEX } })));
         assert.match(renderCallHtml(t, {}), /<span class="ca-amount" title="5000000000000 planck">5 PDEX<\/span>/);
@@ -193,7 +190,7 @@ describe('4. native balances nested in structs and enum variants', () => {
         assert.match(renderCallHtml(t, {}), />2 PDEX</);
     });
 
-    test('ormlVesting.vestedTransfer (373): perPeriod in PDEX; period (a duration typed BlockNumber) stays a plain number', { skip: skip373 }, () => {
+    test('ormlVesting.vestedTransfer (373): perPeriod in PDEX; period (a duration typed BlockNumber) stays a plain number', () => {
         const { ex, decode } = p373;
         const t = callToTree(decode(ex.ormlVesting.vestedTransfer(A, { start: 10, period: 100, periodCount: 4, perPeriod: 3n * PDEX })));
         const html = renderCallHtml(t, {}, { raw: false });
@@ -201,7 +198,7 @@ describe('4. native balances nested in structs and enum variants', () => {
         assert.match(html, /<span class="ca-key">period<\/span>: <span class="ca-num">100<\/span>/);
     });
 
-    test('a nested Balance in a non-native pallet stays raw: hyperFungibleToken.send amount (393)', { skip: skip392 }, () => {
+    test('a nested Balance in a non-native pallet stays raw: hyperFungibleToken.send amount (393)', () => {
         const { ex, decode } = p392;
         const t = callToTree(decode(ex.hyperFungibleToken.send({ assetId: 1, destination: { Evm: 1 }, recipient: '0x' + '11'.repeat(20), amount: 5n * PDEX, timeout: 0, relayerFee: 0, callData: null })));
         assert.doesNotMatch(renderCallHtml(t, {}), /PDEX/);
