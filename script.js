@@ -51,7 +51,7 @@ import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
 import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers } from './lib/collective-live.js';
 import { createDemocracyView } from './lib/democracy-view.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from './lib/wallet-session.js';
-import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel } from './lib/wallet-picker.js';
+import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
@@ -8503,6 +8503,7 @@ async function renderWalletConnectPanel(root) {
                     <div style="color: var(--text-muted); font-size: 0.85rem;">Looking for wallets…</div>
                 </div>
                 <div id="wallet-multisig-accounts"></div>
+                ${buildCreateWalletLineHtml('id="wallet-create-line" style="margin-top:12px; display:none;"')}
 
                 <div id="wallet-mobile-section" style="display:none; margin-top: 24px;">
                     <h3 style="font-size: 0.95rem; margin-bottom: 6px;">On mobile? Use a wallet's in-app browser</h3>
@@ -8584,22 +8585,29 @@ async function renderWalletConnectPanel(root) {
                 mobile wallet's in-app browser using one of the options below. On desktop, install
                 <a href="https://polkadot.js.org/extension/" target="_blank" rel="noopener">Polkadot.js</a>,
                 Talisman or SubWallet.
+                ${buildCreateWalletLineHtml()}
                </div>`
                 : `<div class="wallet-empty-msg">
                 No Substrate wallet extension detected. Install
                 <a href="https://polkadot.js.org/extension/" target="_blank" rel="noopener">Polkadot.js</a>,
                 Talisman or SubWallet — or, if your stash lives on your phone, use a mobile wallet's in-app
                 browser (see below).
+                ${buildCreateWalletLineHtml()}
                </div>`;
         } else if (accounts.length === 0) {
             list = `<div class="wallet-empty-msg">
             ${env ? stakingEscapeHtml(env.name) + ' is connected, but no accounts were shared.' : 'No accounts were shared.'}
             Authorise this site in your wallet and try again.
+            ${buildCreateWalletLineHtml()}
            </div>`;
         } else {
             list = buildAccountListHtml({ accounts, current, currentSource: walletSession.source(), isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress });
         }
         accountsEl.innerHTML = list + buildMissingAccountHelpHtml();
+        // The empty states above carry their own "Create a wallet" line; show
+        // the standing one under the options only when accounts were listed.
+        const createLine = document.getElementById('wallet-create-line');
+        if (createLine) createLine.style.display = (accounts && accounts.length) ? '' : 'none';
         accountsEl.querySelectorAll('.wallet-account-btn').forEach(btn => {
             btn.addEventListener('click', () => selectWallet(btn.getAttribute('data-address'), btn.getAttribute('data-source') || ''));
         });
@@ -9229,6 +9237,7 @@ function buildViewOnlyCallout() {
             </div>
         </div>
         ${renderMobileWalletCards(currentUrl)}
+        ${buildCreateWalletLineHtml()}
         <div class="mobile-wallet-copyrow" style="margin-top:8px;">
             <input id="wallet-readonly-copy-url" type="text" readonly value="${stakingEscapeHtml(currentUrl)}">
             <button id="wallet-readonly-copy-btn" type="button"><i class='bx bx-copy'></i> Copy URL</button>
