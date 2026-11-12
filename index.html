@@ -454,7 +454,7 @@
                     </div>
                     <div id="staking-index-status" style="padding: 0 24px;"></div>
                     <div class="staking-search-wrap" style="margin-top: 15px;">
-                        <p class="staking-search-hint">Enter a Polkadex wallet address to view its claimed staking reward history, then download it as CSV or JSON.</p>
+                        <p class="staking-search-hint">Shows your connected wallet's claimed staking reward history, or enter any Polkadex address. Download it as CSV or JSON.</p>
                         <div class="staking-search-bar">
                             <div style="flex: 1 1 320px; position: relative; display: flex; align-items: center;">
                                 <input type="text" id="staking-address-input" placeholder="Polkadex address (e.g. esxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)" autocomplete="off" spellcheck="false" style="width: 100%; padding-right: 70px;">
@@ -466,6 +466,7 @@
                             <button id="staking-search-btn"><i class='bx bx-search'></i> Search</button>
                         </div>
                         <div id="staking-rewards-error" class="staking-error" style="display: none;"></div>
+                        <div id="staking-rewards-wallet-note" aria-live="polite"></div>
                     </div>
                 </div>
                 <div class="list-container glass" id="staking-rewards-results" style="display: none; margin-top: 20px;"></div>

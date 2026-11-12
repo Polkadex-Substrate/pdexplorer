@@ -51,6 +51,7 @@ import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
 import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers } from './lib/collective-live.js';
 import { createDemocracyView } from './lib/democracy-view.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from './lib/wallet-session.js';
+import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
 import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
@@ -4560,8 +4561,11 @@ function stopCouncilPolling() {
 
 // Bumped on every route change, so async work started for one page can tell it is no longer on screen.
 let routeGeneration = 0;
+// What the page on screen subscribed to (wallet changes, its in-flight request); left on every route change.
+const pageScope = createRouteScope();
 function routeTo(target) {
     routeGeneration++;
+    pageScope.leave();
     stopCouncilPolling(); democracyView.stop(); govDetailPage.stop();
     if (!target) target = 'home';
     // /democracy?ref=N and friends (emails, calendar, bookmarks) -> the item's own page.
@@ -7326,15 +7330,51 @@ async function loadStakingIndexStatus() {
     }
 }
 
+// No address in the URL: the connected wallet's rewards, following switches
+// (lib/wallet-aware.js). An address in the URL is the user's choice and stays.
+const stakingRewardsLatest = createLatest();
+function stakingRewardsViewed() {
+    const r = readRouteFromLocation();
+    return r.startsWith('staking-rewards/') ? r.slice('staking-rewards/'.length) : '';   // as routeTo reads it
+}
 function initStakingRewardsPage(address) {
     loadStakingIndexStatus();
-    const input = document.getElementById('staking-address-input');
     const errEl = document.getElementById('staking-rewards-error');
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-    if (address) {
-        if (input) input.value = address;
-        fetchStakingRewards(address);
+    pageScope.add(walletSession.onActiveAccountChange(onStakingRewardsWalletChange));
+    pageScope.add(() => stakingRewardsLatest.cancel());
+    showStakingRewardsFor(address || '');
+}
+function renderStakingRewardsNote(plan) {
+    const note = document.getElementById('staking-rewards-wallet-note');
+    if (!note) return;
+    note.innerHTML = plan.mode === 'connect' ? connectNoteHtml({ returnTo: '/staking-rewards', what: 'your staking rewards', esc: stakingEscapeHtml })
+        : plan.mode === 'restoring' ? restoringNoteHtml()
+        : viewingBannerHtml({ viewing: plan.address, wallet: plan.wallet, isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, hrefFor: a => '/staking-rewards/' + encodeURIComponent(a) });
+}
+// urlAddress '' means "whoever is connected".
+function showStakingRewardsFor(urlAddress) {
+    const plan = stakingRewardsPlan({ urlAddress, account: walletSession.getActiveAccount(), isSame: isSameAddress });
+    renderStakingRewardsNote(plan);
+    const input = document.getElementById('staking-address-input');
+    const resultsEl = document.getElementById('staking-rewards-results');
+    if (plan.mode !== 'view') {
+        stakingRewardsLatest.cancel(); stakingRewardsData = null;
+        if (input) input.value = '';
+        if (resultsEl) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; }
+        return;
     }
+    if (plan.replaceUrl) { try { history.replaceState(null, '', '/staking-rewards/' + plan.address); } catch (e) { /* sandboxed */ } }
+    if (input) input.value = plan.address;
+    fetchStakingRewards(plan.address);
+}
+function onStakingRewardsWalletChange(change) {
+    const viewed = stakingRewardsViewed();
+    if (!viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress })) {
+        return renderStakingRewardsNote(stakingRewardsPlan({ urlAddress: viewed, account: walletSession.getActiveAccount(), isSame: isSameAddress }));
+    }
+    try { history.replaceState(null, '', '/staking-rewards'); } catch (e) { /* sandboxed */ }
+    showStakingRewardsFor('');
 }
 
 function submitStakingSearch() {
@@ -7359,6 +7399,8 @@ async function fetchStakingRewards(address, isPoll) {
     const errEl = document.getElementById('staking-rewards-error');
     if (!resultsEl) return;
     if (errEl && !isPoll) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    // A newer address, a wallet switch or leaving the page makes this response stale.
+    const req = stakingRewardsLatest.begin();
 
     if (!isValidPolkadexAddress(address)) {
         if (errEl) { errEl.textContent = 'That does not look like a valid Polkadex wallet address.'; errEl.style.display = 'block'; }
@@ -7374,19 +7416,19 @@ async function fetchStakingRewards(address, isPoll) {
     }
 
     try {
-        const res = await fetch('/api/staking-rewards/' + encodeURIComponent(address));
+        const res = await fetch('/api/staking-rewards/' + encodeURIComponent(address), { signal: req.signal });
         const data = await res.json();
+        if (!req.isCurrent()) return;
         if (!res.ok || data.error) throw new Error(data.error || ('Request failed (' + res.status + ')'));
         stakingRewardsData = data;
         renderStakingRewards(data);
         // Unpaid rewards are computed in the background; poll until they are ready.
         if (data.unclaimedComputing && stakingUnclaimedPolls < 12) {
             stakingUnclaimedPolls++;
-            setTimeout(() => {
-                if (stakingRewardsData && stakingRewardsData.address === data.address) fetchStakingRewards(address, true);
-            }, 6000);
+            setTimeout(() => { if (req.isCurrent()) fetchStakingRewards(address, true); }, 6000);
         }
     } catch (e) {
+        if (!req.isCurrent()) return;
         if (!isPoll) {
             stakingRewardsData = null;
             resultsEl.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
@@ -8019,8 +8061,10 @@ function onWalletChanged() {
     refreshConnectWalletButton();
     democracyView.restart();                // "You voted" follows the wallet
     govDetailPage.accountChanged();         // and so does an item page's Actions panel
+    closeSigningModals(document);           // a modal opened for the old account must not sign for the new one
     const here = readRouteFromLocation();
-    if (!isWalletRoute(here)) routeTo(here);   // discussions, council, treasury... re-render for the new identity
+    // discussions, council, treasury... re-render for the new identity; /staking-rewards follows on its own
+    if (!isWalletRoute(here) && !selfManagedRoute(here)) routeTo(here);
 }
 
 function refreshConnectWalletButton() {
@@ -8199,7 +8243,8 @@ function connectWallet() {
 // Open the account picker WITHOUT dropping the current selection. /wallet used to
 // redirect to the stored dashboard, so the picker was unreachable until the user
 // had disconnected; ?switch=1 is the explicit "I want to choose" signal.
-function openWalletPicker() { navigateTo('wallet?switch=1'); }
+// From any other page the picker brings the user back there (lib/wallet-aware.js).
+function openWalletPicker() { navigateTo(pickerTarget(readRouteFromLocation(), window.location.search, isWalletRoute)); }
 // `source` is the extension key the account came from, '' for a typed address.
 function selectWallet(address, source = '') {
     if (!isValidPolkadexAddress(address)) return;
@@ -8416,6 +8461,7 @@ async function tryAutoSelectFirstWallet() {
         // the user had just disconnected. Also bails if an account is already
         // connected, e.g. clicked while the extension's permission prompt was open.
         if (!walletSession.mayAutoPick()) return;
+        walletSession.beginRestore();   // pages show "checking", not a Connect prompt, while the extension answers
         const accounts = await getInjectedAccounts();
         if (!accounts || !accounts.length) return;
         // Late-bind these gates AFTER the async wait so they're checked
@@ -8446,7 +8492,7 @@ async function tryAutoSelectFirstWallet() {
     } catch (e) {
         // Permission-denied / no-extension / etc. — silently fall back to
         // the connect panel that's already on screen.
-    }
+    } finally { walletSession.endRestore(); }
 }
 
 // Build the "Open in mobile wallet" deep-link card list. Rendered as an extra
@@ -8567,7 +8613,7 @@ async function renderWalletConnectPanel(root) {
     const accountsEl = document.getElementById('wallet-accounts');
 
     const stay = document.getElementById('wallet-picker-stay');
-    if (stay) stay.addEventListener('click', () => navigateTo('wallet/' + current));
+    if (stay) stay.addEventListener('click', () => navigateTo((readSafeReturnTo() || '').replace(/^\/+/, '') || ('wallet/' + current)));
     const dis = document.getElementById('wallet-picker-disconnect');
     if (dis) dis.addEventListener('click', disconnectWallet);
 
@@ -8972,6 +9018,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
                 </div>
             </div>
             <div style="padding: 12px 24px 0;">
+                ${viewingBannerHtml({ viewing: data.address, wallet: getStoredWallet(), isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, hrefFor: a => '/wallet/' + encodeURIComponent(a) })}
                 <a href="/account/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${stakingEscapeHtml(data.address)}</a>
             </div>
             <div class="staking-summary-grid">
@@ -11636,9 +11683,10 @@ walletMenu = wireWalletMenu({ doc: document, button: connectWalletBtn, menu: doc
     isConnected: () => !!getStoredWallet(), onConnect: connectWallet, onView: connectWallet, onSwitch: openWalletPicker, onDisconnect: disconnectWallet });
 // Another tab connected, switched or disconnected: follow it without a reload.
 window.addEventListener('storage', (e) => {
-    if (e.key !== WALLET_KEYS.address && e.key !== null) return;
-    onWalletChanged();
-    if (isWalletRoute(readRouteFromLocation())) routeTo(readRouteFromLocation());
+    if (e.key !== WALLET_KEYS.address && e.key !== WALLET_KEYS.source && e.key !== null) return;
+    const change = walletSession.syncExternal();   // onWalletChanged, then the pages' own listeners
+    const here = readRouteFromLocation();
+    if (change && isWalletRoute(here)) navigateTo(walletRouteAfterChange(here, change, isSameAddress), { replace: true });
 });
 const disconnectWalletBtn = document.getElementById('disconnect-wallet-btn');
 if (disconnectWalletBtn) disconnectWalletBtn.addEventListener('click', disconnectWallet);
