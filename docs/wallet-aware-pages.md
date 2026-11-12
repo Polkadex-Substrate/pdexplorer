@@ -50,11 +50,11 @@ mounts. The only asynchronous restore is the auto-pick on the wallet routes.
 
 | Page | Before | After |
 |---|---|---|
-| `/staking-rewards` | Empty address box even with a wallet connected; ignored switch and disconnect; no stale-response guard (a slow response for an earlier address could paint over a later one). | Defaults to the connected wallet and writes it into the URL (`replaceState`). Follows switches; disconnect clears the rewards and shows the connect link. An address the user entered stays, with "Viewing X; your wallet is Y. Show mine". Subscribed through the route scope; the request is aborted and its response dropped on switch, new search or leaving the page. |
+| `/staking-rewards` | Empty address box even with a wallet connected; ignored switch and disconnect; no stale-response guard (a slow response for an earlier address could paint over a later one). | Defaults to the connected wallet and keeps the URL bare, so a copied link does not pin the account (a typed address does go into the URL; Show mine links to the bare page). Follows switches; disconnect clears the rewards and shows the connect link. An address the user entered stays, with "Viewing X; your wallet is Y. Show mine". Subscribed through the route scope; the request is aborted and its response dropped on switch, new search or leaving the page. |
 | `/wallet`, `/stake`, `/staking` | Read the session on load (redirect to `/wallet/<connected>`, auto-pick otherwise). | Unchanged, plus the auto-pick reports `restoring`. |
 | `/wallet/<addr>` (dashboard, My Account) | Switch and disconnect in this tab navigate correctly. A switch in another tab re-rendered the OLD account's dashboard as view-only. Another address's dashboard did not say whose wallet is connected. | A change in another tab moves `/wallet/<old>` to `/wallet/<new>` (or the picker on disconnect); another address's dashboard is kept. "Viewing X; your wallet is Y. Show mine" on a dashboard that is not yours. In-flight dashboard fetches were already dropped (`walletFetchGen`). |
 | Stake / validator picker, Unstake, Pay out, Send, Identity (dashboard modals) | Submit checked the active wallet against the dashboard address, but the modal stayed open after a switch in another tab, showing the old account's balances. | Closed on any wallet change. |
-| Proxy (dashboard Advanced section) | Add and Remove only on your own dashboard, re-rendered with it. | Unchanged (fine). |
+| Proxy (dashboard Advanced section) | Add and Remove only on your own dashboard, re-rendered with it, but the submit trusted that render. | Add and Remove pass `expectedWallet: address`, so the submit refuses once the wallet differs. |
 | Multisig (dashboard list, review modal) | The review re-checked the selected account at signing time, but stayed open after a switch. | Review modal closed on any wallet change; its end hook releases the caller. |
 | Council: vote, candidacy | Read the wallet when opened; stayed open after a switch, still naming the old account. | Closed on any wallet change. |
 | Council: withdraw candidacy, motions vote and close | Withdraw modal closed by `councilCandidacyUI.accountChanged()`; motions re-render with the page. | Unchanged (fine). |
@@ -78,3 +78,12 @@ staking-rewards functions from script.js in a vm over happy-dom: defaults to the
 active account, follows a switch, clears on disconnect, explicit URL address
 wins, a typed search is not undone, a stale response is dropped and aborted,
 and leaving the page leaves no listener and paints nothing.
+
+`test/wallet-change-guards.test.js`: the waits between a check and its effect.
+send() re-checks the wallet after the fee check and again after the wallet
+signed (signAsync, check, send), so a switch signs or broadcasts nothing;
+submitSignedTx gives every caller that check. A tab restored from the
+back-forward cache or woken re-reads the session. Success callbacks repaint the
+dashboard only while it is still on screen. Clear identity carries the address
+it was checked for across confirm(). Discussion sign-in keeps no token if the
+wallet changed while it signed.

@@ -543,7 +543,8 @@ describe('script.js wiring', () => {
     });
 
     test('another tab\'s change goes through the session, and a wallet dashboard of the old wallet follows it', () => {
-        assert.match(SCRIPT, /window\.addEventListener\('storage', \(e\) => \{[\s\S]{0,300}walletSession\.syncExternal\(\)[\s\S]{0,300}walletRouteAfterChange\(/);
+        assert.match(SCRIPT, /window\.addEventListener\('storage', \(e\) => \{[\s\S]{0,300}followWalletElsewhere\(\);/);
+        assert.match(fn('followWalletElsewhere'), /walletSession\.syncExternal\(\)[\s\S]{0,300}walletRouteAfterChange\(/);
     });
 
     test('the auto-pick is reported as a restore, so pages can tell "checking" from "none"', () => {

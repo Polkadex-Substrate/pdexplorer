@@ -7350,7 +7350,7 @@ function renderStakingRewardsNote(plan) {
     if (!note) return;
     note.innerHTML = plan.mode === 'connect' ? connectNoteHtml({ returnTo: '/staking-rewards', what: 'your staking rewards', esc: stakingEscapeHtml })
         : plan.mode === 'restoring' ? restoringNoteHtml()
-        : viewingBannerHtml({ viewing: plan.address, wallet: plan.wallet, isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, hrefFor: a => '/staking-rewards/' + encodeURIComponent(a) });
+        : viewingBannerHtml({ viewing: plan.address, wallet: plan.wallet, isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, hrefFor: () => '/staking-rewards' });
 }
 // urlAddress '' means "whoever is connected".
 function showStakingRewardsFor(urlAddress) {
@@ -7364,7 +7364,6 @@ function showStakingRewardsFor(urlAddress) {
         if (resultsEl) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; }
         return;
     }
-    if (plan.replaceUrl) { try { history.replaceState(null, '', '/staking-rewards/' + plan.address); } catch (e) { /* sandboxed */ } }
     if (input) input.value = plan.address;
     fetchStakingRewards(plan.address);
 }
@@ -8014,9 +8013,7 @@ const multisigUI = createMultisigUI({
     store: multisigStore, storage: localStorage, api: () => globalApi,
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
     submit: submitSignedTx, fetchJson: fetchApiJson,
-    refresh: address => {
-        if (isSameAddress(getStoredWallet(), address) && isWalletRoute(readRouteFromLocation())) fetchWalletDashboard(address);
-    }
+    refresh: address => refreshWalletDashboardFor(address)
 });
 const councilCandidacyUI = createCouncilCandidacyUI({
     api: () => globalApi, selected: getStoredWallet,
@@ -8041,8 +8038,9 @@ const spendPayoutUI = createSpendPayoutUI({
 // background, suspends timers and can lose the transaction status
 // subscription. On return, ask the chain about every transaction still in
 // flight instead of leaving its button on Broadcasting (lib/tx-submit.js).
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') recheckSignedTxs(); });
-window.addEventListener('pageshow', () => recheckSignedTxs());
+// A tab restored from the back-forward cache, or woken, may have missed a wallet change made elsewhere.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { followWalletElsewhere(); recheckSignedTxs(); } });
+window.addEventListener('pageshow', (e) => { if (e.persisted) followWalletElsewhere(); recheckSignedTxs(); });
 window.addEventListener('online', () => recheckSignedTxs());
 let walletMenu = null;   // the header My Account menu, wired once at the bottom of this file
 
@@ -8051,6 +8049,13 @@ let walletMenu = null;   // the header My Account menu, wired once at the bottom
 // governance Actions panel, "You voted", and whichever page is on screen.
 // Wallet routes are re-entered by their own navigation, so they are skipped.
 function isWalletRoute(r) { return /^(wallet|stake|staking)(\/|$)/.test(r || ''); }
+// A success callback's repaint: only while this address's dashboard is still the one on screen.
+function refreshWalletDashboardFor(address) {
+    const r = readRouteFromLocation();
+    if (!isSameAddress(getStoredWallet(), address) || !isWalletRoute(r)) return;
+    if (r.startsWith('wallet/') && !isSameAddress(r.slice('wallet/'.length), address)) return;
+    fetchWalletDashboard(address);
+}
 function onWalletChanged() {
     councilCandidacyUI.accountChanged();
     spendMotionUI.accountChanged();
@@ -9654,7 +9659,7 @@ async function submitStakeTx() {
         onSuccess: () => {
             const modal = document.getElementById('stake-modal');
             if (modal) modal.style.display = 'none';
-            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }
@@ -9741,7 +9746,7 @@ async function submitPayoutTx() {
         onSuccess: () => {
             const modal = document.getElementById('payout-modal');
             if (modal) modal.style.display = 'none';
-            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }
@@ -9900,7 +9905,7 @@ async function submitWithdrawUnbonded() {
         onSuccess: () => {
             const modal = document.getElementById('unstake-modal');
             if (modal) modal.style.display = 'none';
-            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }
@@ -9972,7 +9977,7 @@ async function submitUnstakeTx() {
             onSuccess: () => {
                 const modal = document.getElementById('unstake-modal');
                 if (modal) modal.style.display = 'none';
-                setTimeout(() => fetchWalletDashboard(data.address), 2500);
+                setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
             }
         });
         return;
@@ -10034,7 +10039,7 @@ async function submitUnstakeTx() {
         onSuccess: () => {
             const modal = document.getElementById('unstake-modal');
             if (modal) modal.style.display = 'none';
-            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }
@@ -10248,7 +10253,7 @@ async function submitSetIdentity() {
             // Bust the server-side identity cache by re-fetching the dashboard
             // — getIdentity() in server.js memoises but the cache won't have
             // our new value, so the visible name will refresh on next paint.
-            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }
@@ -10262,6 +10267,7 @@ async function submitClearIdentity() {
     await submitSignedTx({
         buildTx: (api) => api.tx.identity.clearIdentity(),
         label: 'Clear identity',
+        expectedWallet: data.address,   // the wallet may change while confirm() is open
         action: { key: 'identity.clear' },
         button: document.getElementById('clear-identity-tx-btn'),
         busyText: 'Signing…',
@@ -10270,7 +10276,7 @@ async function submitClearIdentity() {
         onSuccess: () => {
             const modal = document.getElementById('identity-modal');
             if (modal) modal.style.display = 'none';
-            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }
@@ -10690,7 +10696,7 @@ async function submitSendTx() {
             if (modal) modal.style.display = 'none';
             // Refresh dashboard a beat later so the chain has finalized the
             // new balances by the time we re-query.
-            setTimeout(() => fetchWalletDashboard(data.address), 2500);
+            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }
@@ -11165,12 +11171,15 @@ async function discussSignIn() {
         const signer = await getWalletSigner(address);
         if (!signer) throw new Error('Could not reach a wallet extension that holds this address.');
         const signed = await signer.signRaw({ address, data: chall.message, type: 'bytes' });
+        const changed = () => !isSameAddress(getStoredWallet(), address);
+        if (changed()) throw new Error('Your wallet changed while signing; you are not signed in.');
         const verRes = await fetch('/api/auth/verify', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ address, signature: signed.signature })
         });
         const ver = await verRes.json();
         if (!verRes.ok || ver.error) throw new Error(ver.error || 'Verification failed.');
+        if (changed()) throw new Error('Your wallet changed while signing; you are not signed in.');
         localStorage.setItem(DISCUSS_TOKEN_KEY, JSON.stringify({ token: ver.token, address }));
         return true;
     } catch (e) {
@@ -11682,11 +11691,14 @@ const connectWalletBtn = document.getElementById('connect-wallet-btn');
 walletMenu = wireWalletMenu({ doc: document, button: connectWalletBtn, menu: document.getElementById('wallet-menu'),
     isConnected: () => !!getStoredWallet(), onConnect: connectWallet, onView: connectWallet, onSwitch: openWalletPicker, onDisconnect: disconnectWallet });
 // Another tab connected, switched or disconnected: follow it without a reload.
-window.addEventListener('storage', (e) => {
-    if (e.key !== WALLET_KEYS.address && e.key !== WALLET_KEYS.source && e.key !== null) return;
+function followWalletElsewhere() {
     const change = walletSession.syncExternal();   // onWalletChanged, then the pages' own listeners
     const here = readRouteFromLocation();
     if (change && isWalletRoute(here)) navigateTo(walletRouteAfterChange(here, change, isSameAddress), { replace: true });
+}
+window.addEventListener('storage', (e) => {
+    if (e.key !== WALLET_KEYS.address && e.key !== WALLET_KEYS.source && e.key !== null) return;
+    followWalletElsewhere();
 });
 const disconnectWalletBtn = document.getElementById('disconnect-wallet-btn');
 if (disconnectWalletBtn) disconnectWalletBtn.addEventListener('click', disconnectWallet);
@@ -12794,7 +12806,8 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         // and an un-awaited async builder would hand signAndSend a Promise.
         const tx = await buildTx(globalApi);
         if (!isSameAddress(expectedWallet, getStoredWallet())) throw new Error('The wallet changed. Open the action again.');
-        await run.send(tx, w.account.address, w.signer);   // never throws; reports its own errors
+        // stillValid: asked again after the fee check and after the wallet signs, so every caller gets it.
+        await run.send(tx, w.account.address, w.signer, { stillValid: () => isSameAddress(expectedWallet, getStoredWallet()) });   // never throws
     } catch (e) {
         // Only buildTx gets here: the explorer's own guard (the keep-alive
         // refusal, "treasury pallet not available"), shown as written.
@@ -13459,6 +13472,7 @@ async function renderProxyList(address, isOwnWallet) {
                     button: btn,
                     busyText: 'Signing…',
                     idleText: 'Remove',
+                    expectedWallet: address,
                     onSuccess: () => setTimeout(() => renderProxyList(address, isOwnWallet), 2500)
                 });
             }));
@@ -13520,6 +13534,7 @@ async function renderAddProxyForm(address) {
             button: submitBtn,
             busyText: 'Signing…',
             idleText: 'Add proxy',
+            expectedWallet: address,
             onError: showErr,
             onSuccess: () => {
                 if (delegateInput) delegateInput.value = '';
