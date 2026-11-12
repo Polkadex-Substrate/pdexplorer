@@ -275,4 +275,72 @@ describe('the real Submittable on the checked path: signAsync, re-check, send', 
         assert.equal(submitted.length, 0, 'broadcast after the wallet changed');
         assert.deepEqual(errors, ['Your wallet changed after signing; nothing was sent.']);
     });
+
+    // signAndSend called the wallet's update(id, result) for every status; on
+    // this path the api drops the id, so tx-submit relays it
+    // (lib/signer-tracking.js). Exactly once per status: no second call from
+    // the api.
+    const withUpdate = (w) => {
+        w.updates = [];
+        w.update = function (id, status) { w.updates.push([id, status, this === w]); };
+        return w;
+    };
+
+    test('a signature-only wallet with update: update(id, result) once for the Ready status', async () => {
+        const { api, drop } = fakeApi();
+        const errors = [];
+        const w = withUpdate(signatureOnlySigner());
+        await tracked(api, () => true, errors)(submittableFor(api), w);
+        await flush();
+        assert.deepEqual(errors, []);
+        assert.equal(w.updates.length, 1, `update calls: ${w.updates.length}`);
+        const [id, result, asMethod] = w.updates[0];
+        assert.equal(id, 1);
+        assert.equal(result.status.isReady, true);
+        assert.equal(asMethod, true);
+        drop();
+    });
+
+    test('a signedTransaction wallet with update: update(id, result) once, its bytes submitted', async () => {
+        const { api, submitted, drop } = fakeApi();
+        const errors = [];
+        const w = withUpdate(signedTxSigner());
+        await tracked(api, () => true, errors)(submittableFor(api), w);
+        await flush();
+        assert.deepEqual(errors, []);
+        assert.deepEqual(submitted, [w.returned]);
+        assert.equal(w.updates.length, 1, `update calls: ${w.updates.length}`);
+        assert.equal(w.updates[0][0], 2);
+        assert.equal(w.updates[0][1].status.isReady, true);
+        assert.equal(w.updates[0][1].txHash.toHex(), blake2AsHex(hexToU8a(w.returned)));
+        drop();
+    });
+
+    test('a wallet with update that throws: still submitted, no error shown', async () => {
+        const { api, submitted, drop } = fakeApi();
+        const errors = [], shown = [];
+        const w = signatureOnlySigner();
+        let calls = 0;
+        w.update = () => { calls++; throw new Error('wallet update broke'); };
+        await tracked(api, () => true, errors, shown)(submittableFor(api), w);
+        await flush();
+        assert.equal(calls, 1);
+        assert.equal(submitted.length, 1);
+        assert.deepEqual(errors, []);
+        assert.ok(shown.some(m => m.stage === 'broadcast'));
+        drop();
+    });
+
+    test('the wallet changes while it signs: update is never called', async () => {
+        const { api, submitted } = fakeApi();
+        const errors = [];
+        let valid = true;
+        const w = withUpdate(signedTxSigner());
+        const sign = w.signPayload;
+        w.signPayload = async (json) => { const r = await sign(json); valid = false; return r; };
+        await tracked(api, () => valid, errors)(submittableFor(api), w);
+        await flush();
+        assert.equal(submitted.length, 0);
+        assert.deepEqual(w.updates, []);
+    });
 });
