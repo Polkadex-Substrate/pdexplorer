@@ -69,7 +69,7 @@ describe('liveSessionFor: the active wallet\'s token, read now', () => {
 const LIFT = ['fetchLabelsJson', 'renderAccountLabelEditor', 'ensureLabelSession', 'labelVote', 'labelReport', 'labelVeto',
     'labelDeleteMine', 'liveLabelSession', 'getDiscussSession', 'discussAuthStore', 'reconcileDiscussSession', 'logoutDiscussToken'];
 
-function panel({ wallet = A, stored = [], onPrompt = null } = {}) {
+function panel({ wallet = A, stored = [], onPrompt = null, signIn = false } = {}) {
     const win = new Window({ url: 'https://explorer.test/account/' + X, settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
     const doc = win.document;
     const slot = doc.createElement('div');
@@ -91,7 +91,8 @@ function panel({ wallet = A, stored = [], onPrompt = null } = {}) {
         DISCUSS_TOKEN_KEY: KEY, document: doc, localStorage: local, fetch: fetchFn, CSS: { escape: s => s },
         getStoredWallet: () => state.wallet, isSameAddress: same,
         addressLabelsCache: new Map(), invalidateAddressLabelCache: () => {}, ensureAddressLabel: () => {},
-        discussSignIn: async () => false,
+        // signIn: the new wallet's sign-in is faked as done, and leaves a token for it
+        discussSignIn: async () => { if (signIn) local.setItem(KEY, JSON.stringify({ v: 3, token: 'tok-new', address: state.wallet, expiresAt: Date.now() + DAY })); return signIn; },
         alert: (m) => { alerts.push(String(m)); }, confirm: () => true,
         prompt: () => { if (onPrompt) onPrompt(state); return 'spam'; },
         stakingEscapeHtml: escapeHtml, stakingShortAddress: (a) => String(a).slice(0, 6), formatLocalDateTime: () => 'today', helpIcon: () => ''
@@ -144,11 +145,19 @@ describe('the labels panel after a wallet switch', () => {
         assert.deepEqual(p.writes(), [], 'a write went out after the switch');
         assert.equal(p.status().startsWith(MSG), true, p.status());
     });
+    test('a vote right after the switch sends nothing under the old token (the new wallet has none yet)', async () => {
+        const p = panel({ stored: STORED }); await p.open();
+        p.state.wallet = B;
+        p.fns.reconcileDiscussSession();
+        await flush();
+        p.slot.querySelector('.label-vote-btn').click(); await flush();
+        assert.deepEqual(p.writes(), [], 'a vote went out after the switch');
+    });
 });
 
 describe('Vote and Report in the labels panel', () => {
-    test('a vote after an account switch is refused, with nothing sent', async () => {
-        const p = panel({ stored: STORED }); await p.open();
+    test('a vote after an account switch that nothing has cleaned up yet is refused, with nothing sent', async () => {
+        const p = panel({ stored: STORED, signIn: true }); await p.open();
         p.state.wallet = B;
         p.slot.querySelector('.label-vote-btn').click(); await flush();
         assert.deepEqual(p.writes(), []);
@@ -251,6 +260,11 @@ describe('the single sign-in policy is written down', () => {
         assert.doesNotMatch(src, /8 tokens|MAX_SESSIONS|up to 8/i);
     });
     test('script.js has no eviction code left', () => {
-        assert.doesNotMatch(readRepo('script.js', import.meta.url), /onEvicted: tokens => tokens\.forEach/);
+        assert.doesNotMatch(readRepo('script.js', import.meta.url), /onEvicted:[^\n]*fetch\(/, 'revocation is one helper now');
+    });
+    test('the help text no longer promises a token per account', () => {
+        const help = readRepo('lib/help-topics.js', import.meta.url);
+        assert.doesNotMatch(help, /keeps its own token|switching wallets and back does not ask again/);
+        assert.match(help, /Only the connected wallet is ever signed in/);
     });
 });

@@ -165,9 +165,9 @@ describe('F-120 — the cookies Reset button revokes server-side', () => {
         // self-guarding — and it is, but that is a property worth pinning
         // rather than re-deriving.
         const rv = src.slice(src.indexOf('function revokeDiscussSession('),
-                             src.indexOf('function revokeDiscussSession(') + 1200);
+                             src.indexOf('function disconnectWallet('));
         assert.match(rv, /catch \(e\)/);
-        assert.match(rv, /for \(const token of tokens\)/, 'every stored account token is revoked, and none means no call');
+        assert.match(rv, /tokens\.forEach\(logoutDiscussToken\)/, 'the stored token is revoked, and none means no call');
         assert.match(rv, /keepalive: true/, 'the logout must survive the reload that follows it');
         assert.match(rv, /\.catch\(\(\) => \{\}\)/);
     });

@@ -393,7 +393,7 @@ describe('sign-in with the wallet changing underneath it', () => {
         assert.deepEqual(p.server.calls.filter(c => c.url === '/api/auth/logout').map(c => c.bearer), ['tok-a']);
     });
 
-    test('the wallet changes while the signature is pending: nothing is posted, nothing stored, the fresh token is revoked', async () => {
+    test('the wallet changes while the signature is pending: nothing is posted, nothing stored, no token issued', async () => {
         const p = page({ wallet: A, rejectSign: (req, state) => { state.wallet = B; return { signature: '0x01' }; } });
         await p.open();
         await p.type('mine'); await p.post();
@@ -402,7 +402,8 @@ describe('sign-in with the wallet changing underneath it', () => {
         assert.equal(p.local.getItem(KEY), null, 'a token for a wallet that is no longer active was stored');
         assert.match(p.q('#discuss-post-error').textContent, /wallet changed/i);
         assert.equal(p.q('#discuss-post-input').value, 'mine');
-        assert.deepEqual(p.server.calls.filter(c => c.url === '/api/auth/logout').map(c => c.bearer), ['tok-issued-1'], 'the fresh token stayed alive on the server');
+        assert.ok(!p.server.calls.some(c => c.url === '/api/auth/verify'), 'a signature for the old wallet was still sent for a token');
+        assert.deepEqual(p.server.tokens.size, 0, 'a token is alive on the server');
     });
 
     test('the wallet changes in another tab right after verify: the token is not stored and is revoked', async () => {

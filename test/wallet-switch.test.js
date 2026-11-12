@@ -133,7 +133,8 @@ describe('root cause: the symptoms Vivek reported', () => {
             profile.local.setItem('pdex_wallet_address', A);
             profile.local.setItem(DISCUSS, session('tok-alice', A));
             const tab = openTab(profile, { path: '/wallet' });
-            tab.ctx.fetch = bad;
+            const orig = tab.ctx.fetch;
+            tab.ctx.fetch = (u, i) => (String(u) === '/api/auth/logout' ? bad() : orig(u, i));
             assert.doesNotThrow(() => tab.fn('selectWallet')(B, 'polkadot-js'));
             await tab.settle();
             assert.equal(stored(tab), B, 'the switch did not happen');
