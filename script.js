@@ -30,7 +30,7 @@ import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, renderEarlierDiscussion, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
 import { composerHtml, wireComposer } from './lib/discussion-composer.js';
-import { createDiscussAuth, signInForDiscussion, sendAsWallet, discussComposerHtml, discussErrorText } from './lib/discussion-auth.js';
+import { createDiscussAuth, signInForDiscussion, sendAsWallet, liveSessionFor, discussComposerHtml, discussErrorText } from './lib/discussion-auth.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
@@ -13554,6 +13554,8 @@ async function ensureAddressLabel(address) {
 async function renderAccountLabelEditor(address) {
     const slot = document.getElementById('account-label-editor');
     if (!slot || !address) return;
+    // The wallet this panel is drawn for; every action re-checks it (liveLabelSession).
+    const openedFor = getStoredWallet();
     const session = getDiscussSession();
     const isOwner = !!(session && session.address === address);
 
@@ -13673,13 +13675,13 @@ async function renderAccountLabelEditor(address) {
     slot.querySelectorAll('.label-row').forEach(row => {
         const signer = row.getAttribute('data-signer');
         if (!signer) return;
-        row.querySelectorAll('.label-vote-btn').forEach(btn => btn.addEventListener('click', () => labelVote(address, signer, parseInt(btn.getAttribute('data-vote'), 10), btn)));
+        row.querySelectorAll('.label-vote-btn').forEach(btn => btn.addEventListener('click', () => labelVote(address, signer, parseInt(btn.getAttribute('data-vote'), 10), btn, openedFor)));
         const delBtn = row.querySelector('.label-delete-btn');
-        if (delBtn) delBtn.addEventListener('click', () => labelDeleteMine(address, signer, delBtn));
+        if (delBtn) delBtn.addEventListener('click', () => labelDeleteMine(address, signer, delBtn, openedFor));
         const reportBtn = row.querySelector('.label-report-btn');
-        if (reportBtn) reportBtn.addEventListener('click', () => labelReport(address, signer, reportBtn));
+        if (reportBtn) reportBtn.addEventListener('click', () => labelReport(address, signer, reportBtn, openedFor));
         const vetoBtn = row.querySelector('.label-veto-btn');
-        if (vetoBtn) vetoBtn.addEventListener('click', () => labelVeto(address, signer, vetoBtn));
+        if (vetoBtn) vetoBtn.addEventListener('click', () => labelVeto(address, signer, vetoBtn, openedFor));
     });
 
     // ─ Wire "Sign in with wallet" button — visible only when a wallet
@@ -13709,13 +13711,14 @@ async function renderAccountLabelEditor(address) {
         if (!label) { if (statusEl) { statusEl.textContent = 'Enter a label first.'; statusEl.style.color = 'var(--error)'; } return; }
         saveBtn.disabled = true;
         try {
+            const live = liveLabelSession(openedFor);
             const res = await fetch('/api/labels/' + encodeURIComponent(address), {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.token },
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + live.token },
                 body: JSON.stringify({ label })
             });
             const data = await res.json();
-            if (res.status === 401) { discussAuthStore().forgetToken(session.token); throw new Error('Session expired - please sign in again.'); }
+            if (res.status === 401) { discussAuthStore().forgetToken(live.token); throw new Error('Session expired - please sign in again.'); }
             if (res.status === 429) throw new Error(data.error || 'Slow down — try again in a minute.');
             if (!res.ok || data.error) throw new Error(data.error || 'Failed to save label.');
             invalidateAddressLabelCache(address);
@@ -13743,12 +13746,23 @@ async function ensureLabelSession() {
     return ok ? getDiscussSession() : null;
 }
 
+// The token to send, read NOW for the ACTIVE wallet, right before each fetch. A
+// token held since the panel was drawn (or across a sign-in or prompt()) may
+// belong to the previous account: switching no longer revokes. Throws if the
+// wallet is not the one the panel was opened for, or has no live token.
+function liveLabelSession(openedFor) {
+    const s = liveSessionFor({ auth: discussAuthStore(), wallet: getStoredWallet, isSame: isSameAddress, openedFor });
+    if (!s) throw new Error('Session expired - please sign in again.');
+    return s;
+}
+
 // ─── Row actions (vote / delete / report / veto) ────────────────────────────
-async function labelVote(address, signer, vote, btn) {
-    const session = await ensureLabelSession();
-    if (!session) return;
+async function labelVote(address, signer, vote, btn, openedFor) {
+    const first = await ensureLabelSession();
+    if (!first) return;
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);
         // Toggle: clicking the same arrow again clears the vote.
         const labels = addressLabelsCache.get(address) || [];
         const row = labels.find(l => l.signer === signer);
@@ -13771,12 +13785,13 @@ async function labelVote(address, signer, vote, btn) {
     }
 }
 
-async function labelDeleteMine(address, signer, btn) {
-    const session = getDiscussSession();
-    if (!session || session.address !== signer) return;
+async function labelDeleteMine(address, signer, btn, openedFor) {
+    const first = getDiscussSession();
+    if (!first || first.address !== signer) return;
     if (!confirm('Remove your label for this address?')) return;
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);
         const res = await fetch('/api/labels/' + encodeURIComponent(address), {
             method: 'DELETE',
             headers: { 'Authorization': 'Bearer ' + session.token }
@@ -13794,9 +13809,9 @@ async function labelDeleteMine(address, signer, btn) {
     }
 }
 
-async function labelReport(address, signer, btn) {
-    const session = await ensureLabelSession();
-    if (!session) return;
+async function labelReport(address, signer, btn, openedFor) {
+    const first = await ensureLabelSession();
+    if (!first) return;
     const reason = (prompt('Briefly, why is this label inappropriate? (optional)') || '').trim();
     // Audit F-170: mirror the server's checkUserText rules so the user gets a
     // specific message at the point of typing rather than a generic 400 after
@@ -13812,6 +13827,7 @@ async function labelReport(address, signer, btn) {
     }
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);   // after the prompt: the wallet may have changed
         const res = await fetch(`/api/labels/${encodeURIComponent(address)}/${encodeURIComponent(signer)}/report`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.token },
@@ -13828,9 +13844,9 @@ async function labelReport(address, signer, btn) {
     }
 }
 
-async function labelVeto(address, signer, btn) {
-    const session = await ensureLabelSession();
-    if (!session || session.address !== address) return;
+async function labelVeto(address, signer, btn, openedFor) {
+    const first = await ensureLabelSession();
+    if (!first || first.address !== address) return;
     const labels = addressLabelsCache.get(address) || [];
     const row = labels.find(l => l.signer === signer);
     const desired = row ? !row.vetoed : true;
@@ -13839,6 +13855,7 @@ async function labelVeto(address, signer, btn) {
         : 'Restore this previously-vetoed label?')) return;
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);   // after the confirm: the wallet may have changed
         const res = await fetch(`/api/labels/${encodeURIComponent(address)}/${encodeURIComponent(signer)}/veto`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.token },
