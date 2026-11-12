@@ -8013,6 +8013,7 @@ const walletSession = createWalletSession({
     storage: localStorage, toAddress: toPolkadexAddress, isSame: isSameAddress, isValid: isValidPolkadexAddress,
     revokeDiscuss: () => revokeDiscussSession(), onChange: () => onWalletChanged()
 });
+reconcileDiscussSession();   // a token for any wallet but the active one is signed out on load
 function getStoredWallet() { return walletSession.connected(); }
 const multisigStore = createMultisigStore(localStorage);
 const multisigUI = createMultisigUI({
@@ -8063,6 +8064,7 @@ function refreshWalletDashboardFor(address) {
     fetchWalletDashboard(address);
 }
 function onWalletChanged() {
+    reconcileDiscussSession();              // one discussion sign-in, bound to the active wallet
     councilCandidacyUI.accountChanged();
     spendMotionUI.accountChanged();
     spendPayoutUI.accountChanged();
@@ -8301,19 +8303,32 @@ function readSafeReturnTo() {
 // their local state cleared; the server row then expires on TTL as before, so
 // the failure mode is exactly today's behaviour rather than a stuck UI.
 function revokeDiscussSession() {
-    // Every account's token: Disconnect and Reset sign this browser out (F-120).
-    // takeAll() clears storage FIRST; a failed call must not leave a token behind.
+    // The stored discussion token: Disconnect, Reset and any change of the active
+    // wallet sign this browser out (F-120). takeAll() clears storage FIRST; a
+    // failed call must not leave a token behind.
     let tokens = [];
     try { tokens = discussAuthStore().takeAll(); } catch (e) { /* unreadable storage - nothing to revoke */ }
-    for (const token of tokens) {
-        try {
-            fetch('/api/auth/logout', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + token },
-                keepalive: true      // survives the page unloading mid-flight
-            }).catch(() => {});
-        } catch (e) { /* ignore */ }
-    }
+    tokens.forEach(logoutDiscussToken);
+}
+
+// Keep only the token that belongs to the active wallet; revoke and remove any
+// other (a legacy multi-token store, an older version's leftovers, a change made
+// in another tab). Runs at startup and in onWalletChanged.
+function reconcileDiscussSession() {
+    let tokens = [];
+    try { tokens = discussAuthStore().reconcile(getStoredWallet()); } catch (e) { /* unreadable storage */ }
+    tokens.forEach(logoutDiscussToken);
+}
+
+// One best-effort, unawaited server logout; it can never block or fail a wallet change.
+function logoutDiscussToken(token) {
+    try {
+        fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token },
+            keepalive: true      // survives the page unloading mid-flight
+        }).catch(() => {});
+    } catch (e) { /* ignore */ }
 }
 
 function disconnectWallet() {
@@ -10791,8 +10806,8 @@ function initDonatePage() {
 // --- Discussion Board ---
 const DISCUSS_TOKEN_KEY = 'pdex_discuss_session';
 
-// One token per address (lib/discussion-auth.js), used only while that address
-// is the connected wallet. isSameAddress compares decoded keys, so an
+// One sign-in (lib/discussion-auth.js), bound to the connected wallet: a change
+// of wallet revokes it. isSameAddress compares decoded keys, so an
 // extension's prefix-42 form matches the stored prefix-88 one (F-128).
 function discussAuthStore() {
     return createDiscussAuth({ storage: localStorage, key: DISCUSS_TOKEN_KEY, isSame: isSameAddress, wallet: getStoredWallet });
@@ -10978,10 +10993,11 @@ async function getWalletSigner(address) {
     return null;
 }
 
-// Challenge, wallet signature, verify; the token is kept for `address` only.
+// Challenge, wallet signature, verify; the token is kept for `address` only, and
+// whatever it replaces is revoked.
 function discussSignInFor(address) {
     return signInForDiscussion({ address, fetchFn: (u, o) => fetch(u, o), getSigner: getWalletSigner, wallet: getStoredWallet,
-        isSame: isSameAddress, auth: discussAuthStore(), onEvicted: tokens => tokens.forEach(t => fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + t }, keepalive: true }).catch(() => {})) });
+        isSame: isSameAddress, auth: discussAuthStore(), onEvicted: tokens => tokens.forEach(logoutDiscussToken) });
 }
 
 // The account labels panel's explicit "Sign in with wallet".
