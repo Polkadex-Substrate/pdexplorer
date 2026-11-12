@@ -714,7 +714,6 @@ describe('wiring', () => {
         assert.match(script, /loadThread: \(id, el, o\) => fetchDiscussionThread\(id, o\.focus, el, \{ embedded: true, onRendered: o\.onRendered, quiet: o\.quiet \}\)/);
         assert.match(script, /fetchFn: \(u, o\) => fetch\(u, o\)/);
         const render = bodyOf(script, 'renderThread');
-        assert.match(render, /root\.querySelector\('#discuss-signin-btn'\)/);
         assert.match(render, /root\.querySelector\('#discuss-post-btn'\)/);
         assert.ok(!/document\.getElementById\('discuss-/.test(render), 'a hidden /discussions page must not capture the buttons');
         assert.match(bodyOf(script, 'submitDiscussionPost'), /root && root\.querySelector\('#discuss-post-input'\)/);

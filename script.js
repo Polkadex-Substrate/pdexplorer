@@ -30,6 +30,7 @@ import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, renderEarlierDiscussion, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
 import { composerHtml, wireComposer } from './lib/discussion-composer.js';
+import { DISCUSS_TOKEN_KEY, createDiscussAuth, signInForDiscussion, sendAsWallet, liveSessionFor, discussComposerHtml, discussErrorText } from './lib/discussion-auth.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
@@ -8012,6 +8013,7 @@ const walletSession = createWalletSession({
     storage: localStorage, toAddress: toPolkadexAddress, isSame: isSameAddress, isValid: isValidPolkadexAddress,
     revokeDiscuss: () => revokeDiscussSession(), onChange: () => onWalletChanged()
 });
+reconcileDiscussSession();   // a token for any wallet but the active one is signed out on load
 function getStoredWallet() { return walletSession.connected(); }
 const multisigStore = createMultisigStore(localStorage);
 const multisigUI = createMultisigUI({
@@ -8062,6 +8064,7 @@ function refreshWalletDashboardFor(address) {
     fetchWalletDashboard(address);
 }
 function onWalletChanged() {
+    reconcileDiscussSession();              // one discussion sign-in, bound to the active wallet
     councilCandidacyUI.accountChanged();
     spendMotionUI.accountChanged();
     spendPayoutUI.accountChanged();
@@ -8300,15 +8303,26 @@ function readSafeReturnTo() {
 // their local state cleared; the server row then expires on TTL as before, so
 // the failure mode is exactly today's behaviour rather than a stuck UI.
 function revokeDiscussSession() {
-    let token = null;
-    try {
-        const raw = localStorage.getItem(DISCUSS_TOKEN_KEY);
-        if (raw) token = (JSON.parse(raw) || {}).token || null;
-    } catch (e) { /* unreadable storage — nothing to revoke */ }
-    // Clear locally FIRST. If the network call is what cleared it, a failed
-    // call would leave the token behind, which is the bug we are fixing.
-    try { localStorage.removeItem(DISCUSS_TOKEN_KEY); } catch (e) {}
-    if (!token) return;
+    // The stored discussion token: Disconnect, Reset and any change of the active
+    // wallet sign this browser out (F-120). takeAll() clears storage FIRST; a
+    // failed call must not leave a token behind.
+    let tokens = [];
+    try { tokens = discussAuthStore().takeAll(); } catch (e) { /* unreadable storage - nothing to revoke */ }
+    tokens.forEach(logoutDiscussToken);
+}
+
+// Keep only the token that belongs to the active wallet; revoke and remove any
+// other (a legacy multi-token store, an older version's leftovers, a change made
+// in another tab). Runs at startup and in onWalletChanged.
+function reconcileDiscussSession() {
+    let tokens = [];
+    try { tokens = discussAuthStore().reconcile(getStoredWallet()); }
+    catch (e) { console.error('Discussion sign-in reconcile failed:', e); }
+    tokens.forEach(logoutDiscussToken);
+}
+
+// One best-effort, unawaited server logout; it can never block or fail a wallet change.
+function logoutDiscussToken(token) {
     try {
         fetch('/api/auth/logout', {
             method: 'POST',
@@ -10791,28 +10805,17 @@ function initDonatePage() {
 }
 
 // --- Discussion Board ---
-const DISCUSS_TOKEN_KEY = 'pdex_discuss_session';
+// DISCUSS_TOKEN_KEY comes from lib/discussion-auth.js (imported at the top):
+// the startup reconcile runs before this part of the file is reached.
 
-function getDiscussSession() {
-    try {
-        const raw = localStorage.getItem(DISCUSS_TOKEN_KEY);
-        if (!raw) return null;
-        const s = JSON.parse(raw);
-        if (!s || !s.token || !s.address) return null;
-        // Audit F-128: this compared with `!==`. The stored session address is
-        // whatever the server echoed back (prefix 88, "e…"), while
-        // getStoredWallet() holds whatever the extension handed us — commonly
-        // prefix 42 ("5…") or prefix 0 ("1…"). Same key, different string, so
-        // reconnecting the SAME wallet silently threw away a valid session and
-        // forced a fresh signature. isSameAddress compares the decoded public
-        // key, which is the thing that actually identifies the account.
-        const connected = getStoredWallet();
-        // No connected wallet means no posting identity either: a token left over
-        // from an account that has since been switched away from must not post.
-        if (!connected || !isSameAddress(connected, s.address)) return null;
-        return s;
-    } catch (e) { return null; }
+// One sign-in (lib/discussion-auth.js), bound to the connected wallet: a change
+// of wallet revokes it. isSameAddress compares decoded keys, so an
+// extension's prefix-42 form matches the stored prefix-88 one (F-128).
+function discussAuthStore() {
+    return createDiscussAuth({ storage: localStorage, key: DISCUSS_TOKEN_KEY, isSame: isSameAddress, wallet: getStoredWallet,
+        revoke: (tokens) => tokens.forEach(logoutDiscussToken) });
 }
+function getDiscussSession() { return discussAuthStore().current(); }
 
 function initDiscussionsPage(threadId) {
     if (threadId) fetchDiscussionThread(threadId, true);   // true: honour a ?post= permalink once, on arrival
@@ -10850,7 +10853,7 @@ function renderThreadList(threads) {
         <div class="list-container glass" style="margin-bottom:20px;">
             <div class="list-header"><h2>Discussions</h2></div>
             <div style="padding:18px 24px;color:var(--text-secondary);font-size:0.88rem;line-height:1.6;">
-                A discussion thread opens automatically for every public proposal and council motion. Each thread locks for new posts once its proposal moves to a referendum (voting) or its motion concludes. Sign in with your Substrate wallet to take part.
+                A discussion thread opens automatically for every public proposal and council motion. Each thread locks for new posts once its proposal moves to a referendum (voting) or its motion concludes. Connect your Substrate wallet to take part.
             </div>
         </div>
         <div class="list-container glass">
@@ -10934,30 +10937,16 @@ async function fetchDiscussionThread(id, focusLink = false, root = document.getE
 function renderThread(thread, posts, root = document.getElementById('discussions-content'), opts = {}) {
     if (!root) return;
     const session = getDiscussSession();
+    const wallet = getStoredWallet();
     // One set of render options for the board and the earlier block, so earlier posts render exactly like current ones.
     const postOpts = { esc: stakingEscapeHtml, shortAddr: stakingShortAddress, fmtDate: formatLocalDateTime, md: opts.md };
+    // Edit shows for the connected author; Save signs first if there is no token yet.
     const postsHtml = renderPostList(thread, posts, { ...postOpts,
-        isEditable: p => !!session && canEditPost(p, thread, session.address, isSameAddress), actions: renderCopyLinkButton });
-
-    let composer;
-    if (thread.status === 'closed') {
-        composer = `<div class="discussion-closed-note"><i class='bx bx-lock-alt'></i> ${stakingEscapeHtml(thread.closedReason || 'This discussion is closed.')}</div>`;
-    } else if (!session) {
-        composer = `<div class="discussion-composer">
-            <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:10px;">Sign in with your Substrate wallet to join this discussion. You will sign a short message — no transaction, no fees.</p>
-            <button id="discuss-signin-btn" class="staking-download-btn"><i class='bx bx-log-in'></i> Sign in with wallet</button>
-            <div id="discuss-post-error" class="staking-error" style="display:none;"></div>
-        </div>`;
-    } else {
-        composer = `<div class="discussion-composer">
-            <div style="color:var(--text-secondary);font-size:0.78rem;margin-bottom:8px;">Posting as <span style="color:var(--brand-secondary);">${stakingShortAddress(session.address)}</span></div>
-            ${composerHtml('<textarea id="discuss-post-input" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000" aria-label="Write a post"></textarea>')}
-            <div style="display:flex;justify-content:flex-end;margin-top:8px;">
-                <button id="discuss-post-btn" class="staking-download-btn" style="background:var(--brand-primary);color:#fff;border-color:var(--brand-primary);"><i class='bx bx-send'></i> Post</button>
-            </div>
-            <div id="discuss-post-error" class="staking-error" style="display:none;"></div>
-        </div>`;
-    }
+        isEditable: p => !!wallet && canEditPost(p, thread, wallet, isSameAddress), actions: renderCopyLinkButton });
+    // Connected: the composer at once, signing at the first Post. Not connected: one link to the picker.
+    const composer = discussComposerHtml({ thread, wallet, session, esc: stakingEscapeHtml, shortAddr: stakingShortAddress,
+        composer: composerHtml('<textarea id="discuss-post-input" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000" aria-label="Write a post"></textarea>'),
+        returnTo: (window.location.pathname || '/') + (window.location.search || '') });
 
     // Posts of the earlier lifecycle threads (council motion, external proposal):
     // read-only, above this thread's own posts, never counted into them.
@@ -10979,19 +10968,11 @@ function renderThread(thread, posts, root = document.getElementById('discussions
             ${composer}
         </div>`;
 
-    const signinBtn = root.querySelector('#discuss-signin-btn');
-    if (signinBtn) signinBtn.addEventListener('click', async () => {
-        signinBtn.disabled = true;
-        signinBtn.innerHTML = "<i class='bx bx-loader-alt'></i> Check your wallet…";
-        const ok = await discussSignIn();
-        if (ok) fetchDiscussionThread(thread.id, false, root, { ...opts, quiet: false });
-        else { signinBtn.disabled = false; signinBtn.innerHTML = "<i class='bx bx-log-in'></i> Sign in with wallet"; }
-    });
     const postBtn = root.querySelector('#discuss-post-btn');
     if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id, root, opts));
     wireComposer(root.querySelector('.discussion-composer .md-composer'));
     wireEditing(root, { esc: stakingEscapeHtml, fetchFn: (input, init) => fetch(input, init), getSession: getDiscussSession, threadId: thread.id, posts,
-        clearSession: () => localStorage.removeItem(DISCUSS_TOKEN_KEY), onUpdated: d => renderThread({ links: thread.links, ...d.thread }, d.posts || [], root, opts) });
+        withSession: (send, onSigning) => discussSend(send, onSigning), onUpdated: d => renderThread({ links: thread.links, ...d.thread }, d.posts || [], root, opts) });
     wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
     // The item page's header count is taken from what was just drawn.
     if (typeof opts.onRendered === 'function') opts.onRendered(thread, posts, opts.earlier || []);
@@ -11015,34 +10996,24 @@ async function getWalletSigner(address) {
     return null;
 }
 
+// Challenge, wallet signature, verify; the token is kept for `address` only, and
+// whatever it replaces is revoked.
+function discussSignInFor(address) {
+    return signInForDiscussion({ address, fetchFn: (u, o) => fetch(u, o), getSigner: getWalletSigner, wallet: getStoredWallet,
+        isSame: isSameAddress, auth: discussAuthStore(), onEvicted: tokens => tokens.forEach(logoutDiscussToken) });
+}
+
+// The account labels panel's explicit "Sign in with wallet".
 async function discussSignIn() {
     const address = getStoredWallet();
     if (!address) { alert('Connect your wallet first using the button in the top-right.'); return false; }
-    try {
-        const challRes = await fetch('/api/auth/challenge', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ address })
-        });
-        const chall = await challRes.json();
-        if (!challRes.ok || chall.error) throw new Error(chall.error || 'Could not start sign-in.');
-        const signer = await getWalletSigner(address);
-        if (!signer) throw new Error('Could not reach a wallet extension that holds this address.');
-        const signed = await signer.signRaw({ address, data: chall.message, type: 'bytes' });
-        const changed = () => !isSameAddress(getStoredWallet(), address);
-        if (changed()) throw new Error('Your wallet changed while signing; you are not signed in.');
-        const verRes = await fetch('/api/auth/verify', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ address, signature: signed.signature })
-        });
-        const ver = await verRes.json();
-        if (!verRes.ok || ver.error) throw new Error(ver.error || 'Verification failed.');
-        if (changed()) throw new Error('Your wallet changed while signing; you are not signed in.');
-        localStorage.setItem(DISCUSS_TOKEN_KEY, JSON.stringify({ token: ver.token, address }));
-        return true;
-    } catch (e) {
-        alert('Sign-in failed: ' + e.message);
-        return false;
-    }
+    try { await discussSignInFor(address); return true; }
+    catch (e) { alert('Sign-in failed: ' + e.message); return false; }
+}
+
+// One authenticated write as the connected wallet, signing first if needed.
+function discussSend(send, onSigning) {
+    return sendAsWallet({ auth: discussAuthStore(), wallet: getStoredWallet, isSame: isSameAddress, signIn: discussSignInFor, send, onSigning });
 }
 
 async function submitDiscussionPost(threadId, root = document.getElementById('discussions-content'), opts = {}) {
@@ -11053,23 +11024,21 @@ async function submitDiscussionPost(threadId, root = document.getElementById('di
     const content = input.value.trim();
     const showErr = msg => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
     if (!content) { showErr('Write something before posting.'); return; }
-    const session = getDiscussSession();
-    if (!session) { showErr('Your session has expired. Please sign in again.'); fetchDiscussionThread(threadId, false, root, { ...opts, quiet: false }); return; }
+    const label = btn ? btn.innerHTML : '';
     if (btn) btn.disabled = true;
     if (errEl) errEl.style.display = 'none';
     try {
-        const res = await fetch('/api/discussions/' + encodeURIComponent(threadId) + '/posts', {
+        const res = await discussSend(s => fetch('/api/discussions/' + encodeURIComponent(threadId) + '/posts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.token },
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + s.token },
             body: JSON.stringify({ content })
-        });
+        }), () => { if (btn) btn.innerHTML = "<i class='bx bx-loader-alt'></i> Confirm in your wallet…"; });
         const data = await res.json();
-        if (res.status === 401) { localStorage.removeItem(DISCUSS_TOKEN_KEY); throw new Error('Session expired — please sign in again.'); }
         if (!res.ok || data.error) throw new Error(data.error || 'Failed to post.');
         renderThread(data.thread, data.posts || [], root, opts);
     } catch (e) {
-        showErr(e.message);
-        if (btn) btn.disabled = false;
+        showErr(discussErrorText(e));
+        if (btn) { btn.disabled = false; btn.innerHTML = label; }
     }
 }
 
@@ -13604,6 +13573,8 @@ async function ensureAddressLabel(address) {
 async function renderAccountLabelEditor(address) {
     const slot = document.getElementById('account-label-editor');
     if (!slot || !address) return;
+    // The wallet this panel is drawn for; every action re-checks it (liveLabelSession).
+    const openedFor = getStoredWallet();
     const session = getDiscussSession();
     const isOwner = !!(session && session.address === address);
 
@@ -13723,13 +13694,13 @@ async function renderAccountLabelEditor(address) {
     slot.querySelectorAll('.label-row').forEach(row => {
         const signer = row.getAttribute('data-signer');
         if (!signer) return;
-        row.querySelectorAll('.label-vote-btn').forEach(btn => btn.addEventListener('click', () => labelVote(address, signer, parseInt(btn.getAttribute('data-vote'), 10), btn)));
+        row.querySelectorAll('.label-vote-btn').forEach(btn => btn.addEventListener('click', () => labelVote(address, signer, parseInt(btn.getAttribute('data-vote'), 10), btn, openedFor)));
         const delBtn = row.querySelector('.label-delete-btn');
-        if (delBtn) delBtn.addEventListener('click', () => labelDeleteMine(address, signer, delBtn));
+        if (delBtn) delBtn.addEventListener('click', () => labelDeleteMine(address, signer, delBtn, openedFor));
         const reportBtn = row.querySelector('.label-report-btn');
-        if (reportBtn) reportBtn.addEventListener('click', () => labelReport(address, signer, reportBtn));
+        if (reportBtn) reportBtn.addEventListener('click', () => labelReport(address, signer, reportBtn, openedFor));
         const vetoBtn = row.querySelector('.label-veto-btn');
-        if (vetoBtn) vetoBtn.addEventListener('click', () => labelVeto(address, signer, vetoBtn));
+        if (vetoBtn) vetoBtn.addEventListener('click', () => labelVeto(address, signer, vetoBtn, openedFor));
     });
 
     // ─ Wire "Sign in with wallet" button — visible only when a wallet
@@ -13759,13 +13730,14 @@ async function renderAccountLabelEditor(address) {
         if (!label) { if (statusEl) { statusEl.textContent = 'Enter a label first.'; statusEl.style.color = 'var(--error)'; } return; }
         saveBtn.disabled = true;
         try {
+            const live = liveLabelSession(openedFor);
             const res = await fetch('/api/labels/' + encodeURIComponent(address), {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.token },
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + live.token },
                 body: JSON.stringify({ label })
             });
             const data = await res.json();
-            if (res.status === 401) { localStorage.removeItem(DISCUSS_TOKEN_KEY); throw new Error('Session expired — please sign in again.'); }
+            if (res.status === 401) { discussAuthStore().forgetToken(live.token); throw new Error('Session expired - please sign in again.'); }
             if (res.status === 429) throw new Error(data.error || 'Slow down — try again in a minute.');
             if (!res.ok || data.error) throw new Error(data.error || 'Failed to save label.');
             invalidateAddressLabelCache(address);
@@ -13793,12 +13765,23 @@ async function ensureLabelSession() {
     return ok ? getDiscussSession() : null;
 }
 
+// The token to send, read NOW for the ACTIVE wallet, right before each fetch. A
+// token held since the panel was drawn (or across a sign-in or prompt()) may
+// belong to the previous account: switching no longer revokes. Throws if the
+// wallet is not the one the panel was opened for, or has no live token.
+function liveLabelSession(openedFor) {
+    const s = liveSessionFor({ auth: discussAuthStore(), wallet: getStoredWallet, isSame: isSameAddress, openedFor });
+    if (!s) throw new Error('Session expired - please sign in again.');
+    return s;
+}
+
 // ─── Row actions (vote / delete / report / veto) ────────────────────────────
-async function labelVote(address, signer, vote, btn) {
-    const session = await ensureLabelSession();
-    if (!session) return;
+async function labelVote(address, signer, vote, btn, openedFor) {
+    const first = await ensureLabelSession();
+    if (!first) return;
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);
         // Toggle: clicking the same arrow again clears the vote.
         const labels = addressLabelsCache.get(address) || [];
         const row = labels.find(l => l.signer === signer);
@@ -13809,7 +13792,7 @@ async function labelVote(address, signer, vote, btn) {
             body: JSON.stringify({ vote: desired })
         });
         const data = await res.json();
-        if (res.status === 401) { localStorage.removeItem(DISCUSS_TOKEN_KEY); throw new Error('Session expired — please sign in again.'); }
+        if (res.status === 401) { discussAuthStore().forgetToken(session.token); throw new Error('Session expired - please sign in again.'); }
         if (!res.ok || data.error) throw new Error(data.error || 'Vote failed.');
         invalidateAddressLabelCache(address);
         renderAccountLabelEditor(address);
@@ -13821,17 +13804,18 @@ async function labelVote(address, signer, vote, btn) {
     }
 }
 
-async function labelDeleteMine(address, signer, btn) {
-    const session = getDiscussSession();
-    if (!session || session.address !== signer) return;
+async function labelDeleteMine(address, signer, btn, openedFor) {
+    const first = getDiscussSession();
+    if (!first || first.address !== signer) return;
     if (!confirm('Remove your label for this address?')) return;
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);
         const res = await fetch('/api/labels/' + encodeURIComponent(address), {
             method: 'DELETE',
             headers: { 'Authorization': 'Bearer ' + session.token }
         });
-        if (res.status === 401) { localStorage.removeItem(DISCUSS_TOKEN_KEY); throw new Error('Session expired — please sign in again.'); }
+        if (res.status === 401) { discussAuthStore().forgetToken(session.token); throw new Error('Session expired - please sign in again.'); }
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Delete failed.');
         invalidateAddressLabelCache(address);
@@ -13844,9 +13828,9 @@ async function labelDeleteMine(address, signer, btn) {
     }
 }
 
-async function labelReport(address, signer, btn) {
-    const session = await ensureLabelSession();
-    if (!session) return;
+async function labelReport(address, signer, btn, openedFor) {
+    const first = await ensureLabelSession();
+    if (!first) return;
     const reason = (prompt('Briefly, why is this label inappropriate? (optional)') || '').trim();
     // Audit F-170: mirror the server's checkUserText rules so the user gets a
     // specific message at the point of typing rather than a generic 400 after
@@ -13862,6 +13846,7 @@ async function labelReport(address, signer, btn) {
     }
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);   // after the prompt: the wallet may have changed
         const res = await fetch(`/api/labels/${encodeURIComponent(address)}/${encodeURIComponent(signer)}/report`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.token },
@@ -13878,9 +13863,9 @@ async function labelReport(address, signer, btn) {
     }
 }
 
-async function labelVeto(address, signer, btn) {
-    const session = await ensureLabelSession();
-    if (!session || session.address !== address) return;
+async function labelVeto(address, signer, btn, openedFor) {
+    const first = await ensureLabelSession();
+    if (!first || first.address !== address) return;
     const labels = addressLabelsCache.get(address) || [];
     const row = labels.find(l => l.signer === signer);
     const desired = row ? !row.vetoed : true;
@@ -13889,6 +13874,7 @@ async function labelVeto(address, signer, btn) {
         : 'Restore this previously-vetoed label?')) return;
     btn.disabled = true;
     try {
+        const session = liveLabelSession(openedFor);   // after the confirm: the wallet may have changed
         const res = await fetch(`/api/labels/${encodeURIComponent(address)}/${encodeURIComponent(signer)}/veto`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.token },

@@ -16,6 +16,7 @@ import * as edit from '../lib/discussion-edit.js';
 import * as links from '../lib/discussion-links.js';
 import * as lifecycle from '../lib/discussion-lifecycle.js';
 import * as composer from '../lib/discussion-composer.js';
+import * as discussAuth from '../lib/discussion-auth.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { closeControlHtml } from '../lib/close-control.js';
 import { itemPathForThread } from '../lib/gov-detail.js';
@@ -43,7 +44,7 @@ function payload({ posts = true, postCount = 2 } = {}) {
 
 // Lift the thread view out of script.js and run it with a fake page.
 async function openThread(body, signedInAs, viewOpts = {}) {
-    const names = ['fetchDiscussionThread', 'renderThread', 'isSameAddress', 'getDiscussSession',
+    const names = ['fetchDiscussionThread', 'renderThread', 'isSameAddress', 'getDiscussSession', 'discussAuthStore',
         'stakingShortAddress', 'formatLocalDateTime', 'helpIcon', 'stakingEscapeHtml'];
     const code = names.map(n => (n === 'fetchDiscussionThread' ? 'async ' : '') + bodyOf(SCRIPT, n)).join('\n');
     const root = { innerHTML: '', querySelectorAll: () => [], querySelector: () => null };
@@ -51,7 +52,7 @@ async function openThread(body, signedInAs, viewOpts = {}) {
     const fetches = [];
     const errors = [];
     const env = {
-        closeControlHtml, ...edit, ...links, ...lifecycle, ...composer, canEditPost: edit.canEdit, itemPathForThread,
+        closeControlHtml, ...edit, ...links, ...lifecycle, ...composer, ...discussAuth, canEditPost: edit.canEdit, itemPathForThread,
         document: { getElementById: id => (id === 'discussions-content' ? root : null) },
         window: { location: { search: '', hash: '', origin: 'https://explorer.polkadex.ee' } },
         localStorage: { getItem: k => store.get(k) ?? null, removeItem: k => store.delete(k) },

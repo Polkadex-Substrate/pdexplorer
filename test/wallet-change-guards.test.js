@@ -297,7 +297,7 @@ describe('discussion sign-in', () => {
             }
         });
         ext.signer.signRaw = async () => { if (switchDuringSign) tab.fn('selectWallet')(W2, 'polkadot-js'); return { signature: '0x01' }; };
-        addFns(tab, ['discussSignIn']);
+        addFns(tab, ['discussSignIn', 'discussSignInFor']);
         return { tab, alerts, posts, token: () => profile.local.getItem('pdex_discuss_session') };
     }
 

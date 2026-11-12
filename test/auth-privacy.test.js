@@ -106,7 +106,8 @@ describe('F-120 — Disconnect revokes the server-side session', () => {
     test('local state is cleared BEFORE the network call', () => {
         // If the removal depended on the fetch resolving, an offline user's
         // token would survive a Disconnect — the exact bug, inverted.
-        const removeAt = fn.indexOf('removeItem(DISCUSS_TOKEN_KEY)');
+        // Since 12 Nov the store holds one token per address; takeAll() empties it.
+        const removeAt = fn.indexOf('takeAll()');
         const fetchAt  = fn.indexOf("fetch('/api/auth/logout'");
         assert.ok(removeAt !== -1 && fetchAt !== -1);
         assert.ok(removeAt < fetchAt,
@@ -134,11 +135,14 @@ describe('F-128 — wallet binding compares keys, not strings', () => {
         scriptSrc.indexOf('function getDiscussSession()') + 1400
     );
 
-    test('getDiscussSession uses isSameAddress', () => {
-        assert.match(fn, /!isSameAddress\(connected,\s*s\.address\)/,
-            'the session is compared by string equality again (F-128)');
-        assert.ok(!/connected\s*!==\s*s\.address/.test(fn),
-            'the raw !== comparison is back');
+    // Since 12 Nov the lookup lives in lib/discussion-auth.js (one token per
+    // address); behaviour is tested in test/discussion-wallet-signin.test.js.
+    // This pins that script.js hands it the key comparison.
+    test('getDiscussSession goes through the per-address store, compared with isSameAddress', () => {
+        assert.match(fn, /discussAuthStore\(\)\.current\(\)/);
+        const store = scriptSrc.slice(scriptSrc.indexOf('function discussAuthStore()'), scriptSrc.indexOf('function discussAuthStore()') + 400);
+        assert.match(store, /isSame: isSameAddress/, 'the session is compared by string equality again (F-128)');
+        assert.match(store, /wallet: getStoredWallet/);
     });
 
     test('isSameAddress decodes both sides rather than lowercasing or trimming', () => {
