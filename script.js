@@ -8244,7 +8244,7 @@ function connectWallet() {
 // redirect to the stored dashboard, so the picker was unreachable until the user
 // had disconnected; ?switch=1 is the explicit "I want to choose" signal.
 // From any other page the picker brings the user back there (lib/wallet-aware.js).
-function openWalletPicker() { navigateTo(pickerTarget(readRouteFromLocation(), window.location.search, isWalletRoute)); }
+function openWalletPicker() { navigateTo(pickerTarget(readRouteFromLocation(), window.location.search, isWalletRoute, { wallet: getStoredWallet(), isSame: isSameAddress })); }
 // `source` is the extension key the account came from, '' for a typed address.
 function selectWallet(address, source = '') {
     if (!isValidPolkadexAddress(address)) return;
