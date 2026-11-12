@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { trackSignedTx, signAndSendOptions } from '../lib/tx-submit.js';
-import { buildTxModel } from '../lib/tx-status.js';
+import { buildTxModel, SIGNING_CAP_MS } from '../lib/tx-status.js';
 import { pickSigningAccount } from '../lib/wallet-session.js';
 import { bodyOf, stripComments } from './helpers/source.js';
 import { makeProfile, openTab, fakeExtension, addr } from './helpers/wallet-world.js';
@@ -94,6 +94,31 @@ describe('send() re-checks the wallet before signing and before broadcasting', (
         assert.equal(w.calls.send + w.calls.signAndSend, 0, 'broadcast after the wallet changed');
         assert.deepEqual(w.calls.onError, ['Your wallet changed after signing; nothing was sent.']);
         assert.equal(w.button.disabled, false);
+    });
+
+    test('the wallet changes while the fee check finds a shortfall: the wallet-changed message wins', async () => {
+        const w = sendWorld({ duringFee: true });
+        w.api.query.system.account = async () => ({ nonce: 0, data: { free: 0n, reserved: 0n, frozen: 0n } });
+        w.run.start();
+        await w.run.send(w.tx, 'addr', {}, { stillValid: w.stillValid });
+        assert.deepEqual(w.calls.onError, ['Your wallet changed; nothing was signed.']);
+        assert.equal(w.calls.sign + w.calls.signAndSend, 0);
+    });
+
+    test('a signature that arrives after the signing cap ended the card is not broadcast', async () => {
+        const w = sendWorld();
+        let release;
+        w.tx.signAsync = () => new Promise((res) => { release = () => res({ nonce: 4, send: (cb) => { w.calls.send++; return Promise.resolve(() => {}); } }); });
+        w.run.start();
+        const sending = w.run.send(w.tx, 'addr', {}, { stillValid: w.stillValid });
+        await flush();
+        mock.timers.tick(SIGNING_CAP_MS + 1);
+        await flush();
+        assert.equal(w.shown.at(-1).stage === 'signing', false, 'the cap did not end the card');
+        release();
+        await sending;
+        await flush();
+        assert.equal(w.calls.send + w.calls.signAndSend, 0, 'a transaction was broadcast after the card said it timed out');
     });
 
     test('the wallet stays: signed with the same options, then sent, and the lifecycle runs as before', async () => {
