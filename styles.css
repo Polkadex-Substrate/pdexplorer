@@ -4737,3 +4737,16 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 }
 .js-older-btn[aria-busy="true"] { opacity: 0.7; cursor: progress; }
 @keyframes older-spin { to { transform: rotate(360deg); } }
+
+/* Pages that follow the connected wallet (lib/wallet-aware.js): "Viewing X;
+   your wallet is Y. Show mine", the connect link and the restore note. */
+.wallet-viewing-note,
+.wallet-connect-note {
+    margin-top: 12px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+.wallet-viewing-note { margin: 0 0 8px; }
+.wallet-viewing-note .item-link,
+.wallet-connect-note .item-link { color: var(--brand-secondary); font-weight: 600; }
