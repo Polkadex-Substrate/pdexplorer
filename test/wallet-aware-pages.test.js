@@ -243,6 +243,13 @@ describe('lib/wallet-aware: page decisions', () => {
         assert.equal(aware.pickerTarget('wallet/' + A, '', isWallet), 'wallet?switch=1');
     });
 
+    test('Switch wallet from /staking-rewards/<own wallet> returns to the bare page, so it shows the NEW wallet', () => {
+        const isWallet = r => /^(wallet|stake|staking)(\/|$)/.test(r);
+        assert.equal(aware.pickerTarget('staking-rewards/' + A, '', isWallet, { wallet: A, isSame: same }), 'wallet?switch=1&returnTo=%2Fstaking-rewards',
+            'returning to /staking-rewards/<old> would pin the old account as if the user had typed it');
+        assert.equal(aware.pickerTarget('staking-rewards/' + X, '', isWallet, { wallet: A, isSame: same }), 'wallet?switch=1&returnTo=' + encodeURIComponent('/staking-rewards/' + X));
+    });
+
     test('pages that manage the wallet themselves are skipped by the global re-render', () => {
         assert.equal(aware.selfManagedRoute('staking-rewards'), true);
         assert.equal(aware.selfManagedRoute('staking-rewards/' + A), true);
@@ -536,7 +543,7 @@ describe('script.js wiring', () => {
     });
 
     test('Switch wallet comes back to the page it was opened from, and Keep honours that too', () => {
-        assert.match(fn('openWalletPicker'), /pickerTarget\(readRouteFromLocation\(\), window\.location\.search, isWalletRoute\)/);
+        assert.match(fn('openWalletPicker'), /pickerTarget\(readRouteFromLocation\(\), window\.location\.search, isWalletRoute, \{ wallet: getStoredWallet\(\), isSame: isSameAddress \}\)/);
         assert.match(fn('renderWalletConnectPanel'), /stay\.addEventListener\('click', \(\) => navigateTo\(\(readSafeReturnTo\(\) \|\| ''\)\.replace/);
     });
 
@@ -573,7 +580,7 @@ describe('wallet switching from another page (real script.js wallet functions)',
     test('Switch wallet opened from a page returns there with the new account', async () => {
         const profile = makeProfile({ extensions: [ext()] });
         profile.local.setItem('pdex_wallet_address', W1);
-        const tab = openTab(profile, { path: '/staking-rewards' });
+        const tab = openTab(profile, { path: '/staking-rewards/' + W1 });   // the page wrote the connected wallet into the URL
         tab.ctx.safeReturnPath = safeReturnPath;
         tab.fn('openWalletPicker')();
         await tab.settle();
