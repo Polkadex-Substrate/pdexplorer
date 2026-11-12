@@ -30,7 +30,7 @@ import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
 import { canEdit as canEditPost, renderPostList, renderEarlierDiscussion, wireEditing } from './lib/discussion-edit.js';
 import { readLinkedPostId, renderCopyLinkButton, wirePermalinks, focusLinkedPost } from './lib/discussion-links.js';
 import { composerHtml, wireComposer } from './lib/discussion-composer.js';
-import { createDiscussAuth, signInForDiscussion, sendAsWallet, liveSessionFor, discussComposerHtml, discussErrorText } from './lib/discussion-auth.js';
+import { DISCUSS_TOKEN_KEY, createDiscussAuth, signInForDiscussion, sendAsWallet, liveSessionFor, discussComposerHtml, discussErrorText } from './lib/discussion-auth.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
@@ -8316,7 +8316,8 @@ function revokeDiscussSession() {
 // in another tab). Runs at startup and in onWalletChanged.
 function reconcileDiscussSession() {
     let tokens = [];
-    try { tokens = discussAuthStore().reconcile(getStoredWallet()); } catch (e) { /* unreadable storage */ }
+    try { tokens = discussAuthStore().reconcile(getStoredWallet()); }
+    catch (e) { console.error('Discussion sign-in reconcile failed:', e); }
     tokens.forEach(logoutDiscussToken);
 }
 
@@ -10804,13 +10805,15 @@ function initDonatePage() {
 }
 
 // --- Discussion Board ---
-const DISCUSS_TOKEN_KEY = 'pdex_discuss_session';
+// DISCUSS_TOKEN_KEY comes from lib/discussion-auth.js (imported at the top):
+// the startup reconcile runs before this part of the file is reached.
 
 // One sign-in (lib/discussion-auth.js), bound to the connected wallet: a change
 // of wallet revokes it. isSameAddress compares decoded keys, so an
 // extension's prefix-42 form matches the stored prefix-88 one (F-128).
 function discussAuthStore() {
-    return createDiscussAuth({ storage: localStorage, key: DISCUSS_TOKEN_KEY, isSame: isSameAddress, wallet: getStoredWallet });
+    return createDiscussAuth({ storage: localStorage, key: DISCUSS_TOKEN_KEY, isSame: isSameAddress, wallet: getStoredWallet,
+        revoke: (tokens) => tokens.forEach(logoutDiscussToken) });
 }
 function getDiscussSession() { return discussAuthStore().current(); }
 
