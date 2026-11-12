@@ -75,8 +75,8 @@ describe('isNativeBalanceField: only a balance of the native currency is PDEX', 
         }
     });
     test('treasury.spend amount is PDEX only when the asset kind is the native one', () => {
-        assert.equal(isNativeBalanceField('treasury', 'spend', 'amount', 'AssetBalanceOf', [a('assetKind', 'AssetKind', none)]), true);
-        assert.equal(isNativeBalanceField('treasury', 'spend', 'amount', 'AssetBalanceOf', [a('assetKind', 'AssetKind', { k: 'null' })]), true);
+        assert.equal(isNativeBalanceField('treasury', 'spend', 'amount', 'AssetBalanceOf', [a('assetKind', 'AssetKind', none)]), false, 'an Option None is not a type that says native');
+        assert.equal(isNativeBalanceField('treasury', 'spend', 'amount', 'AssetBalanceOf', [a('assetKind', 'AssetKind', { k: 'null', t: 'Null' })]), true);
         assert.equal(isNativeBalanceField('treasury', 'spend', 'amount', 'AssetBalanceOf', [a('assetKind', 'AssetKind', { k: 'enum', e: 'Native', v: null })]), true);
         assert.equal(isNativeBalanceField('treasury', 'spend', 'amount', 'AssetBalanceOf', [a('assetKind', 'AssetKind', { k: 'enum', e: 'WithId', v: num(7, 'u32') })]), false);
         assert.equal(isNativeBalanceField('treasury', 'spend', 'amount', 'AssetBalanceOf', []), false);

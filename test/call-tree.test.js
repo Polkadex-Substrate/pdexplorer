@@ -147,7 +147,7 @@ describe('argEntries and codecToNode', () => {
         assert.deepEqual(codecToNode(registry.createType('bool', true)), { k: 'bool', v: true });
         assert.deepEqual(codecToNode(registry.createType('Text', 'hi <b>')), { k: 'text', v: 'hi <b>' });
         const h = registry.createType('H256', '0x' + '11'.repeat(32));
-        assert.deepEqual(codecToNode(h), { k: 'hex', v: '0x' + '11'.repeat(32) });
+        assert.deepEqual(codecToNode(h), { k: 'hex', v: '0x' + '11'.repeat(32), b: 32 });
     });
 
     test('Perbill keeps its raw type for the percent rule', () => {
