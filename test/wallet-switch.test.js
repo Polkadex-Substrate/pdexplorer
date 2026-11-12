@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { makeProfile, openTab, fakeExtension, settle, addr, A, B, C } from './helpers/wallet-world.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../lib/wallet-session.js';
-import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, groupBySource, sourceLabel } from '../lib/wallet-picker.js';
+import { buildAccountListHtml, groupBySource, sourceLabel } from '../lib/wallet-picker.js';
 import { wireWalletMenu } from '../lib/wallet-menu.js';
 import { decodeAddress } from '@polkadot/util-crypto';
 
@@ -79,9 +79,10 @@ describe('root cause: the symptoms Vivek reported', () => {
 
         const tab = openTab(profile, { path: '/wallet', search: '?switch=1' });
         await tab.visit('/wallet?switch=1');
-        assert.ok(tab.accountButtons().length === 2, 'the picker lists both accounts');
+        assert.equal(tab.accountButtons().length, 1, 'the other account is a button');
+        assert.equal(tab.root.querySelectorAll('#wallet-accounts [aria-current="true"]').length, 1, 'the connected account is the one Current row');
         assert.equal(stored(tab), A, 'looking does not disconnect: the current wallet is kept until another is chosen');
-        assert.ok(tab.panelHtml().includes('Connected as'), 'the picker says what is connected');
+        assert.equal(tab.root.querySelector('#wallet-picker-title').textContent.trim(), 'Switch wallet', 'the picker says it is a switch');
     });
 
     test('switching to a different account does not leave the old account\'s discussion session valid', async () => {
@@ -108,7 +109,7 @@ describe('switch extension', () => {
         assert.match(html, /Polkadot\.js/);
         assert.match(html, /Talisman/);
         const buttons = tab.accountButtons();
-        assert.equal(buttons.length, 2);
+        assert.equal(buttons.length, 1, 'Alice is the Current row; Bob is the one choice');
         const bobBtn = buttons.find(b => b.getAttribute('data-source') === 'talisman');
         await bobBtn.click();
         assert.equal(stored(tab), B);
@@ -182,13 +183,14 @@ describe('switch account within the same extension', () => {
         profile.local.setItem('pdex_wallet_address', A);
         const tab = openTab(profile, { path: '/wallet', search: '?switch=1' });
         await tab.visit('/wallet?switch=1');
-        assert.equal(tab.accountButtons().length, 1);
+        assert.equal(tab.accountButtons().length, 0, 'Alice is the Current row, not a button');
         pj.accounts.push(acct(3, 'Carol'));             // the user allows another account in the extension
-        const refresh = tab.root.querySelector('#wallet-accounts').querySelector('#wallet-picker-refresh');
+        const refresh = tab.root.querySelector('#wallet-picker-refresh');
         assert.ok(refresh, 'there is a Refresh accounts control');
-        await refresh.click();
+        assert.equal(refresh.getAttribute('aria-label'), 'Refresh accounts');
+        refresh.click();
         await tab.settle();
-        assert.equal(tab.accountButtons().length, 2, 'the new account did not appear without a page reload');
+        assert.equal(tab.accountButtons().length, 1, 'the new account did not appear without a page reload');
     });
 });
 
@@ -371,10 +373,10 @@ describe('lib/wallet-picker', () => {
         assert.equal(sourceLabel('some-new-wallet'), 'some-new-wallet');
     });
 
-    test('marks exactly one account Connected, even when the same key is in two extensions', () => {
+    test('marks exactly one account Current, even when the same key is in two extensions', () => {
         const accounts = [{ address: A, name: 'one', source: 'polkadot-js' }, { address: addr(1, 42), name: 'one', source: 'talisman' }];
         const html = buildAccountListHtml({ ...base, accounts, current: A, currentSource: 'talisman' });
-        assert.equal((html.match(/Connected/g) || []).length, 1);
+        assert.equal((html.match(/>Current</g) || []).length, 1);
         assert.match(html, /data-source="talisman"[^>]*aria-current="true"/);
     });
 
@@ -382,20 +384,6 @@ describe('lib/wallet-picker', () => {
         const html = buildAccountListHtml({ ...base, accounts: [{ address: A, name: '<img src=x onerror=alert(1)>', source: 'polkadot-js' }], current: '', currentSource: '' });
         assert.ok(!html.includes('<img'), 'an extension-supplied name reached the page unescaped');
         assert.match(html, /&lt;img/);
-    });
-
-    test('the banner appears only when something is connected, and offers Keep and Disconnect', () => {
-        assert.equal(buildCurrentBannerHtml({ current: '', esc, shortAddr: short }), '');
-        const html = buildCurrentBannerHtml({ current: A, currentSource: 'talisman', esc, shortAddr: short });
-        assert.match(html, /wallet-picker-stay/);
-        assert.match(html, /wallet-picker-disconnect/);
-        assert.match(html, /Talisman/);
-    });
-
-    test('the help for an unlisted account says what to do and offers Refresh', () => {
-        const html = buildMissingAccountHelpHtml();
-        assert.match(html, /wallet-picker-refresh/);
-        assert.match(html, /allow <strong>Polkadex Explorer<\/strong>/);
     });
 });
 

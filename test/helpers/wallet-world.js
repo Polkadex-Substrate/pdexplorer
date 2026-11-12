@@ -21,7 +21,10 @@ import { bodyOf } from './source.js';
 import { closeControlHtml } from '../../lib/close-control.js';
 import { isValidPolkadexAddress } from '../../lib/wallet-safety.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../../lib/wallet-session.js';
-import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel } from '../../lib/wallet-picker.js';
+import { sourceLabel } from '../../lib/wallet-picker.js';
+import { mountWalletPicker } from '../../lib/wallet-picker-view.js';
+import { safeReturnPath } from '../../lib/safe-return.js';
+import { Window } from 'happy-dom';
 import { escapeHtml } from '../../lib/html-escape.js';
 import { closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml } from '../../lib/wallet-aware.js';
 
@@ -134,7 +137,12 @@ export function makeProfile({ extensions = [] } = {}) {
 
 export function openTab(profile, { path = '/wallet', search = '' } = {}) {
     const session = memStorage();
-    const root = el('wallet-dashboard');
+    // The pane is a real (happy-dom) element: the picker is a real page now,
+    // with disclosures, list semantics and focus. The header stays a stand-in.
+    const win = new Window({ url: 'https://explorer.test' + path + search, settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
+    const root = win.document.createElement('div');
+    root.id = 'wallet-dashboard';
+    win.document.body.appendChild(root);
     const log = { renders: [], routes: [], democracyRestarts: 0, govAccountChanged: 0, fetches: [], panelRenders: 0 };
     const pending = [];   // dashboard fetches the test resolves by hand
     const header = {};
@@ -143,7 +151,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
     const ctx = {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
-        buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel,
+        mountWalletPicker, sourceLabel,
         closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
         multisigUI: { mountAccounts() {} },
         councilCandidacyUI: { accountChanged() {} },
@@ -158,15 +166,15 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         },
         window: { location: { pathname: path, search, hash: '', origin: 'https://explorer.test' }, injectedWeb3: undefined },
         document: {
-            getElementById: (id) => (id === 'wallet-dashboard' ? root : (header[id] || findIn(root, id))),
-            createElement: () => el('x')
+            getElementById: (id) => (id === 'wallet-dashboard' ? root : (header[id] || win.document.getElementById(id))),
+            createElement: (t) => win.document.createElement(t)
         },
         spaNavDepth: 0,
         stakingEscapeHtml: escapeHtml,
         stakingShortAddress: (a) => String(a).slice(0, 6) + '...' + String(a).slice(-4),
         helpIcon: () => '', closeControlHtml, detectInjectedWalletEnv: () => ({ id: 'test', name: 'Test wallet' }), isMobileDevice: () => false,
         renderMobileWalletCards: () => '', updateSeoMeta() {}, setRouteJsonLd() {}, buildWalletConnectJsonLd: () => ({}),
-        safeReturnPath: () => null, safeRouteToken: () => '',
+        safeReturnPath, safeRouteToken: () => '',
         readRouteFromLocation: () => (ctx.window.location.pathname || '/').replace(/^\/+/, '').replace(/\/+$/, '') || 'home',
         democracyView: { restart() { log.democracyRestarts++; } },
         govDetailPage: { accountChanged() { log.govAccountChanged++; } },
@@ -195,14 +203,6 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         const [p, q] = String(url).split('?');
         ctx.window.location.pathname = p; ctx.window.location.search = q ? '?' + q : '';
     }
-    // An id anywhere in the pane: in its own markup, or in the markup of an
-    // element inside it that the page has since written into (the account list).
-    function findIn(node, id) {
-        const own = queryIn(node, '#' + id)[0];
-        if (own) return own;
-        for (const kid of node._kids.values()) { const hit = kid._html ? findIn(kid, id) : null; if (hit) return hit; }
-        return null;
-    }
 
     // injectedWeb3 reflects the profile's extensions as they are NOW.
     Object.defineProperty(ctx.window, 'injectedWeb3', {
@@ -230,7 +230,8 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         async settle() { await settle(); },
         read: (k) => profile.local.getItem(k),
         panelHtml: () => root.innerHTML,
-        accountButtons: () => root.querySelector('#wallet-accounts') ? root.querySelector('#wallet-accounts').querySelectorAll('.wallet-account-btn') : [],
+        accountButtons: () => Array.from(root.querySelectorAll('#wallet-accounts .wallet-account-btn')),
+        close: () => win.happyDOM.close(),
         call
     };
     profile.tabs.push(tab);
