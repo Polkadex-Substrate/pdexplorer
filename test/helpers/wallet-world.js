@@ -23,6 +23,7 @@ import { isValidPolkadexAddress } from '../../lib/wallet-safety.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../../lib/wallet-session.js';
 import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel } from '../../lib/wallet-picker.js';
 import { escapeHtml } from '../../lib/html-escape.js';
+import { closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml } from '../../lib/wallet-aware.js';
 
 const SCRIPT = readFileSync(new URL('../../script.js', import.meta.url), 'utf8');
 
@@ -143,6 +144,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
         buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel,
+        closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
         multisigUI: { mountAccounts() {} },
         councilCandidacyUI: { accountChanged() {} },
         spendMotionUI: { accountChanged() {} },
