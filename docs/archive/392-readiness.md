@@ -271,9 +271,9 @@ SkipCheckIfFeeless<ChargeAssetTxPayment> with a NativeOrWithId asset id,
 CheckMetadataHash, WeightReclaim). Expected bytes are built from the metadata by
 `test/helpers/extrinsic-builders.js`, not by the library under test.
 
-Polkadex fixtures: `test/fixtures/metadata-373.json` (mainnet) and
-`metadata-392.json` (testnet). They are not in the repo. Without them those
-suites SKIP with a "FIXTURE MISSING" line and count under `# skipped`; the
+Polkadex fixtures: `test/fixtures/metadata-mainnet-373.json` (mainnet) and
+`metadata-testnet-393.json` (testnet). They are committed to the repo (they were not when this was written). Without them those
+suites now FAIL (this text predates that rule; they used to SKIP); the
 Polkadex-specific checks are NOT verified until they exist. With them, each
 metadata version the node offers (v14, and v15/v16 where available) is checked
 for: the extension list, v4 signed round trip with asset id None and Some, the
@@ -336,12 +336,12 @@ node scripts/fetch-metadata.mjs --testnet "$TESTNET_WS"
 Pass:
 
 - `[mainnet] wss://rpc.polkadex.ee`, then `node spec 373 tx 2`, `metadata
-  versions offered: 14, 15` (or more), `wrote .../test/fixtures/metadata-373.json`.
+  versions offered: 14, 15` (or more), `wrote .../test/fixtures/metadata-mainnet-373.json`.
 - `[testnet] <your endpoint>`, then `spec 392`, `metadata versions offered:`
   a list that includes 16, a `seenFormats=` line whose `"5"` entry has
   `"total"` above 0 (the inherents every 392 block carries are bare v5, 0x05,
   so `"bare"` is above 0 and `"general"` is normally 0: nothing on Polkadex
-  emits General), `wrote .../test/fixtures/metadata-392.json`.
+  emits General), `wrote .../test/fixtures/metadata-testnet-393.json`.
 - Last line `Done. Now run: npm test`.
 
 Fail: any `FAILED:` line, or `fixture(s) not written`. "no v5 extrinsic" means
@@ -425,7 +425,7 @@ sqlite3 data/explorer.db "SELECT COUNT(*) FROM blocks WHERE number BETWEEN 15528
 sqlite3 data/explorer.db "SELECT indexer, COUNT(*) FROM scan_failures GROUP BY indexer;"
 curl -s localhost:3001/api/blocks | grep -o '"decodeFailures":{[^}]*}'
 curl -s localhost:3001/api/version
-node -e 'const f=require("./test/fixtures/metadata-392.json");f.extrinsics.filter(x=>x.format.startsWith("v5-")).slice(0,3).forEach(x=>console.log(x.block,x.index,x.format))'
+node -e 'const f=require("./test/fixtures/metadata-testnet-393.json");f.extrinsics.filter(x=>x.format.startsWith("v5-")).slice(0,3).forEach(x=>console.log(x.block,x.index,x.format))'
 ```
 
 Pass:

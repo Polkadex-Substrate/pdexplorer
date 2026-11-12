@@ -1,7 +1,7 @@
 // scripts/fetch-metadata.mjs end to end, against a local JSON-RPC WebSocket
 // serving a fake mainnet: spec 373 up to block UPGRADE - 1, spec 392 from
-// UPGRADE. metadata-392.json is the current runtime (finalized head, spec 392
-// or later, or nothing is written); metadata-373.json is history, read at a
+// UPGRADE. metadata-mainnet-392.json is the current runtime (finalized head, spec 392
+// or later, or nothing is written); metadata-mainnet-373.json is history, read at a
 // fixed block from an archive node, and refused if that block is not 373.
 
 import { test, describe } from 'node:test';
@@ -70,19 +70,19 @@ function runScript(args) {
 }
 
 describe('scripts/fetch-metadata.mjs end to end', () => {
-    test('metadata-392.json comes from the mainnet head, which must be on 392 or later', async () => {
+    test('metadata-mainnet-392.json comes from the mainnet head, which must be on 392 or later', async () => {
         const node = await mockNode({ head: 1200 });
         const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
         try {
-            const r = await runScript(['--only', '392', '--mainnet', node.url, '--blocks', '5', '--out', out]);
+            const r = await runScript(['--only', '392', '--mainnet', node.url, '--blocks', '5', '--network', 'mainnet', '--out', out]);
             assert.equal(r.code, 0, r.err + r.out);
-            assert.match(r.out, /\[mainnet\] ws:\/\/127\.0\.0\.1/);
+            assert.match(r.out, /ws:\/\/127\.0\.0\.1/);
             assert.match(r.out, /finalized #1200 .*node spec 392 tx 3/);
-            const fx = JSON.parse(readFileSync(join(out, 'metadata-392.json'), 'utf8'));
+            const fx = JSON.parse(readFileSync(join(out, 'metadata-mainnet-392.json'), 'utf8'));
             assert.equal(fx.specVersion, 392);
             assert.equal(fx.blockNumber, 1200);
             assert.ok(fx.extrinsics.length > 0 && fx.extrinsics.every(x => x.format === 'v5-bare'));
-            assert.equal(existsSync(join(out, 'metadata-373.json')), false, '--only 392 writes one file');
+            assert.equal(existsSync(join(out, 'metadata-mainnet-373.json')), false, '--only 392 writes one file');
             assert.equal(node.methods.includes('chain_getFinalizedHead'), true);
         } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
     });
@@ -91,21 +91,21 @@ describe('scripts/fetch-metadata.mjs end to end', () => {
         const node = await mockNode({ head: 1200, headSpec: 373 });
         const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
         try {
-            const r = await runScript(['--only', '392', '--mainnet', node.url, '--blocks', '5', '--out', out]);
+            const r = await runScript(['--only', '392', '--mainnet', node.url, '--blocks', '5', '--network', 'mainnet', '--out', out]);
             assert.equal(r.code, 1);
             assert.match(r.err, /FAILED: the node reports spec 373 at its finalized head, below 392: it is out of date or not mainnet\. Nothing written/);
-            assert.equal(existsSync(join(out, 'metadata-392.json')), false);
+            assert.equal(existsSync(join(out, 'metadata-mainnet-392.json')), false);
         } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
     });
 
-    test('metadata-373.json is history: read at a fixed pre-upgrade block from the archive node', async () => {
+    test('metadata-mainnet-373.json is history: read at a fixed pre-upgrade block from the archive node', async () => {
         const node = await mockNode({ head: 1200 });
         const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
         try {
-            const r = await runScript(['--only', '373', '--archive', node.url, '--at373', '990', '--samples', '3', '--out', out]);
+            const r = await runScript(['--only', '373', '--archive', node.url, '--at373', '990', '--samples', '3', '--network', 'mainnet', '--out', out]);
             assert.equal(r.code, 0, r.err + r.out);
             assert.match(r.out, /block #990 .*node spec 373 tx 2/);
-            const fx = JSON.parse(readFileSync(join(out, 'metadata-373.json'), 'utf8'));
+            const fx = JSON.parse(readFileSync(join(out, 'metadata-mainnet-373.json'), 'utf8'));
             assert.equal(fx.specVersion, 373);
             assert.equal(fx.blockNumber, 990);
             assert.equal(fx.extrinsics.length, 3);
@@ -118,10 +118,10 @@ describe('scripts/fetch-metadata.mjs end to end', () => {
         const node = await mockNode({ head: 1200 });
         const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
         try {
-            const r = await runScript(['--only', '373', '--archive', node.url, '--at373', '1100', '--out', out]);
+            const r = await runScript(['--only', '373', '--archive', node.url, '--at373', '1100', '--network', 'mainnet', '--out', out]);
             assert.equal(r.code, 1);
             assert.match(r.err, /FAILED: block #1100 runs spec 392, not 373\. Nothing written; pick a block before the 392 upgrade with --at373/);
-            assert.equal(existsSync(join(out, 'metadata-373.json')), false);
+            assert.equal(existsSync(join(out, 'metadata-mainnet-373.json')), false);
         } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
     });
 
@@ -129,10 +129,10 @@ describe('scripts/fetch-metadata.mjs end to end', () => {
         const node = await mockNode({ head: 1200, prunedBelow: 995 });
         const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
         try {
-            const r = await runScript(['--only', '373', '--archive', node.url, '--at373', '990', '--out', out]);
+            const r = await runScript(['--only', '373', '--archive', node.url, '--at373', '990', '--network', 'mainnet', '--out', out]);
             assert.equal(r.code, 1);
             assert.match(r.err, /FAILED: state at block #990 is not available on ws:\/\/127\.0\.0\.1:\d+: .*State already discarded.*pruned.*--archive.*rpc2\.polkadex\.ee.*Nothing written/);
-            assert.equal(existsSync(join(out, 'metadata-373.json')), false);
+            assert.equal(existsSync(join(out, 'metadata-mainnet-373.json')), false);
         } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
     });
 
@@ -146,10 +146,25 @@ describe('scripts/fetch-metadata.mjs end to end', () => {
         const node = await mockNode({ head: 1200 });
         const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
         try {
-            await runScript(['--mainnet', node.url, '--archive', node.url, '--at373', '990', '--blocks', '5', '--samples', '2', '--out', out]);
+            await runScript(['--mainnet', node.url, '--archive', node.url, '--at373', '990', '--blocks', '5', '--samples', '2', '--network', 'mainnet', '--out', out]);
             const used = [...new Set(node.methods)].sort();
             assert.deepEqual(used, ['chain_getBlock', 'chain_getBlockHash', 'chain_getFinalizedHead', 'chain_getHeader',
                 'state_call', 'state_getMetadata', 'state_getRuntimeVersion']);
+        } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
+    });
+
+    test('output name comes from the fetched network and spec; an unknown chain needs --network', async () => {
+        const node = await mockNode({ head: 1200 });
+        const out = mkdtempSync(join(tmpdir(), 'pdex-fx-'));
+        try {
+            const r = await runScript(['--only', '392', '--mainnet', node.url, '--blocks', '5', '--out', out]);
+            assert.equal(r.code, 1);
+            assert.match(r.err, /not a known Polkadex chain.*--network.*Nothing written/);
+            const r2 = await runScript(['--only', '392', '--mainnet', node.url, '--blocks', '5', '--network', 'testnet', '--out', out]);
+            assert.equal(r2.code, 0, r2.err + r2.out);
+            const fx = JSON.parse(readFileSync(join(out, 'metadata-testnet-392.json'), 'utf8'));
+            assert.equal(fx.network, 'testnet');
+            assert.equal(existsSync(join(out, 'metadata-392.json')), false);
         } finally { node.close(); rmSync(out, { recursive: true, force: true }); }
     });
 

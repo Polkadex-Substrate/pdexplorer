@@ -4827,3 +4827,24 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 @media (max-width: 400px) {
     .wallet-picker-view .wallet-picker-view-bar, #wallet-picker-view .wallet-picker-view-bar { flex-direction: column; align-items: stretch; }
 }
+/* Human-readable call arguments (lib/call-args-format.js) */
+.ca-call { display: block; }
+.ca-call .ca-name { font-size: 0.95rem; color: var(--brand-secondary); }
+.ca-nested { margin: 6px 0 2px; padding: 8px 10px; border-left: 2px solid var(--border-color); background: rgba(255, 255, 255, 0.02); border-radius: 0 6px 6px 0; }
+.ca-nested .ca-name { font-size: 0.82rem; }
+.ca-amount { font-weight: 600; color: var(--text-primary); }
+.ca-raw { font-size: 0.72rem; }
+.ca-num, .ca-hex, .ca-text, .ca-acct { word-break: break-all; }
+.ca-key { color: var(--text-secondary); }
+.ca-enum { color: var(--brand-secondary); }
+.ca-list { margin: 0; padding-left: 18px; }
+.ca-hash code { word-break: normal; }
+.ca-copy { margin-left: 6px; padding: 1px 8px; font-size: 0.7rem; cursor: pointer; color: var(--brand-secondary); background: transparent; border: 1px solid var(--border-color); border-radius: 4px; }
+.ca-raw-view { margin-top: 10px; }
+.ca-raw-view summary { cursor: pointer; color: var(--brand-secondary); font-size: 0.78rem; padding: 4px 0; user-select: none; }
+.ca-raw-json { max-height: 320px; overflow: auto; font-size: 0.74rem; white-space: pre-wrap; word-break: break-all; }
+.motion-args > .ca-call { display: block; }
+.motion-args .ca-call span { min-width: 0; font-weight: inherit; }
+.motion-args .ca-call code { font-size: 0.74rem; }
+.dec-human { margin: 8px 0; }
+.tx-h3 { font-size: 0.95rem; margin: 18px 0 8px; color: var(--text-primary); }

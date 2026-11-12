@@ -724,8 +724,8 @@ describe('help: /help/locked-balance explains the buttons', () => {
     });
 });
 
-const fx392 = loadFixture('metadata-392.json');
-describe('spec 392 metadata: every call and storage item these buttons use exists, with the expected args', { skip: fx392 ? false : 'test/fixtures/metadata-392.json absent' }, () => {
+const fx392 = loadFixture('metadata-testnet-393.json');
+describe('testnet spec 393 metadata: every call and storage item these buttons use exists, with the expected args', () => {
     let registry;
     before(() => { registry = registryFromMetadata(fx392.metadata); });
     const pallet = (name) => registry.metadata.pallets.find(p => p.name.toString() === name);

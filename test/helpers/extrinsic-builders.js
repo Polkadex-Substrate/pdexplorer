@@ -24,10 +24,14 @@ export function registryFromMetadata(metadataHex) {
     return registry;
 }
 
-// Polkadex fixtures written by scripts/fetch-metadata.mjs. null when absent.
+// Polkadex runtime-metadata fixtures committed in test/fixtures (see the README
+// there). A missing or unreadable fixture THROWS: it must never turn a real-codec
+// suite into a silent skip, in CI or anywhere else.
 export function loadFixture(name) {
     const file = join(FIXTURE_DIR, name);
-    if (!existsSync(file)) return null;
+    if (!existsSync(file)) {
+        throw new Error(`test fixture ${name} is missing from ${FIXTURE_DIR}. It is committed to git; restore it (git checkout -- test/fixtures) or see test/fixtures/README.md to refresh it.`);
+    }
     return JSON.parse(readFileSync(file, 'utf8'));
 }
 

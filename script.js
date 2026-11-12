@@ -33,6 +33,7 @@ import { composerHtml, wireComposer } from './lib/discussion-composer.js';
 import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCell, externalSummaryHtml } from './lib/discussion-lifecycle.js';
 import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
+import { renderCallHtml, installCallArgCopy } from './lib/call-args-format.js';
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { validatorsWithStakeState } from './lib/stake-display.js';
@@ -5808,6 +5809,7 @@ function renderDecodeResult(d) {
                     <span class="${x.isSigned ? 'cs-count' : 'cs-warn'}">${x.isSigned ? 'signed' : 'UNSIGNED'}</span>
                     ${x.signer ? `<span class="cs-echo">by ${shortAddressLink(x.signer)}</span>` : ''}
                 </div>
+                ${x.callTree ? `<details class="dec-human" open><summary>Human-readable</summary>${renderCallHtml(x.callTree, {}, { raw: false })}</details>` : ''}
                 <table class="dec-args">
                     <thead><tr><th>Argument</th><th>Type</th><th>Value</th><th>Raw hex</th></tr></thead>
                     <tbody>
@@ -6515,6 +6517,8 @@ async function fetchTxDetails(block, hash) {
                     <tr><td style="padding: 10px; font-weight: bold;">status</td><td style="padding: 10px;"><span class="badge" style="background: ${data.status === 'success' ? 'var(--success)' : 'var(--error)'}; font-size: 11px;">${stakingEscapeHtml(data.status)}</span></td></tr>
                     <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">block</td><td style="padding: 10px;"><a href="/block/${encodeURIComponent(data.block)}" class="item-link">${stakingEscapeHtml(String(data.block))}</a></td></tr>
                 </table>
+                ${data.call ? `<h3 class="tx-h3">Decoded call</h3>${renderCallHtml(data.call, {})}` : ''}
+                ${(data.eventTrees || []).length ? `<h3 class="tx-h3">Events</h3>${data.eventTrees.map(ev => renderCallHtml(ev, {}, { raw: false })).join('')}` : ''}
                 <div class="json-container">
                     ${renderJSONTree({ hash: data.hash, signer: data.from, method: data.event, extrinsic: data.extrinsic, events: data.events })}
                 </div>
@@ -11098,6 +11102,7 @@ const govDetailPage = createGovDetailPage({ root: () => document.getElementById(
     loadThread: (id, el, o) => fetchDiscussionThread(id, o.focus, el, { embedded: true, onRendered: o.onRendered, quiet: o.quiet }), setSeo: (o) => updateSeoMeta('governance-details', { canonicalPath: window.location.pathname, ...o }),
     getApi: () => globalApi, toAddress: toPolkadexAddress, account: () => getStoredWallet(), location: () => window.location, env: { navigator, document },
     visible: () => document.visibilityState === 'visible', scrollTo: (el) => el && el.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
+installCallArgCopy(document, { copy: (t) => navigator.clipboard.writeText(t).then(() => true, () => false) });
 wireGovRowClicks(document, { open: (href) => window.open(href, '_blank', 'noopener'), selection: () => (window.getSelection ? window.getSelection() : '') });
 
 // Map raw indexer status strings to a label + accent color for the corner
@@ -11878,7 +11883,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
 
         const argsHtml = (m.args && m.args.length)
             ? `<details class="motion-details" data-dkey="${stakingEscapeHtml(m.hash + ':args')}"${openDetails.has(m.hash + ':args') ? ' open' : ''}><summary>Call arguments (${m.args.length})</summary>
-                 <div class="motion-args">${m.args.map(a => `<div><span>${stakingEscapeHtml(a.name)}</span><code>${stakingEscapeHtml(String(a.value).slice(0, 220))}${String(a.value).length > 220 ? '…' : ''}</code></div>`).join('')}</div>
+                 <div class="motion-args">${renderCallHtml({ section: m.section, method: m.method, args: m.args, assets: m.assets }, { head: currentBlock, nameOf })}</div>
                </details>`
             : '';
 

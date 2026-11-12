@@ -136,10 +136,10 @@ async function deriveVisibleValidators(api, era) {
     return r.filter(([, o]) => o.isSome).map(([k]) => toHex(k.args[1]));
 }
 
-const fx392 = loadFixture('metadata-392.json');
-const fx373 = loadFixture('metadata-373.json');
+const fx392 = loadFixture('metadata-testnet-393.json');
+const fx373 = loadFixture('metadata-mainnet-373.json');
 
-describe('unclaimed rewards on real spec 392 codecs', { skip: fx392 ? false : 'test/fixtures/metadata-392.json absent' }, () => {
+describe('unclaimed rewards on real testnet spec 393 codecs', () => {
     const registry = fx392 && registryFromMetadata(fx392.metadata);
 
     test('pre-392 era: nominator reward is owed (the derive saw no exposure at all)', async () => {
@@ -237,7 +237,7 @@ describe('unclaimed rewards on real spec 392 codecs', { skip: fx392 ? false : 't
     });
 });
 
-describe('unclaimed rewards on real spec 373 codecs', { skip: fx373 ? false : 'test/fixtures/metadata-373.json absent' }, () => {
+describe('unclaimed rewards on real mainnet spec 373 codecs', () => {
     const registry = fx373 && registryFromMetadata(fx373.metadata);
     const ledger373 = (claimed = []) => ({
         Bonded: { [V1]: V1 },
