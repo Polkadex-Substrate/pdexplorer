@@ -11,10 +11,18 @@
 //                         (default wss://rpc2.polkadex.ee)
 //   --at373 <block>       a mainnet block still under spec 373
 //                         (default 13342000; 392 was enacted at ~13,342,584)
-//   --samples <n>  --out <dir>
+//   --network <name>      name the output for this network instead of reading
+//                         it from the genesis hash (needed for unknown chains)
+//   --samples <n>  --out <dir>   (default out: test/fixtures)
 //   --blocks <n>    how many blocks to scan back (default 400)
 //
-// metadata-392.json is the CURRENT runtime: mainnet at its finalized head,
+// Output names are derived from what was fetched: metadata-<network>-<spec>.json,
+// the network from the genesis hash (mainnet, testnet) and the spec from the
+// runtime version, written straight into test/fixtures/. Point --mainnet at
+// the testnet endpoint and you get metadata-testnet-<spec>.json. The 392 and
+// 373 labels only select which fetch to run.
+//
+// The 392 fetch is the CURRENT runtime: the endpoint at its finalized head,
 // which must report spec 392 or later (lib/live-runtime.js MIN_LIVE_SPEC);
 // an older spec means a stale or wrong node and nothing is written. The script
 // scans the whole window for extrinsic format versions and prints seenFormats
@@ -22,7 +30,7 @@
 // version byte: 0x04, 0x84, 0x05, 0x45). If no v5 extrinsic is found it exits
 // non-zero WITHOUT writing the file; widen the window with --blocks.
 //
-// metadata-373.json is HISTORY: the runtime mainnet ran before 29 October
+// The 373 fetch is HISTORY: the runtime mainnet ran before 29 October
 // 2026, read at a fixed block from an archive node. It backs the historical
 // decode tests and changes only if that file is lost. A block that is not
 // under spec 373 is refused and nothing is written.
@@ -42,6 +50,7 @@ import { fileURLToPath } from 'node:url';
 import { newFormatTally, tallyExtrinsic, sampleLabel, v5MissingMessage } from '../lib/extrinsic-formats.js';
 import { rpcClient } from '../lib/json-rpc-client.js';
 import { MIN_LIVE_SPEC } from '../lib/live-runtime.js';
+import { resolveFixtureName } from '../lib/fixture-name.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -57,14 +66,15 @@ if (!Number.isInteger(AT_373) || AT_373 < 1) {
 }
 const TARGETS = [
     // The current runtime, at the finalized head.
-    { label: '392', file: 'metadata-392.json', url: opt('mainnet', 'wss://rpc.polkadex.ee'), at: null, minSpec: MIN_LIVE_SPEC, network: 'mainnet' },
+    { label: '392', url: opt('mainnet', 'wss://rpc.polkadex.ee'), at: null, minSpec: MIN_LIVE_SPEC },
     // History: the runtime before the 392 upgrade, at a fixed block.
     // rpc2.polkadex.ee is our own ARCHIVE node (it keeps old state), which is
     // why it is the default here: the public load balancer prunes. Override
     // with --archive if it moves.
-    { label: '373', file: 'metadata-373.json', url: opt('archive', 'wss://rpc2.polkadex.ee'), at: AT_373, exactSpec: 373, network: 'mainnet' }
+    { label: '373', url: opt('archive', 'wss://rpc2.polkadex.ee'), at: AT_373, exactSpec: 373 }
 ];
 const ONLY = opt('only', null);
+const NETWORK = opt('network', null);
 const SAMPLES = Number(opt('samples', '12'));
 const MAX_WALK = Number(opt('blocks', '400'));
 if (!Number.isInteger(MAX_WALK) || MAX_WALK < 1) {
@@ -138,7 +148,7 @@ function stateUnavailableMessage(e, t, blockNumber) {
 }
 
 async function fetchTarget(t) {
-    console.log(`\n[${t.network}] ${t.url}`);
+    console.log(`\n${t.url}`);
     const { call, close } = rpcClient(t.url);
     try {
         const blockHash = t.at === null ? await call('chain_getFinalizedHead') : await call('chain_getBlockHash', [t.at]);
@@ -206,16 +216,18 @@ async function fetchTarget(t) {
             if (missing) throw new Error(missing);
         }
 
+        const { network, file: fileName } = resolveFixtureName({ genesisHash, specVersion: rv.specVersion, networkOverride: NETWORK });
+        console.log(`  network ${network}`);
         const out = {
             note: 'Written by scripts/fetch-metadata.mjs. Test fixture; regenerate rather than edit.',
-            network: t.network, endpoint: t.url, fetchedAt: new Date().toISOString(),
+            network, endpoint: t.url, fetchedAt: new Date().toISOString(),
             specName: rv.specName, specVersion: rv.specVersion, transactionVersion: rv.transactionVersion,
             genesisHash, blockHash, blockNumber,
             metadata, metadataVersions: versions, metadataAtVersion: atVersion,
             extrinsics
         };
         mkdirSync(OUT, { recursive: true });
-        const file = join(OUT, t.file);
+        const file = join(OUT, fileName);
         writeFileSync(file, JSON.stringify(out, null, 1) + '\n');
         console.log(`  wrote ${file}`);
         return true;

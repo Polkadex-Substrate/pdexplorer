@@ -34,16 +34,17 @@ the source. Read-only JSON-RPC reads; no keys are involved.
 
 Needs Node 22 and network access to the RPC.
 
-    node scripts/fetch-metadata.mjs --only 392 --out /tmp/fx --mainnet wss://polkadex-testnet.polkadex.ee
-    node scripts/fetch-metadata.mjs --only 373 --out /tmp/fx
+    node scripts/fetch-metadata.mjs --only 392 --mainnet wss://polkadex-testnet.polkadex.ee
+    node scripts/fetch-metadata.mjs --only 373
 
-The script still names its outputs `metadata-392.json` and `metadata-373.json`.
-Copy them in under the honest names, and check the JSON `network` and
-`specVersion` first:
+The script names each file from what it fetched, `metadata-<network>-<spec>.json`
+(network from the genesis hash, spec from the runtime version), and writes it
+straight into `test/fixtures/`. No renaming or copying. The `392` and `373`
+labels only choose which fetch runs; the first command above yields
+`metadata-testnet-<spec>.json` because the endpoint is the testnet. A chain
+whose genesis hash is not in `lib/fixture-name.js` is refused unless you pass
+`--network <name>`.
 
-    cp /tmp/fx/metadata-392.json test/fixtures/metadata-testnet-393.json
-    cp /tmp/fx/metadata-373.json test/fixtures/metadata-mainnet-373.json
-
-If the spec or chain changes, rename the file, update `EXPECTED` in
-`test/fixtures.test.js` and every `loadFixture(...)` call, and update this
-table. Run `npm test`.
+Check `git status` for the new file name. If the spec or chain changed, delete
+the superseded file, update `EXPECTED` in `test/fixtures.test.js` and every
+`loadFixture(...)` call, and update the table above. Run `npm test`.
