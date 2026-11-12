@@ -21,7 +21,7 @@ import { bodyOf } from './source.js';
 import { closeControlHtml } from '../../lib/close-control.js';
 import { isValidPolkadexAddress } from '../../lib/wallet-safety.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../../lib/wallet-session.js';
-import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel } from '../../lib/wallet-picker.js';
+import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel } from '../../lib/wallet-picker.js';
 import { escapeHtml } from '../../lib/html-escape.js';
 
 const SCRIPT = readFileSync(new URL('../../script.js', import.meta.url), 'utf8');
@@ -142,7 +142,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
     const ctx = {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
-        buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, sourceLabel,
+        buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel,
         multisigUI: { mountAccounts() {} },
         councilCandidacyUI: { accountChanged() {} },
         spendMotionUI: { accountChanged() {} },

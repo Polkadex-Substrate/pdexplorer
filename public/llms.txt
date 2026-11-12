@@ -379,4 +379,6 @@ from; prefer the sitemap over this list.
 - API reference (human-readable): https://explorer.polkadex.ee/developers
 - Help center: https://explorer.polkadex.ee/help
 - Polkadex project: https://polkadex.ee
+- [Create a Polkadex wallet](https://polkadex.ee/wallet): the official step-by-step guide
+- [Tokenomics](https://polkadex.ee/tokenomics): genesis supply and the live total supply, read from this explorer's API
 - Source / issues: https://github.com/Polkadex-Substrate
