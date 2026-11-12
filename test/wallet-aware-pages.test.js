@@ -201,9 +201,9 @@ describe('lib/wallet-aware: route scope and latest request', () => {
 describe('lib/wallet-aware: page decisions', () => {
     const acct = (address, status = address ? 'connected' : 'none') => ({ address, source: '', status });
 
-    test('staking rewards: no address in the URL defaults to the connected wallet and writes it into the URL', () => {
+    test('staking rewards: no address in the URL defaults to the connected wallet, kept out of the URL', () => {
         assert.deepEqual(aware.stakingRewardsPlan({ urlAddress: '', account: acct(A), isSame: same }),
-            { mode: 'view', address: A, wallet: A, replaceUrl: true });
+            { mode: 'view', address: A, wallet: A });
     });
 
     test('staking rewards: nothing connected asks to connect; a restore in progress says so instead', () => {
@@ -213,9 +213,9 @@ describe('lib/wallet-aware: page decisions', () => {
 
     test('staking rewards: an address in the URL wins for viewing, whatever is connected', () => {
         assert.deepEqual(aware.stakingRewardsPlan({ urlAddress: X, account: acct(A), isSame: same }),
-            { mode: 'view', address: X, wallet: A, replaceUrl: false });
+            { mode: 'view', address: X, wallet: A });
         assert.deepEqual(aware.stakingRewardsPlan({ urlAddress: X, account: acct(''), isSame: same }),
-            { mode: 'view', address: X, wallet: '', replaceUrl: false });
+            { mode: 'view', address: X, wallet: '' });
     });
 
     test('a page follows the wallet when it was showing the wallet, and stays on an address the user chose', () => {
@@ -384,11 +384,11 @@ describe('staking rewards page follows the connected wallet (real script.js func
         assert.match(HTML, /id="staking-rewards-wallet-note"/);
     });
 
-    test('opened with no address: loads the connected wallet and writes it into the URL', async (t) => {
+    test('opened with no address: loads the connected wallet and leaves the URL bare, so a copied link does not pin it', async (t) => {
         const w = stakingWorld(t, { connected: A });
         await w.visit('/staking-rewards');
         assert.deepEqual(w.log.fetches, ['/api/staking-rewards/' + encodeURIComponent(A)]);
-        assert.equal(w.window.location.pathname, '/staking-rewards/' + A);
+        assert.equal(w.window.location.pathname, '/staking-rewards', 'the wallet\'s address was written into the URL');
         assert.equal(w.input(), A);
         await w.respond(0, A);
         assert.equal(w.results().innerHTML, 'REWARDS:' + A);
@@ -413,28 +413,29 @@ describe('staking rewards page follows the connected wallet (real script.js func
         w.session.endRestore();
         await w.settle();
         assert.deepEqual(w.log.fetches, ['/api/staking-rewards/' + encodeURIComponent(A)]);
-        assert.equal(w.window.location.pathname, '/staking-rewards/' + A);
+        assert.equal(w.window.location.pathname, '/staking-rewards');
     });
 
-    test('switching wallets reloads for the new account and updates the URL', async (t) => {
+    test('switching wallets reloads for the new account; the URL stays bare', async (t) => {
         const w = stakingWorld(t, { connected: A });
         await w.visit('/staking-rewards');
         await w.respond(0, A);
         w.session.select(B, 'polkadot-js');
         await w.settle();
         assert.equal(w.log.fetches.at(-1), '/api/staking-rewards/' + encodeURIComponent(B));
-        assert.equal(w.window.location.pathname, '/staking-rewards/' + B);
+        assert.equal(w.window.location.pathname, '/staking-rewards');
         assert.equal(w.input(), B);
         await w.respond(1, B);
         assert.equal(w.results().innerHTML, 'REWARDS:' + B);
     });
 
-    test('a page reloaded on /staking-rewards/<own address> still follows a switch', async (t) => {
+    test('an old link to /staking-rewards/<own address> still follows a switch, back to the bare page', async (t) => {
         const w = stakingWorld(t, { connected: A, path: '/staking-rewards/' + A });
         await w.visit('/staking-rewards/' + A);
         w.session.select(B, '');
         await w.settle();
-        assert.equal(w.window.location.pathname, '/staking-rewards/' + B);
+        assert.equal(w.log.fetches.at(-1), '/api/staking-rewards/' + encodeURIComponent(B));
+        assert.equal(w.window.location.pathname, '/staking-rewards');
     });
 
     test('disconnect clears the account\'s rewards and shows the connect prompt', async (t) => {
@@ -456,7 +457,7 @@ describe('staking rewards page follows the connected wallet (real script.js func
         await w.visit('/staking-rewards/' + X);
         assert.deepEqual(w.log.fetches, ['/api/staking-rewards/' + encodeURIComponent(X)]);
         assert.ok(w.note().includes(short(X)) && w.note().includes(short(A)), w.note());
-        assert.ok(w.note().includes(`href="/staking-rewards/${encodeURIComponent(A)}"`));
+        assert.ok(w.note().includes('href="/staking-rewards"'), 'Show mine pins the wallet\'s address: ' + w.note());
 
         w.session.select(B, '');                      // switching does not take the page off X
         await w.settle();
@@ -468,6 +469,15 @@ describe('staking rewards page follows the connected wallet (real script.js func
         await w.settle();
         assert.equal(w.note(), '');
         assert.equal(w.window.location.pathname, '/staking-rewards/' + X);
+    });
+
+    test('a typed address goes into the URL, even the wallet\'s own', async (t) => {
+        const w = stakingWorld(t, { connected: A });
+        await w.visit('/staking-rewards');
+        w.document.getElementById('staking-address-input').value = A;
+        w.run('submitStakingSearch')();
+        await w.settle();
+        assert.equal(w.window.location.pathname, '/staking-rewards/' + A);
     });
 
     test('a typed search for another address is explicit: it is not undone by a later switch', async (t) => {
@@ -580,7 +590,7 @@ describe('wallet switching from another page (real script.js wallet functions)',
     test('Switch wallet opened from a page returns there with the new account', async () => {
         const profile = makeProfile({ extensions: [ext()] });
         profile.local.setItem('pdex_wallet_address', W1);
-        const tab = openTab(profile, { path: '/staking-rewards/' + W1 });   // the page wrote the connected wallet into the URL
+        const tab = openTab(profile, { path: '/staking-rewards/' + W1 });   // an old link with the wallet's address
         tab.ctx.safeReturnPath = safeReturnPath;
         tab.fn('openWalletPicker')();
         await tab.settle();

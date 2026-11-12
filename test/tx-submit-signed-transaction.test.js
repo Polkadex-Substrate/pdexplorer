@@ -215,3 +215,64 @@ describe('the real @polkadot/api 17.0.2 Submittable with those options', () => {
         assert.equal(errors.length, 1);
     });
 });
+
+// send() with a wallet check (stillValid, given by submitSignedTx to every
+// caller) signs with signAsync, checks again, then sends: the same options,
+// so the same guarantees, plus nothing is broadcast once the wallet changed.
+describe('the real Submittable on the checked path: signAsync, re-check, send', () => {
+    const tracked = (api, stillValid, errors, shown = []) => {
+        const run = trackSignedTx({
+            api, action: { id: 'a', key: 'balances.transfer', params: {} },
+            show: (a, st, ev, err, ex) => { const m = buildTxModel(a, st, ev, err, ex); shown.push(m); return m; },
+            onError: (t) => errors.push(t)
+        });
+        run.start();
+        return (tx, signer) => run.send(tx, pair.address, signer, { stillValid });
+    };
+
+    test('a wallet that returns signedTransaction: its bytes are submitted, once', async () => {
+        const { api, submitted, drop } = fakeApi();
+        const errors = [], shown = [];
+        const w = signedTxSigner();
+        await tracked(api, () => true, errors, shown)(submittableFor(api), w);
+        await flush();
+        assert.deepEqual(errors, []);
+        assert.deepEqual(submitted, [w.returned]);
+        assert.ok(shown.some(m => m.stage === 'broadcast'));
+        drop();
+    });
+
+    test('a signature-only wallet: the explorer-built transaction, signed, is submitted', async () => {
+        const { api, submitted, drop } = fakeApi();
+        const errors = [];
+        await tracked(api, () => true, errors)(submittableFor(api), signatureOnlySigner());
+        await flush();
+        assert.deepEqual(errors, []);
+        assert.equal(submitted.length, 1);
+        const back = registry.createType('Extrinsic', submitted[0]);
+        assert.equal(back.isSigned, true);
+        assert.equal(back.method.toHex(), remark('0x1234').toHex());
+        drop();
+    });
+
+    test('altered call data is still refused, nothing submitted', async () => {
+        const { api, submitted } = fakeApi();
+        const errors = [];
+        await tracked(api, () => true, errors)(submittableFor(api), signedTxSigner({ callData: '0xdeadbeef' }));
+        assert.equal(submitted.length, 0);
+        assert.equal(errors.length, 1);
+    });
+
+    test('the wallet changes while the wallet signs: signed, never submitted', async () => {
+        const { api, submitted } = fakeApi();
+        const errors = [];
+        let valid = true;
+        const w = signedTxSigner();
+        const sign = w.signPayload;
+        w.signPayload = async (json) => { const r = await sign(json); valid = false; return r; };
+        await tracked(api, () => valid, errors)(submittableFor(api), w);
+        assert.ok(w.returned, 'the wallet was not asked');
+        assert.equal(submitted.length, 0, 'broadcast after the wallet changed');
+        assert.deepEqual(errors, ['Your wallet changed after signing; nothing was sent.']);
+    });
+});
