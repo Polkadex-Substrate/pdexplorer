@@ -10,7 +10,7 @@ import substrateMetadata from '@polkadot/types-support/metadata/static-substrate
 import { decorateExtrinsics } from '@polkadot/types/metadata/decorate';
 import { encodeAddress } from '@polkadot/util-crypto';
 import { registryFromMetadata } from './helpers/extrinsic-builders.js';
-import { codecToNode, callToTree, eventToTree, argEntries } from '../lib/call-tree.js';
+import { codecToNode, callToTree, eventToTree, argEntries, collectAssetIds, assetIdOf } from '../lib/call-tree.js';
 
 const registry = registryFromMetadata(substrateMetadata);
 registry.setChainProperties(registry.createType('ChainProperties', { ss58Format: 88, tokenDecimals: 12, tokenSymbol: 'PDEX' }));
@@ -166,5 +166,28 @@ describe('eventToTree', () => {
         assert.equal(t.method, ev.method);
         assert.ok(t.args.length >= 1);
         assert.ok(t.args.every(a => typeof a.name === 'string' && a.node && a.node.k));
+    });
+});
+
+describe('asset ids', () => {
+    test('collectAssetIds finds the asset a call names, also inside a batch, once each', () => {
+        const t = callToTree(call(ex.utility.batch([ex.assets.transfer(7n, { Id: A }, 5n), ex.assets.transfer(7n, { Id: B }, 6n), ex.assets.transfer(9n, { Id: B }, 1n), ex.balances.transferKeepAlive(A, 1n)])));
+        assert.deepEqual(collectAssetIds(t).sort(), ['7', '9']);
+        assert.deepEqual(collectAssetIds(callToTree(call(ex.balances.transferKeepAlive(A, 1n)))), []);
+    });
+    test('the number of ids is capped', () => {
+        const t = callToTree(call(ex.utility.batch([1n, 2n, 3n, 4n].map(i => ex.assets.transfer(i, { Id: A }, 1n)))));
+        assert.equal(collectAssetIds(t, 2).length, 2);
+    });
+    test('assetIdOf reads id, assetId and WithId', () => {
+        assert.equal(assetIdOf([{ name: 'assetId', node: { k: 'num', v: '4' } }]), '4');
+        assert.equal(assetIdOf([{ name: 'assetKind', node: { k: 'enum', e: 'WithId', v: { k: 'num', v: '5' } } }]), '5');
+        assert.equal(assetIdOf([{ name: 'assetKind', node: { k: 'enum', e: 'Native', v: null } }]), null);
+    });
+    test('event field names are camelCased like call argument names', () => {
+        const fake = { section: 'assets', method: 'Transferred', meta: { fields: [{ name: { isSome: true, unwrap: () => 'asset_id' }, typeName: { isSome: true, unwrap: () => 'T::AssetId' } }] }, data: [registry.createType('u32', 7)] };
+        const t = eventToTree(fake);
+        assert.equal(t.args[0].name, 'assetId');
+        assert.equal(t.args[0].node.v, '7');
     });
 });

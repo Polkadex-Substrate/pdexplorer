@@ -136,14 +136,15 @@ describe('pages that show a decoded call', () => {
     test('the transaction page returns the decoded call and the events as typed trees, and shows them', () => {
         const at = server.indexOf("event: `${targetExt.method.section} -> ${targetExt.method.method}`");
         const block = server.slice(at, at + 900);
-        assert.match(block, /call: callToTree\(targetExt\.method/);
-        assert.match(block, /eventTrees: /);
+        assert.match(server, /callToTree\(targetExt\.method\)/);
+        assert.match(block, /call: txCall/);
+        assert.match(block, /eventTrees\n/);
         assert.match(script, /renderCallHtml\(data\.call/);
         assert.match(script, /renderCallHtml\(\{ section: ev\.section|eventTrees/);
     });
 
     test('the block decoder pairs each extrinsic with its typed call', () => {
-        assert.match(server, /callTree: callToTree\(call/);
+        assert.match(server, /const tree = callToTree\(call\)[\s\S]*callTree: tree/);
         assert.match(script, /renderCallHtml\(x\.callTree/);
     });
 

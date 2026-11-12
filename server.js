@@ -37,6 +37,7 @@ import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
 import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
 import { registerTreasurySpendsRoute } from './lib/treasury-payout-api.js';
+import { argEntries, callToTree, eventToTree, collectAssetIds } from './lib/call-tree.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
 import { summarizeCommissionHistory, describeCommissionHistory, raisedRecently, pendingRaise, wasElectedInEra } from './lib/commission-history.js';
 import { readEraSummary, missingEras, buildChoiceSnapshot, readConst, FALLBACK_HISTORY_DEPTH } from './lib/stake-choice-sync.js';
@@ -2792,6 +2793,9 @@ app.get('/api/decode/:block', async (req, res) => {
                 };
             });
 
+            const tree = callToTree(call);
+            const treeAssets = tree ? await assetMetaFor(tree) : undefined;
+            if (treeAssets) tree.assets = treeAssets;
             out.push({
                 index: i,
                 hash: ex.hash.toHex(),
@@ -2800,6 +2804,8 @@ app.get('/api/decode/:block', async (req, res) => {
                 signer: ex.isSigned ? ex.signer.toString() : null,
                 nonce: ex.isSigned ? ex.nonce.toNumber() : null,
                 args,
+                // The same call as a typed tree: the page shows it in human form.
+                callTree: tree,
                 // Full SCALE-encoded call, so a reader can re-decode independently.
                 callHex: call.toHex(),
                 callLength: call.toU8a().length
@@ -3975,6 +3981,15 @@ app.get('/api/extrinsic/:block/:txHash', async (req, res) => {
             ? parseInt(blockId, 10)
             : null;
 
+        const txCall = callToTree(targetExt.method);
+        const eventTrees = [];
+        for (const rec of [{ tree: txCall }, ...txEvents.map(e => ({ tree: eventToTree(e.event) }))]) {
+            if (!rec.tree) continue;
+            const assets = await assetMetaFor(rec.tree);
+            if (assets) rec.tree.assets = assets;
+            if (rec.tree !== txCall) eventTrees.push(rec.tree);
+        }
+
         res.json({
             hash: txHash,
             block: blockNumber,
@@ -3986,7 +4001,10 @@ app.get('/api/extrinsic/:block/:txHash', async (req, res) => {
             amount: summary.amount,
             status: status,
             extrinsic: targetExt.toHuman(),
-            events: txEvents.map(e => e.toHuman().event)
+            events: txEvents.map(e => e.toHuman().event),
+            // The same call and events as typed trees: the page shows them in human form.
+            call: txCall,
+            eventTrees
         });
     } catch (err) { serverError(res, err, req.path); }
 });
@@ -4712,7 +4730,35 @@ const GOV_DETAIL_ARG_MAX = 1000;
 const govCallCache = new Map();   // proposal hash -> decoded call (hits kept; misses retried after 10 min)
 const govHistCache = new Map();   // "<kind>:<id>:<block>" -> historical read (archive state never changes) or { miss, at } (pruned state: retried after 10 min)
 const GOV_HIST_MISS_MS = 10 * 60 * 1000;
+// The symbol and decimals of the assets a decoded call names, so an asset amount
+// reads in its own unit. { [id]: { symbol, decimals } } or undefined when the call
+// names none (or the runtime has no assets pallet / the read fails).
+const assetMetaCache = new Map();
+async function assetMetaFor(tree) {
+    const ids = collectAssetIds(tree);
+    if (!ids.length || !globalApi || !globalApi.query.assets || !globalApi.query.assets.metadata) return undefined;
+    const out = {};
+    for (const id of ids) {
+        let m = assetMetaCache.get(id);
+        if (!m) {
+            try {
+                const md = await globalApi.query.assets.metadata(id);
+                const symbol = md.symbol ? md.symbol.toUtf8() : '';
+                const decimals = md.decimals ? Number(md.decimals.toString()) : NaN;
+                if (symbol && Number.isInteger(decimals)) { m = { symbol: symbol.slice(0, 16), decimals }; if (assetMetaCache.size > 500) assetMetaCache.clear(); assetMetaCache.set(id, m); }
+            } catch (e) { /* unknown asset: the page shows raw units */ }
+        }
+        if (m) out[id] = m;
+    }
+    return Object.keys(out).length ? out : undefined;
+}
 const govDescribeCall = (c) => describeCall(c, GOV_DETAIL_ARG_MAX);
+const govDescribeCallWithAssets = async (c) => {
+    const d = govDescribeCall(c);
+    const assets = await assetMetaFor({ args: d.args });
+    if (assets) d.assets = assets;
+    return d;
+};
 const govReadRefInfo = (opt) => readReferendumInfo(opt, { toPdex: balanceToPDEX, hashBytes: blake2AsHex });
 function govCollectivePallet(collective) {
     if (collective === 'technicalCommittee') return globalApi.query.technicalCommittee ? 'technicalCommittee' : null;
@@ -4784,7 +4830,7 @@ const govChain = {
             if (len !== null) { const opt = await pre.preimageFor([ph, len]); if (opt && opt.isSome) bytes = opt.unwrap(); }
         }
         let out;
-        if (bytes) out = { call: govDescribeCall(globalApi.registry.createType('Call', bytes)), at: Date.now() };
+        if (bytes) out = { call: await govDescribeCallWithAssets(globalApi.registry.createType('Call', bytes)), at: Date.now() };
         else out = { call: null, note: 'The preimage of this call is not noted on chain, so its contents cannot be shown.', at: Date.now() };
         if (key) { if (govCallCache.size > 200) govCallCache.clear(); govCallCache.set(key, out); }
         return out;
@@ -4812,7 +4858,7 @@ const govChain = {
             try {
                 const bh = await getBlockHashCached(block);
                 const [callOpt, votingOpt] = await Promise.all([q.proposalOf.at(bh, hash), q.voting.at(bh, hash)]);
-                const call = callOpt && callOpt.isSome ? govDescribeCall(callOpt.unwrap()) : null;
+                const call = callOpt && callOpt.isSome ? await govDescribeCallWithAssets(callOpt.unwrap()) : null;
                 const voting = readCollectiveVoting(votingOpt);
                 return call || voting ? { call, voting } : null;
             } catch (e) { return null; }
@@ -6937,7 +6983,7 @@ async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
         
         for (const h of motionHashes) {
             const hash = h.toString();
-            let section = '', method = '', args = [], proposalHash = null;
+            let section = '', method = '', args = [], proposalHash = null, assets;
             let lengthBound = 0;
             // Generous defaults used as the close() weight bound when an
             // exact estimate cannot be computed (bound only needs to be >= actual).
@@ -6951,14 +6997,19 @@ async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
                     if (isExternalProposeCall(section, method)) proposalHash = proposalHashOf(call.args[0], blake2AsHex);
                     lengthBound = call.encodedLength;
                     const argMeta = (call.meta && call.meta.args) || [];
+                    // Typed nodes (lib/call-tree.js): the page shows amounts, accounts and
+                    // nested calls in human form from these; `value` is the text fallback.
+                    let typed = [];
+                    try { typed = argEntries(call); } catch (e) { typed = []; }
                     args = call.args.map((a, i) => {
                         let value;
                         try { value = a.toString(); } catch (e) { value = '[unprintable]'; }
                         // Cap large args (e.g. a runtime wasm blob) so the
                         // council payload stays small.
                         if (value.length > 512) value = value.slice(0, 512) + '…(truncated)';
-                        return { name: argMeta[i] ? String(argMeta[i].name) : ('arg' + i), value };
+                        return { name: argMeta[i] ? String(argMeta[i].name) : ('arg' + i), value, typeName: typed[i] ? typed[i].typeName : null, node: typed[i] ? typed[i].node : null };
                     });
+                    assets = await assetMetaFor({ args: typed });
                     if (probeAddress) {
                         try {
                             const info = await globalApi.tx(call).paymentInfo(probeAddress);
@@ -6988,7 +7039,7 @@ async function readLiveCollectiveMotions(collectivePallet, probeAddress) {
             motions.push({
                 hash,
                 title: (section && method) ? `${section}.${method}` : (collectivePallet === 'technicalCommittee' ? 'Technical Committee Motion' : 'Council Motion'),
-                section, method, args, proposalHash,
+                section, method, args, assets, proposalHash,
                 index, threshold, ayes, nays, end,
                 lengthBound, weightRefTime, weightProofSize
             });

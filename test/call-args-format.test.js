@@ -41,7 +41,7 @@ describe('formatPlanck / formatAmount (BigInt, 12 decimals, no float)', () => {
         assert.equal(formatPlanck('1999999999999'), '1.999999999999');
         assert.equal(formatPlanck('9007199254740993'), '9,007.199254740993');
         assert.equal(formatPlanck('999999999999999999999999'), '999,999,999,999.999999999999');
-        assert.equal(formatPlanck((2n ** 100n).toString()), '1,267,650,600.228229401496703205376');
+        assert.equal(formatPlanck((2n ** 100n).toString()), '1,267,650,600,228,229,401.496703205376');
         assert.equal(formatPlanck(2n ** 64n), '18,446,744.073709551616');
     });
     test('another number of decimals (an asset)', () => {
@@ -92,7 +92,8 @@ describe('renderCallHtml: the CEO case, treasury.spend', () => {
         assert.match(html, /50,000 PDEX/);
         assert.match(html, /title="50000000000000000 planck"/);
         assert.match(html, /<span class="[^"]*ca-raw[^"]*">[^<]*50000000000000000 planck[^<]*<\/span>/);
-        assert.doesNotMatch(html.replace(/title="[^"]*"/g, '').replace(/<span class="[^"]*ca-raw[^"]*">[^<]*<\/span>/g, ''), /50000000000000000/);
+        const visible = html.replace(/<details class="ca-raw-view">[\s\S]*<\/details>/, '').replace(/title="[^"]*"/g, '').replace(/<span class="[^"]*ca-raw[^"]*">[^<]*<\/span>/g, '');
+        assert.doesNotMatch(visible, /50000000000000000/);
     });
 
     test('the beneficiary is a link to the account, with the name when one is known', () => {
@@ -131,7 +132,7 @@ describe('renderCallHtml: the CEO case, treasury.spend', () => {
 
 describe('renderCallHtml: other calls', () => {
     test('balances.transferKeepAlive and staking.bond', () => {
-        assert.match(renderCallHtml(real(ex.balances.transferKeepAlive(A, 12_345_678n * 10n ** 5n)), {}), /1,234.5678 PDEX/);
+        assert.match(renderCallHtml(real(ex.balances.transferKeepAlive(A, 12_345_678n * 10n ** 8n)), {}), /1,234.5678 PDEX/);
         assert.match(renderCallHtml(real(ex.staking.bond(2_500n * PDEX, 'Staked')), {}), /2,500 PDEX/);
     });
 
