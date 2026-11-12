@@ -561,13 +561,15 @@ describe('lib/multisig-view compact: one collapsed line under the account list',
         assert.equal(btn.getAttribute('aria-expanded'), 'false');
     });
 
-    test('still looking: a spinner, never a number', async (t) => {
+    test('still looking: a visible "(checking...)" label, never a number and never a bare spinner', async (t) => {
         const w = msWorld(t, { discover: () => new Promise(() => {}) });
         await tick(5);
         const summary = w.q('details.ms-compact summary');
         assert.ok(!/\(\d+\)/.test(summary.textContent));
-        assert.ok(summary.querySelector('.bx-spin'));
-        assert.match(summary.textContent, /Multisig wallets, looking/);
+        assert.match(summary.textContent.replace(/\s+/g, ' '), /Multisig wallets \(checking\.\.\.\)/);
+        const label = summary.querySelector('.ms-checking');
+        assert.ok(label && !label.closest('.sr-only'), 'the label is visible text, not screen-reader only');
+        assert.equal(summary.querySelector('.bx-spin'), null, 'no bare spinner glyph in the header');
         w.q('details.ms-compact').open = true;
         assert.match(w.q('details.ms-compact').textContent, /Looking for multisig wallets\.\.\./);
     });
@@ -774,12 +776,122 @@ describe('help text matches the words on screen', () => {
         const doc = readFileSync(new URL('../docs/multisig-wallets.md', import.meta.url), 'utf8');
         assert.ok(!doc.includes('Add an existing multisig'));
         assert.match(doc, /Check again/, 'the doc describes the Switch wallet form of the section');
+        assert.match(doc, /\(checking\.\.\.\)/, 'the doc names the checking label, not a spinner');
+        assert.ok(!/shows a spinner while looking/.test(doc));
     });
 
     test('no em or en dashes in the new modules', () => {
         for (const f of ['../lib/wallet-picker.js', '../lib/wallet-picker-view.js', '../lib/help-popover.js']) {
             const src = readFileSync(new URL(f, import.meta.url), 'utf8');
             assert.ok(!/[–—]/.test(src), f);
+        }
+    });
+});
+
+// ─── what the Checker's browser preview showed (2026-11-11) ─────────────────
+//
+// In a real browser at 640px or narrower, the Current row collapsed: a tiny
+// circle where the badge was, no name, the address cut to "e...", Disconnect
+// on the right. The markup was right; the mobile rule was wrong. Disconnect
+// was flex-basis 100% with -14px side margins, so its outer size was
+// 100% - 28px, which plus the 12px gap still fitted on the first line beside
+// a zero-basis name column, and the name column got nothing. happy-dom does no
+// layout, so the guard is the flex line-break arithmetic on the rule itself.
+
+const cssRule = (css, selector) => {
+    const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = [...css.matchAll(new RegExp('(?:^|[}\\n])\\s*' + esc + '\\s*\\{([^}]*)\\}', 'g'))];
+    return m.length ? m[m.length - 1][1] : '';
+};
+const decl = (body, prop) => { const m = [...body.matchAll(new RegExp('(?:^|;|\\s)' + prop + '\\s*:\\s*([^;]+)', 'g'))]; return m.length ? m[m.length - 1][1].trim() : ''; };
+// A length as { pct, px }: "100%", "-14px", "0", "calc(100% + 28px)".
+const length = (v) => {
+    const out = { pct: 0, px: 0 };
+    const body = String(v).trim().replace(/^calc\((.*)\)$/, '$1').replace(/\s+-\s+/g, ' + -').replace(/\s*\+\s*/g, ' + ');
+    for (const term of body.split(' + ')) {
+        const t = term.trim();
+        if (/%$/.test(t)) out.pct += parseFloat(t);
+        else if (/px$/.test(t)) out.px += parseFloat(t);
+        else if (t === '0') continue;
+        else throw new Error('unparsed length ' + v);
+    }
+    return out;
+};
+const sides = (v) => { const p = String(v).trim().split(/\s+/); return { left: p[3] ?? p[1] ?? p[0], right: p[1] ?? p[0] }; };
+
+describe('the Current row, as the Checker saw it in a real browser', () => {
+    const PJ = [acct(31, 'Polkadex Democracy Wallet'), acct(32, 'Treasury Ops'), acct(33, 'Staking stash')];
+    const TA = [acct(34, 'Cold storage', 'talisman')];
+    for (const [where, n] of [['second', 32], ['first', 31]]) {
+        test(`current account ${where} in its extension: name, shortened address, Current badge, aria-current, Disconnect`, async (t) => {
+            const w = mount(t, { current: addr(n), currentSource: 'polkadot-js', accounts: [...PJ, ...TA] });
+            await w.picker.ready;
+            const cur = w.q('[aria-current="true"]');
+            assert.ok(cur, 'a Current row');
+            assert.equal(cur.getAttribute('aria-current'), 'true');
+            const name = PJ.find(a => a.address === addr(n)).name;
+            assert.equal(cur.querySelector('.wallet-account-label').textContent, name);
+            const shown = cur.querySelector('.wallet-account-addr').textContent;
+            assert.equal(shown, short(addr(n)));
+            assert.ok(shown.length > 12 && !/^e\.\.\./.test(shown), 'the address is shortened, not cut to "e..."');
+            assert.equal(cur.querySelector('.wallet-account-badge').textContent.trim(), 'Current');
+            assert.equal(cur.querySelector('#wallet-picker-disconnect').textContent.trim(), 'Disconnect');
+            const order = w.qa('.wallet-account-group[data-source="polkadot-js"] li').map(li => li.querySelector('[data-address]').getAttribute('data-address'));
+            assert.equal(order.indexOf(addr(n)), n === 31 ? 0 : 1, 'the row stays where the extension listed it');
+        });
+    }
+
+    test('before the wallet answers, the Current row already shows the shortened address and the badge, not an empty bar', async (t) => {
+        let answer;
+        const w = mount(t, { current: addr(32), currentSource: 'polkadot-js', getAccounts: () => new Promise(r => { answer = r; }) });
+        await tick(0);
+        const cur = w.q('[aria-current="true"]');
+        assert.ok(cur, 'the Current row is on screen while loading');
+        assert.equal(cur.querySelector('.wallet-account-label').textContent, short(addr(32)));
+        assert.equal(cur.querySelector('.wallet-account-badge').textContent.trim(), 'Current');
+        assert.ok(cur.querySelector('#wallet-picker-disconnect'));
+        answer([...PJ, ...TA]);
+        await w.picker.ready;
+        assert.equal(w.q('[aria-current="true"] .wallet-account-label').textContent, 'Treasury Ops');
+    });
+
+    test('at 640px or narrower, Disconnect always wraps to its own line, so the name column keeps the row width', () => {
+        const at640 = CSS.slice(CSS.indexOf('/* Switch wallet page: mobile */'));
+        const block = at640.slice(at640.indexOf('@media (max-width: 640px)'), at640.indexOf('@media (max-width: 400px)'));
+        const row = cssRule(block, '.wallet-picker .wallet-account-row');
+        assert.equal(decl(row, 'flex-wrap'), 'wrap');
+        const gap = length(decl(cssRule(CSS, '.wallet-account-row'), 'gap') || '0');
+        const dis = cssRule(block, '.wallet-picker .wallet-account-row .wallet-disconnect-link');
+        const basis = length(decl(dis, 'flex-basis') || (decl(dis, 'flex').split(/\s+/)[2] ?? ''));
+        const m = sides(decl(dis, 'margin') || '0');
+        const outer = { pct: basis.pct, px: basis.px + length(m.left).px + length(m.right).px };
+        // The name column's basis is 0 (flex: 1); Disconnect shares its line
+        // whenever gap + outer fits in 100%. It must not, at any width.
+        assert.ok(outer.pct >= 100 && outer.px + gap.px > 0,
+            `Disconnect's outer size is ${outer.pct}% ${outer.px >= 0 ? '+' : '-'} ${Math.abs(outer.px)}px; with the ${gap.px}px gap it fits beside a zero-width name column, which then collapses`);
+    });
+});
+
+// Contrast on the dark surface: muted text (#6B7280) reads about 3.9:1.
+const hex = (h) => { const v = h.replace('#', ''); return [0, 2, 4].map(i => parseInt(v.slice(i, i + 2), 16)); };
+const rootVar = (name) => { const m = CSS.match(new RegExp('--' + name + '\\s*:\\s*(#[0-9a-fA-F]{6})')); return m && m[1]; };
+const resolveColor = (v) => { const m = /var\(--([\w-]+)/.exec(v); return m ? rootVar(m[1]) : v; };
+const lum = (rgb) => { const c = rgb.map(x => { x /= 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const over = (fg, a, bg) => fg.map((x, i) => Math.round(x * a + bg[i] * (1 - a)));
+const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+
+describe('contrast of the quiet text on the Switch wallet page', () => {
+    test('footnote, status line and row chevrons reach 4.5:1 on the page and on a hovered row', () => {
+        const bg = hex(rootVar('bg-dark')), surface = hex(rootVar('bg-surface'));
+        const glass = over([20, 20, 30], 0.6, bg);
+        const hoveredRow = over([255, 255, 255], 0.05, surface);
+        for (const sel of ['.wallet-picker-footnote', '.wallet-picker-status', '.wallet-account-btn .bx-chevron-right']) {
+            const c = resolveColor(decl(cssRule(CSS, sel), 'color'));
+            assert.match(String(c), /^#[0-9a-fA-F]{6}$/, sel + ' has a colour');
+            for (const [what, under] of [['page', bg], ['glass panel', glass], ['hovered row', hoveredRow]]) {
+                const r = ratio(hex(c), under);
+                assert.ok(r >= 4.5, `${sel} on the ${what}: ${r.toFixed(2)}:1`);
+            }
         }
     });
 });
