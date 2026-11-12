@@ -703,8 +703,8 @@ describe('readAccountLocks: chain reads to a plain snapshot (hand-built api)', (
     });
 });
 
-const fx392 = loadFixture('metadata-392.json');
-describe('readAccountLocks on real spec 392 codecs', { skip: fx392 ? false : 'test/fixtures/metadata-392.json absent' }, () => {
+const fx392 = loadFixture('metadata-testnet-393.json');
+describe('readAccountLocks on real testnet spec 393 codecs', () => {
     test('locks, holds, ledger, votingOf, elections and identity decode through the real types', async () => {
         const registry = registryFromMetadata(fx392.metadata);
         registry.setChainProperties(registry.createType('ChainProperties', { ss58Format: 88 }));

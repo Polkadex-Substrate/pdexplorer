@@ -52,7 +52,7 @@ const PREIMAGE = '0x' + 'c7'.repeat(32);
 const LEN = 1_048_576;
 
 const sources = [{ label: 'substrate (types-support)', hex: substrateMetadata }];
-for (const f of ['metadata-373.json', 'metadata-392.json']) {
+for (const f of ['metadata-mainnet-373.json', 'metadata-testnet-393.json']) {
     const fx = loadFixture(f);
     if (fx) sources.push({ label: `Polkadex spec ${fx.specVersion} (${f})`, hex: fx.metadata });
 }

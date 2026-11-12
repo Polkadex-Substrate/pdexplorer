@@ -72,8 +72,8 @@ describe('liveRuntimeStatus / liveRuntimeError', () => {
 // A REAL ApiPromise, booted through a mock provider that reports the given
 // spec: the check reads what the library actually exposes.
 const sources = [{ label: 'Substrate metadata', hex: substrateMetadata }];
-const fx392 = loadFixture('metadata-392.json');
-if (fx392) sources.push({ label: `Polkadex spec ${fx392.specVersion} (metadata-392.json)`, hex: fx392.metadata });
+const fx392 = loadFixture('metadata-testnet-393.json');
+if (fx392) sources.push({ label: `Polkadex spec ${fx392.specVersion} (metadata-testnet-393.json)`, hex: fx392.metadata });
 
 for (const src of sources) {
     describe(`a real ApiPromise on ${src.label}`, () => {

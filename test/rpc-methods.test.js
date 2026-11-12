@@ -30,7 +30,7 @@ for (const [section, defs] of Object.entries(rpcDefinitions)) {
     }
 }
 
-const fx392 = loadFixture('metadata-392.json');
+const fx392 = loadFixture('metadata-testnet-393.json');
 const metadataHex = fx392 ? fx392.metadata : substrateMetadata;
 const TX_PAYMENT_API = [blake2AsHex('TransactionPaymentApi', 64), 4];
 

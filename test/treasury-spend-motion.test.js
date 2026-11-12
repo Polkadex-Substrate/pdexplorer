@@ -120,13 +120,13 @@ describe('the form fields', () => {
     });
 });
 
-const fx = loadFixture('metadata-392.json');
+const fx = loadFixture('metadata-testnet-393.json');
 test('readHeadNumber reads the best block number from the header', async () => {
     const api = { rpc: { chain: { getHeader: async () => ({ number: { toNumber: () => 4321 } }) } } };
     assert.equal(await readHeadNumber(api), 4321);
 });
 
-describe('the built motion on the real codec (metadata fixture)', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
+describe('the built motion on the real codec (metadata fixture)', () => {
     let api;
     const values = { beneficiary: BEN, planck: '1500000000000000', validFrom: null, threshold: 3 };
     before(async () => { api = await ApiPromise.create({ provider: mockProvider({ metadataHex: fx.metadata, specVersion: fx.specVersion }).provider, noInitWarn: true }); });

@@ -25,10 +25,10 @@ import { ERROR_COPY, ACTION_KEYS, PENDING_TITLE } from '../lib/tx-status.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
 import { COUNCIL_SPEND_CAP_PDEX, SPEND_RULE_TEXT } from '../lib/treasury-spend.js';
 
-const fx = loadFixture('metadata-392.json');
+const fx = loadFixture('metadata-testnet-393.json');
 const libFiles = readdirSync(new URL('../lib/', import.meta.url)).filter(f => f.endsWith('.js')).map(f => `lib/${f}`);
 
-describe('runtime 392/393 treasury call surface (metadata fixture)', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
+describe('runtime 392/393 treasury call surface (metadata fixture)', () => {
     const registry = fx ? registryFromMetadata(fx.metadata) : null;
     const pallet = fx ? registry.metadata.pallets.find(p => p.name.toString() === 'Treasury') : null;
     const calls = () => registry.lookup.getSiType(pallet.calls.unwrap().type).def.asVariant.variants;

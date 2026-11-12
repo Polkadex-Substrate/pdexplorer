@@ -12,7 +12,7 @@ Sources, per row: **lib** means @polkadot/types 17.0.2 `rpcDefinitions`
 `sc-rpc-api` definitions, from knowledge of the stable releases, NOT checked
 against the Polkadex node's own `rpc_methods` (no network from where this was
 written); **meta** means the runtime API is in the Polkadex metadata fixtures
-(`test/fixtures/metadata-373.json`, `metadata-392.json`). One indirect check
+(`test/fixtures/metadata-mainnet-373.json`, `metadata-testnet-393.json`). One indirect check
 on the live node does exist: @polkadot/api deletes `api.rpc.<section>.<method>`
 at start-up when the node's `rpc_methods` does not list
 `<section>_<method>` (`api/base/Decorate.js`, `_filterRpcMethods`), so every

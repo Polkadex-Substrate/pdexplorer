@@ -11,7 +11,7 @@
 // 10.13.1 and 17.0.2 with the mainnet 373 metadata and gave identical output.
 //
 // Sources: Substrate's own metadata shipped in @polkadot/types-support
-// (always), plus test/fixtures/metadata-373.json and metadata-392.json when
+// (always), plus test/fixtures/metadata-mainnet-373.json and metadata-testnet-393.json when
 // scripts/fetch-metadata.mjs has written them.
 
 import { test, describe } from 'node:test';
@@ -27,7 +27,7 @@ const H = '0x' + 'ab'.repeat(32);
 const PDEX = 10n ** 12n;
 
 const sources = [{ label: 'substrate (types-support)', hex: substrateMetadata }];
-for (const f of ['metadata-373.json', 'metadata-392.json']) {
+for (const f of ['metadata-mainnet-373.json', 'metadata-testnet-393.json']) {
     const fx = loadFixture(f);
     if (fx) sources.push({ label: `Polkadex spec ${fx.specVersion} (${f})`, hex: fx.metadata });
 }

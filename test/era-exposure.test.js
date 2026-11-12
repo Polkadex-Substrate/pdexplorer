@@ -103,10 +103,10 @@ function chainData392() {
     };
 }
 
-const fx392 = loadFixture('metadata-392.json');
-const fx373 = loadFixture('metadata-373.json');
+const fx392 = loadFixture('metadata-testnet-393.json');
+const fx373 = loadFixture('metadata-mainnet-373.json');
 
-describe('era exposure on real spec 392 codecs', { skip: fx392 ? false : 'test/fixtures/metadata-392.json absent' }, () => {
+describe('era exposure on real testnet spec 393 codecs', () => {
     const registry = fx392 && registryFromMetadata(fx392.metadata);
 
     test('the 392 metadata has both stores (the trap: legacy still decorates, but is not written)', () => {
@@ -184,7 +184,7 @@ describe('era exposure on real spec 392 codecs', { skip: fx392 ? false : 'test/f
     });
 });
 
-describe('era exposure on real spec 373 codecs (history before the upgrade)', { skip: fx373 ? false : 'test/fixtures/metadata-373.json absent' }, () => {
+describe('era exposure on real mainnet spec 373 codecs (history before the upgrade)', () => {
     const registry = fx373 && registryFromMetadata(fx373.metadata);
 
     test('373 has no paged storage: legacy only, same answers', async () => {
