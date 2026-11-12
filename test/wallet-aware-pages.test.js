@@ -553,9 +553,10 @@ describe('script.js wiring', () => {
         assert.match(body, /finally \{[\s\S]*walletSession\.endRestore\(\)/);
     });
 
-    test('Switch wallet comes back to the page it was opened from, and Keep honours that too', () => {
+    // "Keep this wallet" was removed with the picker redesign (the X and Escape
+    // do the same); the round trip is tested end to end in wallet-picker-redesign.test.js.
+    test('Switch wallet comes back to the page it was opened from', () => {
         assert.match(fn('openWalletPicker'), /pickerTarget\(readRouteFromLocation\(\), window\.location\.search, isWalletRoute, \{ wallet: getStoredWallet\(\), isSame: isSameAddress \}\)/);
-        assert.match(fn('renderWalletConnectPanel'), /stay\.addEventListener\('click', \(\) => navigateTo\(\(readSafeReturnTo\(\) \|\| ''\)\.replace/);
     });
 
     test('the wallet dashboard of another address says whose wallet is connected and offers Show mine', () => {

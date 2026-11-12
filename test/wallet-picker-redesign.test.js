@@ -773,7 +773,7 @@ describe('help text matches the words on screen', () => {
         assert.match(all, /Add a multisig wallet/);
         const doc = readFileSync(new URL('../docs/multisig-wallets.md', import.meta.url), 'utf8');
         assert.ok(!doc.includes('Add an existing multisig'));
-        assert.ok(!doc.includes('Refresh discovery'));
+        assert.match(doc, /Check again/, 'the doc describes the Switch wallet form of the section');
     });
 
     test('no em or en dashes in the new modules', () => {
