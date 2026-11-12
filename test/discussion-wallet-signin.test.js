@@ -17,8 +17,9 @@
 // What a user sees now: connected with no valid token, the composer straight
 // away, "Posting as <account>" and one line saying the wallet will ask to
 // confirm it is them. The first Post (or Save of an edit) asks the wallet for
-// the signature and then posts, in one click. The token is remembered per
-// address until it expires. Not connected: "Connect a wallet to comment", which
+// the signature and then posts, in one click. (Later the same day the CEO
+// asked for a single sign-in bound to the active wallet: see wallet-switch.test.js.)
+// The token is remembered for the active wallet until it expires. Not connected: "Connect a wallet to comment", which
 // opens the global connector.
 //
 // The browser parts run the REAL renderThread / submitDiscussionPost from
@@ -35,7 +36,7 @@ import * as links from '../lib/discussion-links.js';
 import * as lifecycle from '../lib/discussion-lifecycle.js';
 import * as composer from '../lib/discussion-composer.js';
 import * as auth from '../lib/discussion-auth.js';
-import { createWalletSession, orderSources } from '../lib/wallet-session.js';
+import { orderSources } from '../lib/wallet-session.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { closeControlHtml } from '../lib/close-control.js';
 import { itemPathForThread } from '../lib/gov-detail.js';
@@ -57,7 +58,7 @@ const flush = async () => { for (let i = 0; i < 12; i++) await new Promise(r => 
 
 // ─── lib/discussion-auth.js: the store ──────────────────────────────────────
 
-describe('the token store keeps one session per address', () => {
+describe('the token store holds one sign-in, for the active wallet', () => {
     const mk = (o = {}) => {
         const storage = memStorage();
         let wallet = o.wallet || '';
@@ -65,15 +66,17 @@ describe('the token store keeps one session per address', () => {
         const store = auth.createDiscussAuth({ storage, key: KEY, isSame: same, wallet: () => wallet, now: () => clock });
         return { storage, store, setWallet: (w) => { wallet = w; }, tick: (ms) => { clock += ms; } };
     };
+    const rows = (w) => { const v = JSON.parse(w.storage.getItem(KEY) || 'null'); return v ? (Array.isArray(v.sessions) ? v.sessions : [v]) : []; };
 
-    test('two accounts signed in on one browser both keep their tokens', () => {
+    test('a second account replaces the first: one token in storage, the old one handed back for revocation', () => {
         const w = mk({ wallet: A });
         w.store.remember(A, 'tok-a', 7 * DAY);
-        w.store.remember(B, 'tok-b', 7 * DAY);
-        assert.equal(w.store.sessionFor(A).token, 'tok-a', 'signing in with B overwrote A (one slot for the browser)');
-        assert.equal(w.store.sessionFor(B).token, 'tok-b');
         assert.equal(w.store.current().token, 'tok-a');
         w.setWallet(B);
+        const r = w.store.remember(B, 'tok-b', 7 * DAY);
+        assert.deepEqual(r.evicted, ['tok-a'], 'the previous account\'s token was not handed back to be revoked');
+        assert.equal(rows(w).length, 1, 'more than one token in storage');
+        assert.equal(w.store.sessionFor(A), null, 'the old account still has a token');
         assert.equal(w.store.current().token, 'tok-b');
         w.setWallet(C);
         assert.equal(w.store.current(), null, 'an account with no token of its own borrowed another one');
@@ -83,55 +86,87 @@ describe('the token store keeps one session per address', () => {
 
     test('the same key in another SS58 encoding is the same account', () => {
         const w = mk({ wallet: A42 });
-        w.store.remember(A, 'tok-a', 7 * DAY);
+        w.store.remember(A42, 'tok-a', 7 * DAY);
         assert.equal(w.store.current().token, 'tok-a');
-        w.store.remember(A42, 'tok-a2', 7 * DAY);
+        const r = w.store.remember(A, 'tok-a2', 7 * DAY);
         assert.equal(w.store.list().length, 1, 'one account, one entry');
+        assert.deepEqual(r.evicted, ['tok-a']);
         assert.equal(w.store.sessionFor(A).token, 'tok-a2');
     });
 
-    test('an expired token is not offered, and is dropped from storage', () => {
+    test('an expired token is not offered; reconcile drops it from storage without a pointless revoke', () => {
         const w = mk({ wallet: A });
         w.store.remember(A, 'tok-a', 7 * DAY);
         w.tick(7 * DAY - 1);
         assert.equal(w.store.current().token, 'tok-a');
         w.tick(2);
         assert.equal(w.store.current(), null, 'an expired token was offered for posting');
-        assert.equal(w.store.list().length, 0);
-    });
-
-    test('a token stored by the previous version ({ token, address }) is still used', () => {
-        const w = mk({ wallet: A });
-        w.storage.setItem(KEY, JSON.stringify({ token: 'old', address: A }));
-        assert.equal(w.store.current().token, 'old', 'everyone signed in today would be asked to sign again');
-        w.store.remember(B, 'tok-b', DAY);
-        assert.equal(w.store.sessionFor(A).token, 'old', 'the legacy entry was lost on the first write');
-    });
-
-    test('forgetToken drops one session; takeAll empties the store and returns every token to revoke', () => {
-        const w = mk({ wallet: A });
-        w.store.remember(A, 'tok-a', DAY);
-        w.store.remember(B, 'tok-b', DAY);
-        w.store.forgetToken('tok-a');
-        assert.equal(w.store.sessionFor(A), null);
-        assert.equal(w.store.sessionFor(B).token, 'tok-b');
-        w.store.remember(A, 'tok-a3', DAY);
-        assert.deepEqual(w.store.takeAll().sort(), ['tok-a3', 'tok-b']);
+        assert.deepEqual(w.store.reconcile(A), []);
         assert.equal(w.storage.getItem(KEY), null);
     });
 
-    test('the store is bounded; the oldest sessions are handed back for revocation', () => {
-        const w = mk();
-        const evicted = [];
-        for (let n = 1; n <= auth.MAX_SESSIONS + 2; n++) evicted.push(...w.store.remember(addr(n), 'tok-' + n, DAY).evicted);
-        assert.equal(w.store.list().length, auth.MAX_SESSIONS);
-        assert.deepEqual(evicted, ['tok-1', 'tok-2']);
+    test('reconcile keeps the active wallet\'s token and returns every other token for revocation', () => {
+        const w = mk({ wallet: A });
+        w.store.remember(A, 'tok-a', DAY);
+        assert.deepEqual(w.store.reconcile(A), [], 'the active wallet\'s own token was revoked');
+        assert.equal(w.store.current().token, 'tok-a');
+        assert.deepEqual(w.store.reconcile(B), ['tok-a']);
+        assert.equal(w.storage.getItem(KEY), null);
+        w.store.remember(A, 'tok-a2', DAY);
+        assert.deepEqual(w.store.reconcile(''), ['tok-a2'], 'a disconnected browser kept a token');
+        assert.equal(w.storage.getItem(KEY), null);
+    });
+
+    test('data from the previous single slot ({ token, address }) is migrated: kept for its own wallet, revoked for another', () => {
+        const w = mk({ wallet: A });
+        w.storage.setItem(KEY, JSON.stringify({ token: 'old', address: A }));
+        assert.equal(w.store.current().token, 'old', 'everyone signed in today would be asked to sign again');
+        assert.deepEqual(w.store.reconcile(A), []);
+        assert.deepEqual(rows(w).map(s => s.token), ['old']);
+        assert.equal(JSON.parse(w.storage.getItem(KEY)).v, 3, 'the legacy shape was not rewritten');
+        const x = mk({ wallet: B });
+        x.storage.setItem(KEY, JSON.stringify({ token: 'old', address: A }));
+        assert.deepEqual(x.store.reconcile(B), ['old']);
+        assert.equal(x.storage.getItem(KEY), null);
+    });
+
+    test('data from the 8-slot map ({ v: 2, sessions }) is migrated: the active wallet\'s token stays, the rest are revoked', () => {
+        const far = 1_000_000 + DAY;
+        const w = mk({ wallet: B });
+        w.storage.setItem(KEY, JSON.stringify({ v: 2, sessions: [
+            { token: 'tok-a', address: A, expiresAt: far }, { token: 'tok-b', address: B, expiresAt: far }, { token: 'tok-c', address: C, expiresAt: far }] }));
+        assert.equal(w.store.current().token, 'tok-b');
+        assert.deepEqual(w.store.reconcile(B).sort(), ['tok-a', 'tok-c']);
+        assert.deepEqual(rows(w).map(s => s.token), ['tok-b']);
+        assert.equal(w.store.current().token, 'tok-b');
+        const none = mk({ wallet: '' });
+        none.storage.setItem(KEY, JSON.stringify({ v: 2, sessions: [{ token: 'tok-a', address: A, expiresAt: far }, { token: 'tok-b', address: B, expiresAt: far }] }));
+        assert.deepEqual(none.store.reconcile('').sort(), ['tok-a', 'tok-b']);
+        assert.equal(none.storage.getItem(KEY), null);
+    });
+
+    test('forgetToken drops that token; takeAll empties the store and returns the token to revoke', () => {
+        const w = mk({ wallet: A });
+        w.store.remember(A, 'tok-a', DAY);
+        w.store.forgetToken('other');
+        assert.equal(w.store.current().token, 'tok-a', 'forgetting some other token dropped this one');
+        w.store.forgetToken('tok-a');
+        assert.equal(w.store.sessionFor(A), null);
+        w.store.remember(A, 'tok-a3', DAY);
+        assert.deepEqual(w.store.takeAll(), ['tok-a3']);
+        assert.equal(w.storage.getItem(KEY), null);
+        w.storage.setItem(KEY, JSON.stringify({ v: 2, sessions: [{ token: 'x', address: A }, { token: 'y', address: B }] }));
+        assert.deepEqual(w.store.takeAll().sort(), ['x', 'y'], 'a legacy multi-token store kept a token past Disconnect');
+    });
+
+    test('there is no multi-token store left in the module', () => {
+        assert.equal(auth.MAX_SESSIONS, undefined);
     });
 
     test('unreadable or throwing storage never throws into the page', () => {
         const boom = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('quota'); }, removeItem() { throw new Error('denied'); } };
         const s = auth.createDiscussAuth({ storage: boom, key: KEY, isSame: same, wallet: () => A });
-        assert.doesNotThrow(() => { s.current(); s.remember(A, 't', DAY); s.forgetToken('t'); s.takeAll(); });
+        assert.doesNotThrow(() => { s.current(); s.remember(A, 't', DAY); s.forgetToken('t'); s.takeAll(); s.reconcile(A); });
         const junk = memStorage(); junk.setItem(KEY, '{not json');
         assert.equal(auth.createDiscussAuth({ storage: junk, key: KEY, isSame: same, wallet: () => A }).current(), null);
     });
@@ -140,7 +175,7 @@ describe('the token store keeps one session per address', () => {
 // ─── a page with the real thread view ───────────────────────────────────────
 
 const LIFT = ['fetchDiscussionThread', 'renderThread', 'submitDiscussionPost', 'getDiscussSession', 'discussAuthStore',
-    'discussSignInFor', 'discussSend', 'getWalletSigner', 'isSameAddress'];
+    'discussSignInFor', 'discussSend', 'getWalletSigner', 'isSameAddress', 'logoutDiscussToken'];
 
 // One browser tab: localStorage, a connected wallet (or none), one wallet
 // extension holding A and B (and C), and a server that issues tokens and
@@ -285,10 +320,10 @@ describe('connected without a token: compose first, sign at the first Post', () 
         assert.ok(verifyAt < postAt, 'posted before signing in');
         assert.equal(p.postCalls()[0].bearer, 'tok-issued-1');
         assert.ok(p.text().includes('first comment'), 'the new post is not on the board');
-        const saved = p.stored().sessions;
-        assert.equal(saved.length, 1);
-        assert.ok(same(saved[0].address, A));
-        assert.ok(saved[0].expiresAt > Date.now() + 6 * DAY, 'the expiry the server gave was not kept');
+        const saved = p.stored();
+        assert.equal(saved.token, 'tok-issued-1');
+        assert.ok(same(saved.address, A));
+        assert.ok(saved.expiresAt > Date.now() + 6 * DAY, 'the expiry the server gave was not kept');
         assert.match(p.text(), /Signed in as/);
         // a second post: no second signature
         await p.type('second'); await p.post();
@@ -342,16 +377,8 @@ describe('not connected: one prompt to the global connector', () => {
     });
 });
 
-describe('switching wallets', () => {
-    test('to an account with its own token: that token, no signature', async () => {
-        const p = page({ wallet: B, stored: [{ token: 'tok-a', address: A }, { token: 'tok-b', address: B }] });
-        await p.open();
-        await p.type('as B'); await p.post();
-        assert.deepEqual(p.signCalls, []);
-        assert.equal(p.postCalls()[0].bearer, 'tok-b', 'posted with another account\'s token');
-    });
-
-    test('to an account without one: back to compose-first, signed by the new account, A\'s token kept', async () => {
+describe('sign-in with the wallet changing underneath it', () => {
+    test('a leftover token for another account is revoked when this account signs in; the new account is signed in by its own signature', async () => {
         const p = page({ wallet: C, stored: [{ token: 'tok-a', address: A }] });
         await p.open();
         assert.match(p.text(), /Posting as/);
@@ -361,29 +388,32 @@ describe('switching wallets', () => {
         assert.ok(same(p.signCalls[0].address, C), 'the signature was asked of the wrong account');
         assert.notEqual(p.postCalls()[0].bearer, 'tok-a');
         assert.ok(same(p.server.posts[0].author, C));
-        const tokens = p.stored().sessions.map(s => s.token).sort();
-        assert.deepEqual(tokens, ['tok-a', 'tok-issued-1'], 'switching lost the first account\'s token');
+        assert.equal(p.stored().token, 'tok-issued-1');
+        assert.ok(!p.server.tokens.has('tok-a'), 'the other account\'s token was left alive on the server');
+        assert.deepEqual(p.server.calls.filter(c => c.url === '/api/auth/logout').map(c => c.bearer), ['tok-a']);
     });
 
-    test('the wallet changes while the signature is pending: nothing is posted, nothing stored for the new account', async () => {
+    test('the wallet changes while the signature is pending: nothing is posted, nothing stored, the fresh token is revoked', async () => {
         const p = page({ wallet: A, rejectSign: (req, state) => { state.wallet = B; return { signature: '0x01' }; } });
         await p.open();
         await p.type('mine'); await p.post();
         assert.equal(p.postCalls().length, 0, 'posted under an address whose token does not match the active wallet');
         assert.equal(p.fns.getDiscussSession(), null);
+        assert.equal(p.local.getItem(KEY), null, 'a token for a wallet that is no longer active was stored');
         assert.match(p.q('#discuss-post-error').textContent, /wallet changed/i);
         assert.equal(p.q('#discuss-post-input').value, 'mine');
+        assert.deepEqual(p.server.calls.filter(c => c.url === '/api/auth/logout').map(c => c.bearer), ['tok-issued-1'], 'the fresh token stayed alive on the server');
     });
 
-    test('lib/wallet-session: switching account keeps every account\'s token; Disconnect still revokes', () => {
-        const storage = memStorage(); let revokes = 0;
-        const s = createWalletSession({ storage, isSame: same, isValid: a => !!a, revokeDiscuss: () => { revokes++; } });
-        s.select(A, 'polkadot-js');
-        s.select(B, 'polkadot-js');
-        s.select(A, 'polkadot-js');
-        assert.equal(revokes, 0, 'a switch revoked the previous account\'s token, so switching back asks for a signature again');
-        s.disconnect();
-        assert.equal(revokes, 1, 'Disconnect must still sign out (F-120)');
+    test('the wallet changes in another tab right after verify: the token is not stored and is revoked', async () => {
+        const p = page({ wallet: A });
+        await p.open();
+        const base = p.local, realSet = base.setItem.bind(base);
+        base.setItem = (k, v) => { realSet(k, v); if (k === KEY) p.state.wallet = B; };   // the other tab switches just as we write
+        await p.type('x'); await p.post();
+        assert.equal(p.postCalls().length, 0);
+        assert.equal(p.local.getItem(KEY), null, 'a token for an address that is no longer active won the slot');
+        assert.deepEqual(p.server.calls.filter(c => c.url === '/api/auth/logout').map(c => c.bearer), ['tok-issued-1']);
     });
 });
 
@@ -406,7 +436,7 @@ describe('an expired token', () => {
         assert.equal(p.signCalls.length, 1);
         assert.deepEqual(p.postCalls().map(c => c.bearer), ['tok-gone', 'tok-issued-1']);
         assert.ok(p.text().includes('retry me'));
-        assert.ok(!p.stored().sessions.some(s => s.token === 'tok-gone'), 'the dead token was kept');
+        assert.notEqual(p.stored().token, 'tok-gone', 'the dead token was kept');
         assert.equal(p.server.posts.length, 1, 'posted twice');
     });
 });

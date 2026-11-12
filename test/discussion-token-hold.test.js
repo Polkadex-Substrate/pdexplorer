@@ -1,9 +1,9 @@
-// Review follow-ups on the per-address discussion tokens.
+// Review follow-ups on the discussion token (one sign-in, bound to the active wallet).
 //
 //   1. The account labels panel read the token once, when it was drawn, and used
-//      it at Save; vote and report held it across a sign-in or a prompt(). Since
-//      an account switch no longer revokes, that token could belong to the OLD
-//      account by the time it was sent. Every action now re-reads the ACTIVE
+//      it at Save; vote and report held it across a sign-in or a prompt(). A switch
+//      now revokes the old token, but a request already in flight must still
+//      never carry the OLD account's token. Every action now re-reads the ACTIVE
 //      wallet's token immediately before the fetch, and refuses if the wallet
 //      is not the one the panel was opened for.
 //   2. A token issued for a wallet that changed while verify was in flight was
@@ -40,7 +40,7 @@ describe('liveSessionFor: the active wallet\'s token, read now', () => {
         const storage = memStorage();
         const s = { wallet };
         const store = auth.createDiscussAuth({ storage, key: KEY, isSame: same, wallet: () => s.wallet });
-        for (const [a, t] of sessions) store.remember(a, t, DAY);
+        for (const [a, t] of sessions) { const keep = s.wallet; s.wallet = a; store.remember(a, t, DAY); s.wallet = keep; }
         return { s, store, deps: (openedFor) => ({ auth: store, wallet: () => s.wallet, isSame: same, openedFor }) };
     };
     test('returns the token that is stored for the active wallet at this moment', () => {
@@ -50,7 +50,7 @@ describe('liveSessionFor: the active wallet\'s token, read now', () => {
         assert.equal(auth.liveSessionFor(w.deps(A)).token, 'tok-a2', 'a token read earlier was used');
     });
     test('refuses when the active wallet is not the one the panel was opened for', () => {
-        const w = mk(A, [[A, 'tok-a'], [B, 'tok-b']]);
+        const w = mk(A, [[A, 'tok-a']]);
         w.s.wallet = B;
         assert.throws(() => auth.liveSessionFor(w.deps(A)), { message: MSG });
     });
@@ -67,7 +67,7 @@ describe('liveSessionFor: the active wallet\'s token, read now', () => {
 // ─── the labels panel ───────────────────────────────────────────────────────
 
 const LIFT = ['fetchLabelsJson', 'renderAccountLabelEditor', 'ensureLabelSession', 'labelVote', 'labelReport', 'labelVeto',
-    'labelDeleteMine', 'liveLabelSession', 'getDiscussSession', 'discussAuthStore'];
+    'labelDeleteMine', 'liveLabelSession', 'getDiscussSession', 'discussAuthStore', 'reconcileDiscussSession', 'logoutDiscussToken'];
 
 function panel({ wallet = A, stored = [], onPrompt = null } = {}) {
     const win = new Window({ url: 'https://explorer.test/account/' + X, settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
@@ -78,7 +78,7 @@ function panel({ wallet = A, stored = [], onPrompt = null } = {}) {
     const local = memStorage();
     const state = { wallet };
     const now = Date.now();
-    local.setItem(KEY, JSON.stringify({ v: 2, sessions: stored.map(s => ({ expiresAt: now + DAY, ...s })) }));
+    if (stored.length) local.setItem(KEY, JSON.stringify({ v: 3, ...{ expiresAt: now + DAY, ...stored[0] } }));
     const calls = [], alerts = [];
     const labels = [{ signer: B, label: 'Treasury', score: 1, reportCount: 0, viewerVote: 0, createdAt: 1 }];
     const fetchFn = async (url, init = {}) => {
@@ -101,20 +101,21 @@ function panel({ wallet = A, stored = [], onPrompt = null } = {}) {
         const pre = SCRIPT.slice(Math.max(0, at - 6), at) === 'async ' ? 'async ' : '';
         return pre + bodyOf(SCRIPT, n);
     }).join('\n');
-    const fns = new Function(...Object.keys(env), code + '\nreturn { renderAccountLabelEditor, labelVote, labelReport, labelVeto, labelDeleteMine };')(...Object.values(env));
+    const fns = new Function(...Object.keys(env), code + '\nreturn { renderAccountLabelEditor, labelVote, labelReport, labelVeto, labelDeleteMine, reconcileDiscussSession };')(...Object.values(env));
     return {
         doc, slot, state, local, calls, alerts, fns,
         async open() { await fns.renderAccountLabelEditor(X); await flush(); },
-        writes: () => calls.filter(c => c.method !== 'GET'),
+        writes: () => calls.filter(c => c.method !== 'GET' && !c.url.startsWith('/api/auth/')),
+        logouts: () => calls.filter(c => c.url === '/api/auth/logout').map(c => c.bearer),
         status: () => doc.getElementById('account-label-status').textContent
     };
 }
-const STORED = [{ token: 'tok-a', address: A }, { token: 'tok-b', address: B }];
+const STORED = [{ token: 'tok-a', address: A }];
 
 describe('Save in the labels panel', () => {
     test('sends the active wallet\'s current token', async () => {
         const p = await (async () => { const q = panel({ stored: STORED }); await q.open(); return q; })();
-        p.local.setItem(KEY, JSON.stringify({ v: 2, sessions: [{ token: 'tok-a2', address: A, expiresAt: Date.now() + DAY }] }));
+        p.local.setItem(KEY, JSON.stringify({ v: 3, token: 'tok-a2', address: A, expiresAt: Date.now() + DAY }));
         p.doc.getElementById('account-label-input').value = 'Cold storage';
         p.doc.getElementById('account-label-save').click(); await flush();
         assert.equal(p.writes().length, 1);
@@ -126,6 +127,21 @@ describe('Save in the labels panel', () => {
         p.doc.getElementById('account-label-input').value = 'Cold storage';
         p.doc.getElementById('account-label-save').click(); await flush();
         assert.deepEqual(p.writes(), [], 'the old account\'s token was sent after the switch');
+        assert.equal(p.status().startsWith(MSG), true, p.status());
+    });
+});
+
+describe('the labels panel after a wallet switch', () => {
+    test('the old token is revoked and gone, so a Save refuses and sends nothing, with that token or any other', async () => {
+        const p = panel({ stored: STORED }); await p.open();
+        p.state.wallet = B;
+        p.fns.reconcileDiscussSession();   // what onWalletChanged does
+        await flush();
+        assert.deepEqual(p.logouts(), ['tok-a'], 'the old token was not revoked');
+        assert.equal(p.local.getItem(KEY), null, 'the old token is still in storage');
+        p.doc.getElementById('account-label-input').value = 'Cold storage';
+        p.doc.getElementById('account-label-save').click(); await flush();
+        assert.deepEqual(p.writes(), [], 'a write went out after the switch');
         assert.equal(p.status().startsWith(MSG), true, p.status());
     });
 });
@@ -188,50 +204,53 @@ describe('sign-in: the wallet changes after verify', () => {
     });
 });
 
-describe('remember() with two tabs writing the same key', () => {
-    // A storage that behaves like two tabs: right after the first setItem lands,
-    // the other tab overwrites the key with its own list (last write wins).
-    function racy(otherList) {
-        const base = memStorage(); let armed = true;
-        return {
-            getItem: (k) => base.getItem(k), removeItem: (k) => base.removeItem(k),
-            setItem(k, v) {
-                base.setItem(k, v);
-                if (armed) { armed = false; base.setItem(k, JSON.stringify({ v: 2, sessions: otherList })); }
-            }
-        };
-    }
-    const far = Date.now() + DAY;
-    test('a write lost to the other tab is redone, merged with what the other tab stored', () => {
-        const other = [{ token: 'tok-b', address: B, expiresAt: far }];
-        const storage = racy(other);
-        const store = auth.createDiscussAuth({ storage, key: KEY, isSame: same, wallet: () => A });
-        store.remember(A, 'tok-a', DAY);
-        const tokens = store.list().map(s => s.token).sort();
-        assert.deepEqual(tokens, ['tok-a', 'tok-b'], 'one tab\'s sign-in vanished');
+describe('remember() with two tabs: a token for an address that is no longer active must not win', () => {
+    const mkw = (wallet, storage = memStorage()) => {
+        const state = { wallet };
+        return { state, storage, store: auth.createDiscussAuth({ storage, key: KEY, isSame: same, wallet: () => state.wallet }) };
+    };
+    test('the wallet is already another one: nothing is written, the new token is handed back for revocation', () => {
+        const w = mkw(B);
+        const r = w.store.remember(A, 'tok-a', DAY);
+        assert.equal(w.storage.getItem(KEY), null);
+        assert.equal(r.stored, false);
+        assert.deepEqual(r.evicted, ['tok-a']);
     });
-    test('a token pushed out by the merge is handed back for revocation', () => {
-        const other = [];
-        for (let n = 10; n < 10 + auth.MAX_SESSIONS; n++) other.push({ token: 'tok-' + n, address: addr(n), expiresAt: far });
-        const storage = racy(other);
-        const store = auth.createDiscussAuth({ storage, key: KEY, isSame: same, wallet: () => A });
-        const r = store.remember(A, 'tok-a', DAY);
-        assert.equal(store.list().length, auth.MAX_SESSIONS);
-        assert.ok(store.list().some(s => s.token === 'tok-a'));
-        assert.equal(r.evicted.length, 1);
-        const left = new Set(store.list().map(s => s.token));
-        assert.ok(!left.has(r.evicted[0]), 'an evicted token is still stored');
+    test('the wallet changes just as we write: our token is taken back out and revoked', () => {
+        const base = memStorage(); let w;
+        const storage = { getItem: k => base.getItem(k), removeItem: k => base.removeItem(k), setItem(k, v) { base.setItem(k, v); w.state.wallet = B; } };
+        w = mkw(A, storage);
+        const r = w.store.remember(A, 'tok-a', DAY);
+        assert.equal(base.getItem(KEY), null, 'a token for a wallet that is no longer active stayed in storage');
+        assert.equal(r.stored, false);
+        assert.ok(r.evicted.includes('tok-a'));
     });
-    test('replacing an address\'s own older token revokes the old one', () => {
-        const store = auth.createDiscussAuth({ storage: memStorage(), key: KEY, isSame: same, wallet: () => A });
-        store.remember(A, 'tok-a', DAY);
-        assert.deepEqual(store.remember(A, 'tok-a2', DAY).evicted, ['tok-a']);
+    test('the other tab overwrote the slot with the new wallet\'s own token: ours loses, theirs is left alone', () => {
+        const base = memStorage(); let w;
+        const storage = { getItem: k => base.getItem(k), removeItem: k => base.removeItem(k),
+            setItem(k, v) { base.setItem(k, JSON.stringify({ v: 3, token: 'tok-b', address: B, expiresAt: Date.now() + DAY })); w.state.wallet = B; } };
+        w = mkw(A, storage);
+        const r = w.store.remember(A, 'tok-a', DAY);
+        assert.equal(JSON.parse(base.getItem(KEY)).token, 'tok-b', 'the other tab\'s sign-in was wiped');
+        assert.equal(r.stored, false);
+        assert.ok(r.evicted.includes('tok-a'));
+    });
+    test('the normal case still stores, and replacing the same account\'s older token revokes the old one', () => {
+        const w = mkw(A);
+        assert.equal(w.store.remember(A, 'tok-a', DAY).stored, true);
+        const r = w.store.remember(A, 'tok-a2', DAY);
+        assert.deepEqual(r.evicted, ['tok-a']);
+        assert.equal(w.store.current().token, 'tok-a2');
     });
 });
 
-describe('the up-to-8-tokens policy is written down', () => {
-    test('lib/discussion-auth.js says why up to 8 tokens sit in localStorage', () => {
+describe('the single sign-in policy is written down', () => {
+    test('lib/discussion-auth.js says one token is kept, and no longer talks about 8 tokens or MAX_SESSIONS', () => {
         const src = readRepo('lib/discussion-auth.js', import.meta.url);
-        assert.match(src, /up to 8 tokens[^\n]*localStorage/i);
+        assert.match(src, /one (sign-in|token)[^\n]*localStorage|localStorage[^\n]*one (sign-in|token)/i);
+        assert.doesNotMatch(src, /8 tokens|MAX_SESSIONS|up to 8/i);
+    });
+    test('script.js has no eviction code left', () => {
+        assert.doesNotMatch(readRepo('script.js', import.meta.url), /onEvicted: tokens => tokens\.forEach/);
     });
 });

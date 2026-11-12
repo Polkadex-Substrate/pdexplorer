@@ -25,6 +25,7 @@ import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } fr
 import { buildAccountListHtml, groupBySource, sourceLabel } from '../lib/wallet-picker.js';
 import { wireWalletMenu } from '../lib/wallet-menu.js';
 import { decodeAddress } from '@polkadot/util-crypto';
+import { bodyOf } from './helpers/source.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const HTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -87,21 +88,125 @@ describe('root cause: the symptoms Vivek reported', () => {
         assert.equal(tab.root.querySelector('#wallet-picker-title').textContent.trim(), 'Switch wallet', 'the picker says it is a switch');
     });
 
-    // Changed 12 Nov (test/discussion-wallet-signin.test.js): tokens are now kept
-    // per address, so a switch no longer revokes. What must still hold is that
-    // the new account never posts with the old account's token.
-    test('switching to a different account never posts with the old account\'s token, and switching back reuses it', async () => {
+    // Changed 12 Nov, second decision: ONE discussion sign-in, bound to the
+    // active wallet. A switch revokes the old token (best effort) and empties
+    // the slot; the new account signs at its first Post.
+    test('switching account revokes the old token on the server with that token, empties storage, and the new wallet has no sign-in', async () => {
         const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
         profile.local.setItem('pdex_wallet_address', A);
         profile.local.setItem(DISCUSS, session('tok-alice', A));
         const tab = openTab(profile, { path: '/wallet' });
         tab.fn('selectWallet')(B, 'polkadot-js');
         await tab.settle();
+        assert.deepEqual(profile.logoutCalls, ['Bearer tok-alice'], 'the old account\'s token was not revoked on the server');
+        assert.equal(profile.local.getItem(DISCUSS), null, 'the old token is still in storage');
         assert.equal(tab.fn('getDiscussSession')(), null, 'Bob would post with Alice\'s token');
-        assert.deepEqual(profile.logoutCalls, [], 'a switch signed Alice out, so switching back asks her to sign again');
+    });
+
+    test('switching back needs a new signature: the first account\'s token is gone', async () => {
+        const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
+        profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem(DISCUSS, session('tok-alice', A));
+        const tab = openTab(profile, { path: '/wallet' });
+        tab.fn('selectWallet')(B, 'polkadot-js');
         tab.fn('selectWallet')(A, 'polkadot-js');
         await tab.settle();
-        assert.equal(tab.fn('getDiscussSession')().token, 'tok-alice');
+        assert.equal(tab.fn('getDiscussSession')(), null, 'switching back reused a token that should have been signed out');
+        assert.deepEqual(profile.logoutCalls, ['Bearer tok-alice'], 'revoked once, not twice');
+    });
+
+    test('a switch to another extension (same or different account) revokes too', async () => {
+        const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice')), talisman(acct(1, 'Alice'), acct(2, 'Bob'))] });
+        profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
+        profile.local.setItem(DISCUSS, session('tok-alice', A));
+        const tab = openTab(profile, { path: '/wallet' });
+        tab.fn('selectWallet')(B, 'talisman');
+        await tab.settle();
+        assert.deepEqual(profile.logoutCalls, ['Bearer tok-alice']);
+        assert.equal(profile.local.getItem(DISCUSS), null);
+    });
+
+    test('a failing revoke (network error, or fetch itself throwing) never blocks the switch', async () => {
+        for (const bad of [() => Promise.reject(new Error('offline')), () => { throw new Error('no network'); }]) {
+            const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
+            profile.local.setItem('pdex_wallet_address', A);
+            profile.local.setItem(DISCUSS, session('tok-alice', A));
+            const tab = openTab(profile, { path: '/wallet' });
+            tab.ctx.fetch = bad;
+            assert.doesNotThrow(() => tab.fn('selectWallet')(B, 'polkadot-js'));
+            await tab.settle();
+            assert.equal(stored(tab), B, 'the switch did not happen');
+            assert.equal(profile.local.getItem(DISCUSS), null, 'the old token stayed in storage after a failed revoke');
+            assert.equal(tab.fn('getDiscussSession')(), null);
+        }
+    });
+});
+
+describe('a token for a wallet that is not the active one is revoked and removed on load', () => {
+    const v2 = (...rows) => JSON.stringify({ v: 2, sessions: rows.map(([token, address]) => ({ token, address, expiresAt: Date.now() + 86400000 })) });
+    test('the 8-slot map: the active wallet\'s token stays, every other one is revoked and removed', async () => {
+        const profile = makeProfile();
+        profile.local.setItem('pdex_wallet_address', B);
+        profile.local.setItem(DISCUSS, v2(['tok-a', A], ['tok-b', B], ['tok-c', addr(3)]));
+        const tab = openTab(profile, { path: '/discussions' });
+        tab.fn('reconcileDiscussSession')();
+        await tab.settle();
+        assert.deepEqual(profile.logoutCalls.slice().sort(), ['Bearer tok-a', 'Bearer tok-c']);
+        assert.deepEqual(JSON.parse(profile.local.getItem(DISCUSS)).token, 'tok-b');
+        assert.equal(tab.fn('getDiscussSession')().token, 'tok-b');
+    });
+    test('the old single slot for another wallet is revoked and removed', async () => {
+        const profile = makeProfile();
+        profile.local.setItem('pdex_wallet_address', B);
+        profile.local.setItem(DISCUSS, session('tok-alice', A));
+        const tab = openTab(profile, { path: '/discussions' });
+        tab.fn('reconcileDiscussSession')();
+        await tab.settle();
+        assert.deepEqual(profile.logoutCalls, ['Bearer tok-alice']);
+        assert.equal(profile.local.getItem(DISCUSS), null);
+    });
+    test('with no wallet connected, any stored token is revoked and removed', async () => {
+        const profile = makeProfile();
+        profile.local.setItem(DISCUSS, v2(['tok-a', A], ['tok-b', B]));
+        const tab = openTab(profile, { path: '/discussions' });
+        tab.fn('reconcileDiscussSession')();
+        await tab.settle();
+        assert.deepEqual(profile.logoutCalls.slice().sort(), ['Bearer tok-a', 'Bearer tok-b']);
+        assert.equal(profile.local.getItem(DISCUSS), null);
+    });
+    test('the page runs it at startup, and again whenever the wallet changes', () => {
+        assert.match(bodyOf(SCRIPT, 'onWalletChanged'), /reconcileDiscussSession\(\)/, 'a change from another tab leaves the old token alive');
+        const at = SCRIPT.indexOf('const walletSession = createWalletSession(');
+        assert.ok(at !== -1);
+        assert.match(SCRIPT.slice(at, at + 500), /\);\s*\n\s*reconcileDiscussSession\(\);/, 'nothing cleans up what an older version left behind');
+    });
+});
+
+describe('another tab changes the wallet', () => {
+    test('this tab revokes and removes the token the other tab left behind', async () => {
+        const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
+        profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem(DISCUSS, session('tok-alice', A));
+        const tab = openTab(profile, { path: '/discussions/t1' });
+        profile.local.setItem('pdex_wallet_address', B);   // the other tab (an older build, say) switched without revoking
+        const change = tab.fn('walletSession').syncExternal();
+        await tab.settle();
+        assert.ok(change, 'the change was not noticed');
+        assert.deepEqual(profile.logoutCalls, ['Bearer tok-alice']);
+        assert.equal(profile.local.getItem(DISCUSS), null);
+        assert.ok(tab.log.routes.includes('discussions/t1'), 'the board was not re-rendered for the new wallet');
+    });
+    test('if the other tab already signed in the NEW wallet, that token is kept', async () => {
+        const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
+        profile.local.setItem('pdex_wallet_address', A);
+        const tab = openTab(profile, { path: '/discussions/t1' });
+        profile.local.setItem('pdex_wallet_address', B);
+        profile.local.setItem(DISCUSS, session('tok-bob', B));
+        tab.fn('walletSession').syncExternal();
+        await tab.settle();
+        assert.deepEqual(profile.logoutCalls, []);
+        assert.equal(tab.fn('getDiscussSession')().token, 'tok-bob');
     });
 });
 
@@ -300,14 +405,27 @@ describe('lib/wallet-session', () => {
         assert.equal(s.select(A, 'polkadot-js').changed, true, 'a different extension for the same account is a change (the signer differs)');
     });
 
-    test('select never revokes (sessions are per address); only disconnect does', () => {
+    test('select revokes when the account or the extension changes, not when nothing changes; disconnect revokes', () => {
         const { s, revokes } = mk();
         s.select(A, 'polkadot-js');
+        const first = revokes();
+        s.select(A, 'polkadot-js');
+        assert.equal(revokes(), first, 'choosing the connected account again revoked the sign-in');
         s.select(addr(1, 42), 'talisman');
+        assert.equal(revokes(), first + 1, 'a switch of extension did not revoke');
         s.select(B, '');
-        assert.equal(revokes(), 0);
+        assert.equal(revokes(), first + 2, 'a switch of account did not revoke');
         s.disconnect();
-        assert.equal(revokes(), 1);
+        assert.equal(revokes(), first + 3);
+    });
+
+    test('a revoker that throws blocks neither the switch nor the disconnect', () => {
+        const { s, storage } = mk({ revokeDiscuss: () => { throw new Error('boom'); } });
+        assert.doesNotThrow(() => s.select(A, 'polkadot-js'));
+        assert.doesNotThrow(() => s.select(B, 'polkadot-js'));
+        assert.equal(storage.get('pdex_wallet_address'), B);
+        assert.doesNotThrow(() => s.disconnect());
+        assert.equal(storage.get('pdex_wallet_address'), undefined);
     });
 
     test('an invalid address is rejected and nothing is written', () => {

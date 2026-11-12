@@ -116,7 +116,7 @@ function queryIn(parent, sel) {
 
 const LIFTED = [
     'toPolkadexAddress', 'isSameAddress', 'getStoredWallet', 'isWalletRoute', 'onWalletChanged', 'refreshConnectWalletButton',
-    'getInjectedAccounts', 'connectWallet', 'openWalletPicker', 'selectWallet', 'revokeDiscussSession', 'disconnectWallet',
+    'getInjectedAccounts', 'connectWallet', 'openWalletPicker', 'selectWallet', 'revokeDiscussSession', 'reconcileDiscussSession', 'logoutDiscussToken', 'disconnectWallet',
     'initWalletPage', 'tryAutoSelectFirstWallet', 'renderWalletConnectPanel', 'invalidateWalletFetch', 'fetchWalletDashboard',
     'getDiscussSession', 'discussAuthStore', 'getWalletSigner', 'resolveWalletSigner', 'navigateTo', 'readSafeReturnTo',
     // present only before the fix:
