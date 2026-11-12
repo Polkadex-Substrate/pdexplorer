@@ -8503,7 +8503,7 @@ async function renderWalletConnectPanel(root) {
                     <div style="color: var(--text-muted); font-size: 0.85rem;">Looking for wallets…</div>
                 </div>
                 <div id="wallet-multisig-accounts"></div>
-                ${buildCreateWalletLineHtml('id="wallet-create-line" style="margin-top:12px;"')}
+                ${buildCreateWalletLineHtml('id="wallet-create-line" style="margin-top:12px; display:none;"')}
 
                 <div id="wallet-mobile-section" style="display:none; margin-top: 24px;">
                     <h3 style="font-size: 0.95rem; margin-bottom: 6px;">On mobile? Use a wallet's in-app browser</h3>
