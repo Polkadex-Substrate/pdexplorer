@@ -186,8 +186,8 @@ describe('helpers', () => {
 
 describe('nominations quota from the runtime API (staking.maxNominations does not exist on 392)', () => {
     test('the 392 metadata has StakingApi.nominations_quota(balance: u128) -> u32 and no MaxNominations constant', (t) => {
-        const fx = loadFixture('metadata-392.json');
-        if (!fx || !fx.metadataAtVersion || !fx.metadataAtVersion['15']) { t.skip('metadata-392.json fixture not present'); return; }
+        const fx = loadFixture('metadata-testnet-393.json');
+        assert.ok(fx.metadataAtVersion && fx.metadataAtVersion['15'], 'metadata-testnet-393.json has no metadata v15');
         const registry = new TypeRegistry();
         const md = new Metadata(registry, fx.metadataAtVersion['15']);
         registry.setMetadata(md);

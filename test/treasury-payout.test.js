@@ -282,8 +282,8 @@ describe('reading the spends from the chain', () => {
     });
 });
 
-const fx = loadFixture('metadata-392.json');
-describe('the calls on the real codec (spec 393 metadata fixture)', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
+const fx = loadFixture('metadata-testnet-393.json');
+describe('the calls on the real codec (spec 393 metadata fixture)', () => {
     let api;
     before(async () => { api = await ApiPromise.create({ provider: mockProvider({ metadataHex: fx.metadata, specVersion: fx.specVersion }).provider, noInitWarn: true }); });
     after(async () => { await api?.disconnect(); });

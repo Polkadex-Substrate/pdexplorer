@@ -110,8 +110,8 @@ describe('help and glossary', () => {
     });
 });
 
-const fx = loadFixture('metadata-392.json');
-describe('a real ApiPromise on the spec metadata', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
+const fx = loadFixture('metadata-testnet-393.json');
+describe('a real ApiPromise on the spec metadata', () => {
     test('democracy.voteLockingPeriod is one lock period of 30 days', async () => {
         const m = mockProvider({ metadataHex: fx.metadata, specVersion: fx.specVersion });
         const api = await ApiPromise.create({ provider: m.provider, noInitWarn: true });

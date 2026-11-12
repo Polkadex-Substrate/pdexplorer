@@ -419,8 +419,8 @@ describe('wiring: server, docs, help, both pages, the picker', () => {
     });
 });
 
-const fx392 = loadFixture('metadata-392.json');
-describe('spec 392 metadata: the storage the status reads', { skip: fx392 ? false : 'test/fixtures/metadata-392.json absent' }, () => {
+const fx392 = loadFixture('metadata-testnet-393.json');
+describe('testnet spec 393 metadata: the storage the status reads', () => {
     let registry;
     before(() => { registry = registryFromMetadata(fx392.metadata); registry.setChainProperties(registry.createType('ChainProperties', { ss58Format: 88 })); });
     const storage = (p, item) => registry.metadata.pallets.find(x => x.name.toString() === p)?.storage.unwrap().items.find(i => i.name.toString() === item);

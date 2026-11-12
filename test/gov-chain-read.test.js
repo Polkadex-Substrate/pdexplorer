@@ -10,7 +10,7 @@
 //
 // Sources: Substrate's metadata shipped in @polkadot/types-support (always; it
 // has the newer preimage pallet with RequestStatusFor, as 392 does), plus
-// test/fixtures/metadata-373.json and metadata-392.json when
+// test/fixtures/metadata-mainnet-373.json and metadata-testnet-393.json when
 // scripts/fetch-metadata.mjs has written them.
 
 import { test, describe } from 'node:test';
@@ -35,7 +35,7 @@ const PDEX = 10n ** 12n;
 const toPdex = (b) => Number(BigInt(b.toString())) / 1e12;
 
 const sources = [{ label: 'substrate (types-support)', hex: substrateMetadata }];
-for (const f of ['metadata-373.json', 'metadata-392.json']) {
+for (const f of ['metadata-mainnet-373.json', 'metadata-testnet-393.json']) {
     const fx = loadFixture(f);
     if (fx) sources.push({ label: `Polkadex spec ${fx.specVersion} (${f})`, hex: fx.metadata, spec: fx.specVersion });
 }

@@ -17,7 +17,7 @@ import { readRepo, stripComments } from './helpers/source.js';
 import { MOTION_TEMPLATES, REMOVED_CALLS, isRemovedCall, missingFromMetadata } from '../lib/motion-templates.js';
 import { renderCall } from '../lib/gov-detail-view.js';
 
-const fx = loadFixture('metadata-392.json');
+const fx = loadFixture('metadata-testnet-393.json');
 const snake = (s) => s.replace(/([A-Z]|\d+)/g, '_$1').toLowerCase();
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -31,7 +31,7 @@ function callIndex(metadataHex) {
     return out;
 }
 
-describe('motion templates exist in the spec 393 metadata', { skip: fx ? false : 'test/fixtures/metadata-392.json not present' }, () => {
+describe('motion templates exist in the spec 393 metadata', () => {
     const index = fx ? callIndex(fx.metadata) : null;
 
     test('the fixture is spec 393', () => assert.equal(fx.specVersion, 393));
