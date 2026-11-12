@@ -297,14 +297,14 @@ describe('discussion sign-in', () => {
             }
         });
         ext.signer.signRaw = async () => { if (switchDuringSign) tab.fn('selectWallet')(W2, 'polkadot-js'); return { signature: '0x01' }; };
-        addFns(tab, ['discussSignIn']);
+        addFns(tab, ['discussSignIn', 'discussSignInFor']);
         return { tab, alerts, posts, token: () => profile.local.getItem('pdex_discuss_session') };
     }
 
     test('the wallet stays: the token is stored for it', async () => {
         const w = signInTab({ switchDuringSign: false });
         assert.equal(await w.tab.fn('discussSignIn')(), true);
-        assert.equal(JSON.parse(w.token()).address, W1);
+        assert.deepEqual(JSON.parse(w.token()).sessions.map(x => x.address), [W1]);
     });
 
     test('the wallet changes while the signature is asked for: no token is kept, the user is told', async () => {

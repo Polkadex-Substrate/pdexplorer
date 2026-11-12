@@ -8,7 +8,7 @@ import {
     postPermalink, readLinkedPostId, renderCopyLinkButton, copyText, wirePermalinks, focusLinkedPost, LINKED_CLASS
 } from '../lib/discussion-links.js';
 import { renderPostHtml } from '../lib/discussion-edit.js';
-import { readRepo, stripComments } from './helpers/source.js';
+import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 
 // ---- minimal DOM fakes ------------------------------------------------------
 function el(tag, attrs = {}) {
@@ -183,8 +183,10 @@ describe('script.js wiring', () => {
         assert.ok(renderAt > 0 && focusAt > renderAt, 'focus must come after the posts are in the DOM');
         assert.match(fn, /if \(focusLink\) focusLinkedPost\(root, readLinkedPostId\(window\.location\.search, window\.location\.hash\)/);
         assert.match(script, /if \(threadId\) fetchDiscussionThread\(threadId, true\)/);
-        // Re-renders after sign-in must not jump back to the linked post.
-        assert.match(script, /if \(ok\) fetchDiscussionThread\(thread\.id, false, root, \{ \.\.\.opts, quiet: false \}\);/);
+        // Re-renders after posting or signing in must not jump back to the linked post.
+        for (const name of ['renderThread', 'submitDiscussionPost']) {
+            assert.ok(!/fetchDiscussionThread\([^,]+, true/.test(bodyOf(script, name)), name + ' re-focuses the linked post');
+        }
     });
     test('routeTo strips the query, so /discussions/<id>?post=N still routes to the thread', () => {
         assert.match(script, /const qIdx = target\.indexOf\('\?'\);\s*\n\s*if \(qIdx >= 0\) target = target\.substring\(0, qIdx\);/);

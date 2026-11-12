@@ -14,6 +14,8 @@
 //      opened while a selection persisted.
 //   3. A dashboard fetch in flight repainted the old account over the picker.
 //   4. Switching accounts left the old account's discussion session in storage.
+//      (Superseded 12 Nov: sessions are now kept per address and only used for
+//      their own account; see test/discussion-wallet-signin.test.js.)
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -85,16 +87,21 @@ describe('root cause: the symptoms Vivek reported', () => {
         assert.equal(tab.root.querySelector('#wallet-picker-title').textContent.trim(), 'Switch wallet', 'the picker says it is a switch');
     });
 
-    test('switching to a different account does not leave the old account\'s discussion session valid', async () => {
+    // Changed 12 Nov (test/discussion-wallet-signin.test.js): tokens are now kept
+    // per address, so a switch no longer revokes. What must still hold is that
+    // the new account never posts with the old account's token.
+    test('switching to a different account never posts with the old account\'s token, and switching back reuses it', async () => {
         const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
         profile.local.setItem('pdex_wallet_address', A);
         profile.local.setItem(DISCUSS, session('tok-alice', A));
         const tab = openTab(profile, { path: '/wallet' });
         tab.fn('selectWallet')(B, 'polkadot-js');
         await tab.settle();
-        assert.equal(profile.local.getItem(DISCUSS), null, 'the old account\'s token is still in storage');
-        assert.deepEqual(profile.logoutCalls, ['Bearer tok-alice'], 'the server was not told to drop the old session');
-        assert.equal(tab.fn('getDiscussSession')(), null);
+        assert.equal(tab.fn('getDiscussSession')(), null, 'Bob would post with Alice\'s token');
+        assert.deepEqual(profile.logoutCalls, [], 'a switch signed Alice out, so switching back asks her to sign again');
+        tab.fn('selectWallet')(A, 'polkadot-js');
+        await tab.settle();
+        assert.equal(tab.fn('getDiscussSession')().token, 'tok-alice');
     });
 });
 
@@ -293,17 +300,14 @@ describe('lib/wallet-session', () => {
         assert.equal(s.select(A, 'polkadot-js').changed, true, 'a different extension for the same account is a change (the signer differs)');
     });
 
-    test('select revokes only when the ADDRESS changes, and before it writes', () => {
-        const { s, revokes, storage } = mk();
+    test('select never revokes (sessions are per address); only disconnect does', () => {
+        const { s, revokes } = mk();
         s.select(A, 'polkadot-js');
-        assert.equal(revokes(), 0, 'first connection has nothing to revoke');
         s.select(addr(1, 42), 'talisman');
-        assert.equal(revokes(), 0, 'same account via another extension keeps the session');
-        let seenWhileRevoking = null;
-        const w = mk({ revokeDiscuss: () => { seenWhileRevoking = w.storage.get('pdex_wallet_address'); } });
-        w.s.select(A, ''); w.s.select(B, '');
-        assert.equal(seenWhileRevoking, A, 'revoke ran after the old address was already gone');
-        assert.equal(w.storage.get('pdex_wallet_address'), B);
+        s.select(B, '');
+        assert.equal(revokes(), 0);
+        s.disconnect();
+        assert.equal(revokes(), 1);
     });
 
     test('an invalid address is rejected and nothing is written', () => {

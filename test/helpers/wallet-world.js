@@ -21,6 +21,7 @@ import { bodyOf } from './source.js';
 import { closeControlHtml } from '../../lib/close-control.js';
 import { isValidPolkadexAddress } from '../../lib/wallet-safety.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../../lib/wallet-session.js';
+import { createDiscussAuth, signInForDiscussion } from '../../lib/discussion-auth.js';
 import { sourceLabel } from '../../lib/wallet-picker.js';
 import { mountWalletPicker } from '../../lib/wallet-picker-view.js';
 import { safeReturnPath } from '../../lib/safe-return.js';
@@ -117,7 +118,7 @@ const LIFTED = [
     'toPolkadexAddress', 'isSameAddress', 'getStoredWallet', 'isWalletRoute', 'onWalletChanged', 'refreshConnectWalletButton',
     'getInjectedAccounts', 'connectWallet', 'openWalletPicker', 'selectWallet', 'revokeDiscussSession', 'disconnectWallet',
     'initWalletPage', 'tryAutoSelectFirstWallet', 'renderWalletConnectPanel', 'invalidateWalletFetch', 'fetchWalletDashboard',
-    'getDiscussSession', 'getWalletSigner', 'resolveWalletSigner', 'navigateTo', 'readSafeReturnTo',
+    'getDiscussSession', 'discussAuthStore', 'getWalletSigner', 'resolveWalletSigner', 'navigateTo', 'readSafeReturnTo',
     // present only before the fix:
     'setStoredWallet', 'getLastUsedAddress', 'setLastUsedAddress', 'consumeSkipAutoPickFlag'
 ];
@@ -151,6 +152,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
     const ctx = {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
+        createDiscussAuth, signInForDiscussion,
         mountWalletPicker, sourceLabel,
         closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
         multisigUI: { mountAccounts() {} },

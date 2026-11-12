@@ -167,7 +167,7 @@ describe('F-120 — the cookies Reset button revokes server-side', () => {
         const rv = src.slice(src.indexOf('function revokeDiscussSession('),
                              src.indexOf('function revokeDiscussSession(') + 1200);
         assert.match(rv, /catch \(e\)/);
-        assert.match(rv, /if \(!token\) return;/);
+        assert.match(rv, /for \(const token of tokens\)/, 'every stored account token is revoked, and none means no call');
         assert.match(rv, /keepalive: true/, 'the logout must survive the reload that follows it');
         assert.match(rv, /\.catch\(\(\) => \{\}\)/);
     });

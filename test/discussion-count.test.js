@@ -187,9 +187,14 @@ describe('wiring', () => {
         assert.match(server_, /res\.json\(\{ threads: withEarlierCounts\(db\.getThreads\(kind\), kind \? db\.getThreads\(null\) : null\) \}\)/);
         assert.match(server_, /earlier: earlierBoards\(withLinks\.links, db\.getThread, db\.getPosts\)/);
     });
-    test('the sign-in and expired-session re-fetches ignore a stored quiet flag so failures show', () => {
-        assert.match(bodyOf(script, 'renderThread'), /fetchDiscussionThread\(thread\.id, false, root, \{ \.\.\.opts, quiet: false \}\)/);
-        assert.match(bodyOf(script, 'submitDiscussionPost'), /fetchDiscussionThread\(threadId, false, root, \{ \.\.\.opts, quiet: false \}\)/);
+    // Since 12 Nov there is no sign-in button and no "session expired" re-fetch:
+    // the first Post signs in (lib/discussion-auth.js). Any re-fetch that comes
+    // back must still drop a stored quiet flag so failures show.
+    test('a re-fetch from the board never inherits a stored quiet flag', () => {
+        for (const name of ['renderThread', 'submitDiscussionPost']) {
+            const calls = bodyOf(script, name).match(/fetchDiscussionThread\([^;]*\)/g) || [];
+            for (const c of calls) assert.match(c, /quiet: false/, name + ': ' + c);
+        }
     });
     test('the board and the earlier block take the same render options (markdown included)', () => {
         const render = bodyOf(script, 'renderThread');
