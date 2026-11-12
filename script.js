@@ -53,7 +53,8 @@ import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers 
 import { createDemocracyView } from './lib/democracy-view.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from './lib/wallet-session.js';
 import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
-import { buildAccountListHtml, buildCurrentBannerHtml, buildMissingAccountHelpHtml, buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
+import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
+import { mountWalletPicker } from './lib/wallet-picker-view.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
@@ -8137,27 +8138,6 @@ function hasInjectedWalletNow() {
         && Object.keys(window.injectedWeb3).length > 0);
 }
 
-// Identify the in-app wallet browser hosting us (if any) so the panel can
-// greet the user by name. `window.injectedWeb3` key names are stable identifiers
-// each wallet self-declares.
-function detectInjectedWalletEnv() {
-    const w = (typeof window !== 'undefined' && window.injectedWeb3) || {};
-    const keys = Object.keys(w);
-    const has = (k) => keys.includes(k);
-    if (has('subwallet-js')) return { id: 'subwallet', name: 'SubWallet' };
-    if (has('talisman')) return { id: 'talisman', name: 'Talisman' };
-    if (has('polkagate')) return { id: 'polkagate', name: 'PolkaGate' };
-    if (has('polkadot-js')) {
-        // polkadot-js is the namespace Nova Wallet and the desktop extension
-        // both use. UA sniffing tells them apart for greeting purposes.
-        const ua = (navigator.userAgent || '').toLowerCase();
-        if (ua.includes('novawallet') || ua.includes('nova-wallet') || ua.includes('nova/')) return { id: 'nova', name: 'Nova Wallet' };
-        return { id: 'polkadot-js', name: 'Polkadot.js' };
-    }
-    if (keys.length) return { id: keys[0], name: keys[0] };
-    return null;
-}
-
 // Known mobile wallets that ship a dapp browser. Each entry tells the connect
 // panel how to deep-link / app-store-link / explain itself. Deep links use the
 // wallets' published universal-link domains where verified; users who don't
@@ -8532,145 +8512,18 @@ function renderMobileWalletCards(currentUrl) {
     return `<div class="mobile-wallet-grid">${cards}</div>`;
 }
 
-async function renderWalletConnectPanel(root) {
-    const env = detectInjectedWalletEnv();
-    const onMobile = isMobileDevice();
+// The Switch wallet / Connect wallet page. The markup and its behaviour live in
+// lib/wallet-picker-view.js; this passes in what only the app has.
+function renderWalletConnectPanel(root) {
     const currentUrl = (typeof location !== 'undefined') ? location.href : 'https://explorer.polkadex.ee/wallet';
-
-    const envBanner = env
-        ? `<div class="wallet-env-banner"><i class='bx bx-check-circle'></i> Detected <strong>${stakingEscapeHtml(env.name)}</strong> — pick an account below to connect.</div>`
-        : '';
-
-    const current = getStoredWallet();
-    root.innerHTML = `
-        <div class="list-container glass">
-            <div class="list-header"><h2>${current ? 'Switch Wallet' : 'Connect Wallet'} ${helpIcon('connecting-wallet', 'How to connect your wallet')}</h2>${closeControlHtml({ parent: 'home' })}</div>
-            <div style="padding: 24px;">
-                ${buildCurrentBannerHtml({ current, currentSource: walletSession.source(), esc: stakingEscapeHtml, shortAddr: stakingShortAddress })}
-                ${envBanner}
-                <p style="color: var(--text-secondary); font-size: 0.88rem; margin-bottom: 16px; line-height: 1.6;">
-                    Connect a Substrate wallet to open your dashboard. You'll be able to view your balance and
-                    sign actions — send PDEX, bond more, nominate validators, pay out rewards or unbond.
-                    Every transaction needs your explicit approval in the wallet; the explorer can never move
-                    funds without it.
-                </p>
-                <div id="wallet-accounts" style="display:flex; flex-direction:column; gap:10px;">
-                    <div style="color: var(--text-muted); font-size: 0.85rem;">Looking for wallets…</div>
-                </div>
-                <div id="wallet-multisig-accounts"></div>
-                ${buildCreateWalletLineHtml('id="wallet-create-line" style="margin-top:12px; display:none;"')}
-
-                <div id="wallet-mobile-section" style="display:none; margin-top: 24px;">
-                    <h3 style="font-size: 0.95rem; margin-bottom: 6px;">On mobile? Use a wallet's in-app browser</h3>
-                    <p style="color: var(--text-secondary); font-size: 0.82rem; margin-bottom: 12px; line-height: 1.5;">
-                        Browser extensions don't run on phones. Open the explorer inside a mobile wallet's built-in
-                        dapp browser — your accounts inject automatically, just like with a desktop extension.
-                    </p>
-                    ${renderMobileWalletCards(currentUrl)}
-                    <div class="mobile-wallet-copyrow">
-                        <input id="wallet-copy-url" type="text" readonly value="${stakingEscapeHtml(currentUrl)}">
-                        <button id="wallet-copy-btn" type="button"><i class='bx bx-copy'></i> Copy URL</button>
-                    </div>
-                </div>
-
-                <div style="margin-top: 22px; border-top: 1px solid var(--border-color); padding-top: 18px;">
-                    <p style="color: var(--text-secondary); font-size: 0.82rem; margin-bottom: 10px;">…or look up any address without connecting (view-only):</p>
-                    <div class="staking-search-bar">
-                        <input type="text" id="wallet-manual-input" placeholder="Polkadex address" autocomplete="off" spellcheck="false">
-                        <button id="wallet-manual-btn"><i class='bx bx-search'></i> View</button>
-                    </div>
-                    <div id="wallet-manual-error" class="staking-error" style="display:none;"></div>
-                </div>
-            </div>
-        </div>`;
-
-    multisigUI.mountAccounts(document.getElementById('wallet-multisig-accounts'));
-    const manualBtn = document.getElementById('wallet-manual-btn');
-    const manualInput = document.getElementById('wallet-manual-input');
-    const manualErr = document.getElementById('wallet-manual-error');
-    const submitManual = () => {
-        const addr = (manualInput.value || '').trim();
-        if (!isValidPolkadexAddress(addr)) {
-            manualErr.textContent = 'That does not look like a valid Polkadex address.';
-            manualErr.style.display = 'block';
-            return;
-        }
-        selectWallet(addr);
-    };
-    if (manualBtn) manualBtn.addEventListener('click', submitManual);
-    if (manualInput) manualInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitManual(); });
-
-    // Copy-URL helper for mobile users; falls back to selecting the input
-    // when navigator.clipboard isn't available (older WebViews).
-    const copyBtn = document.getElementById('wallet-copy-btn');
-    const copyInput = document.getElementById('wallet-copy-url');
-    if (copyBtn && copyInput) copyBtn.addEventListener('click', async () => {
-        try {
-            await navigator.clipboard.writeText(copyInput.value);
-            copyBtn.innerHTML = "<i class='bx bx-check'></i> Copied!";
-            setTimeout(() => { copyBtn.innerHTML = "<i class='bx bx-copy'></i> Copy URL"; }, 1500);
-        } catch (e) {
-            copyInput.select();
-            try { document.execCommand('copy'); } catch (e2) { /* nothing more to try */ }
-        }
+    return mountWalletPicker(root, {
+        current: getStoredWallet(), currentSource: walletSession.source(), onMobile: isMobileDevice(), hash: window.location.hash || '',
+        getAccounts: () => getInjectedAccounts(), select: selectWallet, disconnect: disconnectWallet,
+        isSame: isSameAddress, isValid: isValidPolkadexAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress,
+        helpHtml: helpIcon('connecting-wallet', 'How wallets work on Polkadex Explorer'), closeHtml: closeControlHtml({ parent: 'home' }),
+        mobileCardsHtml: renderMobileWalletCards(currentUrl), currentUrl, clipboard: navigator.clipboard,
+        mountMultisig: (el, opts) => multisigUI.mountAccounts(el, { ...opts, compact: true })
     });
-
-    // Show the mobile-wallet section by default on mobile; on desktop, only
-    // surface it if no wallet was detected (it's still useful info for users
-    // who keep their stash on a phone-only wallet like Nova).
-    const mobileSection = document.getElementById('wallet-mobile-section');
-    const accountsEl = document.getElementById('wallet-accounts');
-
-    const stay = document.getElementById('wallet-picker-stay');
-    if (stay) stay.addEventListener('click', () => navigateTo((readSafeReturnTo() || '').replace(/^\/+/, '') || ('wallet/' + current)));
-    const dis = document.getElementById('wallet-picker-disconnect');
-    if (dis) dis.addEventListener('click', disconnectWallet);
-
-    // (Re)ask every extension for its accounts. The Refresh button calls this
-    // again, so an account the user has just allowed in their wallet appears
-    // without a page reload.
-    const loadAccounts = async () => {
-        accountsEl.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">Looking for wallets…</div>';
-        const accounts = await getInjectedAccounts();
-        let list = '';
-        if (accounts === null) {
-            list = onMobile
-                ? `<div class="wallet-empty-msg">
-                No wallet is exposing accounts to this browser tab. If you're on a phone, open this URL inside a
-                mobile wallet's in-app browser using one of the options below. On desktop, install
-                <a href="https://polkadot.js.org/extension/" target="_blank" rel="noopener">Polkadot.js</a>,
-                Talisman or SubWallet.
-                ${buildCreateWalletLineHtml()}
-               </div>`
-                : `<div class="wallet-empty-msg">
-                No Substrate wallet extension detected. Install
-                <a href="https://polkadot.js.org/extension/" target="_blank" rel="noopener">Polkadot.js</a>,
-                Talisman or SubWallet — or, if your stash lives on your phone, use a mobile wallet's in-app
-                browser (see below).
-                ${buildCreateWalletLineHtml()}
-               </div>`;
-        } else if (accounts.length === 0) {
-            list = `<div class="wallet-empty-msg">
-            ${env ? stakingEscapeHtml(env.name) + ' is connected, but no accounts were shared.' : 'No accounts were shared.'}
-            Authorise this site in your wallet and try again.
-            ${buildCreateWalletLineHtml()}
-           </div>`;
-        } else {
-            list = buildAccountListHtml({ accounts, current, currentSource: walletSession.source(), isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress });
-        }
-        accountsEl.innerHTML = list + buildMissingAccountHelpHtml();
-        // The empty states above carry their own "Create a wallet" line; show
-        // the standing one under the options only when accounts were listed.
-        const createLine = document.getElementById('wallet-create-line');
-        if (createLine) createLine.style.display = (accounts && accounts.length) ? '' : 'none';
-        accountsEl.querySelectorAll('.wallet-account-btn').forEach(btn => {
-            btn.addEventListener('click', () => selectWallet(btn.getAttribute('data-address'), btn.getAttribute('data-source') || ''));
-        });
-        const refresh = document.getElementById('wallet-picker-refresh');
-        if (refresh) refresh.addEventListener('click', loadAccounts);
-        if (mobileSection) mobileSection.style.display = (accounts === null || onMobile) ? 'block' : 'none';
-    };
-    await loadAccounts();
 }
 
 // Animated, stepped loading state shown while the wallet dashboard is fetched.
@@ -13630,7 +13483,7 @@ async function renderMultisigPending(address) {
                         <td style="padding:8px 4px;text-align:right;font-size:0.78rem;color:var(--text-secondary);">${p.when ? `block ${stakingFormatNumber(p.when.height)}` : '—'}</td>
                     </tr>`).join('')}</tbody>
                 </table></div>
-                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;">To approve, execute or cancel, use Switch wallet → Add an existing multisig and enter its full signer list and threshold.</div>`
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;">To approve, execute or cancel, <a href="/wallet?switch=1#multisig" class="item-link">Add a multisig wallet</a> with its full signer list and threshold.</div>`
             }`;
     } catch (e) {
         if (e && e.status === 501) {
