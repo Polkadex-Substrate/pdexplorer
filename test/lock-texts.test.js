@@ -227,6 +227,38 @@ describe('after a cancel the democracy row names only the prior lock', () => {
     });
 });
 
+// Running votes only: Cancel vote, then the next Unlock.
+const RUNNING_STAKED = snap({ free: s(12n * PDEX), frozen: s(400n * PDEX), locks: [lock('democrac', 400n * PDEX)], ...stakeHold(500n * PDEX),
+    democracy: { delegating: false, lockingPeriod: PERIOD, prior: { until: 0, amount: '0' },
+        votes: [{ index: 9, aye: true, conviction: 'Locked1x', balance: s(400n * PDEX) }], referenda: { 9: { ongoing: true, end: 1_050_000 } } } });
+const TWO_RUNNING = snap({ free: s(400n * PDEX), frozen: s(300n * PDEX), locks: [lock('democrac', 300n * PDEX)],
+    democracy: { delegating: false, lockingPeriod: PERIOD, prior: { until: 0, amount: '0' },
+        votes: [{ index: 9, aye: true, conviction: 'None', balance: s(300n * PDEX) }, { index: 10, aye: false, conviction: 'None', balance: s(300n * PDEX) }],
+        referenda: { 9: { ongoing: true, end: 1_050_000 }, 10: { ongoing: true, end: 1_060_000 } } } });
+
+describe('the card after Cancel vote says what the next Unlock frees', () => {
+    const card = (sn) => {
+        const spec = lockActionSpec('democracy-cancel', describeAccountLocks(sn), ME, { connected: ME, isSame: same, ref: 9 });
+        return successCopy(spec.key, spec.params, {}).body;
+    };
+    test('voted with staked PDEX: nothing more spendable, the PDEX stays staked; never "released"', () => {
+        const b = card(RUNNING_STAKED);
+        assert.match(b, /The next Unlock makes nothing more spendable; 400 PDEX stays staked until you unstake\./);
+        assert.doesNotMatch(b, /released/);
+    });
+    test('nothing staked: the gain once the vote is gone, the prior lock kept', () => {
+        assert.match(card(RUNNING_AND_PRIOR), /The next Unlock makes about 290 PDEX spendable\./);
+    });
+    test('another running vote still holds the lock: nothing more spendable, nothing called staked', () => {
+        const b = card(TWO_RUNNING);
+        assert.match(b, /The next Unlock makes nothing more spendable\./);
+        assert.doesNotMatch(b, /staked/);
+    });
+    test('params without the gain (a model cached before the deploy) make no claim', () => {
+        assert.equal(successCopy('democracy.removeVote', { ref: 9 }, {}).body, 'Your vote on referendum #9 is removed and no longer counts.');
+    });
+});
+
 describe('unbonding chunks: ready to withdraw and still unbonding, apart', () => {
     const row = (chunks) => describeAccountLocks(snap({ ...stakeHold(30n * PDEX),
         staking: { ...staked(30n * PDEX), active: s(10n * PDEX), unlocking: s(20n * PDEX), chunks, currentEra: 101, activeEra: 101, activeEraStart: Date.UTC(2026, 10, 5) } }))
