@@ -4403,7 +4403,7 @@ app.get('/api/account/:address/history', (req, res) => {
 });
 
 // Locked / transferable breakdown and why each lock exists (lib/balance-locks-api.js).
-registerBalanceLocksRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, serverError });
+registerBalanceLocksRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, isFresh: isFreshRequest, serverError });
 // A nominator's validators this era: active, waiting, offline, slashed (lib/nomination-status-api.js).
 registerStakingStatusRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, serverError,
     incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address) });
