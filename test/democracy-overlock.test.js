@@ -377,9 +377,9 @@ describe('Cancel vote re-reads the referendum before it signs', () => {
     };
     const spec = () => lockActionSpec('democracy-cancel', describeAccountLocks(RUNNING), ME, { connected: ME, isSame: same, ref: 9 });
     const ENDED = /^This referendum has just ended; reload to see the safe options\.$/;
-    test('still running: removeVote(9)', async () => {
+    test('still running: removeVote(9), after an unlock for the prior on record', async () => {
         const a = api({ isSome: true, unwrap: () => ({ isOngoing: true, isFinished: false }) });
-        assert.deepEqual(await spec().buildTx(a), ['removeVote', 9]);
+        assert.deepEqual(await spec().buildTx(a), { batch: [['unlock', ME], ['removeVote', 9]] });
         assert.deepEqual(a.asked, [9]);
     });
     test('ended (approved) since the panel was drawn: refuses, so the remove cannot merge a conviction lock', async () => {
