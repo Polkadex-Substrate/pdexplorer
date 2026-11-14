@@ -277,7 +277,8 @@ function fakeTxApi({ noMigrate = false, noBatch = false, locksAfter = [] } = {})
         elections: { removeVoter: c('elections.removeVoter') },
         utility: noBatch ? {} : { batchAll: c('utility.batchAll') }
     };
-    const query = { balances: { locks: async () => locksAfter } };
+    // Cancel vote re-reads the referendum before it signs (still running here).
+    const query = { balances: { locks: async () => locksAfter }, democracy: { referendumInfoOf: async () => ({ isSome: true, unwrap: () => ({ isOngoing: true }) }) } };
     return { tx, query };
 }
 const same = (a, b) => String(a) === String(b);

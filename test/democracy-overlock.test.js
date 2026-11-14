@@ -25,6 +25,8 @@ import { projectDemocracyLocks, accumulate } from '../lib/democracy-lock-project
 import { lockActions, lockActionSpec, democracyActions } from '../lib/lock-actions.js';
 import { describeAccountLocks } from '../lib/balance-locks.js';
 import { renderBalanceLocks } from '../lib/balance-locks-view.js';
+import { successCopy } from '../lib/tx-status.js';
+import { HELP_TOPICS } from '../lib/help-topics.js';
 
 const PDEX = 10n ** 12n;
 const s = (v) => v.toString();
@@ -248,10 +250,22 @@ function fakeApi() {
     } };
 }
 const PERIODS = { None: 0, Locked1x: 1, Locked2x: 2, Locked3x: 4, Locked4x: 8, Locked5x: 16, Locked6x: 32 };
-function palletRun(dem, now, calls) {
-    const st = { votes: dem.votes.map(v => ({ ...v, balance: BigInt(v.balance) })), prior: { until: Number(dem.prior.until), amount: BigInt(dem.prior.amount) }, lock: null };
+// st0: carry on from an earlier run (a later step); delegating: Voting::Delegating.
+function palletRun(dem, now, calls, st0 = null) {
+    const st = st0 ? { ...st0, votes: [...st0.votes], prior: { ...st0.prior } } : {
+        delegating: dem.delegating ? { balance: BigInt(dem.balance), conviction: dem.conviction } : null,
+        votes: (dem.votes || []).map(v => ({ ...v, balance: BigInt(v.balance) })), prior: { until: Number(dem.prior.until), amount: BigInt(dem.prior.amount) }, lock: null };
     for (const [op, arg] of calls) {
+        if (op === 'undelegate') {
+            // try_undelegate: prior.accumulate(now + VoteLockingPeriod x lock_periods, balance); Direct, no votes.
+            assert.ok(st.delegating, 'undelegate while not delegating');
+            const at = now + PERIOD * PERIODS[st.delegating.conviction];
+            st.prior = { until: Math.max(st.prior.until, at), amount: st.delegating.balance > st.prior.amount ? st.delegating.balance : st.prior.amount };
+            st.delegating = null;
+            continue;
+        }
         if (op === 'removeVote') {
+            assert.ok(!st.delegating, 'removeVote while delegating');
             const i = st.votes.findIndex(v => v.index === arg);
             assert.ok(i >= 0, `removeVote(${arg}) on a vote not recorded`);
             const v = st.votes[i], info = dem.referenda[arg];
@@ -262,7 +276,8 @@ function palletRun(dem, now, calls) {
             st.votes.splice(i, 1);
         } else if (op === 'unlock') {
             if (now >= st.prior.until) st.prior = { until: 0, amount: 0n };
-            st.lock = st.votes.reduce((a, v) => (v.balance > a ? v.balance : a), st.prior.amount);
+            const held = st.delegating ? (st.delegating.balance > st.prior.amount ? st.delegating.balance : st.prior.amount) : st.prior.amount;
+            st.lock = st.votes.reduce((a, v) => (v.balance > a ? v.balance : a), held);
         }
     }
     return st;
@@ -319,5 +334,280 @@ describe('property: the offered batch never holds more PDEX for longer than the 
             assert.equal(p.until > now ? p.until : null, d.lockedUntil, `case ${k}: the projected date`);
         }
         assert.ok(offered > 150, `enough cases offered a batch (${offered})`);
+    });
+});
+
+// Review round 2 (findings 1 to 5).
+const coversLock = (a, b) => a.until >= b.until && a.amount >= b.amount;
+const delegatingDem = (conviction, balance, prior) => ({ delegating: true, target: OTHER, conviction, balance: s(balance), lockingPeriod: PERIOD, prior });
+const delegatingSnap = (dem, over = {}) => withDem(dem, BigInt(dem.balance) > BigInt(dem.prior.amount) ? BigInt(dem.balance) : BigInt(dem.prior.amount), over);
+
+describe('undelegate: "wait for the earlier lock" only when waiting really holds less', () => {
+    test('500 PDEX at 1x over a 10 PDEX far prior: no advice to wait (waiting would hold 500 until the prior plus the conviction period)', () => {
+        const FAR_PRIOR = BLOCK + 3 * PERIOD;
+        const sn = delegatingSnap(delegatingDem('Locked1x', 500n * PDEX, { until: FAR_PRIOR, amount: s(10n * PDEX) }));
+        const u = lockActions(sn).democracy.undelegate;
+        assert.equal(u.betterAfter, null);
+        assert.equal(u.betterAfterEta, null);
+        assert.deepEqual([u.lockAmount, u.lockUntil], [s(500n * PDEX), FAR_PRIOR]);
+        assert.doesNotMatch(text(html(sn)), /Undelegating after block/);
+    });
+    test('the same with no conviction: no advice to wait either', () => {
+        const sn = delegatingSnap(delegatingDem('None', 500n * PDEX, { until: BLOCK + 900 * 7200, amount: s(10n * PDEX) }));
+        assert.equal(lockActions(sn).democracy.undelegate.betterAfter, null);
+        assert.doesNotMatch(text(html(sn)), /Undelegating after block/);
+    });
+    test('a larger prior ending before the delegation\'s date: the advice stays', () => {
+        const sn = delegatingSnap(delegatingDem('Locked1x', 10n * PDEX, { until: BLOCK + 100, amount: s(500n * PDEX) }));
+        assert.equal(lockActions(sn).democracy.undelegate.betterAfter, BLOCK + 100);
+    });
+    test('ties: an equal amount, or an equal date, gives no advice', () => {
+        const eqAmount = delegatingSnap(delegatingDem('Locked1x', 500n * PDEX, { until: BLOCK + 100, amount: s(500n * PDEX) }));
+        assert.equal(lockActions(eqAmount).democracy.undelegate.betterAfter, null);
+        const eqDate = delegatingSnap(delegatingDem('Locked1x', 10n * PDEX, { until: BLOCK + PERIOD, amount: s(500n * PDEX) }));
+        assert.equal(lockActions(eqDate).democracy.undelegate.betterAfter, null);
+    });
+});
+
+describe('Cancel vote re-reads the referendum before it signs', () => {
+    const RUNNING = withDem(direct([vote(9, true, 'Locked6x', 10n * PDEX)], { 9: { ongoing: true, end: BLOCK + 50 } }, PRIOR_SOON), 500n * PDEX);
+    const api = (info) => {
+        const asked = [];
+        return { asked, tx: fakeApi().tx, query: { democracy: { referendumInfoOf: async (i) => { asked.push(i); return info; } } } };
+    };
+    const spec = () => lockActionSpec('democracy-cancel', describeAccountLocks(RUNNING), ME, { connected: ME, isSame: same, ref: 9 });
+    const ENDED = /^This referendum has just ended; reload to see the safe options\.$/;
+    test('still running: removeVote(9)', async () => {
+        const a = api({ isSome: true, unwrap: () => ({ isOngoing: true, isFinished: false }) });
+        assert.deepEqual(await spec().buildTx(a), ['removeVote', 9]);
+        assert.deepEqual(a.asked, [9]);
+    });
+    test('ended (approved) since the panel was drawn: refuses, so the remove cannot merge a conviction lock', async () => {
+        const a = api({ isSome: true, unwrap: () => ({ isOngoing: false, isFinished: true, asFinished: { approved: true, end: BLOCK } }) });
+        await assert.rejects(async () => spec().buildTx(a), (e) => ENDED.test(e.message));
+    });
+    test('no referendum info any more: refuses too', async () => {
+        await assert.rejects(async () => spec().buildTx(api({ isSome: false })), (e) => ENDED.test(e.message));
+    });
+    test('the referendum cannot be read: refuses', async () => {
+        await assert.rejects(async () => spec().buildTx({ tx: fakeApi().tx, query: {} }), (e) => ENDED.test(e.message));
+    });
+});
+
+describe('undelegate copy matches accumulate: the larger amount until the later date', () => {
+    const LARGER = /larger of the delegated PDEX and any earlier vote lock/;
+    const LATER = /until the later of the conviction period from now and that earlier lock's end/;
+    const OLD = /(delegated PDEX (then )?stays locked for the conviction period|wait the conviction period)/;
+    test('the success card', () => {
+        const b = successCopy('democracy.undelegate', {}, {}).body;
+        assert.match(b, LARGER); assert.match(b, LATER); assert.doesNotMatch(b, OLD);
+    });
+    test('the lock row', () => {
+        const sn = delegatingSnap(delegatingDem('Locked1x', 10n * PDEX, { until: 0, amount: '0' }));
+        const r = describeAccountLocks(sn).items.find(i => i.id === 'democrac').unlock;
+        assert.match(r, LARGER); assert.match(r, LATER); assert.doesNotMatch(r, OLD);
+    });
+    test('the help article', () => {
+        const b = HELP_TOPICS.find(t => t.slug === 'locked-balance').body;
+        assert.match(b, LARGER); assert.match(b, LATER); assert.doesNotMatch(b, OLD);
+    });
+});
+
+describe('a lock id that is an Object.prototype name', () => {
+    test('"toString" as the blocking lock reads as its id, never as a function', () => {
+        const lost = direct([vote(4, false, 'None', 100n * PDEX)], { 4: { finished: true, approved: true, end: 900_000 } });
+        const sn = snap({ free: s(200n * PDEX), frozen: s(100n * PDEX), locks: [lock('toString', 100n * PDEX), lock('democrac', 100n * PDEX)], democracy: lost });
+        assert.deepEqual(lockActions(sn).democracy.heldBy, { id: 'toString', amount: s(100n * PDEX) });
+        const t = text(html(sn));
+        assert.match(t, /Nothing becomes spendable now; the toString lock keeps 100 PDEX locked\./);
+        assert.doesNotMatch(t, /function|native code/);
+        const m = describeAccountLocks({ ...sn, holds: [{ id: 'toString', amount: s(PDEX) }] });
+        assert.equal(m.items.find(i => i.kind === 'lock' && i.id === 'toString').source, 'Unknown lock');
+        assert.equal(m.items.find(i => i.kind === 'hold' && i.id === 'toString').source, 'Unknown hold');
+    });
+});
+
+// Tie-prone pools: equal amounts and equal dates come up often. 'held':
+// winning conviction votes behind a running prior, so votes are kept back.
+function randomDirect(r, ties) {
+    if (ties === 'held') {
+        const pick = (xs) => xs[Math.floor(r() * xs.length)];
+        const now = BLOCK, n = 2 + Math.floor(r() * 3), votes = [], referenda = {};
+        for (let i = 1; i <= n; i++) {
+            votes.push(vote(i, true, pick(['Locked1x', 'Locked2x']), pick([10n, 100n, 300n, 500n, 700n]) * PDEX));
+            referenda[i] = { finished: true, approved: true, end: now - PERIOD + pick([100, 200, 300, 400]) };
+        }
+        const prior = { until: now + pick([100, 200, 300]), amount: s(pick([300n, 500n]) * PDEX) };
+        return { now, votes, referenda, prior, dem: direct(votes, referenda, prior) };
+    }
+    const pick = (xs) => xs[Math.floor(r() * xs.length)];
+    const now = BLOCK;
+    const n = 1 + Math.floor(r() * 4);
+    const votes = [], referenda = {};
+    const amount = () => (ties ? pick([10n, 300n, 500n]) : BigInt(1 + Math.floor(r() * 1000))) * PDEX;
+    for (let i = 1; i <= n; i++) {
+        const state = pick(['finished', 'finished', 'finished', 'ongoing', 'cancelled']);
+        votes.push(vote(i, r() < 0.6, ties ? pick(['None', 'Locked1x', 'Locked2x']) : pick(Object.keys(PERIODS)), amount()));
+        const end = ties ? pick([now - PERIOD + 100, now - 2 * PERIOD + 100, now - PERIOD + 300]) : now - Math.floor(r() * 3 * PERIOD);
+        referenda[i] = state === 'finished' ? { finished: true, approved: r() < 0.7, end }
+            : state === 'ongoing' ? { ongoing: true, end: now + 1000 } : { cancelled: true };
+    }
+    const prior = r() < 0.2 ? { until: 0, amount: '0' }
+        : { until: ties ? pick([now - 10, now, now + 100, now + 300, now + PERIOD + 100]) : Math.max(1, now + Math.floor((r() - 0.3) * 40 * PERIOD)), amount: s(amount()) };
+    return { now, votes, referenda, prior, dem: direct(votes, referenda, prior) };
+}
+const ownLock = (c, now) => {
+    const info = c.referenda[c.v.index];
+    if (!(info && info.finished && c.v.aye === info.approved)) return null;
+    const at = info.end + PERIOD * PERIODS[c.v.conviction];
+    return at > now ? { until: at, amount: BigInt(c.v.balance) } : null;
+};
+const lockNowOf = (c) => c.votes.reduce((a, v) => (BigInt(v.balance) > a ? BigInt(v.balance) : a), BigInt(c.prior.amount));
+const fmt = (x) => JSON.stringify(x, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+
+describe('two held votes that do not nest, both behind a running prior', () => {
+    // Prior 500 PDEX to BLOCK + 100; #1 300 PDEX to BLOCK + 200; #2 100 PDEX to BLOCK + 400.
+    const TWO = direct([vote(1, true, 'Locked1x', 300n * PDEX), vote(2, true, 'Locked1x', 100n * PDEX)],
+        { 1: { finished: true, approved: true, end: BLOCK + 200 - PERIOD }, 2: { finished: true, approved: true, end: BLOCK + 400 - PERIOD } }, PRIOR_SOON);
+    test('the second waits for the first one\'s lock, not the prior: removing both when the prior ends would hold 300 PDEX to BLOCK + 400', () => {
+        const d = lockActions(withDem(TWO, 500n * PDEX)).democracy;
+        assert.deepEqual(d.held.map(h => [h.index, h.wait, h.waitUntil]), [[1, 'prior', BLOCK + 100], [2, 'prior', BLOCK + 200]]);
+        const t = text(html(withDem(TWO, 500n * PDEX)));
+        assert.match(t, new RegExp(`Wait until block ${num(BLOCK + 200)} \\(about ${dayOf(BLOCK + 200)}\\), then press Unlock; after that, remove the vote on referendum #2\\.`));
+    });
+    test('following both in order through the pallet model: each step stays covered by a lock it joins', () => {
+        let st = palletRun(TWO, BLOCK + 100, [['unlock', ME], ['removeVote', 1]]);
+        assert.deepEqual([st.prior.until, st.prior.amount], [BLOCK + 200, 300n * PDEX]);
+        st = palletRun(TWO, BLOCK + 200, [['unlock', ME], ['removeVote', 2]], st);
+        assert.deepEqual([st.prior.until, st.prior.amount], [BLOCK + 400, 100n * PDEX]);
+    });
+});
+
+describe('property, round 2: later inclusion, ties, and following the held guidance', () => {
+    test('a batch included some blocks after it was drawn still never holds more PDEX for longer', async () => {
+        const r = rng(20261115);
+        let offered = 0;
+        for (let k = 0; k < 800; k++) {
+            const c = randomDirect(r, [true, false, 'held'][k % 3]);
+            const delay = [1, 2, 50, 101, 200, 301][k % 6];
+            const spec = lockActionSpec('democracy-unlock', describeAccountLocks(withDem(c.dem, lockNowOf(c))), ME, { connected: ME, isSame: same });
+            if (spec.error) continue;
+            offered++;
+            const tx = await spec.buildTx(fakeApi());
+            const calls = tx.batch || [tx];
+            const at = c.now + delay;
+            const after = palletRun(c.dem, at, calls);
+            const own = [];
+            if (Number(c.prior.until) > at) own.push({ until: Number(c.prior.until), amount: BigInt(c.prior.amount) });
+            for (const [op, i] of calls) {
+                if (op !== 'removeVote') continue;
+                const o = ownLock({ v: c.votes.find(x => x.index === i), referenda: c.referenda }, at);
+                if (o) own.push(o);
+            }
+            const p = after.prior;
+            if (p.until > at && p.amount > 0n) {
+                assert.ok(own.some(x => coversLock(x, p)), `case ${k} (+${delay}) ${fmt({ c, calls, p, own })}`);
+                assert.ok(p.amount <= lockNowOf(c), `case ${k}: amount grew`);
+            }
+        }
+        assert.ok(offered > 200, `enough cases offered a batch (${offered})`);
+    });
+    test('ties: the projection still matches the pallet exactly', async () => {
+        const r = rng(7);
+        for (let k = 0; k < 600; k++) {
+            const c = randomDirect(r, true);
+            const model = describeAccountLocks(withDem(c.dem, lockNowOf(c)));
+            const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
+            if (spec.error) continue;
+            const tx = await spec.buildTx(fakeApi());
+            const calls = tx.batch || [tx];
+            const after = palletRun(c.dem, c.now, calls);
+            const d = model.actions.democracy;
+            if (after.lock != null) assert.equal(s(after.lock), d.lockAfter, `case ${k} ${fmt({ c, calls })}`);
+            assert.equal(after.prior.until > c.now ? after.prior.until : null, d.lockedUntil, `case ${k} ${fmt({ c, calls })}`);
+        }
+    });
+    test('following each held vote\'s guidance, alone or all in order, never merges into a larger, longer lock', async () => {
+        const r = rng(4242);
+        let followed = 0;
+        for (let k = 0; k < 1500; k++) {
+            const c = randomDirect(r, [true, false, 'held'][k % 3]);
+            const model = describeAccountLocks(withDem(c.dem, lockNowOf(c)));
+            const d = model.actions.democracy;
+            if (!d.held || !d.held.length) continue;
+            const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
+            const calls = spec.error ? [] : (((t) => t.batch || [t])(await spec.buildTx(fakeApi())));
+            const today = palletRun(c.dem, c.now, calls);
+            // What the panel says to do for h, as the calls it names.
+            const steps = (h) => {
+                const t = text(html(withDem(c.dem, lockNowOf(c))));
+                const ref = `the vote on referendum #${h.index}`;
+                const unlockFirst = h.wait === 'prior';
+                if (unlockFirst) assert.match(t, new RegExp(`Wait until block ${num(h.waitUntil)}[^.]*, then (press Unlock|Unlock frees [^;]+); after that, remove ${ref}\\.`), `case ${k}: the text for #${h.index}`);
+                return unlockFirst ? [['unlock', ME], ['removeVote', h.index]] : [['removeVote', h.index]];
+            };
+            // The locks running at that block: the prior as the pallet holds it,
+            // and the own lock of every vote still recorded (h among them; one
+            // removed at the same block by another step may set the date).
+            const check = (st, h, at, label) => {
+                const next = palletRun(c.dem, at, steps(h), st);
+                const p = next.prior;
+                if (p.until > at && p.amount > 0n) {
+                    const live = [];
+                    if (st.prior.until > at) live.push(st.prior);
+                    for (const v of st.votes) {
+                        const o = ownLock({ v: { ...v, balance: s(v.balance) }, referenda: c.referenda }, at);
+                        if (o) live.push(o);
+                    }
+                    assert.ok(live.some(x => coversLock(x, p)), `case ${k} ${label} #${h.index} at ${at}: ${fmt({ c, held: d.held, calls, prior: st.prior, p, live })}`);
+                }
+                return next;
+            };
+            for (const h of d.held) { check(today, h, h.waitUntil, 'alone'); followed++; }
+            let st = today;
+            for (const h of [...d.held].sort((a, b) => a.waitUntil - b.waitUntil)) st = check(st, h, h.waitUntil, 'in order');
+        }
+        assert.ok(followed > 100, `enough held votes followed (${followed})`);
+    });
+});
+
+describe('property, round 2: undelegate', () => {
+    test('random delegations and priors, included now or later: the pallet result is what the panel said, and the wait advice holds', async () => {
+        const r = rng(99);
+        const pick = (xs) => xs[Math.floor(r() * xs.length)];
+        let advised = 0;
+        for (let k = 0; k < 2000; k++) {
+            const now = BLOCK;
+            const conviction = pick(Object.keys(PERIODS).slice(0, 4));
+            const balance = pick([10n, 500n, BigInt(1 + Math.floor(r() * 1000))]) * PDEX;
+            const ownUntil = now + PERIOD * PERIODS[conviction];
+            const prior = r() < 0.15 ? { until: 0, amount: '0' }
+                : { until: pick([now - 10, now, now + 100, ownUntil, ownUntil + 100, now + Math.floor(r() * 10 * PERIOD)]), amount: s(pick([10n, 500n, balance / PDEX]) * PDEX) };
+            const dem = delegatingDem(conviction, balance, prior);
+            const u = describeAccountLocks(delegatingSnap(dem)).actions.democracy.undelegate;
+            const spec = lockActionSpec('democracy-undelegate', describeAccountLocks(delegatingSnap(dem)), ME, { connected: ME, isSame: same });
+            const tx = await spec.buildTx(fakeApi());
+            const calls = tx.batch || [tx];
+            const live = Number(prior.until) > now ? { until: Number(prior.until), amount: BigInt(prior.amount) } : { until: 0, amount: 0n };
+            const delay = k % 3 === 0 ? 0 : pick([1, 100, 101]);
+            const after = palletRun(dem, now + delay, calls).prior;
+            if (delay === 0) assert.deepEqual([after.until, s(after.amount)], [u.lockUntil, u.lockAmount], `case ${k} ${fmt({ dem, u })}`);
+            // An expired prior is never carried to the new date.
+            assert.ok(after.amount <= (balance > live.amount ? balance : live.amount), `case ${k}: amount ${fmt({ dem, after })}`);
+            assert.ok(after.until <= Math.max(live.until, now + delay + PERIOD * PERIODS[conviction]), `case ${k}: date ${fmt({ dem, after })}`);
+            const shouldAdvise = live.amount > balance && live.until < ownUntil;
+            assert.equal(u.betterAfter, shouldAdvise ? live.until : null, `case ${k}: advice ${fmt({ dem, u })}`);
+            if (u.betterAfter) {
+                advised++;
+                // Following it: undelegate at that block, through the panel then.
+                const t = u.betterAfter;
+                const later = describeAccountLocks(delegatingSnap(dem, { block: t }));
+                const sp = lockActionSpec('democracy-undelegate', later, ME, { connected: ME, isSame: same });
+                const tx2 = await sp.buildTx(fakeApi());
+                const p = palletRun(dem, t, tx2.batch || [tx2]).prior;
+                assert.deepEqual([p.until, p.amount], [t + PERIOD * PERIODS[conviction], balance], `case ${k}: following the advice ${fmt({ dem, p })}`);
+            }
+        }
+        assert.ok(advised > 20, `enough cases advised waiting (${advised})`);
     });
 });
