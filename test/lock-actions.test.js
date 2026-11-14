@@ -197,7 +197,8 @@ describe('democracyActions: what removeVote and unlock release now, and when the
         const a = democracyActions(d, { ...at, lockAmount: s(30n * PDEX) });
         assert.equal(a.mode, 'delegating');
         assert.equal(a.unlock, false);
-        assert.deepEqual(a.undelegate, { target: OTHER, conviction: 'Locked2x', lockUntil: BLOCK + 2 * PERIOD, lockUntilEta: NOW + 2 * PERIOD * BLOCK_MS });
+        assert.deepEqual(a.undelegate, { target: OTHER, conviction: 'Locked2x', lockUntil: BLOCK + 2 * PERIOD, lockUntilEta: NOW + 2 * PERIOD * BLOCK_MS,
+            lockAmount: s(30n * PDEX), freeAtOnce: false, byPrior: false, rejigFirst: false, betterAfter: null, betterAfterEta: null });
     });
     test('delegating with no conviction: unlockable right after undelegating', () => {
         const d = { delegating: true, target: OTHER, conviction: 'None', balance: s(30n * PDEX), prior: { until: 0, amount: '0' }, lockingPeriod: PERIOD };

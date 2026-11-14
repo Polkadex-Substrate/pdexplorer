@@ -198,6 +198,19 @@ describe('undelegating over an earlier vote lock', () => {
         assert.match(t, new RegExp(`Undelegating keeps 500 PDEX locked until block ${num(FAR_PRIOR)} \\(about ${dayOf(FAR_PRIOR)}\\) because of an earlier vote lock`));
         assert.doesNotMatch(t, new RegExp(`until block ${num(BLOCK)}\\b`));
     });
+    test('an ended earlier lock larger than the delegation: unlock first, so undelegate does not carry it to the new date', async () => {
+        const ended = withDem({ ...DELEGATING.democracy, conviction: 'Locked1x', balance: s(10n * PDEX), prior: { until: BLOCK - 5, amount: s(500n * PDEX) } }, 500n * PDEX);
+        const u = lockActions(ended).democracy.undelegate;
+        assert.deepEqual([u.rejigFirst, u.lockAmount, u.lockUntil], [true, s(10n * PDEX), BLOCK + PERIOD]);
+        const spec = lockActionSpec('democracy-undelegate', describeAccountLocks(ended), ME, { connected: ME, isSame: same });
+        assert.deepEqual(await spec.buildTx(fakeApi()), { batch: [['unlock', ME], ['undelegate']] });
+    });
+    test('a larger earlier lock ending before the delegation\'s: says that undelegating after it ends holds only the delegated PDEX', () => {
+        const soon = withDem({ ...DELEGATING.democracy, conviction: 'Locked1x', balance: s(10n * PDEX), prior: { until: BLOCK + 100, amount: s(500n * PDEX) } }, 500n * PDEX);
+        const t = text(html(soon));
+        assert.match(t, new RegExp(`Undelegating keeps 500 PDEX locked until block ${num(BLOCK + PERIOD)} \\(about ${dayOf(BLOCK + PERIOD)}\\) because of an earlier vote lock`));
+        assert.match(t, new RegExp(`Undelegating after block ${num(BLOCK + 100)} \\(about ${dayOf(BLOCK + 100)}\\), when that lock ends, holds only the delegated PDEX\\.`));
+    });
     test('no earlier lock and no conviction: Unlock frees it right after', () => {
         const plain = withDem({ ...DELEGATING.democracy, prior: { until: 0, amount: '0' } }, 500n * PDEX);
         assert.match(text(html(plain)), /After undelegating, Unlock frees 500 PDEX\./);
@@ -273,7 +286,7 @@ describe('property: the offered batch never holds more PDEX for longer than the 
                     : state === 'ongoing' ? { ongoing: true, end: now + 1000 } : { cancelled: true };
             }
             const prior = r() < 0.2 ? { until: 0, amount: '0' }
-                : { until: now + Math.floor((r() - 0.3) * 40 * PERIOD), amount: s(BigInt(1 + Math.floor(r() * 1000)) * PDEX) };
+                : { until: Math.max(1, now + Math.floor((r() - 0.3) * 40 * PERIOD)), amount: s(BigInt(1 + Math.floor(r() * 1000)) * PDEX) };
             const dem = direct(votes, referenda, prior);
             const lockNow = votes.reduce((a, v) => (BigInt(v.balance) > a ? BigInt(v.balance) : a), BigInt(prior.amount));
             const sn = withDem(dem, lockNow);
@@ -298,7 +311,7 @@ describe('property: the offered batch never holds more PDEX for longer than the 
             const p = after.prior;
             if (p.until > now && p.amount > 0n) {
                 assert.ok(own.some(x => x.until >= p.until && x.amount >= p.amount),
-                    `case ${k}: the batch leaves ${p.amount} until ${p.until}, more than any old lock alone (${JSON.stringify(own, (_, v) => (typeof v === 'bigint' ? v.toString() : v))})`);
+                    `case ${k} ${JSON.stringify({ votes, referenda, prior, calls })}: the batch leaves ${p.amount} until ${p.until}, more than any old lock alone (${JSON.stringify(own, (_, v) => (typeof v === 'bigint' ? v.toString() : v))})`);
                 assert.ok(p.amount <= lockNow, `case ${k}: amount grew`);
             }
             const d = model.actions.democracy;
