@@ -367,12 +367,15 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         assert.equal(m.balance.locked, s(P(29245.5)));
         assert.equal(m.orphanStaking, true);
     });
+    // The row reads the chunks the chain read carries (lib/balance-locks-chain.js),
+    // so a chunk that is ready is never called "already unbonding" (test/lock-texts.test.js).
     test('unbonding chunks are mentioned on a bonded account', () => {
         const m = describeAccountLocks(snap({
             frozen: s(50n * PDEX), locks: [{ id: 'staking ', amount: s(50n * PDEX), reasons: 'All' }],
-            staking: { bonded: true, total: s(50n * PDEX), active: s(30n * PDEX), unlocking: s(20n * PDEX) }
+            staking: { bonded: true, total: s(50n * PDEX), active: s(30n * PDEX), unlocking: s(20n * PDEX),
+                chunks: [{ value: s(20n * PDEX), era: 12 }], currentEra: 10, activeEra: 10, activeEraStart: null }
         }));
-        assert.match(item(m, i => i.id === 'staking ').unlock, /20 PDEX is already unbonding/);
+        assert.match(item(m, i => i.id === 'staking ').unlock, /Still unbonding: 20 PDEX from era 12\./);
     });
     test('hold with the Staking reason (staked via hold on 392): same unstake guidance', () => {
         const m = describeAccountLocks(snap({
