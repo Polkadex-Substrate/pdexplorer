@@ -486,10 +486,11 @@ describe('two held votes that do not nest, both behind a running prior', () => {
 describe('property, round 2: later inclusion, ties, and following the held guidance', () => {
     test('a batch included some blocks after it was drawn still never holds more PDEX for longer', async () => {
         const r = rng(20261115);
+        const pick = (xs) => xs[Math.floor(r() * xs.length)];
         let offered = 0;
         for (let k = 0; k < 800; k++) {
             const c = randomDirect(r, [true, false, 'held'][k % 3]);
-            const delay = [1, 2, 50, 101, 200, 301][k % 6];
+            const delay = pick([0, 1, 2, 50, 99, 100, 101, 200, 299, 300, 301, Math.floor(r() * 2 * PERIOD)]);
             const spec = lockActionSpec('democracy-unlock', describeAccountLocks(withDem(c.dem, lockNowOf(c))), ME, { connected: ME, isSame: same });
             if (spec.error) continue;
             offered++;
@@ -563,9 +564,11 @@ describe('property, round 2: later inclusion, ties, and following the held guida
                 }
                 return next;
             };
-            for (const h of d.held) { check(today, h, h.waitUntil, 'alone'); followed++; }
-            let st = today;
-            for (const h of [...d.held].sort((a, b) => a.waitUntil - b.waitUntil)) st = check(st, h, h.waitUntil, 'in order');
+            // Done at the block the panel names, or some blocks after it.
+            const late = () => (r() < 0.5 ? 0 : Math.floor(r() * 400));
+            for (const h of d.held) { check(today, h, h.waitUntil + late(), 'alone'); followed++; }
+            let st = today, at = 0;
+            for (const h of [...d.held].sort((a, b) => a.waitUntil - b.waitUntil)) { at = Math.max(at, h.waitUntil + late()); st = check(st, h, at, 'in order'); }
         }
         assert.ok(followed > 100, `enough held votes followed (${followed})`);
     });
@@ -588,15 +591,19 @@ describe('property, round 2: undelegate', () => {
             const spec = lockActionSpec('democracy-undelegate', describeAccountLocks(delegatingSnap(dem)), ME, { connected: ME, isSame: same });
             const tx = await spec.buildTx(fakeApi());
             const calls = tx.batch || [tx];
-            const live = Number(prior.until) > now ? { until: Number(prior.until), amount: BigInt(prior.amount) } : { until: 0, amount: 0n };
-            const delay = k % 3 === 0 ? 0 : pick([1, 100, 101]);
-            const after = palletRun(dem, now + delay, calls).prior;
+            // Drawn at now, included delay blocks later: the prior that still
+            // runs is the one running at INCLUSION, not when the panel was drawn.
+            const delay = k % 3 === 0 ? 0 : pick([1, 99, 100, 101, Math.floor(r() * 2 * PERIOD)]);
+            const at = now + delay;
+            const live = Number(prior.until) > at ? { until: Number(prior.until), amount: BigInt(prior.amount) } : { until: 0, amount: 0n };
+            const after = palletRun(dem, at, calls).prior;
             if (delay === 0) assert.deepEqual([after.until, s(after.amount)], [u.lockUntil, u.lockAmount], `case ${k} ${fmt({ dem, u })}`);
-            // An expired prior is never carried to the new date.
-            assert.ok(after.amount <= (balance > live.amount ? balance : live.amount), `case ${k}: amount ${fmt({ dem, after })}`);
-            assert.ok(after.until <= Math.max(live.until, now + delay + PERIOD * PERIODS[conviction]), `case ${k}: date ${fmt({ dem, after })}`);
-            const shouldAdvise = live.amount > balance && live.until < ownUntil;
-            assert.equal(u.betterAfter, shouldAdvise ? live.until : null, `case ${k}: advice ${fmt({ dem, u })}`);
+            // A prior expired by inclusion is never carried to the new date.
+            assert.ok(after.amount <= (balance > live.amount ? balance : live.amount), `case ${k} (+${delay}): amount ${fmt({ dem, calls, after })}`);
+            assert.ok(after.until <= Math.max(live.until, at + PERIOD * PERIODS[conviction]), `case ${k} (+${delay}): date ${fmt({ dem, calls, after })}`);
+            const drawn = Number(prior.until) > now ? { until: Number(prior.until), amount: BigInt(prior.amount) } : { until: 0, amount: 0n };
+            const shouldAdvise = drawn.amount > balance && drawn.until < ownUntil;
+            assert.equal(u.betterAfter, shouldAdvise ? drawn.until : null, `case ${k}: advice ${fmt({ dem, u })}`);
             if (u.betterAfter) {
                 advised++;
                 // Following it: undelegate at that block, through the panel then.
@@ -609,5 +616,100 @@ describe('property, round 2: undelegate', () => {
             }
         }
         assert.ok(advised > 20, `enough cases advised waiting (${advised})`);
+    });
+});
+
+// Fable review round 3: whether the leading democracy.unlock goes in was
+// decided when the panel was drawn. A prior running then can end before the
+// transaction is included; try_undelegate and try_remove_vote accumulate
+// into it without a rejig (only update_lock, democracy.unlock, rejigs), so
+// the ended prior is carried to the new date. The leading unlock is now in
+// every batch that removes votes or undelegates whenever a prior is on
+// record, whatever its date (with a running prior it changes nothing).
+describe('the leading unlock does not depend on the date the panel was drawn at', () => {
+    const PRIOR = { until: BLOCK + 100, amount: s(500n * PDEX) };
+    const calls = async (kind, sn, ref = null, api = fakeApi()) => {
+        const spec = lockActionSpec(kind, describeAccountLocks(sn), ME, { connected: ME, isSame: same, ref });
+        assert.ok(!spec.error, spec.error);
+        const tx = await spec.buildTx(api);
+        return tx.batch || [tx];
+    };
+    test('500 PDEX prior until +100, delegating 10 PDEX at 1x, drawn at +0 and included at +101: only the 10 PDEX stays, until +101 + one period', async () => {
+        const dem = delegatingDem('Locked1x', 10n * PDEX, PRIOR);
+        const c = await calls('democracy-undelegate', delegatingSnap(dem));
+        assert.deepEqual(c, [['unlock', ME], ['undelegate']]);
+        const p = palletRun(dem, BLOCK + 101, c).prior;
+        assert.deepEqual([p.until, p.amount], [BLOCK + 101 + PERIOD, 10n * PDEX]);
+        // Included while the prior still runs: the same as before, the larger amount until the later date.
+        const q = palletRun(dem, BLOCK + 99, c).prior;
+        assert.deepEqual([q.until, q.amount], [BLOCK + 99 + PERIOD, 500n * PDEX]);
+    });
+    test('undelegate with no prior on record: a single undelegate', async () => {
+        assert.deepEqual(await calls('democracy-undelegate', delegatingSnap(delegatingDem('Locked1x', 10n * PDEX, { until: 0, amount: '0' }))), [['undelegate']]);
+    });
+    test('removes under a running prior: unlock, removes, unlock', async () => {
+        const VOTES = [vote(1, false, 'Locked6x', 700n * PDEX), vote(2, true, 'None', 700n * PDEX)];
+        const sn = withDem(direct(VOTES, { 1: { finished: true, approved: true, end: 900_000 }, 2: { finished: true, approved: true, end: 900_000 } }, PRIOR), 700n * PDEX);
+        assert.deepEqual(await calls('democracy-unlock', sn), [['unlock', ME], ['removeVote', 1], ['removeVote', 2], ['unlock', ME]]);
+    });
+    test('removes under a running prior with no final unlock: unlock, removes', async () => {
+        // #3: 300 PDEX 1x until +50, covered by the 500 PDEX prior: removing it frees nothing now.
+        const sn = withDem(direct([vote(3, true, 'Locked1x', 300n * PDEX)], { 3: { finished: true, approved: true, end: BLOCK + 50 - PERIOD } }, PRIOR), 500n * PDEX);
+        assert.deepEqual(await calls('democracy-unlock', sn), [['unlock', ME], ['removeVote', 3]]);
+    });
+    test('removes with no prior on record: no leading unlock', async () => {
+        const sn = withDem(direct([vote(1, false, 'Locked6x', 70n * PDEX)], { 1: { finished: true, approved: true, end: 900_000 } }), 70n * PDEX);
+        assert.deepEqual(await calls('democracy-unlock', sn), [['removeVote', 1], ['unlock', ME]]);
+    });
+    test('only an unlock: still one call', async () => {
+        const sn = withDem(direct([], {}, { until: BLOCK - 1, amount: s(500n * PDEX) }), 500n * PDEX);
+        assert.deepEqual(await calls('democracy-unlock', sn), [['unlock', ME]]);
+    });
+    const ongoing = (info) => ({ tx: fakeApi().tx, query: { democracy: { referendumInfoOf: async () => info } } });
+    const RUNNING_INFO = { isSome: true, unwrap: () => ({ isOngoing: true }) };
+    test('Cancel vote with a prior on record: unlock, then removeVote', async () => {
+        const sn = withDem(direct([vote(9, true, 'Locked2x', 20n * PDEX)], { 9: { ongoing: true, end: BLOCK + 50 } }, PRIOR), 500n * PDEX);
+        assert.deepEqual(await calls('democracy-cancel', sn, 9, ongoing(RUNNING_INFO)), [['unlock', ME], ['removeVote', 9]]);
+    });
+    test('Cancel vote with no prior: a single removeVote', async () => {
+        const sn = withDem(direct([vote(9, true, 'Locked2x', 20n * PDEX)], { 9: { ongoing: true, end: BLOCK + 50 } }), 20n * PDEX);
+        assert.deepEqual(await calls('democracy-cancel', sn, 9, ongoing(RUNNING_INFO)), [['removeVote', 9]]);
+    });
+    test('property: Cancel vote included after the prior ended and the referendum closed never carries the ended prior', async () => {
+        const r = rng(31337);
+        const pick = (xs) => xs[Math.floor(r() * xs.length)];
+        let carried = 0;
+        for (let k = 0; k < 1500; k++) {
+            const amount = pick([10n, 300n, 500n, 700n]) * PDEX;
+            const prior = r() < 0.15 ? { until: 0, amount: '0' } : { until: BLOCK + pick([-10, 0, 50, 100, 300]), amount: s(pick([10n, 300n, 500n, 700n]) * PDEX) };
+            const conviction = pick(Object.keys(PERIODS));
+            const dem = direct([vote(9, r() < 0.7, conviction, amount)], { 9: { ongoing: true, end: BLOCK + 50 } }, prior);
+            const c = await calls('democracy-cancel', withDem(dem, lockNowOf({ votes: dem.votes, prior })), 9, ongoing(RUNNING_INFO));
+            // The re-read said running; by inclusion the referendum may have closed.
+            const at = BLOCK + pick([0, 1, 51, 101, 301, Math.floor(r() * 2 * PERIOD)]);
+            const end = Math.min(at, BLOCK + 50);
+            const closed = r() < 0.6 ? { finished: true, approved: r() < 0.5, end } : { ongoing: true, end: BLOCK + 50 };
+            const p = palletRun({ ...dem, referenda: { 9: closed } }, at, c).prior;
+            if (Number(prior.until) > at || !(p.until > at && p.amount > 0n)) continue;
+            carried++;
+            const o = ownLock({ v: dem.votes[0], referenda: { 9: closed } }, at);
+            assert.ok(o && coversLock(o, p), `case ${k} at +${at - BLOCK}: ${fmt({ prior, vote: dem.votes[0], closed, c, p })}`);
+        }
+        assert.ok(carried > 50, `enough cases where the vote accumulated after the prior ended (${carried})`);
+    });
+    test('property: every remove or undelegate batch starts with an unlock whenever a prior is on record', async () => {
+        const r = rng(8080);
+        let checked = 0;
+        for (let k = 0; k < 900; k++) {
+            const cs = randomDirect(r, [true, false, 'held'][k % 3]);
+            const spec = lockActionSpec('democracy-unlock', describeAccountLocks(withDem(cs.dem, lockNowOf(cs))), ME, { connected: ME, isSame: same });
+            if (spec.error) continue;
+            const c = (((t) => t.batch || [t])(await spec.buildTx(fakeApi())));
+            if (!c.some(([op]) => op === 'removeVote')) continue;
+            checked++;
+            const hasPrior = BigInt(cs.prior.amount) > 0n;
+            assert.equal(c[0][0] === 'unlock', hasPrior, `case ${k}: ${fmt({ prior: cs.prior, c })}`);
+        }
+        assert.ok(checked > 200, `enough batches with removes (${checked})`);
     });
 });
