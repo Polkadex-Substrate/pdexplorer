@@ -4775,6 +4775,14 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-picker-empty { padding: 20px 8px; text-align: center; color: var(--text-secondary); font-size: 0.88rem; line-height: 1.6; }
 .wallet-picker-empty h3 { margin: 6px 0; font-size: 1rem; color: var(--text-primary); }
 .wallet-picker-empty ol { display: inline-block; margin: 6px 0 12px; padding-left: 20px; text-align: left; }
+.wallet-onboarding ul.wallet-onboarding-ext { list-style: none; margin: 8px 0; padding: 0; text-align: left; display: inline-block; }
+.wallet-onboarding ul.wallet-onboarding-ext li { margin: 6px 0; }
+.wallet-onboarding ul.wallet-onboarding-ext a, .wallet-onboarding-help a { color: var(--brand-secondary); font-weight: 600; }
+.wallet-onboarding-blurb { display: block; color: var(--text-muted); font-size: 0.82rem; }
+.wallet-onboarding-note { margin: 10px 0 6px; color: var(--text-primary); }
+.wallet-onboarding-reload { margin: 4px 0 8px; padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color, currentColor); background: transparent; color: inherit; cursor: pointer; }
+.wallet-onboarding-wc { margin-top: 10px; opacity: 0.7; }
+.wallet-onboarding-wc button { padding: 8px 14px; border-radius: var(--radius-sm); border: 1px dashed currentColor; background: transparent; color: inherit; cursor: not-allowed; }
 .wallet-picker-empty-icon { font-size: 1.8rem; color: var(--text-muted); }
 .wallet-picker-install { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 14px; margin: 12px 0; }
 .wallet-picker-install a { color: var(--brand-secondary); }

@@ -56,6 +56,7 @@ import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } fr
 import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
 import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { mountWalletPicker } from './lib/wallet-picker-view.js';
+import { MOBILE_WALLETS } from './lib/wallet-links.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
@@ -8141,42 +8142,9 @@ function hasInjectedWalletNow() {
         && Object.keys(window.injectedWeb3).length > 0);
 }
 
-// Known mobile wallets that ship a dapp browser. Each entry tells the connect
-// panel how to deep-link / app-store-link / explain itself. Deep links use the
-// wallets' published universal-link domains where verified; users who don't
-// have the wallet installed get the app-store fallback automatically.
-const MOBILE_WALLETS = [
-    {
-        id: 'nova',
-        name: 'Nova Wallet',
-        // Nova publishes nova.app.link for opening URLs in its built-in browser.
-        deeplink: (url) => 'https://app.novawallet.io/open/dapp?url=' + encodeURIComponent(url),
-        appStore: 'https://apps.apple.com/app/nova-polkadot-kusama-wallet/id1597119355',
-        playStore: 'https://play.google.com/store/apps/details?id=io.novafoundation.nova.market',
-        site: 'https://novawallet.io',
-        tagline: 'Polkadot & Kusama native — Apple/Android'
-    },
-    {
-        id: 'subwallet',
-        name: 'SubWallet',
-        // SubWallet exposes subwallet:// as a URL scheme to open arbitrary dapp URLs.
-        deeplink: (url) => 'subwallet://browser?url=' + encodeURIComponent(url),
-        appStore: 'https://apps.apple.com/app/subwallet-polkadot-wallet/id1633050285',
-        playStore: 'https://play.google.com/store/apps/details?id=app.subwallet.mobile',
-        site: 'https://subwallet.app',
-        tagline: 'Multi-chain dapp browser — Apple/Android'
-    },
-    {
-        id: 'talisman',
-        name: 'Talisman',
-        // Talisman is browser-extension first; the deep-link is a docs hand-off.
-        deeplink: null,
-        appStore: null,
-        playStore: null,
-        site: 'https://talisman.xyz/download',
-        tagline: 'Browser extension — desktop today'
-    }
-];
+// Known mobile wallets (MOBILE_WALLETS) live in lib/wallet-links.js with every
+// other wallet URL: deep links only where the wallet documents one, app-store
+// links otherwise.
 
 // Enumerate accounts from installed Substrate wallet extensions / mobile
 // in-app browsers. The retry loop helps mobile wallets that inject

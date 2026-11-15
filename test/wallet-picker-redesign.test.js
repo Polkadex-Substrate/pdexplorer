@@ -172,7 +172,7 @@ describe('edge states', () => {
         const empty = w.q('.wallet-picker-empty');
         assert.equal(empty.querySelector('h3').textContent.trim(), 'No wallet found in this browser');
         assert.match(empty.textContent, /Install a wallet extension, then refresh\./);
-        assert.match(empty.textContent, /Get Polkadot\.js/);
+        assert.match(empty.textContent, /Install Polkadot\.js/);   // was "Get": onboarding now names every link "Install X"
         assert.match(empty.textContent, /Talisman/);
         assert.match(empty.textContent, /SubWallet/);
         assert.ok(empty.querySelector('.wallet-picker-refresh-btn'));
