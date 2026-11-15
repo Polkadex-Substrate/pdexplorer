@@ -106,7 +106,7 @@ describe('official links: one module, https, official domains only', () => {
 
     test('script.js carries no wallet download URL of its own', () => {
         assert.ok(!/apps\.apple\.com|play\.google\.com|novawallet\.io|subwallet:\/\//.test(SCRIPT), 'wallet URLs belong in lib/wallet-links.js');
-        assert.match(SCRIPT, /from '\.\/lib\/wallet-links\.js'/);
+        assert.match(SCRIPT, /from '\.\/lib\/mobile-wallet-cards\.js'/, 'script.js gets its wallet links only through the cards module');
     });
 });
 

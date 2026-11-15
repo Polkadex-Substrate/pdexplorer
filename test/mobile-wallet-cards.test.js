@@ -38,8 +38,9 @@ describe('Nova DApp Catalog gate', () => {
 
     test('flag true: a page URL with path, query and hash cannot leak into the link', () => {
         const h = render({ novaListed: true, currentUrl: 'https://explorer.polkadex.ee/wallet?x=1#/secret' });
-        assert.ok(!/wallet/.test(h.match(/href="(https:\/\/app\.novawallet[^"]+)"/)[1]));
-        assert.ok(!/secret|x%3D1/.test(h));
+        const href = h.match(/href="(https:\/\/app\.novawallet[^"]+)"/)[1];
+        assert.equal(decodeURIComponent(href.split('url=')[1]), 'https://explorer.polkadex.ee');
+        assert.ok(!/secret|x%3D1|%2Fwallet/.test(h));
     });
 
     test('flag true on desktop: no deep link, store links', () => {

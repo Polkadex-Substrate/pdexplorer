@@ -56,7 +56,7 @@ import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } fr
 import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
 import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { mountWalletPicker } from './lib/wallet-picker-view.js';
-import { MOBILE_WALLETS } from './lib/wallet-links.js';
+import { mobileWalletCardsHtml } from './lib/mobile-wallet-cards.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
@@ -8466,32 +8466,9 @@ async function tryAutoSelectFirstWallet() {
     } finally { walletSession.endRestore(); }
 }
 
-// Build the "Open in mobile wallet" deep-link card list. Rendered as an extra
-// section in the connect panel so phone users have a one-tap path into a
-// wallet's in-app browser (where injectedWeb3 just works).
-function renderMobileWalletCards(currentUrl) {
-    const isMobile = isMobileDevice();
-    const cards = MOBILE_WALLETS.map(w => {
-        const link = w.deeplink ? w.deeplink(currentUrl) : null;
-        // On mobile, the primary CTA is the deep-link; on desktop we point to
-        // app stores so the user can install + paste the URL.
-        const primary = isMobile && link
-            ? `<a class="mobile-wallet-cta" href="${stakingEscapeHtml(link)}">Open in ${stakingEscapeHtml(w.name)}</a>`
-            : (w.appStore || w.playStore)
-                ? `<div class="mobile-wallet-storelinks">
-                    ${w.appStore ? `<a href="${stakingEscapeHtml(w.appStore)}" target="_blank" rel="noopener"><i class='bx bxl-apple'></i> iOS</a>` : ''}
-                    ${w.playStore ? `<a href="${stakingEscapeHtml(w.playStore)}" target="_blank" rel="noopener"><i class='bx bxl-play-store'></i> Android</a>` : ''}
-                   </div>`
-                : `<a class="mobile-wallet-cta secondary" href="${stakingEscapeHtml(w.site)}" target="_blank" rel="noopener">Visit ${stakingEscapeHtml(w.name)}</a>`;
-        return `<div class="mobile-wallet-card">
-            <div class="mobile-wallet-head">
-                <strong>${stakingEscapeHtml(w.name)}</strong>
-                <span>${stakingEscapeHtml(w.tagline)}</span>
-            </div>
-            ${primary}
-        </div>`;
-    }).join('');
-    return `<div class="mobile-wallet-grid">${cards}</div>`;
+// The "Open in mobile wallet" cards are built in lib/mobile-wallet-cards.js.
+function renderMobileWalletCards() {
+    return mobileWalletCardsHtml({ esc: stakingEscapeHtml, isMobile: isMobileDevice() });
 }
 
 // The Switch wallet / Connect wallet page. The markup and its behaviour live in
@@ -8503,7 +8480,7 @@ function renderWalletConnectPanel(root) {
         getAccounts: () => getInjectedAccounts(), select: selectWallet, disconnect: disconnectWallet,
         isSame: isSameAddress, isValid: isValidPolkadexAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress,
         helpHtml: helpIcon('connecting-wallet', 'How wallets work on Polkadex Explorer'), closeHtml: closeControlHtml({ parent: 'home' }),
-        mobileCardsHtml: renderMobileWalletCards(currentUrl), currentUrl, clipboard: navigator.clipboard,
+        mobileCardsHtml: renderMobileWalletCards(), currentUrl, clipboard: navigator.clipboard,
         mountMultisig: (el, opts) => multisigUI.mountAccounts(el, { ...opts, compact: true })
     });
 }
