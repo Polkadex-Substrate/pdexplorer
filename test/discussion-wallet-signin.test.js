@@ -246,6 +246,8 @@ function page({ wallet = A, stored = [], rejectSign = false, path = '/discussion
         alert: () => {},
         getStoredWallet: () => state.wallet,
         walletSession: { source: () => 'polkadot-js' },
+        // script.js's extension lookup (extensions plus a paired WalletConnect phone); here just the extension.
+        allInjected: () => ({ 'polkadot-js': ext }),
         stakingEscapeHtml: escapeHtml, stakingShortAddress: (a) => String(a).slice(0, 6) + '...' + String(a).slice(-4),
         formatLocalDateTime: () => 'today', helpIcon: () => ''
     };

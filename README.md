@@ -479,6 +479,16 @@ Schema: subscribers live in `email_subscribers`, dispatch idempotency in `email_
 | `SITEMAP_TOP_HOLDERS`         | `100`   | How many top holders (account pages) to include        |
 | `SITEMAP_CACHE_TTL_MS`        | `300000`| How long the rendered XML is cached                    |
 
+### WalletConnect ("Connect with your phone", dark launch)
+
+A phone wallet (Nova Wallet, SubWallet) can sign over WalletConnect v2. It ships **off**; nothing WalletConnect is downloaded and the relay is never contacted unless a visitor turns it on and chooses it.
+
+- **Everyone:** set `FEATURE_FLAGS.walletConnect = true` in `lib/wallet-links.js`.
+- **One browser, for testing:** open any page with `?wc=1` (stores `pdex_wc_enabled=1` in that browser). `?wc=0` removes it again.
+- **Settings:** project id, chain id (Polkadex mainnet `polkadot:3920bcb4960a1eef5580cd5367ff3f43`), relay and app metadata live in `lib/walletconnect-config.js` only. The project id is public; restrict it to `explorer.polkadex.ee` in the Reown dashboard's domain allowlist.
+- **CSP:** `nginx.conf` allows `wss://relay.walletconnect.org` and `wss://relay.walletconnect.com` in `connect-src`, nothing else of WalletConnect (no telemetry, no Verify frame). If the relay URL in the config changes, change the CSP with it.
+- **Code:** `lib/walletconnect-gate.js` (flag, lazy load; the only part in the main bundle), `lib/walletconnect-source.js`, `-session.js`, `-signer.js`, `-view.js` (a lazy chunk, plus `@walletconnect/universal-provider` in another). Tests: `test/walletconnect.test.js`.
+
 ### docker-compose `.env`
 
 A typical `/opt/pdexplorer/.env`:

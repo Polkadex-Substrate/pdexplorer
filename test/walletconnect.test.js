@@ -41,6 +41,7 @@ import { sourceLabel, groupBySource } from '../lib/wallet-picker.js';
 import { createWalletSession } from '../lib/wallet-session.js';
 import { FEATURE_FLAGS } from '../lib/wallet-links.js';
 import { makeProfile, openTab, fakeExtension, settle, addr as worldAddr } from './helpers/wallet-world.js';
+import { bodyOf } from './helpers/source.js';
 
 import * as config from '../lib/walletconnect-config.js';
 import { walletConnectEnabled, createWalletConnectGate } from '../lib/walletconnect-gate.js';
@@ -268,6 +269,10 @@ describe('session: pairing, restore, expiry and accounts (provider mocked)', () 
         assert.equal(o.projectId, config.WC_PROJECT_ID);
         assert.equal(o.relayUrl, config.WC_RELAY_URL);
         assert.deepEqual(o.metadata, config.WC_METADATA);
+        // The real SDK assigns metadata.icons (utils populateAppMetadata) and threw
+        // on the frozen config object in a no-network smoke run: a writable copy.
+        assert.notEqual(o.metadata, config.WC_METADATA);
+        assert.ok(!Object.isFrozen(o.metadata) && !Object.isFrozen(o.metadata.icons));
         assert.equal(o.telemetryEnabled, false);
         assert.equal(o.disableProviderPing, true);
         assert.equal(mock.log.init.length, 1);
@@ -412,6 +417,20 @@ describe('session: pairing, restore, expiry and accounts (provider mocked)', () 
         const r = await s.request('polkadot_signMessage', { address: 'x', data: '0x00', type: 'bytes' });
         assert.deepEqual(r, { signature: '0xab' });
         assert.deepEqual(mock.log.requests[0], { topic: 'topic-1', chainId: CAIP2, request: { method: 'polkadot_signMessage', params: { address: 'x', data: '0x00', type: 'bytes' } } });
+    });
+
+    test('request addresses go out in the encoding the wallet shared (strict wallets match strings)', async () => {
+        const raw = synth(14, 0);
+        const mock = mockProvider({ approve: () => wcSession([`${CAIP2}:${raw}`]), reply: () => ({ signature: '0x' }) });
+        const s = sessionFor(mock);
+        await s.connect({ onUri() {} });
+        await s.request('polkadot_signTransaction', { address: synth(14, 88), transactionPayload: { address: synth(14, 42), method: '0x00' } });
+        const sent = mock.log.requests[0].request.params;
+        assert.equal(sent.address, raw);
+        assert.equal(sent.transactionPayload.address, raw);
+        assert.equal(sent.transactionPayload.method, '0x00');
+        await s.request('polkadot_signMessage', { address: synth(15, 88), data: '0x00', type: 'bytes' });
+        assert.equal(mock.log.requests[1].request.params.address, synth(15, 88), 'an address the wallet did not share is left alone');
     });
 
     test('request with no session refuses clearly', async () => {
@@ -1057,7 +1076,7 @@ describe('script.js wiring (real functions, fake extensions and a fake gate)', (
         profile.wcGate = fakeWcGate([phone]);
         const tab = openTab(profile);
         const accs = await tab.fn('getInjectedAccounts')({ retries: 1, retryDelayMs: 1 });
-        assert.deepEqual(accs.map(a => a.source).sort(), ['polkadot-js', 'walletconnect']);
+        assert.deepEqual(JSON.parse(JSON.stringify(accs.map(a => a.source).sort())), ['polkadot-js', 'walletconnect']);
         assert.ok(accs.find(a => a.source === 'walletconnect').address.startsWith('e'));
         tab.close();
     });
@@ -1194,14 +1213,8 @@ describe('script.js wiring (real functions, fake extensions and a fake gate)', (
 });
 
 function bodyOfName(name) {
-    const at = SCRIPT.indexOf(`function ${name}(`);
-    assert.ok(at >= 0, `${name} exists in script.js`);
-    let i = SCRIPT.indexOf('{', at), depth = 0;
-    for (; i < SCRIPT.length; i++) {
-        if (SCRIPT[i] === '{') depth++;
-        else if (SCRIPT[i] === '}' && --depth === 0) break;
-    }
-    return SCRIPT.slice(at, i + 1);
+    assert.ok(SCRIPT.includes(`function ${name}(`), `${name} exists in script.js`);
+    return bodyOf(SCRIPT, name);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1251,7 +1264,7 @@ describe('tx-submit end to end with the WalletConnect signer', () => {
         await flush();
         assert.deepEqual(errors, []);
         assert.equal(asked.m, 'polkadot_signTransaction');
-        assert.equal(asked.p.address, pair.address);
+        assert.ok(same(asked.p.address, pair.address), 'the payload is for this account (any SS58 format)');
         assert.equal(submitted.length, 1);
         const back = registry.createType('Extrinsic', submitted[0]);
         assert.equal(back.isSigned, true);

@@ -57,6 +57,9 @@ import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, v
 import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { mountWalletPicker } from './lib/wallet-picker-view.js';
 import { mobileWalletCardsHtml } from './lib/mobile-wallet-cards.js';
+import { FEATURE_FLAGS } from './lib/wallet-links.js';
+import { walletConnectEnabled, createWalletConnectGate } from './lib/walletconnect-gate.js';
+import { WC_SOURCE } from './lib/walletconnect-config.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
@@ -8016,6 +8019,32 @@ const walletSession = createWalletSession({
 });
 reconcileDiscussSession();   // a token for any wallet but the active one is signed out on load
 function getStoredWallet() { return walletSession.connected(); }
+// WalletConnect ("Connect with your phone"): dark unless FEATURE_FLAGS.walletConnect or ?wc=1 (?wc=0 undoes it).
+// The WalletConnect code is a lazy chunk, loaded on Connect or to restore a session made here (lib/walletconnect-gate.js).
+const wcGate = createWalletConnectGate({
+    enabled: walletConnectEnabled({ flag: FEATURE_FLAGS.walletConnect, storage: localStorage, search: window.location.search }),
+    storage: localStorage, onEnded: () => onWalletConnectEnded(), onAccounts: (list) => onWalletConnectAccounts(list),
+    deps: { doc: document, getRegistry: () => globalApi && globalApi.registry, isMobile: () => isMobileDevice(), clipboard: navigator.clipboard }
+});
+if (wcGate.enabled) wcGate.restore().catch(e => console.warn('[walletconnect] restore', e));
+// The extensions plus, while paired, the phone (looks like one more extension), or null when there are none.
+function allInjected() {
+    const all = { ...(window.injectedWeb3 || {}), ...wcGate.providers() };
+    return Object.keys(all).length ? all : null;
+}
+// The phone ended the session or it expired: an active phone account goes the way of a removed extension.
+function onWalletConnectEnded() { if (walletSession.source() === WC_SOURCE) disconnectWallet(); }
+function onWalletConnectAccounts(accounts) {
+    if (walletSession.source() !== WC_SOURCE) return;
+    const active = getStoredWallet();
+    if (!(accounts || []).some(a => isSameAddress(a.address, active))) return disconnectWallet();
+    refreshWalletDashboardFor(active);   // a session restored after the dashboard painted arms its action bar
+}
+function walletConnectController() {
+    if (!wcGate.enabled) return false;
+    return { connect: (panel) => wcGate.connect(panel), isConnected: () => wcGate.isConnected(), peerName: () => wcGate.peerName(),
+        disconnect: () => (walletSession.source() === WC_SOURCE ? disconnectWallet() : wcGate.disconnect()) };
+}
 const multisigStore = createMultisigStore(localStorage);
 const multisigUI = createMultisigUI({
     store: multisigStore, storage: localStorage, api: () => globalApi,
@@ -8137,9 +8166,7 @@ function isMobileDevice() {
 // users who arrived in view-only mode (typed-in address) or whose wallet
 // session has ended don't see signing buttons that lead to a dead-end error.
 function hasInjectedWalletNow() {
-    return !!(typeof window !== 'undefined'
-        && window.injectedWeb3
-        && Object.keys(window.injectedWeb3).length > 0);
+    return typeof window !== 'undefined' && !!allInjected();
 }
 
 // Known mobile wallets (MOBILE_WALLETS) live in lib/wallet-links.js with every
@@ -8169,11 +8196,11 @@ function hasInjectedWalletNow() {
 async function getInjectedAccounts({ retries = 6, retryDelayMs = 250 } = {}) {
     // Wait briefly for late injection on mobile wallet in-app browsers.
     for (let i = 0; i < retries; i++) {
-        if (window.injectedWeb3 && Object.keys(window.injectedWeb3).length) break;
+        if (allInjected()) break;
         await new Promise(r => setTimeout(r, retryDelayMs));
     }
-    const injected = window.injectedWeb3;
-    if (!injected || Object.keys(injected).length === 0) return null;
+    const injected = allInjected();
+    if (!injected) return null;
     const accounts = [];
     for (const key of Object.keys(injected)) {
         try {
@@ -8305,7 +8332,9 @@ function disconnectWallet() {
     // session (F-120, via revokeDiscussSession) and records a PERSISTENT opt-out,
     // so a reload or a new tab shows the picker instead of silently reconnecting.
     // onWalletChanged() then resets the views.
+    const endPhone = walletSession.source() === WC_SOURCE;
     walletSession.disconnect();
+    if (endPhone) wcGate.disconnect().catch(() => {});   // Disconnect on a phone account also ends the WalletConnect session
     refreshConnectWalletButton();
     // On a wallet page, land on the connect panel; initWalletPage renders it.
     if (isWalletRoute(readRouteFromLocation())) navigateTo('wallet');
@@ -8481,7 +8510,8 @@ function renderWalletConnectPanel(root) {
         isSame: isSameAddress, isValid: isValidPolkadexAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress,
         helpHtml: helpIcon('connecting-wallet', 'How wallets work on Polkadex Explorer'), closeHtml: closeControlHtml({ parent: 'home' }),
         mobileCardsHtml: renderMobileWalletCards(), currentUrl, clipboard: navigator.clipboard,
-        mountMultisig: (el, opts) => multisigUI.mountAccounts(el, { ...opts, compact: true })
+        mountMultisig: (el, opts) => multisigUI.mountAccounts(el, { ...opts, compact: true }),
+        walletConnect: walletConnectController()
     });
 }
 
@@ -10925,7 +10955,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
 
 // Locate an extension signer that can sign for the given address.
 async function getWalletSigner(address) {
-    const injected = window.injectedWeb3;
+    const injected = allInjected();
     if (!injected) return null;
     for (const key of orderSources(Object.keys(injected), walletSession.source())) {
         try {
@@ -12533,7 +12563,7 @@ async function resolveWalletSigner(fail, signingAccount = null) {
 
     let signer;
     try {
-        const provider = window.injectedWeb3[account.source];
+        const provider = (allInjected() || {})[account.source];
         const ext = await provider.enable('Polkadex Explorer');
         signer = ext.signer;
     } catch (e) { return fail('Wallet extension authorization was rejected.'); }
