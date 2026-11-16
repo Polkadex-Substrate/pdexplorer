@@ -20,7 +20,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { makeProfile, openTab, fakeExtension, settle, addr, A, B, C } from './helpers/wallet-world.js';
+import { makeProfile, openTab, fakeExtension, settle, addr, A, B, C, connectWith } from './helpers/wallet-world.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../lib/wallet-session.js';
 import { buildAccountListHtml, groupBySource, sourceLabel } from '../lib/wallet-picker.js';
 import { wireWalletMenu } from '../lib/wallet-menu.js';
@@ -43,8 +43,9 @@ describe('root cause: the symptoms Vivek reported', () => {
     test('Disconnect sticks: a reload or new tab shows the picker instead of reconnecting the account', async () => {
         const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
         const tab1 = openTab(profile, { path: '/wallet' });
-        await tab1.visit('/wallet');                       // first visit: auto-pick connects
-        assert.equal(stored(tab1), A, 'precondition: the first visit connects the first account');
+        await tab1.visit('/wallet');                       // first visit: the chooser; the user connects (lazy enable, 16 Nov)
+        await connectWith(tab1, 'polkadot-js', A);
+        assert.equal(stored(tab1), A, 'precondition: the first visit connects the account the user picked');
         tab1.fn('disconnectWallet')();
         await tab1.settle();
         assert.equal(stored(tab1), null, 'Disconnect cleared the connected address');
@@ -53,8 +54,9 @@ describe('root cause: the symptoms Vivek reported', () => {
         await tab2.visit('/wallet');
         assert.equal(stored(tab2), null,
             'the next visit silently reconnected the account the user had just disconnected (one-shot skip flag)');
-        assert.ok(tab2.panelHtml().includes('wallet-account-btn') || tab2.accountButtons().length > 0, 'the picker is showing');
+        assert.ok(tab2.root.querySelector('.wallet-option-row[data-source="polkadot-js"]'), 'the chooser is showing');
         assert.ok(!tab2.panelHtml().startsWith('DASHBOARD'), 'no dashboard');
+        assert.equal(profile.extensions[0].enableCalls, 1, 'the next visit asked the wallet again (only the click in tab 1 may)');
     });
 
     test('Switch wallet is not undone by a dashboard fetch that lands afterwards', async () => {
@@ -76,6 +78,7 @@ describe('root cause: the symptoms Vivek reported', () => {
     test('the picker opens even while a selection is persisted (/wallet?switch=1)', async () => {
         const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
         profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
         const plain = openTab(profile, { path: '/wallet' });
         await plain.visit('/wallet');
         assert.ok(plain.log.routes.includes('wallet/' + A), 'plain /wallet still goes straight to the stored dashboard');
@@ -218,12 +221,15 @@ describe('switch extension', () => {
         profile.local.setItem('pdex_wallet_source', 'polkadot-js');
         const tab = openTab(profile, { path: '/wallet', search: '?switch=1' });
         await tab.visit('/wallet?switch=1');
-        const html = tab.root.querySelector('#wallet-accounts').innerHTML;
-        assert.match(html, /Polkadot\.js/);
-        assert.match(html, /Talisman/);
-        const buttons = tab.accountButtons();
-        assert.equal(buttons.length, 1, 'Alice is the Current row; Bob is the one choice');
-        const bobBtn = buttons.find(b => b.getAttribute('data-source') === 'talisman');
+        assert.match(tab.root.querySelector('#wallet-accounts').innerHTML, /Polkadot\.js/);
+        assert.equal(tab.accountButtons().length, 0, 'Alice is the Current row; Polkadot.js holds no other account');
+        // Another wallet: "Use a different wallet", then its row (lazy enable: only now is Talisman asked).
+        assert.equal(profile.extensions[1].enableCalls, 0);
+        tab.root.querySelector('#wallet-picker-different').click();
+        await connectWith(tab, 'talisman');
+        assert.equal(profile.extensions[1].enableCalls, 1);
+        assert.match(tab.root.querySelector('#wallet-accounts').innerHTML, /Talisman/);
+        const bobBtn = tab.accountButtons().find(b => b.getAttribute('data-source') === 'talisman');
         await bobBtn.click();
         assert.equal(stored(tab), B);
         assert.equal(tab.read('pdex_wallet_source'), 'talisman');
@@ -243,11 +249,14 @@ describe('switch extension', () => {
         assert.equal((await tab.fn('getWalletSigner')(A)).extKey, 'polkadot-js');
     });
 
-    test('if the chosen extension no longer holds the account, another that does is used', async () => {
+    test('if the chosen extension no longer holds the account, another the user connected this visit is used; an unconnected one never', async () => {
         const tl = talisman(acct(1, 'Alice'));
         const profile = makeProfile({ extensions: [polkadotJs(acct(2, 'Bob')), tl] });
         const tab = openTab(profile, { path: '/wallet' });
         tab.fn('selectWallet')(A, 'polkadot-js');   // stale preference
+        assert.equal(await tab.fn('getWalletSigner')(A), null, 'a wallet the user never connected was asked');
+        assert.equal(tl.enableCalls, 0);
+        await tab.fn('walletSources').enableSource('talisman');   // the user clicked Talisman's row earlier this visit
         assert.equal((await tab.fn('getWalletSigner')(A)).extKey, 'talisman');
     });
 });
@@ -256,6 +265,7 @@ describe('switch account within the same extension', () => {
     test('picking the other account updates storage, the header and every view, and keeps the extension', async () => {
         const profile = makeProfile({ extensions: [polkadotJs(acct(1, 'Alice'), acct(2, 'Bob'))] });
         profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
         const tab = openTab(profile, { path: '/wallet', search: '?switch=1' });
         await tab.visit('/wallet?switch=1');
         const before = { dem: tab.log.democracyRestarts, gov: tab.log.govAccountChanged };
@@ -294,6 +304,7 @@ describe('switch account within the same extension', () => {
         const pj = polkadotJs(acct(1, 'Alice'));
         const profile = makeProfile({ extensions: [pj] });
         profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
         const tab = openTab(profile, { path: '/wallet', search: '?switch=1' });
         await tab.visit('/wallet?switch=1');
         assert.equal(tab.accountButtons().length, 0, 'Alice is the Current row, not a button');
@@ -332,7 +343,7 @@ describe('disconnect', () => {
         onWallet.fn('disconnectWallet')();
         await onWallet.settle();
         assert.equal(onWallet.ctx.window.location.pathname, '/wallet');
-        assert.ok(onWallet.panelHtml().includes('wallet-accounts'));
+        assert.ok(onWallet.panelHtml().includes('wallet-picker-options'), 'the chooser is showing');
 
         profile.local.setItem('pdex_wallet_address', A);
         const elsewhere = openTab(profile, { path: '/council' });
@@ -349,7 +360,7 @@ describe('disconnect', () => {
         await t1.visit('/wallet');
         t1.fn('disconnectWallet')();
         await t1.settle();
-        await t1.accountButtons().find(b => b.getAttribute('data-address') === B).click();
+        await connectWith(t1, 'polkadot-js', B);
         assert.equal(profile.local.getItem('pdex_wallet_disconnected'), null);
         const t2 = openTab(profile, { path: '/wallet' });      // reload
         await t2.visit('/wallet');
@@ -357,19 +368,28 @@ describe('disconnect', () => {
         assert.ok(t2.log.routes.includes('wallet/' + B), 'a reload goes straight to the connected dashboard');
     });
 
-    test('first-time visitors are still auto-connected (the Disconnect opt-out only applies after a Disconnect)', async () => {
+    // Changed 16 Nov (lazy enable, CEO-approved): a first-time visitor is no
+    // longer auto-connected. The auto-pick asked every extension at load, which
+    // was the popup over a page the visitor had not read. They get the chooser.
+    test('first-time visitors get the chooser: nothing is picked and no wallet is asked', async () => {
         const profile = makeProfile({ extensions: [polkadotJs(acct(2, 'Bob'), acct(1, 'Alice'))] });
         const tab = openTab(profile, { path: '/wallet' });
         await tab.visit('/wallet');
-        assert.equal(stored(tab), B, 'the first account in the list is picked, as before');
+        assert.equal(stored(tab), null);
+        assert.equal(profile.extensions[0].enableCalls, 0);
     });
 
-    test('the last-used account is preferred by the auto-pick, until Disconnect forgets it', async () => {
+    test('the last-used account is preferred by the auto-pick of the remembered wallet, until Disconnect forgets both', async () => {
         const profile = makeProfile({ extensions: [polkadotJs(acct(2, 'Bob'), acct(1, 'Alice'))] });
         profile.local.setItem('pdex_last_used_wallet_address', A);
+        profile.local.setItem('pdex_wallet_last_source', 'polkadot-js');
         const tab = openTab(profile, { path: '/wallet' });
         await tab.visit('/wallet');
         assert.equal(stored(tab), A);
+        tab.fn('disconnectWallet')();
+        await tab.settle();
+        assert.equal(profile.local.getItem('pdex_wallet_last_source'), null);
+        assert.equal(profile.local.getItem('pdex_last_used_wallet_address'), null);
     });
 });
 

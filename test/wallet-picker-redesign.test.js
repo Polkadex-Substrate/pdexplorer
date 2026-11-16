@@ -1,11 +1,14 @@
 // The Switch wallet / Connect wallet page, redesigned (spec:
-// cto-team/plans/2026-11-11-switch-wallet-redesign.md).
+// cto-team/plans/2026-11-11-switch-wallet-redesign.md; since 16 Nov inside the
+// chooser of 2026-11-16-connect-wallet-redesign.md, test/connect-chooser.test.js).
 //
 // The old page printed the copy for both moments at once: in switch mode the
 // user read a "Connected as" box, a green "Detected" banner, the first-connect
 // paragraph and only then the list, where the current account appeared a
 // second time. The account list is now the page; everything else is one line,
-// behind a disclosure, or gone.
+// behind a disclosure, or gone. Since the chooser, the list is one wallet's
+// accounts: the remembered wallet's when switching, the clicked wallet's on
+// first connect.
 //
 // Layers tested here:
 //   1. lib/wallet-picker.js        pure: filtering, grouping, row markup
@@ -22,12 +25,11 @@ import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
 import { encodeAddress, decodeAddress } from '@polkadot/util-crypto';
 import { escapeHtml } from '../lib/html-escape.js';
-import { closeControlHtml } from '../lib/close-control.js';
 import { filterAccounts, buildAccountListHtml, sourceLabel, SEARCH_THRESHOLD } from '../lib/wallet-picker.js';
-import { mountWalletPicker } from '../lib/wallet-picker-view.js';
 import { createMultisigUI } from '../lib/multisig-view.js';
 import { normalizeMultisig } from '../lib/multisig.js';
 import { makeProfile, openTab, fakeExtension, settle } from './helpers/wallet-world.js';
+import { mountChooser, fakeWallet } from './helpers/chooser-world.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const CSS = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
@@ -35,44 +37,30 @@ const CSS = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 const addr = (n, prefix = 88) => encodeAddress(new Uint8Array(32).fill(n), prefix);
 const A = addr(21), B = addr(22), C = addr(23), D = addr(24);
 const same = (a, b) => { try { return Buffer.from(decodeAddress(a)).equals(Buffer.from(decodeAddress(b))); } catch (e) { return false; } };
-const valid = (a) => { try { decodeAddress(a); return true; } catch (e) { return false; } };
 const short = (a) => String(a).slice(0, 8) + '...' + String(a).slice(-6);
 const acct = (n, name, source = 'polkadot-js') => ({ address: addr(n), name, source });
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
 // ─── the page, in a real (happy-dom) document ───────────────────────────────
 
+// `accounts` become fake extensions, one per source. Switching (current set):
+// the wallet the account came from is the root. First connect: the first
+// wallet's row is clicked, so the page is on that wallet's accounts.
 function mount(t, opts = {}) {
-    const window = new Window({ url: 'https://explorer.test/wallet', settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
-    t.after(() => window.happyDOM.close());
-    const doc = window.document;
-    const root = doc.createElement('div');
-    root.id = 'wallet-dashboard';
-    doc.body.appendChild(root);
-    const calls = { select: [], disconnect: 0, multisig: [], closes: 0, loads: 0 };
-    let list = 'accounts' in opts ? opts.accounts : [acct(21, 'Alice'), acct(22, 'Bob')];
-    const deps = {
-        doc, current: opts.current || '', currentSource: opts.currentSource || '', onMobile: !!opts.onMobile, hash: opts.hash || '',
-        getAccounts: opts.getAccounts || (async () => { calls.loads++; return list === null ? null : list.map(a => ({ ...a })); }),
-        select: (a, s) => calls.select.push([a, s]),
-        disconnect: opts.disconnect || (() => { calls.disconnect++; }),
-        isSame: same, isValid: valid, esc: escapeHtml, shortAddr: short,
-        helpHtml: '<a href="/help/connecting-wallet" class="help-inline-icon" title="How wallets work on Polkadex Explorer" aria-label="How wallets work on Polkadex Explorer"></a>',
-        closeHtml: closeControlHtml({ parent: 'home' }),
-        mobileCardsHtml: '<div class="mobile-wallet-grid">CARDS</div>', currentUrl: 'https://explorer.test/wallet',
-        clipboard: { writeText: async () => {} },
-        mountMultisig: (el, o) => { calls.multisig.push(o); el.innerHTML = '<div class="ms-stub">MS</div>'; },
-        slowMs: opts.slowMs
-    };
-    const picker = mountWalletPicker(root, deps);
-    root.querySelector('.close-control').addEventListener('click', () => { calls.closes++; });
-    const q = (s) => root.querySelector(s);
-    const qa = (s) => Array.from(root.querySelectorAll(s));
-    const text = () => root.textContent.replace(/\s+/g, ' ');
-    return { window, doc, root, calls, picker, q, qa, text, setAccounts: (v) => { list = v; } };
+    const list = 'accounts' in opts ? opts.accounts : [acct(21, 'Alice'), acct(22, 'Bob')];
+    const by = new Map();
+    for (const a of list || []) { if (!by.has(a.source)) by.set(a.source, []); by.get(a.source).push({ address: a.address, name: a.name }); }
+    const wallets = [...by].map(([k, accs]) => fakeWallet(k, accs, { hold: !!opts.hold }));
+    const w = mountChooser(t, { wallets, current: opts.current || '', currentSource: opts.currentSource || '', lastSource: opts.lastSource ?? opts.currentSource ?? '',
+        onMobile: !!opts.onMobile, hash: opts.hash || '', slowMs: opts.slowMs });
+    const open = !opts.current && wallets[0] ? wallets[0].key : '';
+    const ready = w.picker.ready.then(async () => { if (open) { w.row(open).click(); await w.settle(); } });
+    w.picker = { ...w.picker, ready, idle: w.picker.idle };
+    w.setAccounts = (v) => { for (const wal of wallets) wal.accounts.splice(0, wal.accounts.length, ...v.filter(a => a.source === wal.key).map(a => ({ address: a.address, name: a.name }))); };
+    return w;
 }
-const key = (w, el, k) => el.dispatchEvent(new w.window.KeyboardEvent('keydown', { key: k, bubbles: true }));
-const type = (w, input, v) => { input.value = v; input.dispatchEvent(new w.window.Event('input', { bubbles: true })); };
+const key = (w, el, k) => w.key(el, k);
+const type = (w, input, v) => w.type(input, v);
 
 describe('switching state (a wallet is connected)', () => {
     test('title, one subtitle line, and the current account exactly once, as a Current row that is not a button', async (t) => {
@@ -80,7 +68,7 @@ describe('switching state (a wallet is connected)', () => {
         await w.picker.ready;
         assert.equal(w.q('#wallet-picker-title').textContent.trim(), 'Switch wallet');
         assert.equal(w.q('.wallet-picker-sub').textContent.trim(), 'Choose the account you want to use.');
-        const rows = w.qa('[data-address]').filter(e => same(e.getAttribute('data-address'), A));
+        const rows = w.qa('#wallet-accounts [data-address]').filter(e => same(e.getAttribute('data-address'), A));
         assert.equal(rows.length, 1, 'the current account appears once');
         const cur = rows[0];
         assert.notEqual(cur.tagName, 'BUTTON', 'the Current row is not clickable');
@@ -129,6 +117,7 @@ describe('switching state (a wallet is connected)', () => {
         assert.equal(cur[0].getAttribute('data-source'), 'talisman');
         assert.equal(w.qa('.wallet-account-badge').length, 1);
         assert.equal(w.qa('.wallet-account-group')[0].getAttribute('data-source'), 'talisman', 'the current group is listed first');
+        assert.deepEqual(w.enables(), { 'polkadot-js': 0, talisman: 1 }, 'only the wallet the account came from is asked');
     });
 
     test('a typed read-only address still gets one Current row, in a group of its own, so Disconnect has a home', async (t) => {
@@ -150,8 +139,8 @@ describe('switching state (a wallet is connected)', () => {
     });
 });
 
-describe('first connect (nothing connected)', () => {
-    test('title, subtitle, no Current row, no Disconnect, and the Create a wallet line', async (t) => {
+describe('first connect (nothing connected), after the wallet\'s row was clicked', () => {
+    test('title, subtitle, no Current row, no Disconnect; no Create a wallet footer line any more', async (t) => {
         const w = mount(t);
         await w.picker.ready;
         assert.equal(w.q('#wallet-picker-title').textContent.trim(), 'Connect wallet');
@@ -159,113 +148,47 @@ describe('first connect (nothing connected)', () => {
         assert.equal(w.q('[aria-current]'), null);
         assert.equal(w.q('#wallet-picker-disconnect'), null);
         assert.equal(w.qa('.wallet-account-btn').length, 2);
-        assert.match(w.q('.wallet-create-line').textContent, /New to Polkadex\? Create a wallet/);
-        assert.ok(w.q('.wallet-picker-footnote'));
+        assert.equal(w.q('.wallet-create-line'), null, 'Create a wallet is the "No wallet? Get one" row now');
+        assert.ok(w.visible(w.q('.wallet-picker-footnote')));
         assert.equal(w.q('section.wallet-picker').getAttribute('data-mode'), 'connect');
     });
 });
 
 describe('edge states', () => {
-    test('no extension (desktop): heading, install links, Refresh, and View any address open', async (t) => {
-        const w = mount(t, { accounts: null });
-        await w.picker.ready;
-        const empty = w.q('.wallet-picker-empty');
-        assert.equal(empty.querySelector('h3').textContent.trim(), 'No wallet found in this browser');
-        assert.match(empty.textContent, /Install a wallet extension, then refresh\./);
-        assert.match(empty.textContent, /Install Polkadot\.js/);   // was "Get": onboarding now names every link "Install X"
-        assert.match(empty.textContent, /Talisman/);
-        assert.match(empty.textContent, /SubWallet/);
-        assert.ok(empty.querySelector('.wallet-picker-refresh-btn'));
-        assert.equal(w.q('#wallet-picker-view').open, true, 'View any address is open: it is the one thing the user can do');
-        assert.equal(w.q('#wallet-picker-footnote').hidden, true, 'no safety line: nothing to approve yet');
-        assert.equal(w.q('#wallet-picker-missing').hidden, true);
-        assert.equal(w.q('#wallet-mobile-section').hidden, false, 'Wallet on your phone? is offered');
-        assert.equal(w.q('#wallet-mobile-section').open, false);
-        assert.ok(w.q('.wallet-create-line'));
-    });
-
-    test('no extension on a phone: the wallet app cards are shown open, with Copy link', async (t) => {
-        const w = mount(t, { accounts: null, onMobile: true });
-        await w.picker.ready;
-        assert.match(w.q('.wallet-picker-empty').textContent, /Phone browsers cannot use wallet extensions\. Open this page inside your wallet app instead\./);
-        const phone = w.q('#wallet-mobile-section');
-        assert.equal(phone.open, true);
-        assert.match(phone.textContent, /Open in your wallet app/);
-        assert.match(phone.textContent, /CARDS/);
-        assert.equal(w.q('#wallet-copy-btn').textContent.trim(), 'Copy link');
-    });
-
-    test('in a wallet app with accounts listed, the phone cards collapse to "Wallet on your phone?"', async (t) => {
-        const w = mount(t, { onMobile: true });
-        await w.picker.ready;
-        const phone = w.q('#wallet-mobile-section');
-        assert.equal(phone.hidden, false);
-        assert.equal(phone.open, false);
-        assert.equal(phone.querySelector('summary').textContent.trim(), 'Wallet on your phone?');
-    });
-
-    test('on desktop with accounts listed there is no phone section and View any address is collapsed', async (t) => {
+    // No extension, a phone, zero accounts and refused: one line under the
+    // row, or the Get a wallet view (test/connect-chooser.test.js).
+    test('on desktop with accounts listed there is no phone section, and More options waits on the options view', async (t) => {
         const w = mount(t);
         await w.picker.ready;
         assert.equal(w.q('#wallet-mobile-section').hidden, true);
+        assert.equal(w.visible(w.q('#wallet-picker-more')), false);
         assert.equal(w.q('#wallet-picker-view').open, false);
         assert.equal(w.q('#wallet-picker-view summary').textContent.trim(), 'View any address');
     });
 
-    test('in switch mode with no extension, the Current row is shown above the empty state', async (t) => {
-        const w = mount(t, { accounts: null, current: A, currentSource: 'polkadot-js' });
-        await w.picker.ready;
-        assert.ok(w.q('[aria-current="true"] #wallet-picker-disconnect'));
-        assert.ok(w.q('.wallet-picker-empty'));
-        const html = w.q('#wallet-accounts').innerHTML;
-        assert.ok(html.indexOf('aria-current') < html.indexOf('wallet-picker-empty'));
-    });
-
-    test('zero accounts shared: one message with three steps and a full Refresh button; no "Don\'t see your account?"', async (t) => {
-        const w = mount(t, { accounts: [] });
-        await w.picker.ready;
-        const empty = w.q('.wallet-picker-empty');
-        assert.equal(empty.querySelector('h3').textContent.trim(), 'Your wallet did not share any accounts');
-        const steps = Array.from(empty.querySelectorAll('ol li')).map(li => li.textContent.trim());
-        assert.deepEqual(steps, ['Open your wallet extension and unlock it.', 'Allow Polkadex Explorer to see at least one account.', 'Press Refresh.']);
-        assert.equal(empty.querySelector('.wallet-picker-refresh-btn').textContent.trim(), 'Refresh');
-        assert.equal(w.q('#wallet-picker-missing').hidden, true);
-        assert.equal(w.q('#wallet-picker-footnote').hidden, false);
-        w.setAccounts([acct(23, 'Carol')]);
-        empty.querySelector('.wallet-picker-refresh-btn').click();
-        await w.picker.idle();
-        assert.equal(w.qa('.wallet-account-btn').length, 1, 'Refresh picks up the account just allowed');
-    });
-
-    test('search appears above 8 accounts, not at 8; the label and group headers carry counts only then', async (t) => {
+    test('search appears above 8 accounts, not at 8; group headers carry counts only then', async (t) => {
         const eight = Array.from({ length: SEARCH_THRESHOLD }, (_, i) => acct(30 + i, 'Account ' + i));
         const w8 = mount(t, { accounts: eight });
         await w8.picker.ready;
         assert.equal(w8.q('#wallet-picker-search-wrap').hidden, true);
-        assert.equal(w8.q('#wallet-picker-count-label').textContent.trim(), 'Your accounts');
         assert.ok(!/\(\d+\)/.test(w8.q('.wallet-group-head').textContent));
         const w9 = mount(t, { accounts: [...eight, acct(60, 'Account 8')] });
         await w9.picker.ready;
         assert.equal(w9.q('#wallet-picker-search-wrap').hidden, false);
-        assert.equal(w9.q('#wallet-picker-count-label').textContent.trim(), 'Your accounts (9)');
         assert.match(w9.q('.wallet-group-head').textContent, /Polkadot\.js \(9\)/);
+        assert.equal(w9.q('#wallet-picker-count-label'), null, 'the "Your accounts" label is gone');
     });
 
-    test('20+ accounts across two extensions: search filters as you type, groups with no match disappear, no match offers Clear search', async (t) => {
-        const many = [
-            ...Array.from({ length: 14 }, (_, i) => acct(30 + i, 'Polka ' + i, 'polkadot-js')),
-            ...Array.from({ length: 9 }, (_, i) => acct(60 + i, 'Tali ' + i, 'talisman'))
-        ];
+    test('23 accounts: search filters as you type, no match offers Clear search', async (t) => {
+        const many = Array.from({ length: 23 }, (_, i) => acct(30 + i, (i < 14 ? 'Polka ' : 'Tali ') + i));
         const w = mount(t, { accounts: many });
         await w.picker.ready;
-        assert.equal(w.q('#wallet-picker-count-label').textContent.trim(), 'Your accounts (23)');
         const search = w.q('#wallet-picker-search');
         assert.equal(search.getAttribute('placeholder'), 'Search by name or address');
         assert.equal(search.getAttribute('inputmode'), 'search');
-        assert.notEqual(w.doc.activeElement, search, 'the search field does not steal focus on load');
-        type(w, search, 'tali 1');
+        assert.notEqual(w.doc.activeElement, search, 'the search field does not steal focus');
+        type(w, search, 'tali 15');
         assert.equal(w.qa('.wallet-account-btn').length, 1);
-        assert.equal(w.qa('.wallet-account-group').length, 1, 'the Polkadot.js group disappeared');
         assert.match(w.q('#wallet-picker-live').textContent, /1 account matches/);
         type(w, search, 'zzz');
         assert.equal(w.qa('.wallet-account-btn').length, 0);
@@ -285,38 +208,29 @@ describe('edge states', () => {
         assert.equal(rows[0].getAttribute('data-address'), addr(35));
     });
 
-    test('multiple extensions: one group each, with an icon tile and the name; current group first', async (t) => {
-        const w = mount(t, { current: C, currentSource: 'talisman', accounts: [acct(21, 'Alice', 'polkadot-js'), acct(22, 'Bob', 'subwallet-js'), acct(23, 'Carol', 'talisman')] });
+    test('the wallet\'s group: role group, labelled by its head, an icon tile hidden from screen readers', async (t) => {
+        const w = mount(t, { current: C, currentSource: 'talisman', accounts: [acct(21, 'Alice', 'polkadot-js'), acct(22, 'Bob', 'talisman'), acct(23, 'Carol', 'talisman')] });
         await w.picker.ready;
-        const groups = w.qa('.wallet-account-group');
-        assert.deepEqual(groups.map(g => g.getAttribute('data-source')), ['talisman', 'polkadot-js', 'subwallet-js']);
-        for (const g of groups) {
-            const head = g.querySelector('.wallet-group-head');
-            assert.equal(g.getAttribute('role'), 'group');
-            assert.equal(g.getAttribute('aria-labelledby'), head.id);
-            const tile = head.querySelector('.wallet-ext-tile');
-            assert.equal(tile.getAttribute('aria-hidden'), 'true');
-        }
-        assert.deepEqual(groups.map(g => g.querySelector('.wallet-ext-tile').textContent.trim()), ['TA', 'PJ', 'SW']);
-        assert.deepEqual(groups.map(g => g.querySelector('.wallet-group-head').textContent.replace(/^\s*\w\w\s*/, '').trim()), ['Talisman', 'Polkadot.js', 'SubWallet']);
+        const g = w.q('.wallet-account-group');
+        assert.equal(g.getAttribute('data-source'), 'talisman');
+        assert.equal(g.getAttribute('role'), 'group');
+        assert.equal(w.q('#' + g.getAttribute('aria-labelledby')).textContent.replace(/^\s*\w\w\s*/, '').trim(), 'Talisman');
+        const tile = g.querySelector('.wallet-ext-tile');
+        assert.equal(tile.getAttribute('aria-hidden'), 'true');
+        assert.equal(tile.textContent.trim(), 'TA');
     });
 
-    test('loading: skeleton rows and "Looking for wallets..."; after the slow threshold, the popup hint', async (t) => {
-        let release;
-        const w = mount(t, { getAccounts: () => new Promise(r => { release = r; }), slowMs: 20 });
-        assert.ok(w.qa('.wallet-skel-account').length >= 2);
-        assert.equal(w.q('#wallet-picker-status').textContent.trim(), 'Looking for wallets...');
-        const r = w.q('#wallet-picker-refresh');
-        assert.equal(r.disabled, true);
-        assert.equal(r.getAttribute('aria-busy'), 'true');
+    test('while the remembered wallet answers: the Current row and a status line; after the slow threshold, the longer hint', async (t) => {
+        const w = mount(t, { current: A, currentSource: 'polkadot-js', hold: true, slowMs: 20 });
+        await tick(5);
+        assert.ok(w.q('[aria-current="true"]'), 'the Current row is on screen while the wallet answers');
+        assert.equal(w.q('#wallet-picker-status').textContent.trim(), 'Asking Polkadot.js...');
         await tick(40);
-        assert.equal(w.q('#wallet-picker-status').textContent.trim(), 'Waiting for your wallet. Check for a popup from your wallet extension.');
-        release([acct(21, 'Alice')]);
+        assert.equal(w.q('#wallet-picker-status').textContent.trim(), 'Still waiting. Look for a Polkadot.js popup, or open the extension.');
+        w.wallets[0].release();
         await w.picker.ready;
-        assert.equal(r.disabled, false);
-        assert.equal(r.getAttribute('aria-busy'), 'false');
         assert.equal(w.q('#wallet-picker-status').textContent.trim(), '');
-        assert.equal(w.q('#wallet-picker-live').textContent.trim(), '1 account found.');
+        assert.equal(w.q('#wallet-picker-live').textContent.trim(), '2 accounts found in Polkadot.js.');
     });
 
     test('Refresh keeps the rows on screen while it asks again, then replaces them', async (t) => {
@@ -325,10 +239,10 @@ describe('edge states', () => {
         w.setAccounts([acct(21, 'Alice'), acct(22, 'Bob'), acct(23, 'Carol')]);
         w.q('#wallet-picker-refresh').click();
         assert.equal(w.qa('.wallet-account-btn').length, 2, 'no flash to empty');
-        assert.equal(w.qa('.wallet-skel-account').length, 0);
-        await w.picker.idle();
+        assert.equal(w.q('#wallet-picker-refresh').getAttribute('aria-busy'), 'true');
+        await w.settle();
         assert.equal(w.qa('.wallet-account-btn').length, 3);
-        assert.equal(w.q('#wallet-picker-live').textContent.trim(), '3 accounts found.');
+        assert.equal(w.q('#wallet-picker-live').textContent.trim(), '3 accounts found in Polkadot.js.');
     });
 });
 
@@ -341,15 +255,13 @@ describe('"Don\'t see your account?"', () => {
         assert.equal(d.open, false);
         assert.equal(d.hidden, false);
         assert.equal(d.querySelector('summary').textContent.trim(), "Don't see your account?");
-        assert.match(d.textContent, /Your wallet only shows the accounts you have allowed for this site\./);
-        assert.match(d.textContent, /Open your wallet extension and allow Polkadex Explorer to see the account\./);
-        assert.match(d.textContent, /Using a different wallet extension\? Install or unlock it, then refresh\./);
-        const loads = w.calls.loads;
+        assert.match(d.textContent, /Your wallet only shows the accounts you allowed for this site\. Allow the account in Polkadot\.js, then refresh\./);
+        const before = w.enables()['polkadot-js'];
         const btn = d.querySelector('.wallet-picker-refresh-btn');
         assert.equal(btn.textContent.trim(), 'Refresh accounts');
         btn.click();
-        await w.picker.idle();
-        assert.equal(w.calls.loads, loads + 1);
+        await w.settle();
+        assert.equal(w.enables()['polkadot-js'], before + 1);
     });
 });
 
@@ -393,16 +305,16 @@ describe('keyboard and screen reader', () => {
         assert.ok(iClose < iHelp && iHelp < iRefresh && iRefresh < iDis && iDis < iBob && iBob < iMissing && iMissing < iView, names.join(' | '));
     });
 
-    test('Escape clears the search first, and only closes the page on a second press', async (t) => {
+    test('Escape clears the search first, and only closes the page on a second press (switching: no Back to go to)', async (t) => {
         const many = Array.from({ length: 10 }, (_, i) => acct(30 + i, 'Account ' + i));
-        const w = mount(t, { accounts: many });
+        const w = mount(t, { accounts: many, current: addr(30), currentSource: 'polkadot-js' });
         await w.picker.ready;
         const search = w.q('#wallet-picker-search');
         type(w, search, 'Account 3');
         assert.equal(w.qa('.wallet-account-btn').length, 1);
         key(w, search, 'Escape');
         assert.equal(search.value, '');
-        assert.equal(w.qa('.wallet-account-btn').length, 10);
+        assert.equal(w.qa('.wallet-account-btn').length, 9);
         assert.equal(w.calls.closes, 0, 'the first Escape only cleared the search');
         key(w, search, 'Escape');
         assert.equal(w.calls.closes, 1, 'the second Escape closes the page through the X');
@@ -427,7 +339,7 @@ describe('keyboard and screen reader', () => {
     });
 
     test('View any address: hint, placeholder, button, and the unchanged error', async (t) => {
-        const w = mount(t);
+        const w = mount(t, { current: A, currentSource: 'polkadot-js' });
         await w.picker.ready;
         const v = w.q('#wallet-picker-view');
         assert.match(v.textContent, /Read only\. You can look, but not sign\./);
@@ -701,6 +613,7 @@ describe('script.js: switch from the header returns to the page it started on', 
     test('a switch started on /wallet/<old> goes to the new dashboard, not back to the old one', async () => {
         const profile = makeProfile({ extensions: [fakeExtension('polkadot-js', [acct42(21, 'Alice'), acct42(22, 'Bob')])] });
         profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
         const tab = openTab(profile, { path: '/wallet/' + A });
         tab.fn('openWalletPicker')();
         await settle();
@@ -714,6 +627,7 @@ describe('script.js: switch from the header returns to the page it started on', 
         test(`returnTo is ignored when it is ${label}`, async () => {
             const profile = makeProfile({ extensions: [fakeExtension('polkadot-js', [acct42(21, 'Alice'), acct42(22, 'Bob')])] });
             profile.local.setItem('pdex_wallet_address', A);
+            profile.local.setItem('pdex_wallet_source', 'polkadot-js');
             const tab = openTab(profile, { path: '/wallet', search: '?switch=1&returnTo=' + encodeURIComponent(evil) });
             await tab.visit('/wallet?switch=1&returnTo=' + encodeURIComponent(evil));
             tab.accountButtons().find(b => same(b.getAttribute('data-address'), B)).click();
@@ -725,6 +639,7 @@ describe('script.js: switch from the header returns to the page it started on', 
     test('a same-origin relative returnTo is honoured', async () => {
         const profile = makeProfile({ extensions: [fakeExtension('polkadot-js', [acct42(21, 'Alice'), acct42(22, 'Bob')])] });
         profile.local.setItem('pdex_wallet_address', A);
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
         const tab = openTab(profile, { path: '/wallet', search: '?switch=1&returnTo=%2Fcouncil' });
         await tab.visit('/wallet?switch=1&returnTo=%2Fcouncil');
         tab.accountButtons().find(b => same(b.getAttribute('data-address'), B)).click();
@@ -783,7 +698,7 @@ describe('help text matches the words on screen', () => {
     test('no em or en dashes in the new modules', () => {
         for (const f of ['../lib/wallet-picker.js', '../lib/wallet-picker-view.js', '../lib/help-popover.js']) {
             const src = readFileSync(new URL(f, import.meta.url), 'utf8');
-            assert.ok(!/[–—]/.test(src), f);
+            assert.ok(!/[\u2013\u2014]/.test(src), f);
         }
     });
 });
@@ -842,15 +757,14 @@ describe('the Current row, as the Checker saw it in a real browser', () => {
     }
 
     test('before the wallet answers, the Current row already shows the shortened address and the badge, not an empty bar', async (t) => {
-        let answer;
-        const w = mount(t, { current: addr(32), currentSource: 'polkadot-js', getAccounts: () => new Promise(r => { answer = r; }) });
+        const w = mount(t, { current: addr(32), currentSource: 'polkadot-js', accounts: [...PJ, ...TA], hold: true });
         await tick(0);
         const cur = w.q('[aria-current="true"]');
         assert.ok(cur, 'the Current row is on screen while loading');
         assert.equal(cur.querySelector('.wallet-account-label').textContent, short(addr(32)));
         assert.equal(cur.querySelector('.wallet-account-badge').textContent.trim(), 'Current');
         assert.ok(cur.querySelector('#wallet-picker-disconnect'));
-        answer([...PJ, ...TA]);
+        w.wallets.forEach(x => x.release());
         await w.picker.ready;
         assert.equal(w.q('[aria-current="true"] .wallet-account-label').textContent, 'Treasury Ops');
     });

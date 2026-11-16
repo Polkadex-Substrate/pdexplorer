@@ -35,9 +35,8 @@ import { buildTxModel, SIGNING_CAP_MS } from '../lib/tx-status.js';
 import { registryFromMetadata, remarkCall } from './helpers/extrinsic-builders.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { closeControlHtml } from '../lib/close-control.js';
-import { mountWalletPicker } from '../lib/wallet-picker-view.js';
-import { buildOnboardingHtml } from '../lib/wallet-onboarding.js';
-import { sourceLabel, groupBySource } from '../lib/wallet-picker.js';
+import { sourceLabel, groupBySource, buildOptionRowsHtml } from '../lib/wallet-picker.js';
+import { mountChooser, fakeWallet, acct as chooserAcct } from './helpers/chooser-world.js';
 import { createWalletSession } from '../lib/wallet-session.js';
 import { FEATURE_FLAGS } from '../lib/wallet-links.js';
 import { makeProfile, openTab, fakeExtension, settle, addr as worldAddr } from './helpers/wallet-world.js';
@@ -1087,107 +1086,78 @@ describe('source: session + signer + panel as one wallet source', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('picker: the WalletConnect slot is live when the flag is on', () => {
-    function mount(t, opts = {}) {
-        const window = domWindow(t);
-        const doc = window.document;
-        const root = doc.createElement('div');
-        doc.body.appendChild(root);
-        const calls = { loads: 0, select: [], connect: 0, disconnect: 0 };
-        let list = 'accounts' in opts ? opts.accounts : null;
-        const deps = {
-            current: opts.current || '', currentSource: opts.currentSource || '', onMobile: !!opts.onMobile, hash: '',
-            getAccounts: async () => { calls.loads++; return list === null ? null : list.map(a => ({ ...a })); },
-            select: (a, s) => calls.select.push([a, s]), disconnect: () => {},
-            isSame: same, isValid: valid, esc: escapeHtml, shortAddr: short,
-            helpHtml: '', closeHtml: closeControlHtml({ parent: 'home' }), mobileCardsHtml: '', currentUrl: 'https://explorer.test/wallet',
-            clipboard: { writeText: async () => {} }, mountMultisig: () => {}, reloadPage: () => {}
-        };
-        if ('walletConnect' in opts) deps.walletConnect = opts.walletConnect;
-        const picker = mountWalletPicker(root, deps);
-        return { root, calls, picker, q: (s) => root.querySelector(s), qa: (s) => Array.from(root.querySelectorAll(s)), setAccounts: (v) => { list = v; } };
-    }
-    const controller = (calls, impl = {}) => ({
-        connect: async (panel) => { calls.connect++; if (impl.connect) return impl.connect(panel); return []; },
-        disconnect: async () => { calls.disconnect++; },
-        isConnected: () => !!(impl.connected && impl.connected()),
-        peerName: () => (impl.peer || '')
+describe('picker: the phone row is live when the flag is on (the chooser, 2026-11-16)', () => {
+    // Pairing, its Back, failure and End connection are tested in full in
+    // test/connect-chooser.test.js; here, what the WalletConnect source needs.
+    test('no wallet in the browser: the phone row starts pairing in the pairing view\'s panel', async (t) => {
+        const w = mountChooser(t, { phone: true });
+        await w.picker.ready;
+        const row = w.action('phone');
+        assert.ok(row);
+        assert.equal(row.disabled, false);
+        assert.ok(!/Coming soon/.test(row.textContent));
+        row.click();
+        await flush();
+        assert.equal(w.phone.connects, 1);
+        const panel = w.phone.panels[0];
+        assert.ok(panel && panel.classList.contains('wallet-wc-panel'));
+        assert.equal(w.q('#wallet-picker-pairing').hidden, false);
     });
 
-    test('no wallet in the browser: the slot button is enabled and starts pairing in its panel', async (t) => {
-        const ctl = { connect: 0, disconnect: 0 };
-        let panelSeen = null;
-        const w = mount(t, { walletConnect: controller(ctl, { connect: (p) => { panelSeen = p; return []; } }) });
+    test('after pairing the phone accounts appear under the phone group head, picked like any extension\'s', async (t) => {
+        const w = mountChooser(t, { phone: { accounts: [chooserAcct(10, 'Nova Wallet account')] } });
         await w.picker.ready;
-        const btn = w.q('[data-slot="walletconnect"] button.wallet-wc-connect');
-        assert.ok(btn);
-        assert.equal(btn.disabled, false);
-        assert.ok(!/Coming soon/.test(w.q('[data-slot="walletconnect"]').textContent));
-        btn.click();
+        w.action('phone').click();
         await flush();
-        assert.equal(ctl.connect, 1);
-        assert.ok(panelSeen && panelSeen.classList.contains('wallet-wc-panel'));
-        assert.equal(panelSeen.hidden, false);
-    });
-
-    test('after pairing the list reloads and the phone accounts appear under WalletConnect, picked like any extension', async (t) => {
-        const ctl = { connect: 0, disconnect: 0 };
-        const phoneAcct = { address: synth(10, 88), name: 'Nova Wallet account', source: 'walletconnect' };
-        let w;
-        w = mount(t, { walletConnect: controller(ctl, { connect: () => { w.setAccounts([phoneAcct]); return [phoneAcct]; } }) });
-        await w.picker.ready;
-        const before = w.calls.loads;
-        w.q('button.wallet-wc-connect').click();
-        await flush();
-        await w.picker.idle();
-        assert.ok(w.calls.loads > before, 'accounts reloaded');
+        w.phone.approve();
+        await w.settle();
         const head = w.q('.wallet-account-group[data-source="walletconnect"] .wallet-group-head');
         assert.ok(head);
-        assert.match(head.textContent, /WalletConnect/);
+        assert.match(head.textContent, /Phone wallet: Nova Wallet/);
+        assert.match(head.querySelector('.wallet-ext-tile').textContent, /WC/, 'the WalletConnect tile');
         w.q('.wallet-account-btn[data-source="walletconnect"]').click();
         assert.deepEqual(w.calls.select, [[synth(10, 88), 'walletconnect']]);
     });
 
-    test('extension accounts present: the slot still offers the phone, under the list', async (t) => {
-        const ctl = { connect: 0, disconnect: 0 };
-        const w = mount(t, { accounts: [{ address: synth(11, 88), name: 'Ext', source: 'polkadot-js' }], walletConnect: controller(ctl) });
+    test('extensions installed: the phone row is still offered, once', async (t) => {
+        const w = mountChooser(t, { phone: true, wallets: [fakeWallet('polkadot-js', [chooserAcct(11, 'Ext')])] });
         await w.picker.ready;
-        assert.ok(w.q('#wallet-accounts [data-slot="walletconnect"] button.wallet-wc-connect'));
-        assert.equal(w.qa('[data-slot="walletconnect"]').length, 1, 'one slot only');
+        assert.equal(w.qa('.wallet-option-row[data-action="phone"]').length, 1);
     });
 
-    test('a connected phone shows its name and an End phone connection button', async (t) => {
-        const ctl = { connect: 0, disconnect: 0 };
-        const w = mount(t, { accounts: [], walletConnect: controller(ctl, { connected: () => true, peer: 'Nova Wallet' }) });
+    test('a connected phone shows its name and the account count; its group offers End connection', async (t) => {
+        const w = mountChooser(t, { phone: { connected: true } });
         await w.picker.ready;
-        const slot = w.q('[data-slot="walletconnect"]');
-        assert.match(slot.textContent, /Nova Wallet/);
-        const end = slot.querySelector('button.wallet-wc-disconnect');
-        assert.ok(end);
+        assert.match(w.action('phone').textContent, /Nova Wallet connected/);
+        w.action('phone').click();
+        await w.settle();
+        const end = w.q('.wallet-wc-disconnect');
+        assert.equal(end.textContent.trim(), 'End connection');
         end.click();
-        await flush();
-        assert.equal(ctl.disconnect, 1);
+        await w.settle();
+        assert.equal(w.phone.disconnects, 1);
     });
 
-    test('a failed pairing shows its message in the panel and re-enables the button; Cancelled shows nothing', async (t) => {
-        const ctl = { connect: 0, disconnect: 0 };
-        let mode = 'fail';
-        const w = mount(t, { walletConnect: controller(ctl, { connect: () => { throw new Error(mode === 'fail' ? 'Your wallet did not share a Polkadex account.' : CANCELLED); } }) });
+    test('a failed pairing shows its message with Try again; Cancelled shows nothing and goes back', async (t) => {
+        const w = mountChooser(t, { phone: true });
         await w.picker.ready;
-        w.q('button.wallet-wc-connect').click();
+        w.action('phone').click();
         await flush();
-        assert.match(w.q('.wallet-wc-panel').textContent, /did not share a Polkadex account/);
-        assert.equal(w.q('button.wallet-wc-connect').disabled, false);
-        mode = 'cancel';
-        w.q('button.wallet-wc-connect').click();
+        w.phone.fail('The relay could not be reached.');
+        await w.settle();
+        assert.match(w.q('#wallet-picker-pairing').textContent, /The relay could not be reached\./);
+        w.q('.wallet-wc-retry').click();
         await flush();
-        assert.ok(!/Cancelled/.test(w.q('.wallet-wc-panel').textContent));
+        w.phone.fail(CANCELLED);
+        await w.settle();
+        assert.equal(w.q('section.wallet-picker').getAttribute('data-view'), 'options');
+        assert.ok(!/Cancelled/.test(w.root.textContent));
     });
 
-    test('flag off: no slot, no mention', async (t) => {
-        const w = mount(t, { accounts: [{ address: synth(11, 88), name: 'Ext', source: 'polkadot-js' }] });
+    test('flag off: no phone row, no mention', async (t) => {
+        const w = mountChooser(t, { wallets: [fakeWallet('polkadot-js', [chooserAcct(11, 'Ext')])] });
         await w.picker.ready;
-        assert.equal(w.q('[data-slot="walletconnect"]'), null);
+        assert.equal(w.action('phone'), null);
         assert.ok(!/WalletConnect/.test(w.root.textContent));
     });
 
@@ -1198,10 +1168,10 @@ describe('picker: the WalletConnect slot is live when the flag is on', () => {
         assert.match(read('lib/wallet-picker.js'), /'walletconnect': 'WC'/);
     });
 
-    test('the onboarding builder renders a live button when given a controller', () => {
-        const html = buildOnboardingHtml({ onMobile: false, walletConnect: { isConnected: () => false, peerName: () => '' } });
-        assert.match(html, /class="wallet-wc-connect"/);
-        assert.ok(!/disabled/.test(html.slice(html.indexOf('data-slot="walletconnect"'))));
+    test('the option rows render a live phone row when given one', () => {
+        const html = buildOptionRowsHtml({ sources: [], phone: { connected: false }, esc: escapeHtml });
+        assert.match(html, /data-action="phone"/);
+        assert.ok(!/disabled/.test(html));
     });
 });
 
@@ -1238,13 +1208,15 @@ function fakeWcGate(accounts, { peer = 'Nova Wallet' } = {}) {
 }
 
 describe('script.js wiring (real functions, fake extensions and a fake gate)', () => {
-    test('allInjected merges extensions and the WalletConnect source; getInjectedAccounts lists the phone accounts', async () => {
+    test('allInjected merges extensions and the WalletConnect source; getInjectedAccounts lists the paired phone, and no extension nobody chose', async () => {
         const phone = { address: worldAddr(20, 0), name: 'Nova Wallet account' };
         const profile = makeProfile({ extensions: [fakeExtension('polkadot-js', [{ address: worldAddr(21, 42), name: 'Ext' }])] });
         profile.wcGate = fakeWcGate([phone]);
         const tab = openTab(profile);
         const accs = await tab.fn('getInjectedAccounts')({ retries: 1, retryDelayMs: 1 });
-        assert.deepEqual(JSON.parse(JSON.stringify(accs.map(a => a.source).sort())), ['polkadot-js', 'walletconnect']);
+        assert.deepEqual(JSON.parse(JSON.stringify(accs.map(a => a.source).sort())), ['walletconnect']);
+        assert.equal(profile.extensions[0].enableCalls, 0, 'the extension was asked without a click (lazy enable)');
+        assert.ok(tab.fn('allInjected')()['polkadot-js'], 'the extension is still detected');
         assert.ok(accs.find(a => a.source === 'walletconnect').address.startsWith('e'));
         tab.close();
     });

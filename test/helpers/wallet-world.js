@@ -21,6 +21,7 @@ import { bodyOf } from './source.js';
 import { closeControlHtml } from '../../lib/close-control.js';
 import { isValidPolkadexAddress } from '../../lib/wallet-safety.js';
 import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from '../../lib/wallet-session.js';
+import { createSourceRegistry, detectSources, signingKeys, findSigner } from '../../lib/wallet-sources.js';
 import { createDiscussAuth, signInForDiscussion } from '../../lib/discussion-auth.js';
 import { sourceLabel } from '../../lib/wallet-picker.js';
 import { mountWalletPicker } from '../../lib/wallet-picker-view.js';
@@ -132,6 +133,20 @@ function lift(name) {
     return pre + bodyOf(SCRIPT, name) + '\n';
 }
 
+// The Connect wallet chooser asks no wallet until a row is clicked. These do
+// what a user does: click the wallet's row, wait, then pick the account.
+export async function connectWith(tab, key, address) {
+    const row = tab.root.querySelector(`.wallet-option-row[data-source="${key}"]`);
+    if (!row) throw new Error('no row for ' + key);
+    row.click();
+    await settle();
+    if (address === undefined) return;
+    const btn = tab.accountButtons().find(b => { try { return Buffer.from(decodeAddress(b.getAttribute('data-address'))).equals(Buffer.from(decodeAddress(address))); } catch (e) { return false; } });
+    if (!btn) throw new Error('no account row for ' + address);
+    btn.click();
+    await settle();
+}
+
 // openTab(profile) is a fresh page load: new sessionStorage, new module state,
 // the profile's localStorage and extensions. Several tabs share one profile.
 export function makeProfile({ extensions = [] } = {}) {
@@ -154,12 +169,13 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
     const ctx = {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
+        createSourceRegistry, detectSources, signingKeys, findSigner,
         createDiscussAuth, signInForDiscussion,
         mountWalletPicker, sourceLabel,
         closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
         multisigUI: { mountAccounts() {} },
         // The WalletConnect gate: off unless a test puts one on the profile.
-        wcGate: profile.wcGate || { enabled: false, providers: () => ({}), isConnected: () => false, peerName: () => '', connect: async () => [], disconnect: async () => {}, restore: async () => [] },
+        wcGate: profile.wcGate || { enabled: false, providers: () => ({}), isConnected: () => false, peerName: () => '', connect: async () => [], cancel() {}, disconnect: async () => {}, restore: async () => [] },
         WC_SOURCE: 'walletconnect',
         councilCandidacyUI: { accountChanged() {} },
         spendMotionUI: { accountChanged() {} },
@@ -195,7 +211,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         routeTo(target) {
             const t = String(target).split('?')[0];
             log.routes.push(t);
-            if (t === 'wallet' || t === 'stake') ctx.initWalletPage('');
+            if (t === 'wallet' || t === 'stake' || t === 'staking') ctx.initWalletPage('');
             else if (t.startsWith('wallet/')) ctx.initWalletPage(t.slice('wallet/'.length));
         },
         fetch: (url, init) => {
@@ -223,6 +239,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         let walletActionsBlockedReason = null, walletEntryIntent = null, _walletSigningRecheckTimer = null, walletFetchGen = 0, walletMenu = null;
         const walletSession = createWalletSession({ storage: localStorage, toAddress: toPolkadexAddress, isSame: isSameAddress, isValid: isValidPolkadexAddress,
             revokeDiscuss: () => revokeDiscussSession(), onChange: () => onWalletChanged() });
+        const walletSources = createSourceRegistry({ getInjected: () => allInjected(), appName: 'Polkadex Explorer', toAddress: toPolkadexAddress });
     `;
     // `walletSession` and friends must exist before the lifted functions run, but
     // function declarations hoist, so one script is enough.
