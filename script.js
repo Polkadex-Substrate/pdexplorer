@@ -52,7 +52,8 @@ import { BUTTON_STAGE_TEXT, defaultThreshold, checkThreshold, motionState, overl
 import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
 import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers } from './lib/collective-live.js';
 import { createDemocracyView } from './lib/democracy-view.js';
-import { createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS } from './lib/wallet-session.js';
+import { createWalletSession, WALLET_KEYS } from './lib/wallet-session.js';
+import { createSourceRegistry, detectSources, signingKeys, findSigner } from './lib/wallet-sources.js';
 import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
 import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { mountWalletPicker } from './lib/wallet-picker-view.js';
@@ -4293,7 +4294,7 @@ function buildWalletConnectJsonLd() {
                     {
                         '@type': 'HowToStep', 'position': 1,
                         'name': 'Connect your wallet',
-                        'text': 'Open explorer.polkadex.ee/wallet and click Connect Wallet. On mobile, open the URL inside Nova Wallet or SubWallet\'s in-app dapp browser.',
+                        'text': 'Open explorer.polkadex.ee/wallet and choose how to connect: your wallet extension, or Phone wallet to scan a code with Nova Wallet or SubWallet. On mobile, you can also open the URL inside the wallet\'s in-app browser.',
                         'url': 'https://explorer.polkadex.ee/wallet'
                     },
                     {
@@ -8033,6 +8034,8 @@ function allInjected() {
     const all = { ...(window.injectedWeb3 || {}), ...wcGate.providers() };
     return Object.keys(all).length ? all : null;
 }
+// The only code that asks a wallet (enable): a click on its row, the remembered wallet, signing (lib/wallet-sources.js).
+const walletSources = createSourceRegistry({ getInjected: allInjected, toAddress: toPolkadexAddress });
 // The phone ended the session or it expired: an active phone account goes the way of a removed extension.
 function onWalletConnectEnded() { if (walletSession.source() === WC_SOURCE) disconnectWallet(); }
 function onWalletConnectAccounts(accounts) {
@@ -8043,7 +8046,7 @@ function onWalletConnectAccounts(accounts) {
 }
 function walletConnectController() {
     if (!wcGate.enabled) return false;
-    return { connect: (panel) => wcGate.connect(panel), isConnected: () => wcGate.isConnected(), peerName: () => wcGate.peerName(),
+    return { connect: (panel) => wcGate.connect(panel), cancel: () => wcGate.cancel(), isConnected: () => wcGate.isConnected(), peerName: () => wcGate.peerName(),
         disconnect: () => (walletSession.source() === WC_SOURCE ? disconnectWallet() : wcGate.disconnect()) };
 }
 const multisigStore = createMultisigStore(localStorage);
@@ -8202,26 +8205,8 @@ async function getInjectedAccounts({ retries = 6, retryDelayMs = 250 } = {}) {
     }
     const injected = allInjected();
     if (!injected) return null;
-    const accounts = [];
-    for (const key of Object.keys(injected)) {
-        try {
-            const provider = injected[key];
-            if (!provider || typeof provider.enable !== 'function') continue;
-            const ext = await provider.enable('Polkadex Explorer');
-            if (ext && ext.accounts && typeof ext.accounts.get === 'function') {
-                const accs = await ext.accounts.get();
-                for (const a of accs) {
-                    const pdex = toPolkadexAddress(a.address);
-                    // Audit F-117: a `rawAddress` field used to be stored here
-                    // "for the injected signer", but nothing ever read it —
-                    // every signAndSend call site passes account.address and
-                    // extensions accept any SS58 encoding of a key they own.
-                    accounts.push({ address: pdex, name: a.name || key, source: key });
-                }
-            }
-        } catch (e) { /* user rejected this extension */ }
-    }
-    return accounts;
+    // Only the wallets in use: the account's, the remembered one, this visit's, a paired phone. Never every extension.
+    return walletSources.accounts(signingKeys({ stored: walletSession.source(), remembered: walletSession.lastSource(), enabled: walletSources.enabledKeys(), present: Object.keys(injected) }));
 }
 
 function connectWallet() {
@@ -8406,15 +8391,12 @@ function initWalletPage(address) {
     //      replace:true so the back button still lands on the previous page,
     //      not on a transient /wallet entry.
     //
-    //   2. If no stored address but the wallet extension already exposes
-    //      accounts to this tab, auto-pick the FIRST account (the user's
-    //      explicit preference — "use the first wallet in the list").
-    //      Done async so the connect panel still paints instantly while
-    //      the extension is being queried; if the auto-pick lands, it
-    //      replaces the panel with the dashboard.
+    //   2. If no stored address but a wallet is remembered
+    //      (pdex_wallet_last_source), ask that wallet only, silently, and
+    //      restore the last-used account. A new visitor is asked nothing.
     //
-    //   3. Otherwise show the connect panel as before (search-indexable,
-    //      lists every detected extension account as a button).
+    //   3. Otherwise show the Connect wallet chooser: one row per way to
+    //      connect; a wallet is asked only when its row is clicked.
     const wantPicker = new URLSearchParams(window.location.search || '').get('switch') === '1';
     const stored = getStoredWallet();
     if (!wantPicker && stored && isValidPolkadexAddress(stored)) {
@@ -8455,6 +8437,9 @@ function initWalletPage(address) {
 // the current route after the async account fetch to avoid clobbering
 // whatever the user picked manually or navigated to while we were waiting.
 async function tryAutoSelectFirstWallet() {
+    // A new visitor gets the chooser: no wallet is asked on load unless one is remembered (pdex_wallet_last_source).
+    const remembered = walletSession.lastSource();
+    if (!remembered) return;
     try {
         // Honour an explicit Disconnect. It is PERSISTENT (lib/wallet-session.js):
         // the old one-shot sessionStorage flag stopped the auto-pick for a single
@@ -8463,8 +8448,8 @@ async function tryAutoSelectFirstWallet() {
         // connected, e.g. clicked while the extension's permission prompt was open.
         if (!walletSession.mayAutoPick()) return;
         walletSession.beginRestore();   // pages show "checking", not a Connect prompt, while the extension answers
-        const accounts = await getInjectedAccounts();
-        if (!accounts || !accounts.length) return;
+        const accounts = (await walletSources.read(remembered)).accounts;
+        if (!accounts.length) return;
         // Late-bind these gates AFTER the async wait so they're checked
         // against the freshest state, not stale captures from start time. The
         // user may have clicked Disconnect or picked an account meanwhile.
@@ -8507,7 +8492,8 @@ function renderWalletConnectPanel(root) {
     const currentUrl = (typeof location !== 'undefined') ? location.href : 'https://explorer.polkadex.ee/wallet';
     return mountWalletPicker(root, {
         current: getStoredWallet(), currentSource: walletSession.source(), onMobile: isMobileDevice(), hash: window.location.hash || '',
-        getAccounts: () => getInjectedAccounts(), select: selectWallet, disconnect: disconnectWallet,
+        lastSource: walletSession.lastSource(), getSources: () => detectSources(window.injectedWeb3), enableSource: (k) => walletSources.enableSource(k),
+        readSource: (k) => walletSources.read(k), enabledKeys: () => walletSources.enabledKeys(), select: selectWallet, disconnect: disconnectWallet,
         isSame: isSameAddress, isValid: isValidPolkadexAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress,
         helpHtml: helpIcon('connecting-wallet', 'How wallets work on Polkadex Explorer'), closeHtml: closeControlHtml({ parent: 'home' }),
         mobileCardsHtml: renderMobileWalletCards(), currentUrl, clipboard: navigator.clipboard,
@@ -10958,18 +10944,8 @@ function renderThread(thread, posts, root = document.getElementById('discussions
 async function getWalletSigner(address) {
     const injected = allInjected();
     if (!injected) return null;
-    for (const key of orderSources(Object.keys(injected), walletSession.source())) {
-        try {
-            const provider = injected[key];
-            if (!provider || typeof provider.enable !== 'function') continue;
-            const ext = await provider.enable('Polkadex Explorer');
-            if (ext && ext.accounts && ext.accounts.get && ext.signer && ext.signer.signRaw) {
-                const accs = await ext.accounts.get();
-                if (accs.some(a => isSameAddress(a.address, address))) return ext.signer;
-            }
-        } catch (e) { /* user rejected this extension */ }
-    }
-    return null;
+    const keys = signingKeys({ stored: walletSession.source(), remembered: walletSession.lastSource(), enabled: walletSources.enabledKeys(), present: Object.keys(injected) });
+    return (await findSigner(walletSources, { keys, address, isSame: isSameAddress, needs: 'signRaw' })).signer;
 }
 
 // Challenge, wallet signature, verify; the token is kept for `address` only, and
@@ -12545,30 +12521,23 @@ async function resolveWalletSigner(fail, signingAccount = null) {
     const staleRuntime = liveRuntimeError(globalApi);
     if (staleRuntime) return fail(staleRuntime);
 
-    let injected;
-    try { injected = await getInjectedAccounts(); }
-    catch (e) { return fail('Could not access your wallet extension.'); }
-    if (!injected || !injected.length) {
+    const injected = allInjected();
+    if (!injected) {
         return fail(isMobileDevice()
-            ? "You're in read-only mode — no wallet is connected to this browser tab. Open this page inside Nova Wallet or SubWallet's in-app browser to sign transactions, then come back to this action."
-            : 'No Substrate wallet extension found. Install Polkadot.js, Talisman or SubWallet (desktop) — or open this page in a mobile wallet\'s in-app browser.');
+            ? "You're in read-only mode: no wallet is connected to this browser tab. Open this page inside Nova Wallet or SubWallet's in-app browser to sign transactions, then come back to this action."
+            : 'No wallet extension found. Install Polkadot.js, Talisman or SubWallet (desktop), or open this page in a mobile wallet\'s in-app browser.');
     }
-
-    // Match by underlying public key so an SS58-prefix mismatch between the
-    // extension (often prefix 42) and the stored address (Polkadex prefix 88)
-    // doesn't make the account look missing.
-    const account = signingAccount
-        ? injected.find(a => isSameAddress(a.address, address) && a.source === signingAccount.source)
-        : pickSigningAccount(injected, address, walletSession.source(), isSameAddress);
-    if (!account) return fail("This account isn't available in your connected wallet. Switch to the right account in your wallet extension (or reconnect) and try again.");
-
-    let signer;
-    try {
-        const provider = (allInjected() || {})[account.source];
-        const ext = await provider.enable('Polkadex Explorer');
-        signer = ext.signer;
-    } catch (e) { return fail('Wallet extension authorization was rejected.'); }
-    return { account, signer };
+    // Only the wallet the account came from, the remembered one and this visit's are asked; the legacy
+    // fallback (no wallet recorded at all) asks each installed one once, here only, and remembers the holder.
+    const keys = signingAccount ? [signingAccount.source] : signingKeys({ stored: walletSession.source(), remembered: walletSession.lastSource(),
+        enabled: walletSources.enabledKeys(), present: Object.keys(injected), legacy: true });
+    let found;
+    try { found = await findSigner(walletSources, { keys, address, isSame: isSameAddress }); }
+    catch (e) { return fail('Could not access your wallet extension.'); }
+    if (found.rejected) return fail('Wallet extension authorization was rejected.');
+    if (!found.account) return fail("This account isn't available in your connected wallet. Switch to the right account in your wallet extension (or reconnect) and try again.");
+    if (!signingAccount && !walletSession.lastSource()) walletSession.rememberSource(found.key);
+    return { account: found.account, signer: found.signer };
 }
 
 // Every result goes to the status card (lib/tx-status-card.js); the watching
