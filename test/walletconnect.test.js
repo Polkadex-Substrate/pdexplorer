@@ -1165,7 +1165,8 @@ describe('picker: the phone row is live when the flag is on (the chooser, 2026-1
         assert.equal(sourceLabel('walletconnect'), 'WalletConnect');
         const g = groupBySource([{ address: synth(1, 88), name: 'a', source: 'walletconnect' }]);
         assert.equal(g[0].label, 'WalletConnect');
-        assert.match(read('lib/wallet-picker.js'), /'walletconnect': 'WC'/);
+        // Brand audit C11: no blue WC monogram; the phone group head is the neutral phone icon.
+        assert.ok(!/'walletconnect': 'WC'/.test(read('lib/wallet-picker.js')));
     });
 
     test('the option rows render a live phone row when given one', () => {

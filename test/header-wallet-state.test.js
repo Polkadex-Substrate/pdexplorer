@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { encodeAddress } from '@polkadot/util-crypto';
-import { createWalletSession, WALLET_KEYS } from '../lib/wallet-session.js';
+import { createWalletSession, WALLET_KEYS, isSessionStorageKey } from '../lib/wallet-session.js';
 import { readRepo, bodyOf, stripComments } from './helpers/source.js';
 
 const RUNNER = fileURLToPath(new URL('./helpers/full-page.js', import.meta.url));
@@ -131,6 +131,16 @@ describe('storage refuses the write (full quota, private window): the reported s
         connectedAs(r.steps[1], A, 'after connecting');
         connectedAs(r.final, A, 'after the tab came back');
     });
+    test('12. another tab disconnects and only the disconnected flag changes in storage: this page lets go of its held account, and says so', async () => {
+        // This page connected A but storage refused the write, so storage never
+        // held an address. The other tab's Disconnect removes keys that are
+        // already absent (no storage event for those) and sets the flag: the
+        // one event this page gets is for pdex_wallet_disconnected.
+        const r = await page({ path: 'wallet', refuseWalletWrites: true, wallets: { 'polkadot-js': [ext(41)] },
+            steps: [{ click: ROW('polkadot-js') }, { click: '.wallet-account-btn' }, { storage: { [WALLET_KEYS.disconnected]: '1' } }] });
+        connectedAs(r.steps[1], A, 'after connecting');
+        notConnected(r.final, 'after the other tab disconnected');
+    });
     test('11. Disconnect still disconnects when storage refuses the removal too', async () => {
         const r = await page({ path: 'wallet', refuseWalletWrites: true, wallets: { 'polkadot-js': [ext(41)] },
             steps: [{ click: ROW('polkadot-js') }, { click: '.wallet-account-btn' }, { click: MENU }, { click: MENU_DISCONNECT }] });
@@ -177,6 +187,25 @@ describe('lib/wallet-session.js: the choice holds for this page when storage can
         s.select(A, 'polkadot-js');
         assert.equal(s.syncExternal(), null);
         assert.equal(s.connected(), A);
+    });
+    test('the storage keys a page must listen to for another tab: address, source, the disconnected flag, and a clear()', () => {
+        for (const k of [WALLET_KEYS.address, WALLET_KEYS.source, WALLET_KEYS.disconnected, null]) assert.equal(isSessionStorageKey(k), true, String(k));
+        for (const k of [WALLET_KEYS.lastUsed, WALLET_KEYS.lastSource, 'pdex_watchlist_v1']) assert.equal(isSessionStorageKey(k), false, k);
+        const code = stripComments(SCRIPT);
+        assert.match(code, /window\.addEventListener\('storage', \(e\) => \{\s*if \(!isSessionStorageKey\(e\.key\)\) return;/, 'the page filters the storage event some other way');
+    });
+    test('a disconnected-only write from another tab drops the held choice and is announced once, flagged external', () => {
+        const storage = refusing();
+        const s = createWalletSession({ storage, isSame: same });
+        const seen = [];
+        s.onActiveAccountChange(c => seen.push(c.reason + ':' + c.current + ':' + c.external));
+        s.select(A, 'polkadot-js');
+        storage.m.set(WALLET_KEYS.disconnected, '1');   // the other tab's Disconnect
+        const c = s.syncExternal();
+        assert.equal(c && c.reason, 'disconnect');
+        assert.equal(s.getActiveAccount().status, 'none');
+        assert.deepEqual(seen, ['connect:' + A + ':false', 'disconnect::true']);
+        assert.equal(s.syncExternal(), null, 'told once');
     });
     test('another tab that does write wins: this page follows what storage now says', () => {
         const storage = refusing();

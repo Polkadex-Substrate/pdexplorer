@@ -11,7 +11,9 @@
 //   wallets: { key: [address] }      fake extensions on window.injectedWeb3; enable() is counted
 //   refuseWalletWrites: true         storage throws on pdex_wallet* / pdex_last* writes and
 //                                    removals once seeded (a full quota, or a private window)
-//   steps: [ { click: selector, nth }, { event: 'visibilitychange' }, { storage: { key: value|null } } ]
+//   hang: [key]                      those extensions never answer enable() (the auto-pick stays 'restoring')
+//   steps: [ { click: selector, nth }, { event: 'visibilitychange' }, { storage: { key: value|null } },
+//            { go: '/path' } (an SPA navigation: pushState, then popstate) ]
 // }
 // Prints one line: RESULT {"first": header, "steps": [header...], "final": {...}}.
 // Nothing reaches the network: fetch is a stub, WebSocket never opens, and the
@@ -73,7 +75,8 @@ const enables = {};
 const injected = {};
 for (const [key, list] of Object.entries(scenario.wallets || {})) {
     enables[key] = 0;
-    injected[key] = { enable: async () => { enables[key]++; return { accounts: { get: async () => list.map((address, i) => ({ address, name: key + ' ' + i })) }, signer: {} }; } };
+    const hang = (scenario.hang || []).includes(key);
+    injected[key] = { enable: async () => { enables[key]++; if (hang) await new Promise(() => {}); return { accounts: { get: async () => list.map((address, i) => ({ address, name: key + ' ' + i })) }, signer: {} }; } };
 }
 win.injectedWeb3 = injected;
 
@@ -85,6 +88,20 @@ const header = () => {
         connectedClass: btn.classList.contains('is-connected'),
         navTitle: document.getElementById('nav-my-account').title,
         enables: { ...enables }
+    };
+};
+// The dashboard's "whose account is this" slot and the controls beside it.
+const dashboard = () => {
+    const note = document.querySelector('#wallet-dashboard .wallet-viewing-note.is-readonly');
+    const banner = document.querySelector('#wallet-dashboard .wallet-viewing-note:not(.is-readonly)');
+    const sw = document.getElementById('wallet-switch-btn');
+    return {
+        note: note ? note.textContent.replace(/\s+/g, ' ').trim() : null,
+        noteHtml: note ? note.outerHTML : null,
+        banner: banner ? banner.textContent.replace(/\s+/g, ' ').trim() : null,
+        switchShown: !!sw && !sw.hidden,
+        switchPresent: !!sw,
+        title: document.title
     };
 };
 
@@ -105,6 +122,9 @@ for (const step of scenario.steps || []) {
         else el.click();
     } else if (step.event) {
         document.dispatchEvent(new win.Event(step.event));
+    } else if (step.go) {
+        win.history.pushState(null, '', step.go);
+        win.dispatchEvent(new win.Event('popstate'));
     } else if (step.storage) {
         // Another tab wrote (its writes succeed): change the shared storage, then
         // one 'storage' event per key, as the browser sends them.
@@ -118,7 +138,7 @@ for (const step of scenario.steps || []) {
         refuse.on = was;
     }
     await tick(step.wait || 60);
-    steps.push({ ...header(), path: location.pathname + location.search });
+    steps.push({ ...header(), path: location.pathname + location.search, dashboard: dashboard() });
 }
 
 const result = {
@@ -127,7 +147,8 @@ const result = {
         ...header(), path: location.pathname + location.search,
         stored: local.getItem('pdex_wallet_address'),
         dashboardDisconnect: !!document.getElementById('wallet-disconnect-btn'),
-        menuWho: (document.getElementById('wallet-menu-who') || {}).textContent || ''
+        menuWho: (document.getElementById('wallet-menu-who') || {}).textContent || '',
+        dashboard: dashboard()
     },
     errors
 };
