@@ -242,6 +242,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         const walletSession = createWalletSession({ storage: localStorage, toAddress: toPolkadexAddress, isSame: isSameAddress, isValid: isValidPolkadexAddress,
             revokeDiscuss: () => revokeDiscussSession(), onChange: () => onWalletChanged() });
         const walletSources = createSourceRegistry({ getInjected: () => allInjected(), appName: 'Polkadex Explorer', toAddress: toPolkadexAddress });
+        walletSession.onActiveAccountChange(() => refreshConnectWalletButton());   // as script.js wires the header
     `;
     // `walletSession` and friends must exist before the lifted functions run, but
     // function declarations hoist, so one script is enough.

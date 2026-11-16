@@ -8106,7 +8106,6 @@ function onWalletChanged() {
     walletActionsBlockedReason = null; currentWalletData = null; walletEntryIntent = null;
     if (_walletSigningRecheckTimer) { clearTimeout(_walletSigningRecheckTimer); _walletSigningRecheckTimer = null; }
     invalidateWalletFetch();
-    refreshConnectWalletButton();
     democracyView.restart();                // "You voted" follows the wallet
     govDetailPage.accountChanged();         // and so does an item page's Actions panel
     closeSigningModals(document);           // a modal opened for the old account must not sign for the new one
@@ -8115,12 +8114,15 @@ function onWalletChanged() {
     if (!isWalletRoute(here) && !selfManagedRoute(here)) routeTo(here);
 }
 
+// The header button, the My Account menu and the sidebar item. Drawn from the
+// session (lib/wallet-session.js), on load and on every change it announces.
 function refreshConnectWalletButton() {
     const btn = document.getElementById('connect-wallet-btn');
     const label = document.getElementById('connect-wallet-label');
     const sub = document.getElementById('connect-wallet-sub');
     const disconnectBtn = document.getElementById('disconnect-wallet-btn');
-    const stored = getStoredWallet();
+    const active = walletSession.getActiveAccount();
+    const stored = active.address;
     if (stored) {
         // Connected: lead with "My Account" so the affordance is obvious, and
         // tuck the abbreviated address underneath as a secondary line.
@@ -8143,7 +8145,7 @@ function refreshConnectWalletButton() {
     if (disconnectBtn) disconnectBtn.style.display = stored ? 'inline-flex' : 'none';
     // The My Account menu: who is connected, and shut it when nobody is.
     const who = document.getElementById('wallet-menu-who');
-    if (who) who.textContent = stored ? (stakingShortAddress(stored) + (walletSession.source() ? ' (' + sourceLabel(walletSession.source()) + ')' : '')) : '';
+    if (who) who.textContent = stored ? (stakingShortAddress(stored) + (active.source ? ' (' + sourceLabel(active.source) + ')' : '')) : '';
     if (!stored && walletMenu) walletMenu.close();
     // Reflect connected state on the sidebar item too — clearer than a generic "My Account" link.
     const navMine = document.getElementById('nav-my-account');
@@ -8243,8 +8245,7 @@ function selectWallet(address, source = '') {
     // select() lifts a Disconnect opt-out, remembers the extension, and revokes
     // the previous account's discussion session if the address changed.
     const pdex = toPolkadexAddress(address);
-    walletSession.select(pdex, source);
-    refreshConnectWalletButton();
+    walletSession.select(pdex, source);   // the header follows through onActiveAccountChange
     // Honour ?returnTo=<path> if the user arrived at /wallet from a
     // "Connect a wallet to <do thing>" link elsewhere in the app — e.g.
     // the account-labels "suggest or vote" prompt on /account/<addr>.
@@ -8338,7 +8339,6 @@ function disconnectWallet() {
     const endPhone = walletSession.source() === WC_SOURCE;
     walletSession.disconnect();
     if (endPhone) wcGate.disconnect().catch(() => {});   // Disconnect on a phone account also ends the WalletConnect session
-    refreshConnectWalletButton();
     // On a wallet page, land on the connect panel; initWalletPage renders it.
     if (isWalletRoute(readRouteFromLocation())) navigateTo('wallet');
 }
@@ -11502,6 +11502,8 @@ window.addEventListener('storage', (e) => {
 });
 const disconnectWalletBtn = document.getElementById('disconnect-wallet-btn');
 if (disconnectWalletBtn) disconnectWalletBtn.addEventListener('click', disconnectWallet);
+// Connect, switch, Disconnect, another tab, a phone session ending: every path announces it.
+walletSession.onActiveAccountChange(() => refreshConnectWalletButton());
 refreshConnectWalletButton();
 
 setInterval(() => {
