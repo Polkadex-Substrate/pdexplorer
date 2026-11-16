@@ -272,11 +272,50 @@ describe('loaded rows survive a dashboard re-render', () => {
         assert.equal(store.address, OTHER);
     });
 
-    test('the cache paint neither reads nor wipes the store', async () => {
+    test('the cache paint shows the loaded rows too (no ten-row flash) but never writes the store or mounts a bar', async () => {
         const store = newStore();
         const first = page(store, {}, { queue: [more(10, 50, '4941:60')] });
         first.btn.click(); await tick();
-        page(store, {}, { live: false });
+        const painted = page(store, {}, { live: false });
+        assert.equal(painted.table.rows.length, 60);
+        assert.equal(new Set(painted.table.rows.map(r => r.hash)).size, 60);
+        assert.equal(painted.bar, null);
+        assert.equal(store.rows.length, 60);
+        assert.equal(store.next, '4941:60');
+    });
+
+    test('the cache paint of another wallet shows only its own ten rows and leaves the store alone', async () => {
+        const store = newStore();
+        const first = page(store, {}, { queue: [more(10, 50, '4941:60')] });
+        first.btn.click(); await tick();
+        const other = page(store, { address: OTHER, recentTransactions: rows(200, 10) }, { live: false });
+        assert.equal(other.table.rows.length, 10);
+        assert.equal(store.address, ME);
+        assert.equal(store.rows.length, 60);
+    });
+
+    test('more than ten new transactions between renders: no overlap, so the loaded rows and cursor reset instead of leaving a gap', async () => {
+        const store = newStore();
+        const first = page(store, {}, { queue: [more(10, 50, '4941:60')] });
+        first.btn.click(); await tick();
+        const jumped = page(store, { recentTransactions: rows(500, 10), recentTransactionsNext: '4491:510', recentTransactionsTotal: 1475 },
+            { queue: [more(510, 50, '4441:560')] });
+        assert.equal(jumped.table.rows.length, 10);
+        assert.equal(jumped.count.textContent, 'Showing 10 of 1,475 transactions');
+        assert.equal(store.rows.length, 10);
+        assert.equal(store.next, '4491:510');
+        assert.equal(jumped.btn.textContent, 'Load 50 more');
+        jumped.btn.click(); await tick();
+        assert.deepEqual(jumped.urls, [`/api/account/${ME}/history?list=transactions&before=4491%3A510&limit=50`]);
+        assert.equal(jumped.table.rows.length, 60);
+    });
+
+    test('the cache paint with no overlap shows only the cached ten', async () => {
+        const store = newStore();
+        const first = page(store, {}, { queue: [more(10, 50, '4941:60')] });
+        first.btn.click(); await tick();
+        const painted = page(store, { recentTransactions: rows(500, 10) }, { live: false });
+        assert.equal(painted.table.rows.length, 10);
         assert.equal(store.rows.length, 60);
     });
 });
@@ -305,6 +344,51 @@ describe('a page that lands after the user left is dropped', () => {
         await tick();
         assert.equal(table.rows.length, 10);
         assert.equal(store.rows.length, 10);
+    });
+});
+
+describe('brand audit: neutral pager, plain links (cto-team/plans/2026-11-16-brand-audit-open-ui.md R1, R2)', () => {
+    const loader = stripComments(readRepo('lib/account-load-older.js', import.meta.url));
+    const css = readRepo('styles.css', import.meta.url);
+    const rule = sel => { const i = css.indexOf(sel + ' {'); assert.ok(i !== -1, sel); return css.slice(i, css.indexOf('}', i)); };
+
+    test('the bar carries no inline button style, Primary outline or off-token tint', () => {
+        assert.ok(!/BUTTON_STYLE/.test(loader));
+        assert.ok(!/rgba\(229/.test(loader));
+        assert.ok(!/brand-primary/.test(loader));
+        assert.ok(!/brand-secondary/.test(loader));
+    });
+
+    test('the buttons are the neutral secondary style in styles.css', () => {
+        const base = rule('.js-older-btn, .js-older-search');
+        assert.match(base, /border: 1px solid var\(--border-color\)/);
+        assert.match(base, /background: rgba\(255, 255, 255, 0\.05\)/);
+        assert.match(base, /color: var\(--text-primary\)/);
+        assert.ok(!/brand-primary|229/.test(base));
+        assert.match(rule('.js-older-btn:hover, .js-older-search:hover'), /border-color: var\(--border-hover\)/);
+    });
+
+    test('Search all stays hidden until needed, and the rendered buttons have no style attribute colours', () => {
+        const store = newStore();
+        const ui = page(store);
+        assert.equal(ui.btn.getAttribute('style'), null);
+        const search = ui.card.querySelector('.js-older-search');
+        assert.match(search.getAttribute('style') || '', /display: none/);
+        assert.ok(!/color|border|background/.test(search.getAttribute('style') || ''));
+    });
+
+    test('both View all links use the inline link class, not green', async () => {
+        const store = newStore();
+        const ui = page(store, {}, { queue: [more(10, 52, null)] });
+        ui.btn.click(); await tick();
+        const link = ui.done.querySelector('a');
+        assert.equal(link.getAttribute('class'), 'item-link is-inline');
+        assert.equal(link.getAttribute('style'), null);
+        const script = readRepo('script.js', import.meta.url);
+        const header = script.split('\n').find(l => l.includes('View all on the account page'));
+        assert.match(header, /class="item-link is-inline"/);
+        assert.ok(!/brand-secondary/.test(header));
+        assert.match(rule('.item-link.is-inline'), /text-decoration: underline/);
     });
 });
 
