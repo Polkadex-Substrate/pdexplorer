@@ -1114,7 +1114,7 @@ describe('picker: the phone row is live when the flag is on (the chooser, 2026-1
         const head = w.q('.wallet-account-group[data-source="walletconnect"] .wallet-group-head');
         assert.ok(head);
         assert.match(head.textContent, /Phone wallet: Nova Wallet/);
-        assert.match(head.querySelector('.wallet-ext-tile').textContent, /WC/, 'the WalletConnect tile');
+        assert.ok(head.querySelector('.wallet-ext-tile.tile-icon .bx-mobile'), 'the neutral phone tile (brand audit C11)');
         w.q('.wallet-account-btn[data-source="walletconnect"]').click();
         assert.deepEqual(w.calls.select, [[synth(10, 88), 'walletconnect']]);
     });

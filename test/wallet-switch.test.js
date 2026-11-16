@@ -626,7 +626,8 @@ describe('page wiring', () => {
         assert.match(SCRIPT, /onSwitch: openWalletPicker, onDisconnect: disconnectWallet/);
         assert.match(SCRIPT, /switchBtn\.addEventListener\('click', openWalletPicker\)/);
         assert.match(SCRIPT, /getElementById\('wallet-disconnect-btn'\)/);
-        assert.match(SCRIPT, /window\.addEventListener\('storage', \(e\) => \{\s*if \(e\.key !== WALLET_KEYS\.address/);
+        // The keys live in lib/wallet-session.js (isSessionStorageKey), the disconnected flag among them.
+        assert.match(SCRIPT, /window\.addEventListener\('storage', \(e\) => \{\s*if \(!isSessionStorageKey\(e\.key\)\) return;/);
         assert.ok(!/pdex_skip_wallet_auto_pick|consumeSkipAutoPickFlag/.test(SCRIPT.replace(/\/\/.*$/gm, '')), 'the one-shot flag is back');
     });
 

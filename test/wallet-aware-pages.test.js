@@ -560,7 +560,9 @@ describe('script.js wiring', () => {
     });
 
     test('the wallet dashboard of another address says whose wallet is connected and offers Show mine', () => {
-        assert.match(fn('renderWalletDashboard'), /viewingBannerHtml\(\{ viewing: data\.address, wallet: getStoredWallet\(\)/);
+        // One slot for the banner and the not-connected note (brand audit section 3), repainted on session changes.
+        assert.match(fn('renderWalletDashboard'), /walletViewingSlotHtml\(data\.address\)/);
+        assert.match(fn('walletViewingSlotHtml'), /const wallet = getStoredWallet\(\);[\s\S]*viewingBannerHtml\(\{ viewing, wallet,/);
     });
 
     test('script.js stays under its 15,000-line ceiling', () => {

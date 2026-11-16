@@ -324,6 +324,10 @@ describe('the chooser markup', () => {
         assert.equal(note.textContent.replace(/\s+/g, ' ').trim(), 'Connects through the WalletConnect relay, run by Reown. It sees your IP address, not your keys or the contents of what you sign. Privacy');
         assert.equal(note.querySelector('a').getAttribute('href'), '/privacy');
         assert.equal(note.querySelector('a').textContent, 'Privacy');
+        // A new tab: the router takes any same-tab /path click, which would leave
+        // the chooser and lose the QR code halfway through pairing.
+        assert.equal(note.querySelector('a').getAttribute('target'), '_blank');
+        assert.equal(note.querySelector('a').getAttribute('rel'), 'noopener');
     });
 
     test('C20: the support block keeps its class names for the stylesheet', () => {
@@ -399,7 +403,7 @@ describe('privacy and cookie pages (audit section 4)', () => {
         const s4 = PRIVACY.slice(PRIVACY.indexOf('4. Third-party services'), PRIVACY.indexOf('5. Email alerts'));
         assert.match(s4, /<ul[^>]*>/);
         assert.equal((s4.match(/<li[\s>]/g) || []).length, 5);
-        assert.ok(!/[–—]/.test(s4), 'en or em dash in section 4');
+        assert.ok(!/[\u2013\u2014]/.test(s4), 'en or em dash in section 4');
         assert.match(PRIVACY, /9\. Contact/);
         assert.ok(!/8\. Contact/.test(PRIVACY));
     });
@@ -423,6 +427,8 @@ describe('privacy and cookie pages (audit section 4)', () => {
         const s4 = PRIVACY.slice(PRIVACY.indexOf('4. Third-party services'), PRIVACY.indexOf('5. Email alerts'));
         const short = PRIVACY.slice(PRIVACY.indexOf('Short version'), PRIVACY.indexOf('1. Who we are'));
         const notStore = COOKIES.slice(COOKIES.indexOf('What we do NOT store'), COOKIES.indexOf('Sessions</h2>'));
-        for (const [name, s] of [['section 4', s4], ['short version', short], ['what we do not store', notStore]]) assert.ok(!/[–—]/.test(s), name);
+        // Section 3's first paragraph carries text C, so the whole paragraph is held to the rule.
+        const s3 = PRIVACY.slice(PRIVACY.indexOf('3. Wallet addresses and signatures'), PRIVACY.indexOf('4. Third-party services'));
+        for (const [name, s] of [['section 3', s3], ['section 4', s4], ['short version', short], ['what we do not store', notStore]]) assert.ok(!/[\u2013\u2014]/.test(s), name);
     });
 });
