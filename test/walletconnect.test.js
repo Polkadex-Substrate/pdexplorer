@@ -488,6 +488,9 @@ function signedTxFor(p, payload, override = {}) {
     ext.addSignature(p.address, signPayloadWith(p, used), used);
     return ext.toHex();
 }
+// The MultiSignature inside a signed extrinsic (sr25519 signatures are
+// randomised, so a fresh signature of the same payload never equals it).
+const sigInside = (tx) => registry.createType('Extrinsic', tx).inner.signature.multiSignature.toHex();
 
 describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polkadot_signMessage', () => {
     test('signPayload sends { address, transactionPayload } and returns { id, signature }', async () => {
@@ -521,7 +524,8 @@ describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polka
         const signer = createWalletConnectSigner({ request: async () => ({ signedTransaction: tx }), getRegistry: () => registry });
         const r = await signer.signPayload(payload);
         assert.equal(r.signedTransaction, tx);
-        assert.equal(r.signature, signPayloadWith(pair, payload), 'the MultiSignature inside the returned transaction');
+        assert.equal(r.signature, sigInside(tx), 'the MultiSignature inside the returned transaction');
+        assert.ok(signatureVerify(payloadMessage(registry, payload), r.signature, pair.address).isValid);
     });
 
     test('signedTransaction wins over a stray signature field: the signature returned is the one in the transaction', async () => {
@@ -529,7 +533,8 @@ describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polka
         const tx = signedTxFor(pair, payload);
         const stray = signPayloadWith(pair, payloadFor(pair.address, '0x99'));
         const signer = createWalletConnectSigner({ request: async () => ({ signature: stray, signedTransaction: tx }), getRegistry: () => registry });
-        assert.equal((await signer.signPayload(payload)).signature, signPayloadWith(pair, payload));
+        assert.equal((await signer.signPayload(payload)).signature, sigInside(tx));
+        assert.notEqual(sigInside(tx), stray);
     });
 
     test('a signedTransaction that differs from what we built is refused: signer, call, era, nonce, tip', async () => {
