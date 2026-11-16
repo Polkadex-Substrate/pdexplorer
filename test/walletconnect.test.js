@@ -31,7 +31,7 @@ import substrateMetadata from '@polkadot/types-support/metadata/static-substrate
 import { installPolkadotFixes } from '../lib/tx-extensions.js';
 import { trackSignedTx, WALLET_CHANGED_SIGNED } from '../lib/tx-submit.js';
 import { trackingSigner } from '../lib/signer-tracking.js';
-import { buildTxModel } from '../lib/tx-status.js';
+import { buildTxModel, SIGNING_CAP_MS } from '../lib/tx-status.js';
 import { registryFromMetadata, remarkCall } from './helpers/extrinsic-builders.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { closeControlHtml } from '../lib/close-control.js';
@@ -46,7 +46,8 @@ import { bodyOf } from './helpers/source.js';
 import * as config from '../lib/walletconnect-config.js';
 import { walletConnectEnabled, createWalletConnectGate } from '../lib/walletconnect-gate.js';
 import { createWalletConnectSession, WC_NO_POLKADEX_ACCOUNT } from '../lib/walletconnect-session.js';
-import { createWalletConnectSigner, normaliseSignature, payloadMessage, rawMessage, CANCELLED, TIMEOUT_TEXT } from '../lib/walletconnect-signer.js';
+import * as signerModule from '../lib/walletconnect-signer.js';
+const { createWalletConnectSigner, normaliseSignature, payloadMessage, rawMessage, CANCELLED, TIMEOUT_TEXT, SIGN_TIMEOUT_MS, SESSION_ENDED_TEXT, DIFFERENT_TX } = signerModule;
 import { mountPairingPanel, showPendingNotice } from '../lib/walletconnect-view.js';
 import { createWalletConnectSource } from '../lib/walletconnect-source.js';
 
@@ -115,12 +116,13 @@ function mockProvider({ existing = null, approve, reply } = {}) {
 
 const sessionFor = (mock, extra = {}) => createWalletConnectSession({ loadProvider: async () => mock.P, ...extra });
 
-let registry, pair, edPair;
+let registry, pair, edPair, ecPair;
 before(async () => {
     await cryptoWaitReady();
     registry = registryFromMetadata(substrateMetadata);
     pair = new Keyring({ type: 'sr25519', ss58Format: 88 }).addFromMnemonic(mnemonicGenerate());
     edPair = new Keyring({ type: 'ed25519', ss58Format: 88 }).addFromMnemonic(mnemonicGenerate());
+    ecPair = new Keyring({ type: 'ecdsa', ss58Format: 88 }).addFromMnemonic(mnemonicGenerate());
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,6 +480,14 @@ function payloadFor(address, data = '0x1234') {
 const signPayloadWith = (p, payload) => registry.createType('ExtrinsicPayload', payload, { version: payload.version }).sign(p).signature;
 // What a wallet that drops the type byte would return: 64 bytes.
 const bare = (sigHex) => u8aToHex(hexToU8a(sigHex).slice(1));
+// The signed extrinsic a wallet would return for a payload, signed by p, with
+// some fields swapped for others (and signed as swapped).
+function signedTxFor(p, payload, override = {}) {
+    const used = { ...payload, ...override };
+    const ext = registry.createType('Extrinsic', registry.createType('Call', used.method), { version: 4 });
+    ext.addSignature(p.address, signPayloadWith(p, used), used);
+    return ext.toHex();
+}
 
 describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polkadot_signMessage', () => {
     test('signPayload sends { address, transactionPayload } and returns { id, signature }', async () => {
@@ -505,13 +515,54 @@ describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polka
         assert.ok(ids.every(i => i > 0), 'never 0 or -1 (the api reads -1 as no id)');
     });
 
-    test('a signedTransaction from the wallet is passed on as it is', async () => {
+    test('a signedTransaction that is exactly our transaction is passed on, its signature taken from it', async () => {
         const payload = payloadFor(pair.address);
-        const sig = signPayloadWith(pair, payload);
-        const signer = createWalletConnectSigner({ request: async () => ({ signature: sig, signedTransaction: '0xfeed' }), getRegistry: () => registry });
+        const tx = signedTxFor(pair, payload);
+        const signer = createWalletConnectSigner({ request: async () => ({ signedTransaction: tx }), getRegistry: () => registry });
         const r = await signer.signPayload(payload);
-        assert.equal(r.signedTransaction, '0xfeed');
-        assert.equal(r.signature, sig);
+        assert.equal(r.signedTransaction, tx);
+        assert.equal(r.signature, signPayloadWith(pair, payload), 'the MultiSignature inside the returned transaction');
+    });
+
+    test('signedTransaction wins over a stray signature field: the signature returned is the one in the transaction', async () => {
+        const payload = payloadFor(pair.address);
+        const tx = signedTxFor(pair, payload);
+        const stray = signPayloadWith(pair, payloadFor(pair.address, '0x99'));
+        const signer = createWalletConnectSigner({ request: async () => ({ signature: stray, signedTransaction: tx }), getRegistry: () => registry });
+        assert.equal((await signer.signPayload(payload)).signature, signPayloadWith(pair, payload));
+    });
+
+    test('a signedTransaction that differs from what we built is refused: signer, call, era, nonce, tip', async () => {
+        const payload = payloadFor(pair.address);
+        const cases = {
+            signer: signedTxFor(edPair, { ...payload, address: edPair.address }),
+            call: signedTxFor(pair, payload, { method: payloadFor(pair.address, '0x9999').method }),
+            era: signedTxFor(pair, payload, { era: registry.createType('ExtrinsicEra', { current: 7, period: 64 }).toHex() }),
+            nonce: signedTxFor(pair, payload, { nonce: '0x00000006' }),
+            tip: signedTxFor(pair, payload, { tip: '0x00000000000000000000000000000001' })
+        };
+        for (const [what, tx] of Object.entries(cases)) {
+            const signer = createWalletConnectSigner({ request: async () => ({ signature: signPayloadWith(pair, payload), signedTransaction: tx }), getRegistry: () => registry });
+            await assert.rejects(signer.signPayload(payload), (e) => e.message === DIFFERENT_TX, `different ${what} must be refused`);
+        }
+        assert.equal(DIFFERENT_TX, 'The wallet returned a different transaction; nothing was sent.');
+    });
+
+    test('a signedTransaction that is unsigned or not a transaction at all is refused', async () => {
+        const payload = payloadFor(pair.address);
+        const unsigned = registry.createType('Extrinsic', registry.createType('Call', payload.method), { version: 4 }).toHex();
+        for (const tx of [unsigned, '0xfeed', 'not hex']) {
+            const signer = createWalletConnectSigner({ request: async () => ({ signature: signPayloadWith(pair, payload), signedTransaction: tx }), getRegistry: () => registry });
+            await assert.rejects(signer.signPayload(payload), (e) => e.message === DIFFERENT_TX, String(tx).slice(0, 20));
+        }
+    });
+
+    test('a signedTransaction with our fields but a signature that does not verify for them is refused', async () => {
+        const payload = payloadFor(pair.address);
+        const ext = registry.createType('Extrinsic', registry.createType('Call', payload.method), { version: 4 });
+        ext.addSignature(pair.address, signPayloadWith(pair, payloadFor(pair.address, '0x99')), payload);
+        const signer = createWalletConnectSigner({ request: async () => ({ signedTransaction: ext.toHex() }), getRegistry: () => registry });
+        await assert.rejects(signer.signPayload(payload), /does not match/);
     });
 
     test('the signer has no update(): nothing to relay after signAsync, trackingSigner passes it through untouched', () => {
@@ -534,9 +585,20 @@ describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polka
         assert.equal(calls[0].params.address, pair.address);
         assert.equal(calls[0].params.type, 'bytes');
         assert.equal(u8aToString(hexToU8a(calls[0].params.data)), '<Bytes>' + text + '</Bytes>');
+        assert.deepEqual(calls[0].params, { address: pair.address, data: calls[0].params.data, type: 'bytes', message: calls[0].params.data }, 'the bytes as both data and message');
         assert.equal(typeof r.id, 'number');
         // What the server checks (server.js /api/auth/verify): either form verifies.
         assert.ok(signatureVerify(u8aWrapBytes(stringToU8a(text)), r.signature, pair.address).isValid);
+    });
+
+    test('the signMessage params carry a comment citing the Reown reference and why message repeats data', () => {
+        const src = read('lib/walletconnect-signer.js');
+        const at = src.indexOf('async signRaw');
+        assert.ok(at > 0);
+        const before = src.slice(Math.max(0, at - 1200), at);
+        assert.match(before, /docs\.reown\.com/);
+        assert.match(before, /`message`/);
+        assert.match(before, /`data`/);
     });
 
     test('rawMessage: hex input is decoded, already-wrapped input is not wrapped twice', () => {
@@ -595,9 +657,46 @@ describe('signature normalisation: MultiSignature out, never a silent guess', ()
         assert.throws(() => normaliseSignature('0x01' + 'aa'.repeat(65), { message: new Uint8Array(1), address: pair.address }), /66 bytes/);
     });
 
-    test('a prefixed ecdsa signature (66 bytes, 0x02) is kept', () => {
-        const sig = '0x02' + 'cd'.repeat(65);
-        assert.equal(normaliseSignature(sig, { message: new Uint8Array(1), address: pair.address }), sig);
+    test('a prefixed ecdsa signature (66 bytes, 0x02) is kept only when it verifies for this account', () => {
+        const payload = payloadFor(ecPair.address);
+        const sig = signPayloadWith(ecPair, payload);
+        assert.equal(hexToU8a(sig).length, 66);
+        assert.equal(normaliseSignature(sig, { message: payloadMessage(registry, payload), address: ecPair.address }), sig);
+        assert.throws(() => normaliseSignature('0x02' + 'cd'.repeat(65), { message: payloadMessage(registry, payload), address: ecPair.address }), /does not match/);
+    });
+
+    test('every prefixed signature is verified: one over some other payload is refused', () => {
+        const payload = payloadFor(pair.address);
+        const other = signPayloadWith(pair, payloadFor(pair.address, '0x99'));
+        assert.equal(hexToU8a(other).length, 65);
+        assert.throws(() => normaliseSignature(other, { message: payloadMessage(registry, payload), address: pair.address }), /does not match/);
+    });
+
+    test('every prefixed signature is verified: one by another account is refused', () => {
+        const payload = payloadFor(pair.address);
+        const theirs = signPayloadWith(edPair, payloadFor(edPair.address));
+        assert.throws(() => normaliseSignature(theirs, { message: payloadMessage(registry, payload), address: pair.address }), /does not match/);
+    });
+
+    test('a type byte that names the wrong scheme is refused, not corrected', () => {
+        const payload = payloadFor(pair.address);
+        const sig = hexToU8a(signPayloadWith(pair, payload));
+        const lied = u8aToHex(u8aConcat(new Uint8Array([0]), sig.slice(1)));
+        assert.throws(() => normaliseSignature(lied, { message: payloadMessage(registry, payload), address: pair.address }), /does not match/);
+    });
+
+    test('a transaction signature must be over the exact payload bytes: one over <Bytes>payload</Bytes> is refused', async () => {
+        const payload = payloadFor(pair.address);
+        const wrapped = u8aToHex(pair.sign(u8aWrapBytes(payloadMessage(registry, payload)), { withType: true }));
+        const signer = createWalletConnectSigner({ request: async () => ({ signature: wrapped }), getRegistry: () => registry });
+        await assert.rejects(signer.signPayload(payload), /does not match/);
+    });
+
+    test('a signMessage reply by another account, or over other bytes, is refused', async () => {
+        const byOther = createWalletConnectSigner({ request: async (m, params) => ({ signature: u8aToHex(edPair.sign(hexToU8a(params.data), { withType: true })) }), getRegistry: () => registry });
+        await assert.rejects(byOther.signRaw({ address: pair.address, data: 'hello', type: 'bytes' }), /does not match/);
+        const otherBytes = createWalletConnectSigner({ request: async () => ({ signature: u8aToHex(pair.sign(rawMessage('goodbye'), { withType: true })) }), getRegistry: () => registry });
+        await assert.rejects(otherBytes.signRaw({ address: pair.address, data: 'hello', type: 'bytes' }), /does not match/);
     });
 
     test('no signature, or not hex: an error', () => {
@@ -679,8 +778,31 @@ describe('pending state, timeout and cancel', () => {
         await assert.rejects(signer.signRaw({ address: pair.address, data: 'x' }), /Unsupported chain/);
     });
 
-    test('the default timeout matches the WalletConnect request lifetime (5 minutes)', () => {
-        assert.match(read('lib/walletconnect-signer.js'), /SIGN_TIMEOUT_MS = 5 \* 60 \* 1000/);
+    test('the default timeout is the tx card\'s signing cap: one shared constant (SIGNING_CAP_MS, 180 s)', () => {
+        assert.equal(SIGNING_CAP_MS, 180000);
+        assert.equal(SIGN_TIMEOUT_MS, SIGNING_CAP_MS);
+        const src = read('lib/walletconnect-signer.js');
+        assert.match(src, /import \{[^}]*\bSIGNING_CAP_MS\b[^}]*\} from '\.\/tx-status\.js'/);
+        assert.match(src, /SIGN_TIMEOUT_MS = SIGNING_CAP_MS/);
+        assert.match(TIMEOUT_TEXT, /3 minutes/);
+        assert.ok(!/5 minutes/.test(TIMEOUT_TEXT));
+    });
+
+    test('cancelAll ends every pending request with the session-ended text and closes each notice; late answers are ignored', async () => {
+        const releases = [];
+        let closed = 0;
+        const signer = createWalletConnectSigner({ request: () => new Promise((r) => { releases.push(r); }), getRegistry: () => registry, onPending: () => () => { closed++; } });
+        const a = signer.signRaw({ address: pair.address, data: 'x' });
+        const b = signer.signPayload(payloadFor(pair.address));
+        await flush();
+        signer.cancelAll();
+        await assert.rejects(a, (e) => e.message === SESSION_ENDED_TEXT);
+        await assert.rejects(b, (e) => e.message === SESSION_ENDED_TEXT);
+        assert.equal(closed, 2);
+        assert.match(SESSION_ENDED_TEXT, /Nothing was signed/);
+        for (const r of releases) r({ signature: '0x00' });
+        await flush();
+        signer.cancelAll();   // nothing pending: harmless
     });
 });
 
@@ -891,6 +1013,45 @@ describe('source: session + signer + panel as one wallet source', () => {
         mock.instance().emit('session_delete', { topic: 'topic-1' });
         assert.equal(ended.length, 1);
         assert.equal(src.isConnected(), false);
+    });
+
+    test('a session ended on the phone while a signature waits: the request is cancelled and the notice removed', async (t) => {
+        const mock = mockProvider({ approve: () => wcSession([`${CAIP2}:${pair.address}`]), reply: () => new Promise(() => {}) });
+        const { window, src, ended } = sourceWith(t, mock);
+        await src.connect(window.document.createElement('div'));
+        const ext = await src.provider.enable();
+        const p = ext.signer.signRaw({ address: pair.address, data: 'x' });
+        await flush();
+        assert.ok(window.document.querySelector('.wc-pending'));
+        mock.instance().emit('session_delete', { topic: 'topic-1' });
+        await assert.rejects(p, (e) => e.message === SESSION_ENDED_TEXT);
+        assert.equal(window.document.querySelector('.wc-pending'), null, '"Approve on your phone" removed');
+        assert.equal(ended.length, 1);
+    });
+
+    test('a session that expires while a signature waits: the request is cancelled and the notice removed', async (t) => {
+        const mock = mockProvider({ approve: () => wcSession([`${CAIP2}:${pair.address}`]), reply: () => new Promise(() => {}) });
+        const { window, src } = sourceWith(t, mock);
+        await src.connect(window.document.createElement('div'));
+        const ext = await src.provider.enable();
+        const p = ext.signer.signPayload(payloadFor(pair.address));
+        await flush();
+        mock.instance().emitClient('session_expire', { topic: 'topic-1' });
+        await assert.rejects(p, (e) => e.message === SESSION_ENDED_TEXT);
+        assert.equal(window.document.querySelector('.wc-pending'), null);
+    });
+
+    test('our own disconnect while a signature waits cancels it too, without reporting an end from the phone', async (t) => {
+        const mock = mockProvider({ approve: () => wcSession([`${CAIP2}:${pair.address}`]), reply: () => new Promise(() => {}) });
+        const { window, src, ended } = sourceWith(t, mock);
+        await src.connect(window.document.createElement('div'));
+        const ext = await src.provider.enable();
+        const p = ext.signer.signRaw({ address: pair.address, data: 'x' });
+        await flush();
+        await src.disconnect();
+        await assert.rejects(p, (e) => e.message === SESSION_ENDED_TEXT);
+        assert.equal(window.document.querySelector('.wc-pending'), null);
+        assert.deepEqual(ended, []);
     });
 
     test('our own disconnect does not report itself as ended from the phone', async (t) => {
@@ -1273,6 +1434,31 @@ describe('tx-submit end to end with the WalletConnect signer', () => {
         assert.ok(shown.some(m => m.stage === 'broadcast'));
     });
 
+    test('a phone that returns the signed transaction: exactly those bytes are submitted', async () => {
+        const { api, submitted } = fakeApi();
+        const errors = [];
+        let sent = null;
+        const run = trackSignedTx({ api, action: { id: 'd', key: 'system.remark', params: {} }, show: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex), onError: (t) => errors.push(t) });
+        run.start();
+        const signer = createWalletConnectSigner({ getRegistry: () => registry, request: async (m, params) => { sent = signedTxFor(pair, params.transactionPayload); return { signedTransaction: sent }; } });
+        await run.send(submittable(api), pair.address, signer, { stillValid: () => true, assetId: 0 });
+        await flush();
+        assert.deepEqual(errors, []);
+        assert.deepEqual(submitted, [sent]);
+    });
+
+    test('a phone that returns a different signed transaction (another nonce): nothing is sent', async () => {
+        const { api, submitted } = fakeApi();
+        const errors = [];
+        const run = trackSignedTx({ api, action: { id: 'e', key: 'system.remark', params: {} }, show: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex), onError: (t) => errors.push(t) });
+        run.start();
+        const signer = createWalletConnectSigner({ getRegistry: () => registry, request: async (m, params) => ({ signedTransaction: signedTxFor(pair, params.transactionPayload, { nonce: '0x00000063' }) }) });
+        await run.send(submittable(api), pair.address, signer, { stillValid: () => true, assetId: 0 });
+        await flush();
+        assert.equal(submitted.length, 0);
+        assert.ok(errors.some(e => e.includes(DIFFERENT_TX)), errors.join(' | '));
+    });
+
     test('the wallet changes while the phone is signing: nothing is sent', async () => {
         const { api, submitted } = fakeApi();
         const errors = [];
@@ -1304,11 +1490,11 @@ describe('CSP: the relay is reachable, nothing else of WalletConnect is', () => 
     const policies = [...conf.matchAll(/add_header Content-Security-Policy "([^"]+)"/g)].map(m => m[1]);
     const connect = (p) => (/connect-src ([^;]+)/.exec(p) || [])[1] || '';
 
-    test('both server blocks allow wss://relay.walletconnect.org and .com in connect-src, and stay identical', () => {
+    test('both server blocks allow wss://relay.walletconnect.org (the only relay dialled) in connect-src, not .com, and stay identical', () => {
         assert.equal(policies.length, 2);
         for (const p of policies) {
             assert.match(connect(p), /(^|\s)wss:\/\/relay\.walletconnect\.org(\s|$)/);
-            assert.match(connect(p), /(^|\s)wss:\/\/relay\.walletconnect\.com(\s|$)/);
+            assert.ok(!/walletconnect\.com/.test(p), 'relay.walletconnect.com is never dialled (config uses .org), so it is not allowed');
             assert.match(p, /connect-src 'self' wss:\/\/rpc\.polkadex\.ee/);
         }
         assert.equal(policies[0], policies[1]);
@@ -1325,9 +1511,11 @@ describe('CSP: the relay is reachable, nothing else of WalletConnect is', () => 
         }
     });
 
-    test('the nginx comment explains the relay entry', () => {
-        assert.match(conf, /relay\.walletconnect\.(org|com)[^\n]*\n?[^\n]*/);
+    test('the nginx comment explains the relay entry; neither it nor the README lists .com as allowed', () => {
+        assert.match(conf, /relay\.walletconnect\.org[^\n]*\n?[^\n]*/);
         assert.match(conf, /WalletConnect/);
+        assert.ok(!conf.includes('relay.walletconnect.com'));
+        assert.ok(!read('README.md').includes('wss://relay.walletconnect.com'));
     });
 });
 
@@ -1342,5 +1530,49 @@ describe('privacy and storage inventory', () => {
     test('the privacy page names the WalletConnect relay as a third party used only when chosen', () => {
         assert.match(html, /WalletConnect/);
         assert.match(html, /relay\.walletconnect/);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('third-party notices: the WalletConnect Community License', () => {
+    const NOTICES = 'public/THIRD-PARTY-NOTICES.txt';
+    const wcDir = new URL('../node_modules/@walletconnect/', import.meta.url);
+    // The packages of ours that ship under that license (the rest are MIT).
+    const licensed = readdirSync(wcDir).filter(d => {
+        try { return /SEE LICENSE IN LICENSE\.md/.test(JSON.parse(readFileSync(new URL(d + '/package.json', wcDir), 'utf8')).license || ''); } catch (e) { return false; }
+    });
+
+    test('the notices file carries the attribution the license requires', () => {
+        const txt = read(NOTICES);
+        assert.ok(txt.includes('Portions \u00a9 2025 Reown, Inc. All Rights Reserved'), 'the exact notice from section 2(a)');
+        assert.match(txt, /@walletconnect\/universal-provider/);
+        assert.ok(!/[\u2013\u2014]/.test(txt), 'no en or em dashes');
+    });
+
+    test('the notices file carries the license text verbatim, as installed (not fetched), for every package under it', () => {
+        const txt = read(NOTICES);
+        assert.ok(licensed.includes('universal-provider'), licensed.join(','));
+        for (const d of licensed) {
+            const lic = readFileSync(new URL(d + '/LICENSE.md', wcDir), 'utf8');
+            assert.ok(txt.includes(lic.trim()), `@walletconnect/${d} LICENSE.md not copied verbatim (re-copy it after a version bump)`);
+            assert.match(txt, new RegExp('@walletconnect/' + d + '\\b'), `@walletconnect/${d} named`);
+        }
+    });
+
+    test('the installed version is the one the notices file names', () => {
+        const ver = JSON.parse(read('package.json')).devDependencies['@walletconnect/universal-provider'];
+        assert.ok(read(NOTICES).includes(ver), ver);
+    });
+
+    test('it starts with a UTF-8 byte order mark, so browsers read the \u00a9 and quotes right (nginx sends text/plain without a charset)', () => {
+        assert.equal(read(NOTICES).charCodeAt(0), 0xfeff);
+    });
+
+    test('Vite ships it at /THIRD-PARTY-NOTICES.txt (public/), the footer links it, and the SPA router lets the link through', () => {
+        const html = read('index.html');
+        const footer = html.slice(html.indexOf('<footer class="site-footer">'), html.indexOf('</footer>'));
+        assert.match(footer, /<a href="\/THIRD-PARTY-NOTICES\.txt"[^>]*>[^<]*Licen/);
+        assert.match(SCRIPT, /const isRealFile = \/\\\.\[a-z0-9\]\{2,12\}\$\/i\.test\(path\)/);
+        assert.ok(/\.[a-z0-9]{2,12}$/i.test('/THIRD-PARTY-NOTICES.txt'));
     });
 });
