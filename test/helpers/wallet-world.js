@@ -121,6 +121,8 @@ const LIFTED = [
     'initWalletPage', 'tryAutoSelectFirstWallet', 'renderWalletConnectPanel', 'invalidateWalletFetch', 'fetchWalletDashboard',
     'getDiscussSession', 'discussAuthStore', 'getWalletSigner', 'resolveWalletSigner', 'navigateTo', 'readSafeReturnTo',
     // WalletConnect wiring (lib/walletconnect-gate.js is replaced by profile.wcGate):
+    // The legacy multisig signer lookup (the review's "Find my signer" click):
+    'askWalletsForSigners', 'canAskWalletsForSigners',
     'allInjected', 'onWalletConnectEnded', 'onWalletConnectAccounts', 'walletConnectController', 'refreshWalletDashboardFor',
     // present only before the fix:
     'setStoredWallet', 'getLastUsedAddress', 'setLastUsedAddress', 'consumeSkipAutoPickFlag'

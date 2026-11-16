@@ -359,7 +359,7 @@ describe('script.js: signing never asks a wallet the user did not choose', () =>
         tab.close();
     });
 
-    test('discussion sign-in asks the connected wallet only, and never runs the legacy fallback', async () => {
+    test('discussion sign-in asks the connected wallet only; a wallet the user did not choose is never asked', async () => {
         const profile = makeProfile({ extensions: [pj(acct(1, 'Alice')), ta(acct(1, 'Alice in Talisman'))] });
         profile.local.setItem('pdex_wallet_address', A);
         profile.local.setItem('pdex_wallet_source', 'talisman');
@@ -367,11 +367,15 @@ describe('script.js: signing never asks a wallet the user did not choose', () =>
         assert.equal((await tab.fn('getWalletSigner')(A)).extKey, 'talisman');
         assert.deepEqual(counts(profile), { 'polkadot-js': 0, talisman: 1 });
 
-        const legacy = makeProfile({ extensions: [pj(acct(1, 'Alice'))] });
-        legacy.local.setItem('pdex_wallet_address', A);
-        const t2 = openTab(legacy, { path: '/discussions' });
+        // The connected wallet no longer holds the account: no other wallet is asked.
+        // (A session that recorded no wallet at all may ask them on the sign-in
+        // click: test/connect-chooser-review.test.js, finding 7.)
+        const moved = makeProfile({ extensions: [pj(acct(2, 'Bob')), ta(acct(1, 'Alice in Talisman'))] });
+        moved.local.setItem('pdex_wallet_address', A);
+        moved.local.setItem('pdex_wallet_source', 'polkadot-js');
+        const t2 = openTab(moved, { path: '/discussions' });
         assert.equal(await t2.fn('getWalletSigner')(A), null);
-        assert.equal(legacy.extensions[0].enableCalls, 0, 'the discussion sign-in asked a wallet nobody chose');
+        assert.equal(moved.extensions[1].enableCalls, 0, 'the discussion sign-in asked a wallet nobody chose');
         tab.close(); t2.close();
     });
 
