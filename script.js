@@ -58,7 +58,7 @@ import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { mountWalletPicker } from './lib/wallet-picker-view.js';
 import { mobileWalletCardsHtml } from './lib/mobile-wallet-cards.js';
 import { FEATURE_FLAGS } from './lib/wallet-links.js';
-import { walletConnectEnabled, createWalletConnectGate } from './lib/walletconnect-gate.js';
+import { walletConnectEnabled, walletConnectDebugEnabled, createWalletConnectGate } from './lib/walletconnect-gate.js';
 import { WC_SOURCE } from './lib/walletconnect-config.js';
 import { wireWalletMenu } from './lib/wallet-menu.js';
 import { createMultisigStore } from './lib/multisig.js';
@@ -8024,7 +8024,8 @@ function getStoredWallet() { return walletSession.connected(); }
 const wcGate = createWalletConnectGate({
     enabled: walletConnectEnabled({ flag: FEATURE_FLAGS.walletConnect, storage: localStorage, search: window.location.search }),
     storage: localStorage, onEnded: () => onWalletConnectEnded(), onAccounts: (list) => onWalletConnectAccounts(list),
-    deps: { doc: document, getRegistry: () => globalApi && globalApi.registry, isMobile: () => isMobileDevice(), clipboard: navigator.clipboard }
+    deps: { doc: document, getRegistry: () => globalApi && globalApi.registry, getApi: () => globalApi, isMobile: () => isMobileDevice(), clipboard: navigator.clipboard,
+        debug: walletConnectDebugEnabled({ storage: localStorage, search: window.location.search }) }   // ?wcdebug=1: support block on a failed signature check
 });
 if (wcGate.enabled) wcGate.restore().catch(e => console.warn('[walletconnect] restore', e));
 // The extensions plus, while paired, the phone (looks like one more extension), or null when there are none.
