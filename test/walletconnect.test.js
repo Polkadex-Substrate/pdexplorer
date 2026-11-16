@@ -493,7 +493,7 @@ function signedTxFor(p, payload, override = {}) {
 const sigInside = (tx) => registry.createType('Extrinsic', tx).inner.signature.multiSignature.toHex();
 
 describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polkadot_signMessage', () => {
-    test('signPayload sends { address, transactionPayload } and returns { id, signature }', async () => {
+    test('signPayload sends { address, transactionPayload } (withSignedTransaction false) and returns { id, signature }', async () => {
         const payload = payloadFor(pair.address);
         const calls = [];
         const signer = createWalletConnectSigner({
@@ -503,7 +503,9 @@ describe('signer: a @polkadot/api Signer over polkadot_signTransaction and polka
         const r = await signer.signPayload(payload);
         assert.equal(calls.length, 1);
         assert.equal(calls[0].method, 'polkadot_signTransaction');
-        assert.deepEqual(calls[0].params, { address: pair.address, transactionPayload: payload });
+        // withSignedTransaction false: the wallet signs exactly this payload
+        // (test/walletconnect-signature.test.js has why: Nova rebuilds it otherwise).
+        assert.deepEqual(calls[0].params, { address: pair.address, transactionPayload: { ...payload, withSignedTransaction: false } });
         assert.equal(typeof r.id, 'number');
         assert.equal(hexToU8a(r.signature).length, 65);
     });
