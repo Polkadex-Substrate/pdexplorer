@@ -4848,3 +4848,10 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .motion-args .ca-call code { font-size: 0.74rem; }
 .dec-human { margin: 8px 0; }
 .tx-h3 { font-size: 0.95rem; margin: 18px 0 8px; color: var(--text-primary); }
+
+/* Load older / Load 50 more bar: full-width, touch-sized button on phones, count above and status below. */
+@media (max-width: 640px) {
+    .js-older-bar .js-older-count { flex-basis: 100%; text-align: center; }
+    .js-older-bar .js-older-btn { width: 100%; min-height: 44px; }
+}
+.js-older-done:focus-visible, .js-older-btn:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }

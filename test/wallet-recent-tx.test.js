@@ -154,7 +154,7 @@ describe('Load 50 more bar', () => {
         ui.btn.click();
         await tick();
         assert.deepEqual(ui.urls, [`/api/account/${ME}/history?list=transactions&before=4991%3A10&limit=50`]);
-        assert.equal(ui.disabledDuring, false, 'the stub sees the state at request time; checked below via busyAttr');
+        assert.deepEqual([ui.disabledDuring, ui.busyText, ui.busyAttr], [true, 'Loading...', 'true'], 'button state at request time');
         assert.equal(ui.table.rows.length, 60);
         assert.ok(ui.table.rows.every(r => r.direction === (r.from === ME ? 'Sent' : 'Received')), 'direction missing on a row');
         assert.equal(ui.table.rows[59].direction, 'Received');
