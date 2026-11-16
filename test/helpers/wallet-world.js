@@ -119,6 +119,8 @@ const LIFTED = [
     'getInjectedAccounts', 'connectWallet', 'openWalletPicker', 'selectWallet', 'revokeDiscussSession', 'reconcileDiscussSession', 'logoutDiscussToken', 'disconnectWallet',
     'initWalletPage', 'tryAutoSelectFirstWallet', 'renderWalletConnectPanel', 'invalidateWalletFetch', 'fetchWalletDashboard',
     'getDiscussSession', 'discussAuthStore', 'getWalletSigner', 'resolveWalletSigner', 'navigateTo', 'readSafeReturnTo',
+    // WalletConnect wiring (lib/walletconnect-gate.js is replaced by profile.wcGate):
+    'allInjected', 'onWalletConnectEnded', 'onWalletConnectAccounts', 'walletConnectController', 'refreshWalletDashboardFor',
     // present only before the fix:
     'setStoredWallet', 'getLastUsedAddress', 'setLastUsedAddress', 'consumeSkipAutoPickFlag'
 ];
@@ -156,6 +158,9 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         mountWalletPicker, sourceLabel,
         closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
         multisigUI: { mountAccounts() {} },
+        // The WalletConnect gate: off unless a test puts one on the profile.
+        wcGate: profile.wcGate || { enabled: false, providers: () => ({}), isConnected: () => false, peerName: () => '', connect: async () => [], disconnect: async () => {}, restore: async () => [] },
+        WC_SOURCE: 'walletconnect',
         councilCandidacyUI: { accountChanged() {} },
         spendMotionUI: { accountChanged() {} },
         spendPayoutUI: { accountChanged() {} },

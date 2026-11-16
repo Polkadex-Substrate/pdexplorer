@@ -224,18 +224,20 @@ describe('Connect with your phone (WalletConnect) slot', () => {
         }
     });
 
-    test('with the flag on, a clearly marked disabled button appears; it does nothing', async (t) => {
-        const w = mount(t, { walletConnect: true });
+    test('with the flag on, the slot is a live button (the WalletConnect source; test/walletconnect.test.js)', async (t) => {
+        let connects = 0;
+        const w = mount(t, { walletConnect: { connect: async () => { connects++; return []; }, disconnect: async () => {}, isConnected: () => false, peerName: () => '' } });
         await w.picker.ready;
         const slot = w.q('[data-slot="walletconnect"]');
         assert.ok(slot);
         const btn = slot.querySelector('button');
         assert.equal(btn.textContent.trim(), 'Connect with your phone (WalletConnect)');
-        assert.equal(btn.disabled, true);
-        assert.equal(btn.getAttribute('aria-disabled'), 'true');
-        assert.match(slot.textContent, /Coming soon/);
+        assert.equal(btn.disabled, false);
+        assert.ok(!/Coming soon/.test(slot.textContent));
         btn.click();
-        assert.equal(w.calls.select.length, 0);
+        await new Promise(r => setTimeout(r, 5));
+        assert.equal(connects, 1);
+        assert.equal(w.calls.select.length, 0, 'pairing alone selects nothing; the user picks an account');
     });
 
     test('the onboarding builder honours the same flag', () => {
@@ -243,9 +245,10 @@ describe('Connect with your phone (WalletConnect) slot', () => {
         assert.match(buildOnboardingHtml({ onMobile: false, walletConnect: true, esc: escapeHtml }), /data-slot="walletconnect"/);
     });
 
-    test('no WalletConnect code is shipped yet', () => {
-        assert.ok(!/@walletconnect|@reown|relay\.walletconnect/i.test(SCRIPT));
-        assert.ok(!/@walletconnect|@reown/i.test(readFileSync(new URL('../package.json', import.meta.url), 'utf8')));
+    test('WalletConnect code never reaches the eager bundle: script.js has no static import of it', () => {
+        const statics = [...SCRIPT.matchAll(/^\s*import\s+[^;]*?from\s+'([^']+)'/gms)].map(m => m[1]);
+        assert.ok(!statics.some(s => /@walletconnect|@reown|walletconnect-(session|signer|source|view)/.test(s)), statics.filter(s => /walletconnect/.test(s)).join(', '));
+        assert.ok(!/@reown/i.test(readFileSync(new URL('../package.json', import.meta.url), 'utf8')));
     });
 });
 

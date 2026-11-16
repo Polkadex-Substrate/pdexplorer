@@ -226,7 +226,7 @@ describe('F-105 — the published storage inventory must match the code', () => 
         // filters, saved multisig definitions, and reviewed multisig call data.
         const storageSources = [
             'script.js', 'lib/wallet-session.js', 'lib/stake-filters.js',
-            'lib/multisig.js', 'lib/multisig-view.js'
+            'lib/multisig.js', 'lib/multisig-view.js', 'lib/walletconnect-config.js'
         ].map(read).join('\n');
         const inCode = new Set([...storageSources.matchAll(/pdex_[a-z_0-9]+/g)].map(m => m[0]));
         const inDocs = new Set([...read('index.html').matchAll(/pdex_[a-z_0-9]+/g)].map(m => m[0]));
