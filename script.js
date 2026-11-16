@@ -8972,7 +8972,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                 <div style="padding: 8px 24px 20px;">${validatorsHtml}</div>
             </div>
             <div class="list-container glass">
-                <div class="list-header"><h2>Recent Staking Rewards</h2><a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">View all</a></div>
+                <div class="list-header"><h2>Recent Staking Rewards</h2><a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link is-inline" style="font-size:0.78rem;">View all</a></div>
                 <div id="wallet-recent-rewards-table"></div>
             </div>
         </div>
@@ -8990,7 +8990,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
         </div>
 
         <div class="list-container glass">
-            <div class="list-header"><h2>Recent Transactions</h2><a href="/account/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">View all on the account page</a></div>
+            <div class="list-header"><h2>Recent Transactions</h2><a href="/account/${encodeURIComponent(data.address)}" class="item-link is-inline" style="font-size:0.78rem;">View all on the account page</a></div>
             <div id="wallet-recent-tx-table"></div>
         </div>
         <div id="wallet-advanced-section"></div>`;
