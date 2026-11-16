@@ -8053,6 +8053,7 @@ const multisigStore = createMultisigStore(localStorage);
 const multisigUI = createMultisigUI({
     store: multisigStore, storage: localStorage, api: () => globalApi,
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
+    canAskWallets: canAskWalletsForSigners, askWallets: askWalletsForSigners,
     submit: submitSignedTx, fetchJson: fetchApiJson,
     refresh: address => refreshWalletDashboardFor(address)
 });
@@ -8207,6 +8208,22 @@ async function getInjectedAccounts({ retries = 6, retryDelayMs = 250 } = {}) {
     if (!injected) return null;
     // Only the wallets in use: the account's, the remembered one, this visit's, a paired phone. Never every extension.
     return walletSources.accounts(signingKeys({ stored: walletSession.source(), remembered: walletSession.lastSource(), enabled: walletSources.enabledKeys(), present: Object.keys(injected) }));
+}
+// A multisig session from before the signer wallet was remembered (source 'multisig', no
+// pdex_wallet_last_source) finds no signer above. The multisig review then offers "Find my
+// signer in my wallets"; only that click calls askWalletsForSigners, which asks the installed
+// wallets once each (lib/wallet-sources.js) and remembers the first that holds a signer.
+function canAskWalletsForSigners() { return !!allInjected() && !walletSession.lastSource(); }
+async function askWalletsForSigners(signers) {
+    const injected = allInjected();
+    if (!injected) return [];
+    for (const key of signingKeys({ enabled: walletSources.enabledKeys(), present: Object.keys(injected), legacy: true })) {
+        const held = ((await walletSources.read(key)).accounts || []).filter(a => (signers || []).some(s => isSameAddress(s, a.address)));
+        if (!held.length) continue;
+        if (!walletSession.lastSource()) walletSession.rememberSource(key);
+        return held;
+    }
+    return [];
 }
 
 function connectWallet() {
@@ -10940,12 +10957,16 @@ function renderThread(thread, posts, root = document.getElementById('discussions
     if (typeof opts.onRendered === 'function') opts.onRendered(thread, posts, opts.earlier || []);
 }
 
-// Locate an extension signer that can sign for the given address.
+// Locate an extension signer that can sign for the given address. Runs only on a click (Post,
+// Sign in with wallet, a label vote), so a session that recorded no wallet at all may ask each
+// installed wallet once, as signing does; the holder is remembered.
 async function getWalletSigner(address) {
     const injected = allInjected();
     if (!injected) return null;
-    const keys = signingKeys({ stored: walletSession.source(), remembered: walletSession.lastSource(), enabled: walletSources.enabledKeys(), present: Object.keys(injected) });
-    return (await findSigner(walletSources, { keys, address, isSame: isSameAddress, needs: 'signRaw' })).signer;
+    const keys = signingKeys({ stored: walletSession.source(), remembered: walletSession.lastSource(), enabled: walletSources.enabledKeys(), present: Object.keys(injected), legacy: true });
+    const found = await findSigner(walletSources, { keys, address, isSame: isSameAddress, needs: 'signRaw' });
+    if (found.signer && !walletSession.lastSource()) walletSession.rememberSource(found.key);
+    return found.signer;
 }
 
 // Challenge, wallet signature, verify; the token is kept for `address` only, and
