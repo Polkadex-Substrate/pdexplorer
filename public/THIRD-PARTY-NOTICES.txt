@@ -6,8 +6,8 @@ requires. The other dependencies, listed in package-lock.json, are under
 their own permissive licenses (MIT, Apache-2.0 and similar).
 
 
-WalletConnect (the "Connect with your phone" option)
-----------------------------------------------------
+WalletConnect (the Phone wallet option)
+---------------------------------------
 
 Portions © 2025 Reown, Inc. All Rights Reserved
 
@@ -20,8 +20,8 @@ Packages, as installed from package-lock.json:
 
 These packages are licensed under the WalletConnect Community License
 Agreement below, a copy of the LICENSE.md file shipped in each of them (the
-file is the same in all of them). The WalletConnect code is loaded only when a
-visitor chooses "Connect with your phone".
+file is the same in all of them). The WalletConnect code is loaded only for a
+visitor who chooses the Phone wallet option.
 
 ======================================================================
 WALLETCONNECT COMMUNITY LICENSE AGREEMENT (verbatim from LICENSE.md)

@@ -52,9 +52,9 @@ import { BUTTON_STAGE_TEXT, defaultThreshold, checkThreshold, motionState, overl
 import { showTxStatus, showTxNotice } from './lib/tx-status-card.js';
 import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers } from './lib/collective-live.js';
 import { createDemocracyView } from './lib/democracy-view.js';
-import { createWalletSession, WALLET_KEYS } from './lib/wallet-session.js';
+import { createWalletSession, isSessionStorageKey } from './lib/wallet-session.js';
 import { createSourceRegistry, detectSources, signingKeys, findSigner } from './lib/wallet-sources.js';
-import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
+import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, notConnectedNoteHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
 import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { mountWalletPicker } from './lib/wallet-picker-view.js';
 import { mobileWalletCardsHtml } from './lib/mobile-wallet-cards.js';
@@ -8388,7 +8388,7 @@ function initWalletPage(address) {
         }
         // Personal dashboard: noindex and no route JSON-LD (PII / dynamic).
         updateSeoMeta('wallet', {
-            title: 'My Account — Polkadex Explorer',
+            title: isSameAddress(getStoredWallet(), address) ? 'My Account - Polkadex Explorer' : 'Account ' + stakingShortAddress(address) + ' - Polkadex Explorer',
             description: 'Your Polkadex account dashboard: balances, staking, nominations, rewards, and recent transactions.',
             canonicalPath: '/wallet/' + address,
             noindex: true
@@ -8825,6 +8825,23 @@ function repaintWalletPriceCard(price) {
 let walletAprData = null;
 let walletAprDays = 30;
 
+// Under the dashboard header, "whose account is this": the banner when another
+// wallet is connected, the read-only note when none is, nothing while a wallet
+// is restoring (a returning user must not see the note flash). One slot for both.
+function walletViewingSlotHtml(viewing) {
+    if (walletSession.getActiveAccount().status === 'restoring') return '';
+    const wallet = getStoredWallet();
+    return viewingBannerHtml({ viewing, wallet, isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, hrefFor: a => '/wallet/' + encodeURIComponent(a) })
+        || notConnectedNoteHtml({ viewing, wallet, esc: stakingEscapeHtml, shortAddr: stakingShortAddress });
+}
+// Repaint that slot, and Switch wallet (nothing to switch with no wallet), on every session change.
+function paintWalletViewingSlot() {
+    const slot = document.getElementById('wallet-viewing-slot');
+    if (slot) slot.innerHTML = walletViewingSlotHtml(slot.getAttribute('data-address') || '');
+    const sw = document.getElementById('wallet-switch-btn');
+    if (sw) sw.hidden = !getStoredWallet();
+}
+
 function renderWalletDashboard(data, price, rewardsPayload) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
@@ -8868,12 +8885,12 @@ function renderWalletDashboard(data, price, rewardsPayload) {
                 <h2><i class='bx bx-wallet'></i> ${identity ? stakingEscapeHtml(identity) : 'Wallet Dashboard'} ${helpIcon('switching-wallets', 'About the wallet dashboard')}</h2>
                 <div style="display:flex; gap:14px; align-items:center;">
                     <a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">Full reward history</a>
-                    <button id="wallet-switch-btn" class="staking-download-btn">Switch wallet</button>
+                    <button id="wallet-switch-btn" class="staking-download-btn"${getStoredWallet() ? '' : ' hidden'}>Switch wallet</button>
                     ${isOwnWallet ? '<button id="wallet-disconnect-btn" class="staking-download-btn">Disconnect</button>' : ''}
                 </div>
             </div>
             <div style="padding: 12px 24px 0;">
-                ${viewingBannerHtml({ viewing: data.address, wallet: getStoredWallet(), isSame: isSameAddress, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, hrefFor: a => '/wallet/' + encodeURIComponent(a) })}
+                <div id="wallet-viewing-slot" data-address="${stakingEscapeHtml(data.address)}">${walletViewingSlotHtml(data.address)}</div>
                 <a href="/account/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${stakingEscapeHtml(data.address)}</a>
             </div>
             <div class="staking-summary-grid">
@@ -11497,13 +11514,14 @@ function followWalletElsewhere() {
     if (change && isWalletRoute(here)) navigateTo(walletRouteAfterChange(here, change, isSameAddress), { replace: true });
 }
 window.addEventListener('storage', (e) => {
-    if (e.key !== WALLET_KEYS.address && e.key !== WALLET_KEYS.source && e.key !== null) return;
+    if (!isSessionStorageKey(e.key)) return;   // includes the disconnected flag: a page holding an account storage refused must hear another tab's Disconnect
     followWalletElsewhere();
 });
 const disconnectWalletBtn = document.getElementById('disconnect-wallet-btn');
 if (disconnectWalletBtn) disconnectWalletBtn.addEventListener('click', disconnectWallet);
 // Connect, switch, Disconnect, another tab, a phone session ending: every path announces it.
 walletSession.onActiveAccountChange(() => refreshConnectWalletButton());
+walletSession.onActiveAccountChange(() => paintWalletViewingSlot());
 refreshConnectWalletButton();
 
 setInterval(() => {
