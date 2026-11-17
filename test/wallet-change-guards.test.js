@@ -285,6 +285,8 @@ describe('discussion sign-in', () => {
         const ext = twoAccounts();
         const profile = makeProfile({ extensions: [ext] });
         profile.local.setItem('pdex_wallet_address', W1);
+        // Picked from Polkadot.js: the discussion sign-in asks only the wallet the account came from (lib/wallet-sources.js).
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
         const tab = openTab(profile, { path: '/discussions' });
         const alerts = [], posts = [];
         Object.assign(tab.ctx, {

@@ -101,8 +101,11 @@ describe('wiring', () => {
         const gate = fn.indexOf('liveRuntimeError(globalApi)');
         assert.ok(gate > 0, 'resolveWalletSigner no longer checks the runtime');
         assert.match(fn, /if \(staleRuntime\) return fail\(staleRuntime\)/);
-        assert.ok(gate < fn.indexOf('getInjectedAccounts('), 'the check must come before the wallet extension is touched');
-        assert.ok(gate < fn.indexOf('.enable('), 'the check must come before the wallet authorization');
+        // The wallet is asked only through lib/wallet-sources.js (findSigner); nothing in here calls enable itself.
+        assert.ok(fn.indexOf('findSigner(') > 0, 'resolveWalletSigner no longer asks the wallet through the registry');
+        assert.ok(gate < fn.indexOf('findSigner('), 'the check must come before the wallet extension is touched');
+        assert.ok(gate < fn.indexOf('allInjected('), 'the check must come before the wallets are even looked up');
+        assert.equal(fn.indexOf('.enable('), -1, 'resolveWalletSigner calls enable directly again');
     });
 
     test('browser: the status pill says when the node is out of date', () => {

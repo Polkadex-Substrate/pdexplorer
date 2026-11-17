@@ -30,6 +30,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
+import { createSourceRegistry, signingKeys, findSigner } from '../lib/wallet-sources.js';
 import { decodeAddress } from '@polkadot/util-crypto';
 import * as edit from '../lib/discussion-edit.js';
 import * as links from '../lib/discussion-links.js';
@@ -245,7 +246,11 @@ function page({ wallet = A, stored = [], rejectSign = false, path = '/discussion
         fetch: fetchFn,
         alert: () => {},
         getStoredWallet: () => state.wallet,
-        walletSession: { source: () => 'polkadot-js' },
+        walletSession: { source: () => 'polkadot-js', lastSource: () => 'polkadot-js' },
+        // script.js's extension lookup (extensions plus a paired WalletConnect phone); here just the extension.
+        allInjected: () => ({ 'polkadot-js': ext }),
+        // The one place that asks a wallet (lib/wallet-sources.js), as script.js builds it.
+        walletSources: createSourceRegistry({ getInjected: () => ({ 'polkadot-js': ext }) }), signingKeys, findSigner,
         stakingEscapeHtml: escapeHtml, stakingShortAddress: (a) => String(a).slice(0, 6) + '...' + String(a).slice(-4),
         formatLocalDateTime: () => 'today', helpIcon: () => ''
     };

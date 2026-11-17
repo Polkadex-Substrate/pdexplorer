@@ -24,6 +24,8 @@
   },
   "devDependencies": {
     "@fontsource/inter": "5.2.8",
+    "@polkadot-api/merkleize-metadata": "1.3.2",
+    "@walletconnect/universal-provider": "2.26.0",
     "boxicons": "2.1.4",
     "chart.js": "4.5.1",
     "happy-dom": "21.0.4",

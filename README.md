@@ -479,6 +479,19 @@ Schema: subscribers live in `email_subscribers`, dispatch idempotency in `email_
 | `SITEMAP_TOP_HOLDERS`         | `100`   | How many top holders (account pages) to include        |
 | `SITEMAP_CACHE_TTL_MS`        | `300000`| How long the rendered XML is cached                    |
 
+### WalletConnect ("Connect with your phone", dark launch)
+
+A phone wallet (Nova Wallet, SubWallet) can sign over WalletConnect v2. It ships **off**; nothing WalletConnect is downloaded and the relay is never contacted unless a visitor turns it on and chooses it.
+
+- **Everyone:** set `FEATURE_FLAGS.walletConnect = true` in `lib/wallet-links.js`.
+- **One browser, for testing:** open any page with `?wc=1` (stores `pdex_wc_enabled=1` in that browser). `?wc=0` removes it again.
+- **Settings:** project id, chain id (Polkadex mainnet `polkadot:3920bcb4960a1eef5580cd5367ff3f43`), relay and app metadata live in `lib/walletconnect-config.js` only. The project id is public; restrict it to `explorer.polkadex.ee` in the Reown dashboard's domain allowlist.
+- **CSP:** `nginx.conf` allows `wss://relay.walletconnect.org` (the only relay the SDK dials, `WC_RELAY_URL`) in `connect-src`, nothing else of WalletConnect (no telemetry, no Verify frame). If the relay URL in the config changes, change the CSP with it.
+- **License:** `@walletconnect/universal-provider` and its `core`, `sign-client`, `types` and `utils` packages are under the WalletConnect Community License (Reown, Inc.), not MIT. Its required notice and a copy of the license are in `public/THIRD-PARTY-NOTICES.txt`, served at `/THIRD-PARTY-NOTICES.txt` and linked from the footer. Re-copy the license text from `node_modules` after a version bump (a test checks it). Above 500 monthly active users or 2,500,000 RPCs a month the license requires a paid commercial license from Reown.
+- **Signing payload:** the phone is asked to sign with `CheckMetadataHash` on (mode 1) and the chain's metadata hash, and with `withSignedTransaction: false`, so it signs exactly the payload the explorer verifies. Nova Wallet otherwise rebuilds the transaction with its own hash and the explorer's check refuses it. The hash is computed in the browser from the node's v15 metadata (`lib/metadata-hash.js`, `@polkadot-api/merkleize-metadata` in a lazy chunk) with the runtime's build inputs (`PDEX`, 12 decimals, SS58 88). No hash (node slow or old): mode 0, as before. A mode 1 transaction needs a runtime built with the `metadata-hash` feature.
+- **Diagnosing a refused signature:** open any page with `?wcdebug=1` (stores `pdex_wc_debug=1`; `?wcdebug=0` removes it). A failed signature check then shows a copyable support block and logs it to the console: the payload sent, the exact bytes verified, the returned signature or transaction, the wallet's name, url and version, and which variants the signature does verify against. No session topic or keys.
+- **Code:** `lib/walletconnect-gate.js` (flag, lazy load; the only part in the main bundle), `lib/walletconnect-source.js`, `-session.js`, `-signer.js`, `-view.js`, `-debug.js`, `lib/metadata-hash.js` (a lazy chunk, plus `@walletconnect/universal-provider` in another). Tests: `test/walletconnect.test.js`, `test/walletconnect-signature.test.js`.
+
 ### docker-compose `.env`
 
 A typical `/opt/pdexplorer/.env`:
