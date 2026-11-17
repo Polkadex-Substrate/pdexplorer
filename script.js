@@ -64,6 +64,7 @@ import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx, recheckSignedTxs } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
+import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -284,7 +285,8 @@ function formatNetworkNumber(value, maximumFractionDigits = 1) {
 //             treasury (proposals, approved, history — each typically <50),
 //             democracy referenda + public proposals (small),
 //             council motions (small, pre-filtered by status pill),
-//             wallet recent-rewards + recent-tx (intentional top-~10 snapshots).
+//             wallet recent-rewards (an intentional top-~10 snapshot); wallet recent-tx
+//             starts at 10 and grows by a "Load 50 more" bar (lib/wallet-recent-tx.js).
 //   api.setData(newRows);   // call when the underlying data changes
 //   api.refresh();          // re-render with current state (e.g. after a format change)
 //
@@ -8714,7 +8716,7 @@ async function fetchWalletDashboard(address) {
     let didPaintFromCache = false;
     if (cached && cached.wallet) {
         try {
-            renderWalletDashboard(cached.wallet, cached.price || { history: [], configured: false }, cached.rewards || null);
+            renderWalletDashboard(cached.wallet, cached.price || { history: [], configured: false }, cached.rewards || null, { live: false });
             didPaintFromCache = true;
             // Audit F-068: the cache paint was visually indistinguishable from
             // live data. A user could look at a balance that was up to
@@ -8773,7 +8775,7 @@ async function fetchWalletDashboard(address) {
         // Re-render with the live wallet payload and whichever of price/
         // rewards has already landed. Anything still in-flight will paint
         // into the rendered DOM via the targeted handlers below.
-        renderWalletDashboard(latestWallet, latestPrice, latestRewards);
+        renderWalletDashboard(latestWallet, latestPrice, latestRewards, { live: true });
         writeWalletCache(address, { wallet: latestWallet, price: latestPrice, rewards: latestRewards });
         // Live data is on screen — safe to open a shortcut's modal now.
         maybeRunWalletEntryIntent();
@@ -8845,8 +8847,11 @@ function repaintWalletPriceCard(price) {
 //   walletAprDays     — currently selected period in days (0 = all-time)
 let walletAprData = null;
 let walletAprDays = 30;
+// Recent transactions loaded past the first 10, kept outside the render so a re-render does not drop them.
+const walletRecentStore = { address: null, rows: [], next: null };
 
-function renderWalletDashboard(data, price, rewardsPayload) {
+// `live` is false on the cache paint (its cursor may be old): the Load 50 more bar mounts on live renders only.
+function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
     currentWalletData = data;
@@ -8869,14 +8874,8 @@ function renderWalletDashboard(data, price, rewardsPayload) {
             </a>`).join('')
         : '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 8px 0;">This wallet is not nominating any validators.</div>';
 
-    // Recent transactions + recent rewards tables are rendered by makeTable
-    // into placeholder divs after the outer dashboard chrome lands. Tag each
-    // row in `recentTransactions` with a `direction` so the column can sort
-    // and filter on it without recomputing per-row.
-    const recentTx = (data.recentTransactions || []).map(t => ({
-        ...t,
-        direction: t.from === data.address ? 'Sent' : 'Received'
-    }));
+    // Recent rewards are a plain makeTable; recent transactions go through mountWalletRecentTx below, which tags
+    // each row with a `direction` (so the column sorts and filters) and adds the Load 50 more bar.
     const recentClaimed = rewards.recentClaimed || [];
 
     const priceConfigured = price && price.configured;
@@ -8973,7 +8972,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
                 <div style="padding: 8px 24px 20px;">${validatorsHtml}</div>
             </div>
             <div class="list-container glass">
-                <div class="list-header"><h2>Recent Staking Rewards</h2><a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">View all</a></div>
+                <div class="list-header"><h2>Recent Staking Rewards</h2><a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link is-inline" style="font-size:0.78rem;">View all</a></div>
                 <div id="wallet-recent-rewards-table"></div>
             </div>
         </div>
@@ -8991,7 +8990,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
         </div>
 
         <div class="list-container glass">
-            <div class="list-header"><h2>Recent Transactions</h2><a href="/account/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">View account</a></div>
+            <div class="list-header"><h2>Recent Transactions</h2><a href="/account/${encodeURIComponent(data.address)}" class="item-link is-inline" style="font-size:0.78rem;">View all on the account page</a></div>
             <div id="wallet-recent-tx-table"></div>
         </div>
         <div id="wallet-advanced-section"></div>`;
@@ -9025,9 +9024,14 @@ function renderWalletDashboard(data, price, rewardsPayload) {
         ]
     });
 
-    makeTable({
-        container: document.getElementById('wallet-recent-tx-table'),
-        rows: recentTx,
+    const txGen = walletFetchGen;
+    const txContainer = document.getElementById('wallet-recent-tx-table');
+    mountWalletRecentTx({
+        container: txContainer, data, store: walletRecentStore, live,
+        fetchJson: fetchApiJson, isCurrent: () => txGen === walletFetchGen,
+        buildTable: rows => makeTable({
+        container: txContainer,
+        rows,
         defaultSort: { key: 'timestamp', dir: 'desc' },
         globalSearch: false,
         summarySuffix: 'transactions',
@@ -9061,6 +9065,7 @@ function renderWalletDashboard(data, price, rewardsPayload) {
                 format: row => `<span style="white-space:nowrap;">${row.timestamp ? stakingEscapeHtml(formatLocalDate(row.timestamp)) : '—'}</span>`
             }
         ]
+        })
     });
 
     const switchBtn = document.getElementById('wallet-switch-btn');

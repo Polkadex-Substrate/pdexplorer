@@ -37,6 +37,15 @@ describe('message wording', () => {
     });
 });
 
+describe('a custom button label', () => {
+    test('emptyFilteredMessage names the label; the default stays "Load older"', () => {
+        assert.equal(emptyFilteredMessage({ loaded: 60, total: 1462, noun: 'transactions', complete: false, label: 'Load 50 more' }),
+            'No matching transactions in the 60 loaded; Load 50 more to search further');
+        assert.equal(emptyFilteredMessage({ loaded: 600, total: 1462, noun: 'events', complete: false }),
+            'No matching events in the 600 loaded; Load older to search further');
+    });
+});
+
 describe('searchAll loop', () => {
     // Pages of one row each; matches are rows with hit:true.
     const pagesOf = hits => hits.map((hit, i) => ({ rows: [{ id: i, hit }], next: i < hits.length - 1 ? `c${i}` : null }));
