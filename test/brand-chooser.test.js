@@ -29,6 +29,18 @@ const CSS = readRepo('styles.css', import.meta.url);
 const HTML = readRepo('index.html', import.meta.url);
 const NOTICES = readRepo('public/THIRD-PARTY-NOTICES.txt', import.meta.url);
 
+// Split a selector list on the commas outside parentheses (:is(a, b) is one selector).
+function splitSelectors(head) {
+    const out = []; let depth = 0, cur = '';
+    for (const ch of head) {
+        if (ch === '(') depth++;
+        if (ch === ')') depth--;
+        if (ch === ',' && depth === 0) { out.push(cur); cur = ''; } else cur += ch;
+    }
+    out.push(cur);
+    return out.map(x => x.trim().replace(/\s+/g, ' ')).filter(Boolean);
+}
+
 // Every innermost rule: { line, selectors: [..], decls: { prop: value }, media }.
 function parseRules(css) {
     const clean = css.replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '));
@@ -47,7 +59,7 @@ function parseRules(css) {
             if (i < 0) continue;
             decls[d.slice(0, i).trim()] = d.slice(i + 1).trim().replace(/\s+/g, ' ');
         }
-        rules.push({ line: before.split('\n').length + (m[1].match(/^\s*/)[0].split('\n').length - 1), selectors: head.split(',').map(s => s.trim().replace(/\s+/g, ' ')), decls, media });
+        rules.push({ line: before.split('\n').length + (m[1].match(/^\s*/)[0].split('\n').length - 1), selectors: splitSelectors(head), decls, media });
     }
     return rules;
 }
@@ -114,7 +126,7 @@ describe('lint: greens are for positive states, never for an action', () => {
         // The Current row is marked with Primary like the sidebar (brand pass 3.5); only its badge is green.
         assert.doesNotMatch(decl('.wallet-account-row', 'border'), /--brand-secondary/);
         assert.equal(decl('.wallet-account-row.is-current', 'border'), '1px solid var(--border-hover)');
-        assert.equal(decl('.wallet-account-row.is-current', 'background'), 'rgba(230, 0, 122, 0.08)');
+        assert.equal(decl('.wallet-account-row.is-current', 'background'), 'rgba(230, 0, 122, 0.16)');
         assert.equal(decl('.wallet-account-row.is-current', 'position'), 'relative');
         assert.equal(decl('.wallet-account-row.is-current', 'overflow'), 'hidden');
         const bar = '.wallet-account-row.is-current::before';
@@ -337,7 +349,7 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
         ['.wallet-ext-tile', 'background', TINT14],
         // 3.1 the lead row
         ['.wallet-option-row.is-primary', 'border-color', 'var(--brand-primary)'],
-        ['.wallet-option-row.is-primary', 'background', TINT08],
+        ['.wallet-option-row.is-primary', 'background', 'rgba(230, 0, 122, 0.16)'],
         ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', 'background', 'var(--brand-primary)'],
         ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', 'border-color', 'var(--brand-primary)'],
         ['.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', 'background', 'var(--brand-primary)'],
@@ -346,7 +358,7 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
         ['.wallet-option-row.is-primary .bx-chevron-right', 'color', 'var(--brand-primary)'],
         // 3.2 the only account
         ['.wallet-account-btn.is-primary', 'border-color', 'var(--brand-primary)'],
-        ['.wallet-account-btn.is-primary', 'background', TINT08],
+        ['.wallet-account-btn.is-primary', 'background', 'rgba(230, 0, 122, 0.16)'],
         ['.wallet-account-btn.is-primary .bx-chevron-right', 'color', 'var(--brand-primary)'],
         // 3.3 pairing
         ['.wc-qr', 'box-shadow', '0 0 0 1px var(--border-hover), 0 0 24px var(--brand-primary-glow)'],
@@ -676,135 +688,250 @@ describe('privacy and cookie pages (audit section 4)', () => {
     });
 });
 
-// Alternating row shades (Fable, cto-team/plans/2026-11-17-chooser-alternating-rows.md).
-// The checks are functions of a CSS string so the proof-of-failure test can run
-// them against a broken copy.
-describe('alternating row shades in the chooser lists', () => {
-    const OPT_STRIPE = ':where(.wallet-option-list > .wallet-option:nth-child(even)) > .wallet-option-row';
-    const ACC_STRIPE = ':where(#wallet-accounts .wallet-account-list > li:nth-child(even)) > .wallet-account-btn';
-    const A = 'rgba(255, 255, 255, 0.03)', B = 'rgba(255, 255, 255, 0.07)', H = 'rgba(255, 255, 255, 0.10)';
-    // The line of the LAST outside-media rule naming the selector: the one that wins the cascade.
-    const lineOf = (rules, sel) => { const r = rules.filter(x => !x.media && x.selectors.includes(sel)).pop(); return r ? r.line : -1; };
+// Alternating brand-coloured rows, Revision 2 (Fable, cto-team/plans/2026-11-17-chooser-alternating-rows.md):
+// odd rows Primary pink, even rows Violet, every row striped by position, the
+// lead and Current rows at Lift strength. The checks are functions of a CSS
+// string so the proof-of-failure test can run them against a broken copy.
+describe('alternating brand-coloured rows in the chooser lists (revision 2)', () => {
+    const PINK = [230, 0, 122], VIOLET = [103, 69, 210];
+    const S_PINK = 'rgba(230, 0, 122, 0.10)', S_VIOLET = 'rgba(103, 69, 210, 0.14)';
+    const B_PINK = 'rgba(230, 0, 122, 0.22)', B_VIOLET = 'rgba(103, 69, 210, 0.32)';
+    const L_PINK = 'rgba(230, 0, 122, 0.16)', L_VIOLET = 'rgba(103, 69, 210, 0.22)';
+    const OPT = (k) => `:where(.wallet-option-list > .wallet-option:nth-child(${k})) > .wallet-option-row`;
+    const ACC = (k) => `:where(#wallet-accounts .wallet-account-list > li:nth-child(${k})) > :is(.wallet-account-btn, .wallet-account-row)`;
+    const OPT_L = (k) => `.wallet-option-list > .wallet-option:nth-child(${k}) > .wallet-option-row:is(:hover, .is-primary)`;
+    const ACC_L = (k) => `#wallet-accounts .wallet-account-list > li:nth-child(${k}) > :is(.wallet-account-btn, .wallet-account-row):is(:hover, .is-primary, .is-current)`;
+    const STRIPES = [OPT('odd'), OPT('even'), ACC('odd'), ACC('even')];
+    const LIFTS = [OPT_L('odd'), OPT_L('even'), ACC_L('odd'), ACC_L('even')];
+    const WANT = new Map([
+        [OPT('odd'), { background: S_PINK, 'border-color': B_PINK }], [OPT('even'), { background: S_VIOLET, 'border-color': B_VIOLET }],
+        [ACC('odd'), { background: S_PINK, 'border-color': B_PINK }], [ACC('even'), { background: S_VIOLET, 'border-color': B_VIOLET }],
+        [OPT_L('odd'), { background: L_PINK }], [OPT_L('even'), { background: L_VIOLET }],
+        [ACC_L('odd'), { background: L_PINK }], [ACC_L('even'), { background: L_VIOLET }]
+    ]);
+    const lineOf = (rules, sel) => { const r = rules.find(x => !x.media && x.selectors.includes(sel)); return r ? r.line : -1; };
     const declOf = (rules, sel, prop) => { let v; for (const r of rules) if (!r.media && r.selectors.includes(sel) && prop in r.decls) v = r.decls[prop]; return v; };
+    const msg = (e) => e.join('\n');
+    const tri = (c) => (c.match(/rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)/) || []).slice(1, 4).map(Number);
 
-    // Check 1: both stripe rules exist outside media queries, one declaration each.
+    // Check 2: the eight rules exist once, outside media queries, with exactly the values.
     function checkExist(css) {
         const rules = parseRules(css), err = [];
-        for (const sel of [OPT_STRIPE, ACC_STRIPE]) {
+        for (const [sel, want] of WANT) {
             const hit = rules.filter(r => r.selectors.includes(sel));
             if (hit.length !== 1) { err.push(`stripe rule "${sel}" found ${hit.length} times, wanted 1`); continue; }
-            const r = hit[0];
-            if (r.media) err.push(`stripe rule "${sel}" is inside a media query`);
-            const keys = Object.keys(r.decls);
-            if (keys.length !== 1 || r.decls.background !== B) err.push(`stripe rule "${sel}" must declare only background: ${B}, has ${JSON.stringify(r.decls)}`);
+            if (hit[0].media) err.push(`stripe rule "${sel}" is inside a media query`);
+            if (JSON.stringify(hit[0].decls) !== JSON.stringify(want)) err.push(`stripe rule "${sel}" must declare ${JSON.stringify(want)}, has ${JSON.stringify(hit[0].decls)}`);
         }
         return err;
     }
-    // Check 3: the stripe sits before every rule that must beat it (equal-or-lower specificity cannot, so order matters).
+    // Check 3: no row is exempt.
+    function checkNoExemption(css) {
+        const rules = parseRules(css), err = [];
+        for (const r of rules) for (const s of r.selectors) {
+            if (!/nth-child/.test(s) || !/wallet-(option|account)/.test(s)) continue;
+            if (/:not\(/.test(s) || /is-quiet|ms-rows/.test(s)) err.push(`stripe selector "${s}" excludes or names an exempt row`);
+        }
+        const q = rules.filter(r => !r.media && r.selectors.includes('.wallet-option-row.is-quiet'));
+        for (const r of q) if ('background' in r.decls || 'background-color' in r.decls) err.push(`".wallet-option-row.is-quiet" declares a background (${r.decls.background || r.decls['background-color']}), which unstripes the quiet row`);
+        return err;
+    }
+    // Check 5: order. Equal-specificity rules are decided by position.
     function checkOrder(css) {
         const rules = parseRules(css), err = [];
-        const before = (stripe, later) => {
-            const s = lineOf(rules, stripe);
-            for (const sel of later) { const l = lineOf(rules, sel); if (s < 0 || l < 0 || s >= l) err.push(`stripe rule "${stripe}" (line ${s}) must come before "${sel}" (line ${l})`); }
-        };
-        before(OPT_STRIPE, ['.wallet-option-row:hover', '.wallet-option-row.is-quiet', '.wallet-option-row.is-primary']);
-        before(ACC_STRIPE, ['.wallet-account-btn:hover', '.wallet-account-btn.is-primary']);
+        const before = (a, later) => { const s = lineOf(rules, a); for (const sel of later) { const l = lineOf(rules, sel); if (s < 0 || l < 0 || s >= l) err.push(`stripe rule "${a}" (line ${s}) must come before "${sel}" (line ${l})`); } };
+        const after = (a, earlier) => { const s = lineOf(rules, a); for (const sel of earlier) { const l = lineOf(rules, sel); if (s < 0 || l < 0 || s <= l) err.push(`rule "${a}" (line ${s}) must come after "${sel}" (line ${l})`); } };
+        for (const k of ['odd', 'even']) {
+            before(OPT(k), ['.wallet-option-row:hover', '.wallet-option-row.is-primary', '.wallet-option.is-waiting .wallet-option-row']);
+            after(OPT(k), ['.wallet-option-row']);
+            before(ACC(k), ['.wallet-account-btn:hover', '.wallet-account-btn.is-primary', '.wallet-account-row.is-current']);
+            after(ACC(k), ['.wallet-account-btn', '.wallet-account-row']);
+            after(OPT_L(k), ['.wallet-option-row.is-primary', '.wallet-option-row:hover']);
+            after(ACC_L(k), ['.wallet-account-btn.is-primary', '.wallet-account-row.is-current', '.wallet-account-btn:hover']);
+        }
         return err;
     }
-    const msg = (e) => e.join('\n');
 
-    test('1: the two stripe rules exist outside any media query, one declaration each (0.07)', () => {
+    // Check 9: rendered parity, in a real DOM with the CSS under test.
+    const hueOf = (bg) => { const t = tri(bg).join(','); return t === PINK.join(',') ? 'pink' : t === VIOLET.join(',') ? 'violet' : ''; };
+    function parityOf(css, listHtml, listSel, rowSel, label) {
+        const w = new Window(), d = w.document;
+        d.head.innerHTML = `<style>${css}</style>`;
+        d.body.innerHTML = `<div id="wallet-accounts">${listHtml}</div>`;
+        const lis = Array.from(d.querySelectorAll(listSel + ' > li')), err = [], hues = [];
+        lis.forEach((li, i) => {
+            const row = li.querySelector(':scope > ' + rowSel);
+            const bg = w.getComputedStyle(row).backgroundColor, h = hueOf(bg);
+            hues.push(h);
+            if (!h) err.push(`${label}: "${listSel} > li:nth-child(${i + 1}) > ${rowSel}" (${row.className}) has fill ${bg}, neither stripe hue`);
+        });
+        for (let i = 1; i < hues.length; i++) if (hues[i] && hues[i] === hues[i - 1]) err.push(`${label}: "${listSel} > li:nth-child(${i}) and (${i + 1})" share the ${hues[i]} fill`);
+        return { err, lis, w };
+    }
+    const sources = (n) => ['talisman', 'polkadot-js', 'subwallet-js', 'nova'].slice(0, n).map(k => ({ key: k, name: k }));
+    function checkParity(css) {
+        const err = [];
+        for (const [lead, n, phone, sw] of [['talisman', 3, true, false], ['polkadot-js', 3, true, false], ['subwallet-js', 3, true, false], ['get', 0, false, false], ['', 2, false, false], ['talisman', 3, false, true]]) {
+            const html = buildOptionRowsHtml({ sources: sources(n), phone: phone ? { connected: false } : false, switching: sw, lead, esc: escapeHtml });
+            err.push(...parityOf(css, `<ul class="wallet-option-list">${html}</ul>`, '.wallet-option-list', '.wallet-option-row', `options lead=${lead || 'none'} n=${n}`).err);
+        }
+        const accounts = Array.from({ length: 5 }, (_, i) => ({ address: addr(30 + i), name: 'Acc ' + i, source: 'talisman' }));
+        for (const [current, primary] of [[null, false], [accounts[2].address, false]]) {
+            const html = buildAccountListHtml({ accounts, current, currentSource: 'talisman', isSame: same, esc: escapeHtml, shortAddr: short, primary });
+            const d = new Window().document; d.body.innerHTML = html;
+            for (let k = 0; k < d.querySelectorAll('.wallet-account-list').length; k++) {
+                const one = d.querySelectorAll('.wallet-account-list')[k].outerHTML;
+                err.push(...parityOf(css, one, '.wallet-account-list', ':is(.wallet-account-btn, .wallet-account-row)', `accounts current=${!!current} list ${k + 1}`).err);
+            }
+        }
+        const get = buildGetWalletHtml({}), gd = new Window().document; gd.body.innerHTML = get;
+        err.push(...parityOf(css, gd.querySelector('.wallet-option-list').outerHTML, '.wallet-option-list', '.wallet-option-row', 'install rows').err);
+        return err;
+    }
+
+    test('1: :root declares --violet #6745D2 and no other new custom property', () => {
+        const root = CSS.slice(CSS.indexOf(':root'), CSS.indexOf('}', CSS.indexOf(':root')));
+        const names = [...root.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]);
+        assert.match(root, /--violet:\s*#6745D2\s*;/);
+        assert.deepEqual(names.filter(n => !['--brand-primary', '--brand-secondary', '--brand-primary-glow', '--bg-dark', '--bg-surface', '--bg-glass', '--border-color', '--border-hover', '--text-primary', '--text-secondary', '--text-muted', '--success', '--error', '--radius-sm', '--radius-md', '--radius-lg', '--sidebar-width', '--transition-fast', '--transition-normal'].includes(n)), ['--violet']);
+        assert.ok(names.indexOf('--violet') === names.indexOf('--brand-primary') + 1, '--violet sits next to --brand-primary');
+    });
+    test('2: the four option and four account stripe rules exist outside any media query, with the exact values', () => {
         assert.deepEqual(checkExist(CSS), [], msg(checkExist(CSS)));
+        assert.equal(STRIPES.length + LIFTS.length, 8);
     });
-    test('2: rest fill stays 0.03 on both row kinds, hover fills are 0.10', () => {
-        assert.equal(declOf(RULES, '.wallet-option-row', 'background'), A);
-        assert.equal(declOf(RULES, '.wallet-account-btn', 'background'), A);
-        assert.equal(declOf(RULES, '.wallet-option-row:hover', 'background'), H);
-        assert.equal(declOf(RULES, '.wallet-account-btn:hover', 'background'), H);
+    test('3: no stripe selector excludes a row, and the quiet row declares no background', () => {
+        assert.deepEqual(checkNoExemption(CSS), [], msg(checkNoExemption(CSS)));
+        assert.equal(declOf(RULES, '.wallet-option-row.is-quiet', 'background'), undefined);
+        assert.equal(declOf(RULES, '.wallet-option-row.is-quiet', 'color'), 'var(--text-secondary)');
+        assert.equal(declOf(RULES, '.wallet-option-row.is-quiet .wallet-option-name', 'font-weight'), '500');
     });
-    test('3: order guard, the stripe rules precede hover, quiet and primary', () => {
-        assert.deepEqual(checkOrder(CSS), [], msg(checkOrder(CSS)));
-    });
-    test('4: no stripe selector touches current, lead, quiet, multisig or the Current row; no nth-child background is hex or non-white', () => {
-        const stripes = RULES.filter(r => r.selectors.some(s => /nth-child/.test(s) && /wallet-(option|account)/.test(s)));
-        assert.ok(stripes.length >= 2);
-        for (const r of stripes) for (const s of r.selectors) assert.ok(!/is-current|is-primary|is-quiet|ms-rows|wallet-account-row/.test(s), 'stripe selector reaches an exempt row: ' + s);
-        for (const r of RULES.filter(x => x.selectors.some(s => /nth-child/.test(s)))) {
-            const bg = (r.decls.background || r.decls['background-color'] || '');
-            if (!bg) continue;
-            assert.ok(!/#[0-9a-f]{3,8}\b/i.test(bg), 'hex background on nth-child: ' + r.selectors.join(', '));
-            if (/rgba?\(/.test(bg)) assert.match(bg, /^rgba\(255, 255, 255, [\d.]+\)$/, 'non-white background on nth-child: ' + r.selectors.join(', '));
+    test('4: no revision 1 white-alpha row fill remains on a chooser row; fallbacks are 0.03 rest, 0.05 hover', () => {
+        const rows = RULES.filter(r => r.selectors.some(s => /wallet-(option-row|account-btn|account-row)/.test(s) && !/ \.|::/.test(s.replace(/^.*?(wallet-(option-row|account-btn|account-row)[^ ]*)$/, '$1').slice(0, 0))));
+        for (const r of rows) for (const s of r.selectors.filter(x => /wallet-(option-row|account-btn|account-row)[^ ]*$/.test(x))) {
+            const bg = r.decls.background || '';
+            assert.ok(!/rgba\(255, 255, 255, 0\.(07|10)\)/.test(bg), `revision 1 fill on "${s}": ${bg}`);
+        }
+        assert.equal(declOf(RULES, '.wallet-option-row', 'background'), 'rgba(255, 255, 255, 0.03)');
+        assert.equal(declOf(RULES, '.wallet-account-row', 'background'), 'rgba(255, 255, 255, 0.03)');
+        assert.equal(declOf(RULES, '.wallet-option-row:hover', 'background'), 'rgba(255, 255, 255, 0.05)');
+        assert.equal(declOf(RULES, '.wallet-account-btn:hover', 'background'), 'rgba(255, 255, 255, 0.05)');
+        for (const sel of ['.wallet-option-row:hover', '.wallet-account-btn:hover']) {
+            assert.equal(declOf(RULES, sel, 'border-color'), 'var(--border-hover)', sel);
+            assert.equal(declOf(RULES, sel, 'box-shadow'), '0 0 0 3px var(--brand-primary-glow)', sel);
         }
     });
-    test('5: lead rows and the Current row keep Tint 08; the quiet row keeps background: none', () => {
-        const T = 'rgba(230, 0, 122, 0.08)';
-        assert.equal(declOf(RULES, '.wallet-option-row.is-primary', 'background'), T);
-        assert.equal(declOf(RULES, '.wallet-account-btn.is-primary', 'background'), T);
-        assert.equal(declOf(RULES, '.wallet-account-row.is-current', 'background'), T);
-        assert.equal(declOf(RULES, '.wallet-option-row.is-quiet', 'background'), 'none');
+    test('5: order and specificity guard (stripes after the row bases, before hover, lead, Current and waiting; lifts after them)', () => {
+        assert.deepEqual(checkOrder(CSS), [], msg(checkOrder(CSS)));
     });
-
-    describe('6: the markup :nth-child rests on', () => {
-        const esc = escapeHtml;
-        const kids = (el) => Array.from(el.children);
-        test('option rows: every child of the list is li.wallet-option; Cancel and the problem line sit inside an li', () => {
-            const html = buildOptionRowsHtml({
-                sources: [{ key: 'talisman', name: 'Talisman' }, { key: 'polkadot-js', name: 'Polkadot.js' }, { key: 'subwallet-js', name: 'SubWallet' }],
-                states: { talisman: { status: 'waiting' }, 'polkadot-js': { problem: 'rejected' } },
-                phone: { connected: false }, esc
-            });
-            const doc = new Window().document;
-            doc.body.innerHTML = `<ul class="wallet-option-list">${html}</ul>`;
-            const ul = doc.querySelector('.wallet-option-list');
-            assert.ok(kids(ul).length >= 4);
-            for (const c of kids(ul)) assert.ok(c.tagName === 'LI' && c.classList.contains('wallet-option'), 'child is ' + c.tagName + '.' + c.className);
-            const cancel = ul.querySelector('.wallet-option-cancel');
-            assert.ok(cancel && cancel.parentElement.tagName === 'LI', 'Cancel inside an li');
-            const prob = ul.querySelector('.wallet-option-problem');
-            assert.ok(prob && prob.parentElement.tagName === 'LI', 'problem line inside an li');
-        });
-        test('account lists: with a current account, a search query and more than 8 accounts, every child is an li with one btn or row', () => {
-            const accounts = Array.from({ length: 10 }, (_, i) => ({ address: addr(20 + i), name: 'Acc ' + i, source: i < 6 ? 'talisman' : 'polkadot-js' }));
-            for (const q of ['', 'Acc']) {
-                const doc = new Window().document;
-                doc.body.innerHTML = buildAccountListHtml({ accounts, current: accounts[1].address, currentSource: 'talisman', isSame: same, esc, shortAddr: short, query: q });
-                const lists = Array.from(doc.querySelectorAll('.wallet-account-list'));
-                assert.ok(lists.length >= 1);
-                let current = 0;
-                for (const ul of lists) for (const c of kids(ul)) {
-                    assert.equal(c.tagName, 'LI');
-                    assert.equal(c.querySelectorAll('.wallet-account-btn, .wallet-account-row').length, 1);
-                    assert.equal(kids(c).filter(k => k.matches('.wallet-account-btn, .wallet-account-row')).length, 1, 'direct child');
-                    current += c.querySelectorAll('.wallet-account-row.is-current').length;
-                }
-                assert.equal(current, 1);
+    test('6: the lead keeps a solid 2 px pink edge and a Lift fill; Current keeps the bar, the Edge border and the badge', () => {
+        const INSET = 'inset 0 0 0 1px var(--brand-primary)', HALO = '0 0 0 3px var(--brand-primary-glow)';
+        for (const sel of ['.wallet-option-row.is-primary', '.wallet-account-btn.is-primary']) {
+            assert.equal(declOf(RULES, sel, 'border-color'), 'var(--brand-primary)', sel);
+            assert.equal(declOf(RULES, sel, 'box-shadow'), INSET, sel);
+            assert.equal(declOf(RULES, sel, 'background'), L_PINK, sel + ' fallback fill');
+            assert.equal(declOf(RULES, sel + ':hover, ' + sel + ':focus-visible', 'x'), undefined);
+        }
+        for (const sel of ['.wallet-option-row.is-primary', '.wallet-account-btn.is-primary']) {
+            const r = RULES.find(x => !x.media && x.selectors.includes(sel + ':hover') && x.selectors.includes(sel + ':focus-visible'));
+            assert.ok(r, sel + ' needs a hover and focus-visible rule that keeps the inset edge');
+            assert.equal(r.decls['box-shadow'], `${INSET}, ${HALO}`, sel);
+        }
+        assert.equal(decl('.wallet-account-row.is-current', 'border'), '1px solid var(--border-hover)');
+        assert.equal(decl('.wallet-account-row.is-current', 'background'), L_PINK);
+        assert.equal(decl('.wallet-account-row.is-current::before', 'background'), 'var(--brand-primary)');
+        assert.equal(decl('.wallet-account-row.is-current::before', 'width'), '3px');
+        assert.match(decl('.wallet-account-badge', 'color'), /--brand-secondary/);
+        assert.equal(declOf(RULES, '.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', 'background'), 'var(--brand-primary)');
+        assert.equal(declOf(RULES, '.wallet-option-row.is-primary .bx-chevron-right', 'color'), 'var(--brand-primary)');
+    });
+    test('7: palette guard, every colour in a stripe rule is Primary or Violet, alphas within the ceilings', () => {
+        const ceil = { '230,0,122': 0.22, '103,69,210': 0.32 };
+        let seen = 0;
+        for (const r of RULES.filter(x => x.selectors.some(s => /nth-child/.test(s) && /wallet-(option|account)/.test(s)))) {
+            for (const prop of ['background', 'border-color']) {
+                const v = r.decls[prop]; if (!v) continue;
+                const m = v.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/);
+                assert.ok(m, `${r.selectors[0]} ${prop}: ${v} is not a plain rgba`);
+                const key = m.slice(1, 4).join(',');
+                assert.ok(key in ceil, `${r.selectors[0]} ${prop}: ${v} is not Primary or Violet`);
+                assert.ok(Number(m[4]) <= ceil[key], `${r.selectors[0]} ${prop}: alpha ${m[4]} is over ${ceil[key]}`);
+                seen++;
             }
-        });
-        test('Get a wallet: every child of the install list is li.wallet-option', () => {
-            const doc = new Window().document;
-            doc.body.innerHTML = buildGetWalletHtml({});
-            const ul = doc.querySelector('.wallet-option-list');
-            assert.ok(kids(ul).length >= 3);
-            for (const c of kids(ul)) assert.ok(c.tagName === 'LI' && c.classList.contains('wallet-option'));
-        });
+        }
+        assert.equal(seen, 12, 'four stripe rules with fill and border, four lift rules with fill');
+    });
+    test('8: contrast guard, white and secondary text at 4.5:1 and the pink chevron at 3:1 on every stripe and lift fill, over #12121A', () => {
+        const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+        const lum = (rgb) => 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+        const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+        const over = (fill) => { const t = tri(fill), a = Number(fill.match(/([\d.]+)\)$/)[1]), base = [0x12, 0x12, 0x1A]; return t.map((c, i) => c * a + base[i] * (1 - a)); };
+        assert.equal(CSS.match(/--bg-surface:\s*(#[0-9a-fA-F]{6})/)[1].toUpperCase(), '#12121A');
+        for (const fill of [S_PINK, S_VIOLET, L_PINK, L_VIOLET]) {
+            const bg = over(fill);
+            assert.ok(ratio([255, 255, 255], bg) >= 4.5, `white on ${fill}`);
+            assert.ok(ratio([0x9C, 0xA3, 0xAF], bg) >= 4.5, `--text-secondary on ${fill}`);
+            assert.ok(ratio(PINK, bg) >= 3, `pink chevron on ${fill}`);
+            assert.ok(ratio([0, 0xE6, 0x76], bg) >= 4.5, `green badge on ${fill}`);
+        }
+        assert.ok(ratio(PINK, over('rgba(230, 0, 122, 0.20)')) >= 3 && ratio(PINK, over('rgba(230, 0, 122, 0.30)')) < 3.2, 'the 0.20 ceiling is sound');
+    });
+    test('9: rendered parity, no two adjacent rows share a hue, in the options (lead on row 1, 2 and 3, quiet Get last), accounts, Current group and install lists', () => {
+        assert.deepEqual(checkParity(CSS), [], msg(checkParity(CSS)));
+    });
+    test('9b: rendered, the lead is stronger than its neighbours and wears the solid pink edge; Current is told from the lead by bar and badge', () => {
+        const html = buildOptionRowsHtml({ sources: sources(3), phone: { connected: false }, lead: 'polkadot-js', esc: escapeHtml });
+        const { w, lis } = parityOf(CSS, `<ul class="wallet-option-list">${html}</ul>`, '.wallet-option-list', '.wallet-option-row', 'lead');
+        const cs = lis.map(li => w.getComputedStyle(li.querySelector('.wallet-option-row')));
+        const alpha = (c) => Number(c.backgroundColor.match(/([\d.]+)\)$/)[1]);
+        assert.equal(cs[1].backgroundColor, L_VIOLET, 'lead on an even position is Lift Violet');
+        assert.equal(cs[1].borderColor || cs[1].borderTopColor, 'rgb(230, 0, 122)');
+        assert.equal(cs[0].backgroundColor, S_PINK);
+        assert.ok(alpha(cs[1]) > alpha(cs[2]) - 0.0001 && cs[1].backgroundColor !== cs[2].backgroundColor);
+        const accounts = Array.from({ length: 3 }, (_, i) => ({ address: addr(40 + i), name: 'A' + i, source: 'talisman' }));
+        const ah = buildAccountListHtml({ accounts, current: accounts[0].address, currentSource: 'talisman', isSame: same, esc: escapeHtml, shortAddr: short });
+        const d = new Window(); d.document.head.innerHTML = `<style>${CSS}</style>`; d.document.body.innerHTML = `<div id="wallet-accounts">${ah}</div>`;
+        const cur = d.document.querySelector('.wallet-account-row.is-current');
+        assert.equal(d.getComputedStyle(cur).backgroundColor, L_PINK, 'Current on an odd position is Lift Pink');
+        assert.ok(cur.querySelector('.wallet-account-badge'), 'the badge is still there');
+        assert.ok(!cur.matches('.is-primary') && !cur.querySelector('.wallet-option-action'), 'Current has no action pill');
     });
 
-    test('7: the guard fails when the stripe rule is removed or moved after .is-primary, and the message names the selector', () => {
+    test('10: the guards fail on broken copies and the message names the selector', () => {
         const lines = CSS.split('\n');
-        const idx = (sel) => lines.findIndex(l => l.startsWith(sel));
-        const oi = idx(OPT_STRIPE), ai = idx(ACC_STRIPE);
-        assert.ok(oi >= 0 && ai >= 0, 'stripe rules are single-line rules');
-        const removed = lines.filter((_, i) => i !== oi && i !== ai).join('\n');
-        const e1 = checkExist(removed);
-        assert.ok(e1.length >= 2 && e1.some(m => m.includes(OPT_STRIPE)) && e1.some(m => m.includes(ACC_STRIPE)), msg(e1));
-        const e1b = checkOrder(removed);
-        assert.ok(e1b.some(m => m.includes(OPT_STRIPE)), msg(e1b));
-        const moved = lines.filter((_, i) => i !== oi && i !== ai);
-        moved.push(lines[oi], lines[ai]);
-        const mv = moved.join('\n');
-        assert.deepEqual(checkExist(mv), [], 'moved copy still has the rules');
-        const e3 = checkOrder(mv);
-        assert.ok(e3.some(m => m.includes(OPT_STRIPE) && m.includes('.wallet-option-row.is-primary')), msg(e3));
-        assert.ok(e3.some(m => m.includes(ACC_STRIPE) && m.includes('.wallet-account-btn.is-primary')), msg(e3));
+        const idx = (sel) => lines.findIndex(l => l.startsWith(sel + ' {'));
+        const oe = idx(OPT('even')), ae = idx(ACC('even')), oo = idx(OPT('odd')), ao = idx(ACC('odd'));
+        assert.ok(oe >= 0 && ae >= 0 && oo >= 0 && ao >= 0, 'stripe rules are single-line rules');
+        // (a) the even rules removed
+        const a = lines.filter((_, i) => i !== oe && i !== ae).join('\n');
+        const ea = checkExist(a);
+        assert.ok(ea.some(m => m.includes(OPT('even'))) && ea.some(m => m.includes(ACC('even'))), msg(ea));
+        const pa = checkParity(a);
+        assert.ok(pa.some(m => m.includes('.wallet-option-list > li:nth-child(2) > .wallet-option-row')), msg(pa).slice(0, 600));
+        assert.ok(pa.some(m => m.includes('.wallet-account-list > li:nth-child(2)')), 'accounts parity names the row');
+        // (b) background: none restored on the quiet row
+        const b = lines.map(l => l.startsWith('.wallet-option-row.is-quiet {') ? '.wallet-option-row.is-quiet { background: none; color: var(--text-secondary); }' : l).join('\n');
+        const eb = checkNoExemption(b);
+        assert.ok(eb.some(m => m.includes('.wallet-option-row.is-quiet')), msg(eb));
+        const pb = checkParity(b);
+        assert.ok(pb.some(m => m.includes('.wallet-option-row') && /fill rgba\(0, 0, 0, 0\)|fill transparent|fill $/.test(m) || m.includes('neither stripe hue')), msg(pb).slice(0, 600));
+        // (b2) a :not() exemption added to a stripe selector
+        const b2 = CSS.replace(OPT('odd'), OPT('odd').replace('.wallet-option:nth-child(odd)', '.wallet-option:nth-child(odd):not(.is-waiting)'));
+        const eb2 = checkNoExemption(b2);
+        assert.ok(eb2.some(m => m.includes(':not(')), msg(eb2));
+        // (c) a stripe rule moved after .is-primary
+        const rest = lines.filter((_, i) => i !== oo && i !== oe);
+        rest.splice(rest.findIndex(l => l.startsWith('.wallet-option-row.is-primary {')) + 1, 0, lines[oo], lines[oe]);
+        const ec = checkOrder(rest.join('\n'));
+        assert.ok(ec.some(m => m.includes(OPT('odd')) && m.includes('.wallet-option-row.is-primary')), msg(ec));
+        // (d) a stripe rule moved before the row base (the base would win the cascade)
+        const rest2 = lines.filter((_, i) => i !== oo && i !== oe);
+        const bi = rest2.findIndex(l => l.startsWith('.wallet-option-row {'));
+        rest2.splice(bi, 0, lines[oo], lines[oe]);
+        const d2 = rest2.join('\n');
+        assert.ok(checkOrder(d2).some(m => m.includes(OPT('odd')) && m.includes('"')), 'order guard names the selector');
+        assert.ok(checkParity(d2).some(m => m.includes('.wallet-option-list > li:nth-child(1) > .wallet-option-row')), msg(checkParity(d2)).slice(0, 600));
+        // and the healthy file passes all of them
+        assert.deepEqual([...checkExist(CSS), ...checkNoExemption(CSS), ...checkOrder(CSS), ...checkParity(CSS)], []);
     });
 });
