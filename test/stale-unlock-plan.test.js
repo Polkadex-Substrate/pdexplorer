@@ -269,6 +269,20 @@ describe('VoteLockingPeriod cannot be read: a winning vote under conviction is n
         assert.deepEqual(alone.refs.map(r => r.text), ['#7: ended; locked until its conviction lock ends']);
         for (const t of [h, row.unlock, alone.unlock, JSON.stringify(alone.refs)]) assert.doesNotMatch(t, /Infinity|NaN|\u221e|block null|block undefined/);
     });
+    test('delegating at 6x: Undelegate is not said to free the PDEX at once, and no block is made up', () => {
+        const dem = { delegating: true, target: OTHER, conviction: 'Locked6x', balance: s(40n * PDEX), lockingPeriod: undefined, prior: NO_PRIOR };
+        const m = describeAccountLocks(snap(dem, 5000, 40n * PDEX));
+        const u = m.actions.democracy.undelegate;
+        assert.equal(u.freeAtOnce, false);
+        assert.equal(u.lockUntil, null);
+        const h = text(renderBalanceLocks(m, { canSign: true }));
+        assert.match(h, /Undelegating keeps 40 PDEX locked until its conviction lock ends; then unlock it here\./);
+        assert.doesNotMatch(h, /Infinity|NaN|\u221e|block null|Unlock frees/);
+        // No conviction: nothing to wait for, period or not.
+        const none = describeAccountLocks(snap({ ...dem, conviction: 'None' }, 5000, 40n * PDEX)).actions.democracy.undelegate;
+        assert.equal(none.freeAtOnce, true);
+        assert.equal(none.lockUntil, 5000);
+    });
     test('drawn with the period read, signed when it cannot be: refused before anything is built', async () => {
         // At 2,001 #7's 1x lock (to 2,000) is over, so the panel offers its removal.
         const m = describeAccountLocks(snap(direct([WON7], REFS), 2001, 10n * PDEX));
