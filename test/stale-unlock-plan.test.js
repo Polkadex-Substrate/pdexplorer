@@ -19,7 +19,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { lockActionSpec } from '../lib/lock-actions.js';
-import { accumulate } from '../lib/democracy-lock-projection.js';
+import { accumulate, projectDemocracyLocks } from '../lib/democracy-lock-projection.js';
 import { describeAccountLocks } from '../lib/balance-locks.js';
 import { renderBalanceLocks } from '../lib/balance-locks-view.js';
 import { democracyChain } from './helpers/democracy-chain.js';
@@ -34,6 +34,9 @@ const PERIOD = 1000;   // VoteLockingPeriod on this made-up chain
 const PERIODS = { None: 0, Locked1x: 1, Locked2x: 2, Locked3x: 4, Locked4x: 8, Locked5x: 16, Locked6x: 32 };
 const NO_PRIOR = { until: 0, amount: '0' };
 const STALE = (e) => e.message === 'Your votes or locks changed since this page loaded. Reload to see the safe options.';
+// The account is as it was; only blocks went by, and a lock or a referendum ended.
+const MOVED_ON = (e) => e.message === 'Time has moved on since this page loaded: a vote lock or a referendum has ended, so what can be removed or unlocked is different now. Reload to see the safe options.';
+const PERIOD_UNREAD = (e) => e.message === 'The vote lock period could not be read from the chain just now, so these removals cannot be checked. Reload and try again.';
 
 const vote = (index, aye, conviction, amount) => ({ index, aye, conviction, balance: s(amount) });
 const direct = (votes, referenda, prior = NO_PRIOR) => ({ delegating: false, lockingPeriod: PERIOD, votes, referenda, prior });
@@ -49,6 +52,9 @@ const chainAt = (dem, block) => democracyChain(dem, block, { period: PERIOD });
 const tx = { democracy: { unlock: (who) => ['unlock', who], removeVote: (i) => ['removeVote', i] }, utility: { batchAll: (calls) => ({ batch: calls }) } };
 const spec = (model) => lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
 const sign = async (model, chain) => ((t) => t.batch || [t])(await spec(model).buildTx({ ...chain, tx }));
+// The same, listing every call the wallet would be asked to sign as it is built.
+const signWith = async (model, chain, built) => ((t) => t.batch || [t])(await spec(model).buildTx({ ...chain,
+    tx: { ...tx, democracy: { unlock: (w) => { built.push('unlock'); return tx.democracy.unlock(w); }, removeVote: (i) => { built.push('removeVote'); return tx.democracy.removeVote(i); } } } }));
 const text = (h) => h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 // The pallet rule, written from try_remove_vote (not from the code under test).
 const accumulatesAt = (v, info, at) => !!(info && info.finished && v.aye === info.approved && at < info.end + PERIOD * PERIODS[v.conviction]);
@@ -150,8 +156,21 @@ describe('an account change is told apart from the block moving on', () => {
     test('both, 50 blocks later with the 500 PDEX prior: refused', async () => {
         await assert.rejects(sign(drawn, chainAt(direct([LOST3, WON7], REFS, PRIOR_500), DRAWN_AT + 50)), STALE);
     });
-    test('the block alone changes the plan only when a lock ends in between: past 2,000 #7 can go too, so it asks for a reload', async () => {
-        await assert.rejects(sign(drawn, chainAt(TWO, 2001)), STALE);
+    test('the block alone changes the plan only when a lock ends in between: past 2,000 #7 can go too, so it asks for a reload, saying time moved on', async () => {
+        const built = [];
+        await assert.rejects(signWith(drawn, chainAt(TWO, 2001), built), MOVED_ON);
+        assert.deepEqual(built, []);
+    });
+    test('the account as drawn, a running referendum finished since: time moved on, not "your votes or locks changed"', async () => {
+        // Drawn with #9 running; it ends at 1,010, the losing side, so #9 can be removed too.
+        const running = direct([LOST3, WON7, vote(9, false, 'Locked1x', 35n * PDEX)], { ...REFS, 9: { ongoing: true, end: 1010 } });
+        const model = describeAccountLocks(snap(running, DRAWN_AT, 40n * PDEX));
+        const ended = direct(running.votes, { ...REFS, 9: { finished: true, approved: true, end: 1010 } });
+        await assert.rejects(sign(model, chainAt(ended, 1011)), MOVED_ON);
+    });
+    test('the account changed AND blocks went by: still "your votes or locks changed"', async () => {
+        await assert.rejects(sign(drawn, chainAt(direct([LOST3, WON7], REFS, PRIOR_500), 2001)), STALE);
+        await assert.rejects(sign(drawn, chainAt(direct([WON7], REFS), 2001)), STALE);
     });
 });
 
@@ -212,4 +231,68 @@ describe('safe removals and Unlock alone keep working, read again first', () => 
             assert.deepEqual(await sign(model, chainAt(dem, DRAWN_AT + 10)), calls);
         });
     }
+});
+
+// Issue #69 (Fable): VoteLockingPeriod missing or unreadable used to count as
+// 0 blocks, so a winning vote under conviction looked over at its
+// referendum's end and its removal was built. Unknown now counts as
+// unbounded: such a vote is never in the batch, and nothing claims a date.
+describe('VoteLockingPeriod cannot be read: a winning vote under conviction is never removed', () => {
+    const SIX7 = vote(7, true, 'Locked6x', 10n * PDEX);
+    for (const [what, lockingPeriod] of [['missing', undefined], ['read as 0', 0], ['not a number', 'n/a']]) {
+        test(`${what}: the projection holds the 6x vote; nothing to remove, no button`, () => {
+            const dem = { ...direct([SIX7], REFS), lockingPeriod };
+            const p = projectDemocracyLocks(dem, { now: 5000 });
+            assert.deepEqual(p.votes.map(v => [v.index, v.safe, v.accumulates]), [[7, false, true]]);
+            assert.deepEqual(p.batch.remove, []);
+            const m = describeAccountLocks(snap(dem, 5000, 10n * PDEX));
+            assert.deepEqual(m.actions.democracy.remove, []);
+            assert.match(spec(m).error, /^Nothing to remove or unlock right now\.$/);
+        });
+    }
+    test('the losing vote beside it is still removed; the 6x vote waits', () => {
+        const m = describeAccountLocks(snap({ ...direct([LOST3, SIX7], REFS), lockingPeriod: undefined }, 5000, 40n * PDEX));
+        assert.deepEqual(m.actions.democracy.remove.map(r => r.index), [3]);
+        assert.deepEqual(m.actions.democracy.held.map(h => [h.index, h.until]), [[7, null]]);
+        assert.equal(m.actions.democracy.lockAfter, s(10n * PDEX));
+    });
+    test('the panel says the vote waits for its conviction lock, with no made-up block, and no "lock period is over"', () => {
+        const m = describeAccountLocks(snap({ ...direct([SIX7], REFS, PRIOR_500), lockingPeriod: undefined }, DRAWN_AT, 500n * PDEX));
+        const h = text(renderBalanceLocks(m, { canSign: true }));
+        assert.match(h, /Vote on referendum #7: 10 PDEX until its conviction lock ends\./);
+        assert.match(h, /Remove the vote on referendum #7 once its own conviction lock ends; the lock period could not be read, so reload to see the date\./);
+        const row = m.items.find(i => i.id === 'democrac');
+        assert.match(row.unlock, /10 PDEX until its conviction lock ends for referendum #7/);
+        const alone = describeAccountLocks(snap({ ...direct([SIX7], REFS), lockingPeriod: undefined }, 5000, 10n * PDEX)).items.find(i => i.id === 'democrac');
+        assert.doesNotMatch(alone.unlock, /lock period is over/);
+        assert.match(alone.unlock, /^10 PDEX stays locked until its conviction lock ends \(the lock period could not be read; reload to see the date\)\./);
+        assert.deepEqual(alone.refs.map(r => r.text), ['#7: ended; locked until its conviction lock ends']);
+        for (const t of [h, row.unlock, alone.unlock, JSON.stringify(alone.refs)]) assert.doesNotMatch(t, /Infinity|NaN|\u221e|block null|block undefined/);
+    });
+    test('delegating at 6x: Undelegate is not said to free the PDEX at once, and no block is made up', () => {
+        const dem = { delegating: true, target: OTHER, conviction: 'Locked6x', balance: s(40n * PDEX), lockingPeriod: undefined, prior: NO_PRIOR };
+        const m = describeAccountLocks(snap(dem, 5000, 40n * PDEX));
+        const u = m.actions.democracy.undelegate;
+        assert.equal(u.freeAtOnce, false);
+        assert.equal(u.lockUntil, null);
+        const h = text(renderBalanceLocks(m, { canSign: true }));
+        assert.match(h, /Undelegating keeps 40 PDEX locked until its conviction lock ends; then unlock it here\./);
+        assert.doesNotMatch(h, /Infinity|NaN|\u221e|block null|Unlock frees/);
+        // No conviction: nothing to wait for, period or not.
+        const none = describeAccountLocks(snap({ ...dem, conviction: 'None' }, 5000, 40n * PDEX)).actions.democracy.undelegate;
+        assert.equal(none.freeAtOnce, true);
+        assert.equal(none.lockUntil, 5000);
+    });
+    test('drawn with the period read, signed when it cannot be: refused before anything is built', async () => {
+        // At 2,001 #7's 1x lock (to 2,000) is over, so the panel offers its removal.
+        const m = describeAccountLocks(snap(direct([WON7], REFS), 2001, 10n * PDEX));
+        assert.deepEqual(m.actions.democracy.remove.map(r => r.index), [7]);
+        for (const consts of [{}, { democracy: {} }, { democracy: { voteLockingPeriod: 0 } }]) {
+            const built = [];
+            await assert.rejects(signWith(m, { ...chainAt(direct([WON7], REFS), 2001), consts }, built), PERIOD_UNREAD, JSON.stringify(consts));
+            assert.deepEqual(built, []);
+        }
+        // Read, the same chain signs as offered.
+        assert.deepEqual(await sign(m, chainAt(direct([WON7], REFS), 2001)), [['removeVote', 7], ['unlock', ME]]);
+    });
 });
