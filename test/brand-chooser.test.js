@@ -675,3 +675,135 @@ describe('privacy and cookie pages (audit section 4)', () => {
         for (const [name, s] of [['section 3', s3], ['section 4', s4], ['short version', short], ['what we do not store', notStore]]) assert.ok(!/[\u2013\u2014]/.test(s), name);
     });
 });
+
+// Alternating row shades (Fable, cto-team/plans/2026-11-17-chooser-alternating-rows.md).
+// The checks are functions of a CSS string so the proof-of-failure test can run
+// them against a broken copy.
+describe('alternating row shades in the chooser lists', () => {
+    const OPT_STRIPE = ':where(.wallet-option-list > .wallet-option:nth-child(even)) > .wallet-option-row';
+    const ACC_STRIPE = ':where(#wallet-accounts .wallet-account-list > li:nth-child(even)) > .wallet-account-btn';
+    const A = 'rgba(255, 255, 255, 0.03)', B = 'rgba(255, 255, 255, 0.07)', H = 'rgba(255, 255, 255, 0.10)';
+    const lineOf = (rules, sel) => { const r = rules.find(x => !x.media && x.selectors.includes(sel)); return r ? r.line : -1; };
+    const declOf = (rules, sel, prop) => { let v; for (const r of rules) if (!r.media && r.selectors.includes(sel) && prop in r.decls) v = r.decls[prop]; return v; };
+
+    // Check 1: both stripe rules exist outside media queries, one declaration each.
+    function checkExist(css) {
+        const rules = parseRules(css), err = [];
+        for (const sel of [OPT_STRIPE, ACC_STRIPE]) {
+            const hit = rules.filter(r => r.selectors.includes(sel));
+            if (hit.length !== 1) { err.push(`stripe rule "${sel}" found ${hit.length} times, wanted 1`); continue; }
+            const r = hit[0];
+            if (r.media) err.push(`stripe rule "${sel}" is inside a media query`);
+            const keys = Object.keys(r.decls);
+            if (keys.length !== 1 || r.decls.background !== B) err.push(`stripe rule "${sel}" must declare only background: ${B}, has ${JSON.stringify(r.decls)}`);
+        }
+        return err;
+    }
+    // Check 3: the stripe sits before every rule that must beat it (equal-or-lower specificity cannot, so order matters).
+    function checkOrder(css) {
+        const rules = parseRules(css), err = [];
+        const before = (stripe, later) => {
+            const s = lineOf(rules, stripe);
+            for (const sel of later) { const l = lineOf(rules, sel); if (s < 0 || l < 0 || s >= l) err.push(`stripe rule "${stripe}" (line ${s}) must come before "${sel}" (line ${l})`); }
+        };
+        before(OPT_STRIPE, ['.wallet-option-row:hover', '.wallet-option-row.is-quiet', '.wallet-option-row.is-primary']);
+        before(ACC_STRIPE, ['.wallet-account-btn:hover', '.wallet-account-btn.is-primary']);
+        return err;
+    }
+    const msg = (e) => e.join('\n');
+
+    test('1: the two stripe rules exist outside any media query, one declaration each (0.07)', () => {
+        assert.deepEqual(checkExist(CSS), [], msg(checkExist(CSS)));
+    });
+    test('2: rest fill stays 0.03 on both row kinds, hover fills are 0.10', () => {
+        assert.equal(declOf(RULES, '.wallet-option-row', 'background'), A);
+        assert.equal(declOf(RULES, '.wallet-account-btn', 'background'), A);
+        assert.equal(declOf(RULES, '.wallet-option-row:hover', 'background'), H);
+        assert.equal(declOf(RULES, '.wallet-account-btn:hover', 'background'), H);
+    });
+    test('3: order guard, the stripe rules precede hover, quiet and primary', () => {
+        assert.deepEqual(checkOrder(CSS), [], msg(checkOrder(CSS)));
+    });
+    test('4: no stripe selector touches current, lead, quiet, multisig or the Current row; no nth-child background is hex or non-white', () => {
+        const stripes = RULES.filter(r => r.selectors.some(s => /nth-child/.test(s) && /wallet-(option|account)/.test(s)));
+        assert.ok(stripes.length >= 2);
+        for (const r of stripes) for (const s of r.selectors) assert.ok(!/is-current|is-primary|is-quiet|ms-rows|wallet-account-row/.test(s), 'stripe selector reaches an exempt row: ' + s);
+        for (const r of RULES.filter(x => x.selectors.some(s => /nth-child/.test(s)))) {
+            const bg = (r.decls.background || r.decls['background-color'] || '');
+            if (!bg) continue;
+            assert.ok(!/#[0-9a-f]{3,8}\b/i.test(bg), 'hex background on nth-child: ' + r.selectors.join(', '));
+            if (/rgba?\(/.test(bg)) assert.match(bg, /^rgba\(255, 255, 255, [\d.]+\)$/, 'non-white background on nth-child: ' + r.selectors.join(', '));
+        }
+    });
+    test('5: lead rows and the Current row keep Tint 08; the quiet row keeps background: none', () => {
+        const T = 'rgba(230, 0, 122, 0.08)';
+        assert.equal(declOf(RULES, '.wallet-option-row.is-primary', 'background'), T);
+        assert.equal(declOf(RULES, '.wallet-account-btn.is-primary', 'background'), T);
+        assert.equal(declOf(RULES, '.wallet-account-row.is-current', 'background'), T);
+        assert.equal(declOf(RULES, '.wallet-option-row.is-quiet', 'background'), 'none');
+    });
+
+    describe('6: the markup :nth-child rests on', () => {
+        const esc = escapeHtml;
+        const kids = (el) => Array.from(el.children);
+        test('option rows: every child of the list is li.wallet-option; Cancel and the problem line sit inside an li', () => {
+            const html = buildOptionRowsHtml({
+                sources: [{ key: 'talisman', name: 'Talisman' }, { key: 'polkadot-js', name: 'Polkadot.js' }, { key: 'subwallet-js', name: 'SubWallet' }],
+                states: { talisman: { status: 'waiting' }, 'polkadot-js': { problem: 'rejected' } },
+                phone: { connected: false }, esc
+            });
+            const doc = new Window().document;
+            doc.body.innerHTML = `<ul class="wallet-option-list">${html}</ul>`;
+            const ul = doc.querySelector('.wallet-option-list');
+            assert.ok(kids(ul).length >= 4);
+            for (const c of kids(ul)) assert.ok(c.tagName === 'LI' && c.classList.contains('wallet-option'), 'child is ' + c.tagName + '.' + c.className);
+            const cancel = ul.querySelector('.wallet-option-cancel');
+            assert.ok(cancel && cancel.parentElement.tagName === 'LI', 'Cancel inside an li');
+            const prob = ul.querySelector('.wallet-option-problem');
+            assert.ok(prob && prob.parentElement.tagName === 'LI', 'problem line inside an li');
+        });
+        test('account lists: with a current account, a search query and more than 8 accounts, every child is an li with one btn or row', () => {
+            const accounts = Array.from({ length: 10 }, (_, i) => ({ address: addr(20 + i), name: 'Acc ' + i, source: i < 6 ? 'talisman' : 'polkadot-js' }));
+            for (const q of ['', 'Acc']) {
+                const doc = new Window().document;
+                doc.body.innerHTML = buildAccountListHtml({ accounts, current: accounts[1].address, currentSource: 'talisman', isSame: same, esc, shortAddr: short, query: q });
+                const lists = Array.from(doc.querySelectorAll('.wallet-account-list'));
+                assert.ok(lists.length >= 1);
+                let current = 0;
+                for (const ul of lists) for (const c of kids(ul)) {
+                    assert.equal(c.tagName, 'LI');
+                    assert.equal(c.querySelectorAll('.wallet-account-btn, .wallet-account-row').length, 1);
+                    assert.equal(kids(c).filter(k => k.matches('.wallet-account-btn, .wallet-account-row')).length, 1, 'direct child');
+                    current += c.querySelectorAll('.wallet-account-row.is-current').length;
+                }
+                assert.equal(current, 1);
+            }
+        });
+        test('Get a wallet: every child of the install list is li.wallet-option', () => {
+            const doc = new Window().document;
+            doc.body.innerHTML = buildGetWalletHtml({});
+            const ul = doc.querySelector('.wallet-option-list');
+            assert.ok(kids(ul).length >= 3);
+            for (const c of kids(ul)) assert.ok(c.tagName === 'LI' && c.classList.contains('wallet-option'));
+        });
+    });
+
+    test('7: the guard fails when the stripe rule is removed or moved after .is-primary, and the message names the selector', () => {
+        const lines = CSS.split('\n');
+        const idx = (sel) => lines.findIndex(l => l.startsWith(sel));
+        const oi = idx(OPT_STRIPE), ai = idx(ACC_STRIPE);
+        assert.ok(oi >= 0 && ai >= 0, 'stripe rules are single-line rules');
+        const removed = lines.filter((_, i) => i !== oi && i !== ai).join('\n');
+        const e1 = checkExist(removed);
+        assert.ok(e1.length >= 2 && e1.some(m => m.includes(OPT_STRIPE)) && e1.some(m => m.includes(ACC_STRIPE)), msg(e1));
+        const e1b = checkOrder(removed);
+        assert.ok(e1b.some(m => m.includes(OPT_STRIPE)), msg(e1b));
+        const moved = lines.filter((_, i) => i !== oi && i !== ai);
+        moved.push(lines[oi], lines[ai]);
+        const mv = moved.join('\n');
+        assert.deepEqual(checkExist(mv), [], 'moved copy still has the rules');
+        const e3 = checkOrder(mv);
+        assert.ok(e3.some(m => m.includes(OPT_STRIPE) && m.includes('.wallet-option-row.is-primary')), msg(e3));
+        assert.ok(e3.some(m => m.includes(ACC_STRIPE) && m.includes('.wallet-account-btn.is-primary')), msg(e3));
+    });
+});
