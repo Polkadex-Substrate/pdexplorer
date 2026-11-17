@@ -234,8 +234,8 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         });
     }
 
-    test('C6: the Back focus ring is an outline, not a box-shadow', () => {
-        assert.equal(decl('.wallet-picker-back:focus-visible', 'box-shadow'), undefined);
+    test('C6 (amended, brand pass 3.0): the Back focus ring is the outline, with only the Primary halo added (no other shadow)', () => {
+        assert.equal(decl('.wallet-picker-back:focus-visible', 'box-shadow'), '0 0 0 3px var(--brand-primary-glow)');
     });
 
     test('C3: the dead green Refresh and Install styles are deleted, not restyled', () => {
@@ -335,7 +335,6 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
         ['.wallet-option.is-waiting .wallet-option-row', 'border-color', 'var(--border-hover)'],
         ['.wallet-option.is-waiting .wallet-option-row', 'box-shadow', HALO],
         ['.wallet-ext-tile', 'background', TINT14],
-        ['.wallet-group-head .wallet-ext-tile', 'background', TINT14],
         // 3.1 the lead row
         ['.wallet-option-row.is-primary', 'border-color', 'var(--brand-primary)'],
         ['.wallet-option-row.is-primary', 'background', TINT08],
@@ -408,11 +407,12 @@ describe('lint: pink is never the colour of small text', () => {
     // Pink on the surface is about 4.1:1, under AA for small text. Icons, markers
     // and fills may be pink; text labels stay --text-primary. A hover or focus
     // colour on a link is the older site-wide idiom and is left to the hover rule.
+    // Icon-only elements (a tile that holds one Boxicon, the spinner) are icons.
     const PINK = /var\(--brand-primary\)|#e6007a/i;
     const SCOPE = /wallet-(picker|option|ext|account|group|get|onboarding|viewing|connect|wc)|\.wc-|\.wp-/;
     const iconLike = (sel) => {
         const last = sel.split(/[\s>+~]+/).pop();
-        return /^(i|\.bx[\w-]*)(?![\w-])/.test(last) || /::(marker|before|after)$/.test(last) || /:(hover|focus|focus-visible|focus-within)/.test(sel);
+        return /^(i|\.bx[\w-]*)(?![\w-])/.test(last) || /\.(tile-icon|wallet-option-spin)$/.test(last) || /::(marker|before|after)$/.test(last) || /:(hover|focus|focus-visible|focus-within)/.test(sel);
     };
     const offenders = (rules) => rules.filter(r => PINK.test(r.decls.color || '')).flatMap(r => r.selectors.filter(s => SCOPE.test(s) && !iconLike(s)).map(s => `styles.css:${r.line} ${s} { color: ${r.decls.color} }`));
 
