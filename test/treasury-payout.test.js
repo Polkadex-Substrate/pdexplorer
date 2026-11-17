@@ -19,15 +19,20 @@
 //   check_payment() always returns Success.
 //   PayoutPeriod = SpendPeriod = 24 days of 12 s blocks (172,800).
 
-import { test, describe, before, after } from 'node:test';
+import { test, describe, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { ApiPromise } from '@polkadot/api';
 import { encodeAddress } from '@polkadot/util-crypto';
-import {
+import { u8aConcat, compactToU8a, u8aToHex } from '@polkadot/util';
+import * as payoutLib from '../lib/treasury-payout.js';
+import { trackSignedTx } from '../lib/tx-submit.js';
+import { WATCHDOG_MS } from '../lib/tx-status.js';
+
+const {
     classifySpend, formatSpendAmount, blockEta, buildSpendTx, readSpends, readSpend, readPot, treasuryPotAccount, spendVerdict, spendFromChain,
-    PAYOUT_FEE_TEXT, CHECK_FEE_TEXT
-} from '../lib/treasury-payout.js';
+    findPaidEvent, PAID_SCAN_MAX_BLOCKS, PAYOUT_FEE_TEXT, CHECK_FEE_TEXT
+} = payoutLib;
 import { registerTreasurySpendsRoute, SPENDS_ROUTE } from '../lib/treasury-payout-api.js';
 import { spendColumns, createSpendPayoutUI } from '../lib/treasury-payout-view.js';
 import { evaluateEvents, successCopy, buildTxModel, decodeDispatchError, ERROR_COPY, PENDING_TITLE } from '../lib/tx-status.js';
@@ -159,19 +164,41 @@ const accountData = ({ free, frozen, miscFrozen, feeFrozen }) => ({ data: {
     ...(frozen != null ? { frozen: { toString: () => frozen } } : {}),
     ...(miscFrozen != null ? { miscFrozen: { toString: () => miscFrozen }, feeFrozen: { toString: () => feeFrozen } } : {})
 } });
-function fakeChain({ head = 1500, count = 9, spends = [spend()], blockTime = 12000, pot = { free: '1000000000000000000' }, ed = '1000000000000' } = {}) {
-    const calls = { pages: [], accounts: [] };
+// events: block number -> [[section, method, index], ...], the System.Events
+// of that block (raw storage read, decoded with the registry), for the
+// payment evidence (#72); a block in `unreadable` fails to read.
+function fakeChain({ head = 1500, count = 9, spends = [spend()], blockTime = 12000, pot = { free: '1000000000000000000' }, ed = '1000000000000', events = {}, unreadable = [] } = {}) {
+    const calls = { pages: [], accounts: [], eventBlocks: [] };
     const byIndex = new Map(spends.map(s => [s.index, s]));
     const key = (i) => ({ args: [{ toNumber: () => i }], toHex: () => '0x' + i.toString(16).padStart(8, '0') });
+    const record = ([section, method, index]) => ({ phase: { isApplyExtrinsic: true }, event: { section, method, data: [{ toString: () => String(index) }] } });
     const api = {
-        registry: { chainDecimals: [12] },
+        registry: {
+            chainDecimals: [12],
+            createType: (type, bytes) => { assert.equal(type, 'Vec<EventRecord>'); return (c.events[bytes.block] || []).map(record); }
+        },
+        rpc: {
+            chain: {
+                getHeader: async () => ({ number: { toNumber: () => head } }),
+                getBlockHash: async (n) => ({ block: Number(n), toHex: () => `0xb${Number(n)}` })
+            },
+            state: {
+                getStorage: async (k, hash) => {
+                    assert.equal(k, 'system-events-key');
+                    calls.eventBlocks.push(hash.block);
+                    if (c.unreadable.includes(hash.block)) throw new Error('state_getStorage failed');
+                    return some({ block: hash.block });
+                }
+            }
+        },
         consts: {
             babe: { expectedBlockTime: { toNumber: () => blockTime } },
             treasury: { payoutPeriod: { toNumber: () => 172800 }, palletId: { toU8a: () => PALLET_ID } },
             balances: { existentialDeposit: { toString: () => ed } }
         },
         query: {
-            system: { number: async () => ({ toNumber: () => head }), account: async (who) => { calls.accounts.push(who); return accountData(c.pot); } },
+            system: { number: async () => ({ toNumber: () => head }), account: async (who) => { calls.accounts.push(who); return accountData(c.pot); },
+                events: { key: () => 'system-events-key' } },
             treasury: {
                 spendCount: async () => ({ toNumber: () => count }),
                 spends: Object.assign(async (i) => byIndex.has(Number(i)) ? some(codecSpend(byIndex.get(Number(i)))) : NONE, {
@@ -186,7 +213,7 @@ function fakeChain({ head = 1500, count = 9, spends = [spend()], blockTime = 120
         },
         tx: { treasury: { payout: (i) => ({ method: { toHex: () => `payout(${i})` } }), checkStatus: (i) => ({ method: { toHex: () => `check(${i})` } }) } }
     };
-    const c = { api, calls, byIndex, pot, set head(h) { head = h; } };
+    const c = { api, calls, byIndex, pot, events: { ...events }, unreadable: [...unreadable], set head(h) { head = h; } };
     return c;
 }
 
@@ -273,12 +300,72 @@ describe('reading the spends from the chain', () => {
         assert.deepEqual(await readSpend(c.api, 7), { next: 1201, spend: spend(), pot });
         assert.deepEqual(await readSpend(c.api, 99), { next: 1201, spend: null, pot });
     });
-    test('the watchdog verdict: payout is on chain once Attempted (or gone), check_status once gone', () => {
+    // #72: "gone" is not proof of payment. check_status also removes an
+    // expired unpaid spend (SpendProcessed) and void_spend a Pending one
+    // (AssetSpendVoided), so an absent spend is applied only with a Paid
+    // event for it; without one it is 'unverified'. The old expectation here
+    // was spendVerdict('payout', null) === 'applied'.
+    test('the watchdog verdict: payout is on chain once Attempted, or gone with a Paid event for it; check_status once gone', () => {
         assert.equal(spendVerdict('payout', spend()), 'pending');
         assert.equal(spendVerdict('payout', spend({ status: 'Attempted' })), 'applied');
-        assert.equal(spendVerdict('payout', null), 'applied');
+        // No scan result at all, or one that could not read every block (or was over the bound), is 'unchecked':
+        // not "found no payment" (Fable low on #72).
+        assert.equal(spendVerdict('payout', null), 'unchecked');
+        assert.equal(spendVerdict('payout', null, { paid: false, complete: false }), 'unchecked');
+        assert.equal(spendVerdict('payout', null, { paid: false, complete: true }), 'unverified');
+        assert.equal(spendVerdict('payout', null, { paid: true, block: 1501, complete: true }), 'applied');
         assert.equal(spendVerdict('checkStatus', spend({ status: 'Attempted' })), 'pending');
         assert.equal(spendVerdict('checkStatus', null), 'applied');
+        assert.equal(spendVerdict('checkStatus', null, { paid: false, complete: true }), 'applied', 'check_status clears paid and expired spends alike');
+        assert.equal(spendVerdict('checkStatus', null, { paid: false, complete: false }), 'applied');
+        assert.equal(spendVerdict('payout', null, { paid: true, block: 1501, complete: false }), 'applied', 'a Paid event is evidence even when other blocks were unreadable');
+    });
+});
+
+// #72: the payment evidence for a spend that is no longer on chain. On
+// Polkadex (PayFromAccount) payout pays synchronously and emits
+// treasury.Paid { index, payment_id } in the block it runs in; check_status
+// on an expired unpaid spend emits only SpendProcessed { index }, and
+// void_spend only AssetSpendVoided { index }. So a Paid event for the index,
+// in the blocks since the spend was last seen Pending, is the evidence.
+describe('payment evidence: a treasury.Paid event for the spend (#72)', () => {
+    test('a Paid event for this index in the scanned blocks is evidence, with its block', async () => {
+        const c = fakeChain({ head: 1503, events: { 1501: [['treasury', 'Paid', 7]], 1502: [['treasury', 'SpendProcessed', 7]] } });
+        assert.deepEqual(await findPaidEvent(c.api, 7, 1499), { paid: true, block: 1501, complete: true });
+        assert.deepEqual([...c.calls.eventBlocks].sort((a, b) => a - b), [1499, 1500, 1501, 1502, 1503], 'from..head, every block read');
+    });
+    test('an expired spend cleared by check_status (SpendProcessed only) is not evidence of payment', async () => {
+        const c = fakeChain({ head: 1503, events: { 1502: [['treasury', 'SpendProcessed', 7]] } });
+        assert.deepEqual(await findPaidEvent(c.api, 7, 1499), { paid: false, complete: true });
+    });
+    test('a voided spend (AssetSpendVoided) is not evidence of payment', async () => {
+        const c = fakeChain({ head: 1503, events: { 1500: [['treasury', 'AssetSpendVoided', 7]] } });
+        assert.deepEqual(await findPaidEvent(c.api, 7, 1499), { paid: false, complete: true });
+    });
+    test('a Paid event for another spend, or another pallet\'s Paid, is not evidence for this one', async () => {
+        const c = fakeChain({ head: 1503, events: { 1500: [['treasury', 'Paid', 8]], 1501: [['bounties', 'Paid', 7]] } });
+        assert.deepEqual(await findPaidEvent(c.api, 7, 1499), { paid: false, complete: true });
+    });
+    test('a block that cannot be read makes the scan incomplete; a Paid found elsewhere still counts', async () => {
+        const gap = fakeChain({ head: 1503, unreadable: [1501] });
+        assert.deepEqual(await findPaidEvent(gap.api, 7, 1499), { paid: false, complete: false });
+        const found = fakeChain({ head: 1503, unreadable: [1501], events: { 1502: [['treasury', 'Paid', 7]] } });
+        assert.deepEqual(await findPaidEvent(found.api, 7, 1499), { paid: true, block: 1502, complete: false });
+    });
+    test('bounded: more than maxBlocks to scan, or no start block, reads nothing and is incomplete', async () => {
+        assert.ok(PAID_SCAN_MAX_BLOCKS >= 20 && PAID_SCAN_MAX_BLOCKS <= 200, 'covers the 90 s watch with margin, and stays bounded');
+        const far = fakeChain({ head: 1500 + PAID_SCAN_MAX_BLOCKS, events: { 1600: [['treasury', 'Paid', 7]] } });
+        assert.deepEqual(await findPaidEvent(far.api, 7, 1500), { paid: false, complete: false });
+        assert.deepEqual(far.calls.eventBlocks, []);
+        assert.deepEqual(await findPaidEvent(far.api, 7, 1500, { maxBlocks: PAID_SCAN_MAX_BLOCKS + 1 }), { paid: false, complete: true });
+        assert.deepEqual(await findPaidEvent(far.api, 7, null), { paid: false, complete: false });
+        assert.deepEqual(await findPaidEvent(far.api, 7, undefined), { paid: false, complete: false });
+    });
+    test('the head unreadable: incomplete, never a throw', async () => {
+        const c = fakeChain();
+        c.api.rpc.chain.getHeader = async () => { throw new Error('no link'); };
+        assert.deepEqual(await findPaidEvent(c.api, 7, 1499), { paid: false, complete: false });
+        assert.deepEqual(await findPaidEvent({}, 7, 1499), { paid: false, complete: false });
     });
 });
 
@@ -314,6 +401,41 @@ describe('the calls on the real codec (spec 393 metadata fixture)', () => {
             assert.equal(d.key, key);
             assert.equal(d.text, ERROR_COPY[key], key);
         }
+    });
+});
+
+// The same evidence read through a real ApiPromise on the spec 393 metadata:
+// raw System.Events storage per block, decoded with the registry.
+describe('payment evidence on the real codec (spec 393 metadata fixture, #72)', () => {
+    const u32le = (n) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n, true); return b; };
+    // EventRecord: Phase::ApplyExtrinsic(1), RuntimeEvent [pallet 16 = Treasury, variant], data, no topics.
+    const record = (variant, index) => u8aConcat(new Uint8Array([0]), u32le(1), new Uint8Array([16, variant]), u32le(index), new Uint8Array([0]));
+    const PAID = 9, VOIDED = 8, PROCESSED = 11;
+    const blocks = { 15: [record(VOIDED, 7), record(PAID, 8)], 16: [record(PROCESSED, 7)] };
+    const hashOf = (n) => '0x' + n.toString(16).padStart(64, '0');
+    let api, current = blocks;
+    before(async () => {
+        const ext = {
+            chain_getHeader: () => ({ parentHash: '0x' + '22'.repeat(32), number: '0x10', stateRoot: '0x' + '00'.repeat(32), extrinsicsRoot: '0x' + '00'.repeat(32), digest: { logs: [] } }),
+            chain_getBlockHash: ([n]) => hashOf(n == null ? 16 : Number(n)),
+            state_getStorage: ([, hash]) => { const n = parseInt(hash, 16); const recs = current[n] || []; return u8aToHex(u8aConcat(compactToU8a(recs.length), ...recs)); }
+        };
+        api = await ApiPromise.create({ provider: mockProvider({ metadataHex: fx.metadata, specVersion: fx.specVersion, extra: ext }).provider, noInitWarn: true });
+    });
+    after(async () => { await api?.disconnect(); });
+
+    test('the fixture event indices are treasury.Paid, AssetSpendVoided and SpendProcessed', () => {
+        const all = api.registry.createType('Vec<EventRecord>', u8aConcat(compactToU8a(3), record(PAID, 7), record(VOIDED, 7), record(PROCESSED, 7)));
+        assert.deepEqual(all.map(r => `${r.event.section}.${r.event.method}(${r.event.data[0].toString()})`),
+            ['treasury.Paid(7)', 'treasury.AssetSpendVoided(7)', 'treasury.SpendProcessed(7)']);
+    });
+    test('voided then cleared, and a Paid for another spend: no evidence for spend 7; Paid(8) is evidence for spend 8', async () => {
+        assert.deepEqual(await findPaidEvent(api, 7, 15), { paid: false, complete: true });
+        assert.deepEqual(await findPaidEvent(api, 8, 15), { paid: true, block: 15, complete: true });
+    });
+    test('a Paid(7) in the range is evidence', async () => {
+        current = { ...blocks, 16: [record(PAID, 7), record(PROCESSED, 7)] };
+        try { assert.deepEqual(await findPaidEvent(api, 7, 15), { paid: true, block: 16, complete: true }); } finally { current = blocks; }
     });
 });
 
@@ -674,6 +796,192 @@ describe('the Spends tab', () => {
     });
 });
 
+// #72, through the real tracker (lib/tx-submit.js) and status model
+// (lib/tx-status.js): a payout is Sent, the status updates stop, and the
+// watchdog finds the spend gone. Only payment evidence (Attempted, or a Paid
+// event for the spend since it was signed) may end it "paid" with onSuccess;
+// an expired or voided spend that is gone ends neutral and unverified, with a
+// link to look the transaction up.
+const TX_HASH = '0x' + 'ab'.repeat(32);
+const flush = async () => { for (let i = 0; i < 12; i++) await tick(); };
+function trackedWorld(opts) {
+    const w = spendsWorld(opts);
+    const api = w.chain.api;
+    Object.assign(api, { on() {}, off() {} });
+    Object.assign(w, { shown: [], successes: 0, errors: [], stages: [] });
+    w.last = () => w.shown[w.shown.length - 1];
+    w.submitWith = async (o) => {
+        w.submitted.push(o);
+        const button = { disabled: false, innerHTML: o.idleText, setAttribute() {}, removeAttribute() {} };
+        const run = trackSignedTx({
+            api, button, idleText: o.idleText, verify: o.verify,
+            action: { ...o.action, label: o.label, id: 'tx-72' },
+            onError: (t, m) => { w.errors.push(t); if (o.onError) o.onError(t, m); },
+            onSuccess: () => { w.successes++; if (o.onSuccess) o.onSuccess(); },
+            onStage: (st, m) => { w.stages.push(st); if (o.onStage) o.onStage(st, m); },
+            show: (a, st, ev, err, ex) => { const m = buildTxModel(a, st, ev, err, ex); w.shown.push(m); return m; }
+        });
+        run.start();
+        const tx = await o.buildTx(api);
+        tx.signAndSend = (addr, so, cb) => { w.emit = (status) => cb({ status, events: [], txHash: { toHex: () => TX_HASH } }); return Promise.resolve(() => {}); };
+        await run.send(tx, ME, {});
+    };
+    // Sent, then the subscription goes silent; `change` is what the chain does
+    // meanwhile; then one watchdog check.
+    w.silentThen = async (change) => {
+        w.emit({ type: 'Ready' });
+        await flush();
+        change(w.chain);
+        mock.timers.tick(WATCHDOG_MS);
+        await flush();
+    };
+    return w;
+}
+
+describe('the payout watchdog needs payment evidence (#72)', () => {
+    before(() => mock.timers.enable({ apis: ['setTimeout'] }));
+    after(() => mock.timers.reset());
+
+    const gone = (c, head, events) => { c.byIndex.delete(7); c.head = head; Object.assign(c.events, events); };
+    // incomplete: the scan could not read every block, so the card must not say
+    // "found no payment" (it did not look everywhere).
+    const unverified = (w, { incomplete = false } = {}) => {
+        const m = w.last();
+        assert.equal(m.stage, 'unverified', `ended ${m.stage}: ${m.title}`);
+        assert.equal(m.tone, 'neutral');
+        assert.doesNotMatch(m.title, /is paid/i);
+        assert.match(m.body, /no longer on chain/i);
+        if (incomplete) {
+            assert.equal(m.stageText, 'Payment could not be checked');
+            assert.match(m.title, /Spend #7 cleared; payment could not be checked/);
+            assert.match(m.body, /could not (read|check)/i);
+            assert.doesNotMatch(m.title + m.body + m.stageText, /found no payment|no payment|unverified/i);
+        } else {
+            assert.equal(m.stageText, 'Payment unverified');
+            assert.match(m.title, /Spend #7 cleared; payment unverified/);
+            assert.match(m.body, /found no payment/i);
+        }
+        assert.ok(m.links.some(l => l.href === `/tx/1499/${TX_HASH}` && /transaction/i.test(l.label)), 'a way to inspect the transaction');
+        assert.equal(w.successes, 0, 'payout onSuccess ran without payment evidence');
+        assert.deepEqual(w.errors, []);
+        assert.ok(!w.shown.some(x => /is paid/i.test(x.title)), 'a paid title was shown');
+    };
+
+    test('the watchdog verify reads the spend, then the Paid events since the block it was signed at', async () => {
+        const w = spendsWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        const verify = w.submitted[0].verify;
+        assert.equal(await verify(w.chain.api), 'pending', 'still Pending: no event read needed');
+        assert.deepEqual(w.chain.calls.eventBlocks, []);
+        w.chain.byIndex.set(7, spend({ status: 'Attempted' }));
+        assert.equal(await verify(w.chain.api), 'applied', 'Attempted is paid (PayFromAccount pays inside payout)');
+        gone(w.chain, 1503, {});
+        assert.equal(await verify(w.chain.api), 'unverified');
+        assert.equal(Math.min(...w.chain.calls.eventBlocks), 1498, 'scanned from the head at signing, less one block of margin');
+        assert.equal(Math.max(...w.chain.calls.eventBlocks), 1503);
+        w.chain.events[1501] = [['treasury', 'Paid', 7]];
+        assert.equal(await verify(w.chain.api), 'applied');
+    });
+
+    test('an expired unpaid spend cleared by check_status is not reported paid', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1503, { 1502: [['treasury', 'SpendProcessed', 7]] }));
+        unverified(w);
+    });
+
+    test('a voided spend is not reported paid', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1503, { 1500: [['treasury', 'AssetSpendVoided', 7]] }));
+        unverified(w);
+    });
+
+    test('unreadable event blocks are no evidence either, and the card says the payment could not be checked', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => { gone(c, 1503, {}); c.unreadable.push(1500, 1501, 1502); });
+        unverified(w, { incomplete: true });
+    });
+
+    test('a range over the 60 block bound is not read, so the card says the payment could not be checked', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1499 + 200, {}));
+        assert.deepEqual(w.chain.calls.eventBlocks, [], 'nothing should be read over the bound');
+        unverified(w, { incomplete: true });
+    });
+
+    test('a complete scan with no payment keeps "found no payment" and both cards keep the transaction lookup link', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1503, { 1502: [['treasury', 'SpendProcessed', 7]] }));
+        unverified(w);
+        assert.ok(w.last().links.some(l => l.href === `/tx/1499/${TX_HASH}`));
+    });
+
+    test('the incomplete card still never reports paid and still releases the spend button', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1499 + 200, {}));
+        assert.equal(w.stages[w.stages.length - 1], 'unverified');
+        assert.equal(w.successes, 0);
+        assert.deepEqual(w.fetches.slice(-1), ['/api/treasury/spends?fresh=1']);
+    });
+
+    test('unverified ends the watch: the spend button is released after the list is read again, and nothing fires later', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1503, {}));
+        assert.equal(w.stages[w.stages.length - 1], 'unverified');
+        assert.deepEqual(w.fetches.slice(-1), ['/api/treasury/spends?fresh=1'], 'the list was not read again');
+        const n = w.shown.length;
+        mock.timers.tick(WATCHDOG_MS * 6);
+        await flush();
+        assert.equal(w.shown.length, n, 'the watchdog kept running after the end');
+    });
+
+    test('a Paid event for the spend still confirms it: "Spend #7 is paid" and onSuccess once', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1503, { 1500: [['treasury', 'Paid', 7]], 1502: [['treasury', 'SpendProcessed', 7]] }));
+        assert.equal(w.last().stage, 'confirmed');
+        assert.equal(w.last().title, 'Spend #7 is paid');
+        assert.equal(w.successes, 1);
+        assert.deepEqual(w.errors, []);
+    });
+
+    test('an Attempted spend still confirms it', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => { c.byIndex.set(7, spend({ status: 'Attempted' })); c.head = 1501; });
+        assert.equal(w.last().stage, 'confirmed');
+        assert.equal(w.last().title, 'Spend #7 is paid');
+        assert.equal(w.successes, 1);
+    });
+
+    test('Check status keeps its own meaning: the spend gone is cleared (paid or expired), confirmed, onSuccess', async () => {
+        const w = trackedWorld({ head: 1499, rows: [spend({ status: 'Attempted' })] });
+        await w.ui.mount(w.el);
+        await w.click(7, 'checkStatus');
+        await w.silentThen((c) => gone(c, 1503, {}));
+        assert.equal(w.last().stage, 'confirmed');
+        assert.equal(w.last().title, 'Spend #7 is cleared');
+        assert.equal(w.successes, 1);
+        assert.deepEqual(w.chain.calls.eventBlocks, [], 'check_status needs no payment evidence');
+    });
+});
+
 describe('help', () => {
     test('the treasury article explains paying out and checking a spend, and who pays the fee', () => {
         const t = HELP_TOPICS.find(x => x.slug === 'treasury').body;
@@ -685,6 +993,14 @@ describe('help', () => {
         assert.match(t, /refunded/);
         assert.match(t, /expires/);
         assert.doesNotMatch(t, /The explorer has no button for that yet/);
+    });
+    test('the transaction status article explains "Payment unverified" without calling it paid (#72)', () => {
+        const t = HELP_TOPICS.find(x => x.slug === 'transaction-status').body;
+        const item = (t.match(/<li><b>Payment unverified<\/b>[\s\S]*?<\/li>/) || [''])[0];
+        assert.ok(item, 'no Payment unverified entry');
+        assert.match(item, /no payment/i);
+        assert.match(item, /expired|voided/i);
+        assert.match(item, /Look up the transaction/);
     });
 });
 
