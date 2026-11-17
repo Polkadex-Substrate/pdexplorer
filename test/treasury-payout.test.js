@@ -308,12 +308,17 @@ describe('reading the spends from the chain', () => {
     test('the watchdog verdict: payout is on chain once Attempted, or gone with a Paid event for it; check_status once gone', () => {
         assert.equal(spendVerdict('payout', spend()), 'pending');
         assert.equal(spendVerdict('payout', spend({ status: 'Attempted' })), 'applied');
-        assert.equal(spendVerdict('payout', null), 'unverified');
+        // No scan result at all, or one that could not read every block (or was over the bound), is 'unchecked':
+        // not "found no payment" (Fable low on #72).
+        assert.equal(spendVerdict('payout', null), 'unchecked');
+        assert.equal(spendVerdict('payout', null, { paid: false, complete: false }), 'unchecked');
         assert.equal(spendVerdict('payout', null, { paid: false, complete: true }), 'unverified');
         assert.equal(spendVerdict('payout', null, { paid: true, block: 1501, complete: true }), 'applied');
         assert.equal(spendVerdict('checkStatus', spend({ status: 'Attempted' })), 'pending');
         assert.equal(spendVerdict('checkStatus', null), 'applied');
         assert.equal(spendVerdict('checkStatus', null, { paid: false, complete: true }), 'applied', 'check_status clears paid and expired spends alike');
+        assert.equal(spendVerdict('checkStatus', null, { paid: false, complete: false }), 'applied');
+        assert.equal(spendVerdict('payout', null, { paid: true, block: 1501, complete: false }), 'applied', 'a Paid event is evidence even when other blocks were unreadable');
     });
 });
 
@@ -838,15 +843,24 @@ describe('the payout watchdog needs payment evidence (#72)', () => {
     after(() => mock.timers.reset());
 
     const gone = (c, head, events) => { c.byIndex.delete(7); c.head = head; Object.assign(c.events, events); };
-    const unverified = (w) => {
+    // incomplete: the scan could not read every block, so the card must not say
+    // "found no payment" (it did not look everywhere).
+    const unverified = (w, { incomplete = false } = {}) => {
         const m = w.last();
         assert.equal(m.stage, 'unverified', `ended ${m.stage}: ${m.title}`);
         assert.equal(m.tone, 'neutral');
         assert.doesNotMatch(m.title, /is paid/i);
-        assert.equal(m.stageText, 'Payment unverified');
-        assert.match(m.title, /Spend #7 cleared; payment unverified/);
         assert.match(m.body, /no longer on chain/i);
-        assert.match(m.body, /no payment/i);
+        if (incomplete) {
+            assert.equal(m.stageText, 'Payment could not be checked');
+            assert.match(m.title, /Spend #7 cleared; payment could not be checked/);
+            assert.match(m.body, /could not (read|check)/i);
+            assert.doesNotMatch(m.title + m.body + m.stageText, /found no payment|no payment|unverified/i);
+        } else {
+            assert.equal(m.stageText, 'Payment unverified');
+            assert.match(m.title, /Spend #7 cleared; payment unverified/);
+            assert.match(m.body, /found no payment/i);
+        }
         assert.ok(m.links.some(l => l.href === `/tx/1499/${TX_HASH}` && /transaction/i.test(l.label)), 'a way to inspect the transaction');
         assert.equal(w.successes, 0, 'payout onSuccess ran without payment evidence');
         assert.deepEqual(w.errors, []);
@@ -886,12 +900,40 @@ describe('the payout watchdog needs payment evidence (#72)', () => {
         unverified(w);
     });
 
-    test('unreadable event blocks are no evidence either', async () => {
+    test('unreadable event blocks are no evidence either, and the card says the payment could not be checked', async () => {
         const w = trackedWorld({ head: 1499 });
         await w.ui.mount(w.el);
         await w.click(7);
         await w.silentThen((c) => { gone(c, 1503, {}); c.unreadable.push(1500, 1501, 1502); });
+        unverified(w, { incomplete: true });
+    });
+
+    test('a range over the 60 block bound is not read, so the card says the payment could not be checked', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1499 + 200, {}));
+        assert.deepEqual(w.chain.calls.eventBlocks, [], 'nothing should be read over the bound');
+        unverified(w, { incomplete: true });
+    });
+
+    test('a complete scan with no payment keeps "found no payment" and both cards keep the transaction lookup link', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1503, { 1502: [['treasury', 'SpendProcessed', 7]] }));
         unverified(w);
+        assert.ok(w.last().links.some(l => l.href === `/tx/1499/${TX_HASH}`));
+    });
+
+    test('the incomplete card still never reports paid and still releases the spend button', async () => {
+        const w = trackedWorld({ head: 1499 });
+        await w.ui.mount(w.el);
+        await w.click(7);
+        await w.silentThen((c) => gone(c, 1499 + 200, {}));
+        assert.equal(w.stages[w.stages.length - 1], 'unverified');
+        assert.equal(w.successes, 0);
+        assert.deepEqual(w.fetches.slice(-1), ['/api/treasury/spends?fresh=1']);
     });
 
     test('unverified ends the watch: the spend button is released after the list is read again, and nothing fires later', async () => {

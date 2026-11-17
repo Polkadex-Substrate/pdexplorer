@@ -171,6 +171,15 @@ describe('buildTxModel: the confirmed, processed and silent-wallet cards', () =>
         assert.match(m.links[0].label, /transaction/i);
         assert.ok(m.links.some(l => l.href === '/treasury'));
         assert.equal(m.code, null, 'not a failure: no support code');
+        // A scan that could not read every block (extra.unchecked) must not say it found no payment.
+        const u = T.buildTxModel(pay, 'unverified', null, null, { txHash: HASH, address: ADDR, sentBlock: 100, unchecked: true });
+        assert.equal(u.stage, 'unverified');
+        assert.equal(u.tone, 'neutral');
+        assert.equal(u.title, 'Spend #7 cleared; payment could not be checked');
+        assert.equal(u.stageText, 'Payment could not be checked');
+        assert.doesNotMatch(u.title + u.body + u.stageText, /found no payment|is paid|confirmed on chain/i);
+        assert.equal(u.links[0].href, `/tx/100/${HASH}`, 'the transaction lookup link stays');
+        assert.ok(u.links.some(l => l.href === '/treasury'));
         // Any other action: a generic neutral text, still no success claim.
         const g = T.buildTxModel(action, 'unverified', null, null, { txHash: HASH, sentBlock: 100 });
         assert.equal(g.tone, 'neutral');
