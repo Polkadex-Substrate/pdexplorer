@@ -683,7 +683,8 @@ describe('alternating row shades in the chooser lists', () => {
     const OPT_STRIPE = ':where(.wallet-option-list > .wallet-option:nth-child(even)) > .wallet-option-row';
     const ACC_STRIPE = ':where(#wallet-accounts .wallet-account-list > li:nth-child(even)) > .wallet-account-btn';
     const A = 'rgba(255, 255, 255, 0.03)', B = 'rgba(255, 255, 255, 0.07)', H = 'rgba(255, 255, 255, 0.10)';
-    const lineOf = (rules, sel) => { const r = rules.find(x => !x.media && x.selectors.includes(sel)); return r ? r.line : -1; };
+    // The line of the LAST outside-media rule naming the selector: the one that wins the cascade.
+    const lineOf = (rules, sel) => { const r = rules.filter(x => !x.media && x.selectors.includes(sel)).pop(); return r ? r.line : -1; };
     const declOf = (rules, sel, prop) => { let v; for (const r of rules) if (!r.media && r.selectors.includes(sel) && prop in r.decls) v = r.decls[prop]; return v; };
 
     // Check 1: both stripe rules exist outside media queries, one declaration each.

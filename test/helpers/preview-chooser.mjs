@@ -28,6 +28,8 @@ const root = new URL('../../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
 const out = process.argv[2];
 const selftest = process.argv.includes('--selftest');
+// --rows: the small two-scene preview of the alternating row shades (no note scene, Inter 400 and 600 only).
+const rowsOnly = process.argv.includes('--rows');
 const b64 = (p) => rd(p, null).toString('base64');
 
 // ── assets ──
@@ -35,14 +37,19 @@ const dataFont = (p) => `url(data:font/woff2;base64,${b64(p)}) format('woff2')`;
 function interCss() {
     const css = rd('public/vendor/inter.css');
     const blocks = css.match(/\/\* inter-[^*]*\*\/\s*@font-face\s*\{[^}]*\}/g) || [];
-    return blocks.filter(b => /inter-latin-(300|400|500|600|700)-normal/.test(b)).map(b => {
+    return blocks.filter(b => (rowsOnly ? /inter-latin-(400|600)-normal/ : /inter-latin-(300|400|500|600|700)-normal/).test(b)).map(b => {
         const file = /inter-latin-\d+-normal/.exec(b)[0];
         return b.replace(/src:[^;]*;/, `src: ${dataFont(`public/vendor/inter/${file}.woff2`)};`);
     }).join('\n');
 }
 function boxiconsCss() {
     const css = rd('public/vendor/boxicons/css/boxicons.min.css');
-    return css.replace(/src:url\(\.\.\/fonts\/boxicons\.eot\);src:[^}]*\}/, `src:${dataFont('public/vendor/boxicons/fonts/boxicons.woff2')}}`);
+    const full = css.replace(/src:url\(\.\.\/fonts\/boxicons\.eot\);src:[^}]*\}/, `src:${dataFont('public/vendor/boxicons/fonts/boxicons.woff2')}}`);
+    if (!rowsOnly) return full;
+    // --rows: keep only the icon classes the shell and the wallet views name (size budget).
+    const src = rd('index.html') + ['wallet-picker.js', 'wallet-onboarding.js', 'wallet-picker-view.js', 'walletconnect-view.js'].map(f => rd('lib/' + f)).join('');
+    const used = new Set([...src.matchAll(/\bbx-[a-z0-9-]+/g)].map(m => m[0]));
+    return full.split('}').filter(r => { const m = /\.(bx-[a-z0-9-]+):before/.exec(r); return !m || used.has(m[1]); }).join('}');
 }
 const STYLES = rd('styles.css');
 const APP_CSS = interCss() + '\n' + STYLES + '\n' + boxiconsCss();
@@ -61,7 +68,10 @@ function shellHtml() {
     wallet.removeAttribute('style');
     for (const n of app.querySelectorAll('.nav-item.active')) n.classList.remove('active');
     app.querySelector('#nav-my-account').classList.add('active');
-    for (const img of app.querySelectorAll('img[src="logo.png"]')) img.setAttribute('src', logoUri);
+    // --rows: the hidden modal dialogs are not part of the picture (size budget).
+    if (rowsOnly) for (const m of Array.from(app.querySelectorAll('[id$="-modal"]'))) if (!m.closest('.wallet-picker')) m.remove();
+    // --rows: one copy of the logo in the page, put into each frame by FRAME_JS (size budget).
+    for (const img of app.querySelectorAll('img[src="logo.png"]')) img.setAttribute('src', rowsOnly ? 'data:image/png;base64,LOGO_ONCE' : logoUri);
     return app.outerHTML;
 }
 const SHELL = shellHtml();
@@ -101,6 +111,11 @@ const SCENES = [
     { id: 'get-first', title: 'Get a wallet: three equal choices', primary: 0, build: () => setup({}, async (w) => { w.action('get').click(); await w.settle(); }) },
     { id: 'get-retried', title: 'Get a wallet after a failed Check again: Reload page is the one Solid', primary: 0, solidExtra: '.wallet-onboarding-reload', build: () => setup({}, async (w) => { w.action('get').click(); await w.settle(); w.q('.wallet-get-check').click(); await w.settle(); }) },
     { id: 'switching', title: 'Switching: the current account carries the sidebar bar and tint', primary: 0, build: () => setup({ wallets: [TALISMAN(), POLKADOT()], current: addr(10, 42), currentSource: 'talisman', lastSource: 'talisman' }) }
+];
+
+const ROW_SCENES = [
+    { id: 'rows-options', title: 'Alternating shades: options, 4 rows (lead on row 2, the quiet Get row is not striped)', primary: 1, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true, lastSource: 'talisman' }) },
+    { id: 'rows-accounts', title: 'Alternating shades: 5 accounts of one wallet', primary: 0, build: () => setup({ wallets: [fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings'), acct(15, 'Trading'), acct(16, 'Cold storage')])] }, async (w) => { w.row('talisman').click(); await w.settle(); }) }
 ];
 
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
@@ -153,9 +168,10 @@ function checkFile(html) {
 // ── assemble ──
 const FRAME_JS = `
 const css = document.getElementById('app-css').textContent;
+const logo = (document.getElementById('logo-once') || {}).textContent;
 for (const f of document.querySelectorAll('iframe[data-scene]')) {
   const t = document.getElementById('t-' + f.dataset.scene);
-  f.srcdoc = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>' + css + '</style></head><body>' + t.innerHTML + '</body></html>';
+  f.srcdoc = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>' + css + '</style></head><body>' + (logo ? t.innerHTML.split('LOGO_ONCE').join(logo) : t.innerHTML) + '</body></html>';
   f.addEventListener('load', () => { try { f.style.height = Math.max(240, f.contentDocument.documentElement.scrollHeight) + 'px'; } catch (e) {} });
 }`;
 const CHROME_CSS = `body{margin:0;padding:24px;background:#08080C;color:#F2F2F6;font-family:Inter,system-ui,sans-serif}
@@ -170,7 +186,7 @@ async function build(scenes, files = {}) {
     const parts = [];
     const sceneList = [];
     for (const s of scenes) sceneList.push({ id: s.id, title: s.title, html: await renderScene(s) });
-    sceneList.push({ id: 'note', title: 'Not-connected note on /wallet/<address> (the real page, nothing connected)', html: noteScene() });
+    if (!rowsOnly) sceneList.push({ id: 'note', title: 'Not-connected note on /wallet/<address> (the real page, nothing connected)', html: noteScene() });
     const body = sceneList.map(s => `<section class="scene"><h2>${s.title}</h2><div class="frames">
 <figure><figcaption>1280 px</figcaption><iframe data-scene="${s.id}" data-w="1280" title="${s.id} at 1280 px"></iframe></figure>
 <figure><figcaption>390 px</figcaption><iframe data-scene="${s.id}" data-w="390" title="${s.id} at 390 px"></iframe></figure></div>
@@ -181,7 +197,7 @@ async function build(scenes, files = {}) {
 <h1>Connect wallet chooser: brand identity pass (feat/connect-chooser)</h1>
 <p class="lead">The branch's real index.html shell, styles.css and chooser, in frames at 1280 px and 390 px. Labels and titles are outside the frames.</p>
 ${body}
-<script>${FRAME_JS}</script></body></html>`;
+${rowsOnly ? `<script id="logo-once" type="text/plain">${b64('logo.png')}</script>` : ''}<script>${FRAME_JS}</script></body></html>`;
     checkFile(html);
     return html;
 }
@@ -205,9 +221,9 @@ async function guardSelfTest() {
 if (selftest) { await guardSelfTest(); process.exit(0); }
 if (!out) { console.error('usage: node --experimental-sqlite test/helpers/preview-chooser.mjs <out.html> [--selftest]'); process.exit(2); }
 try {
-    const html = await build(SCENES);
+    const html = await build(rowsOnly ? ROW_SCENES : SCENES);
     writeFileSync(out, html);
-    console.log(`wrote ${out}: ${html.length} bytes, ${SCENES.length + 1} scenes`);
+    console.log(`wrote ${out}: ${html.length} bytes, ${rowsOnly ? ROW_SCENES.length : SCENES.length + 1} scenes`);
     process.exit(0);
 } catch (e) {
     console.error('REFUSED, file not written:\n' + e.message);
