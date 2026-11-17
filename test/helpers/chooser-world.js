@@ -79,9 +79,10 @@ export function mountChooser(t, opts = {}) {
     const window = new Window({ url: 'https://explorer.test/wallet', width: opts.width || 1024, settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
     t.after(() => window.happyDOM.close());
     const doc = window.document;
-    const root = doc.createElement('div');
-    root.id = 'wallet-dashboard';
-    doc.body.appendChild(root);
+    // opts.shell: the real page's markup (preview generator); the picker mounts into its #wallet-dashboard.
+    let root;
+    if (opts.shell) { doc.body.innerHTML = opts.shell; root = doc.getElementById('wallet-dashboard'); }
+    else { root = doc.createElement('div'); root.id = 'wallet-dashboard'; doc.body.appendChild(root); }
     const wallets = opts.wallets || [];
     const injected = Object.fromEntries(wallets.map(w => [w.key, w.provider]));
     const registry = opts.registry || createSourceRegistry({ getInjected: () => injected, appName: 'Polkadex Explorer', toAddress: toPdex });

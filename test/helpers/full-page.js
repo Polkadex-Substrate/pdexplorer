@@ -152,5 +152,7 @@ const result = {
     },
     errors
 };
+// The preview generator asks for the rendered shell (test/helpers/preview-chooser.mjs).
+if (scenario.dumpHtml) { const app = document.querySelector('.app-container'); result.appHtml = app ? app.outerHTML : ''; }
 process.stdout.write('RESULT ' + JSON.stringify(result) + '\n');
 process.exit(0);
