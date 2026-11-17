@@ -315,7 +315,7 @@ describe('send() relays statuses to the wallet\'s update (lib/tx-submit.js)', ()
         await flush();
         assert.equal(w.calls.send, 0);
         assert.deepEqual(inner.updates, []);
-        assert.deepEqual(w.calls.onError, ['Your wallet changed after signing; nothing was sent.']);
+        assert.deepEqual(w.calls.onError, ['Your wallet changed after signing, so this request is out of date; nothing was sent. Start the action again.']);
     });
 
     test('the wallet changed before signing: never signed, update never called', async () => {

@@ -12600,6 +12600,9 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         stage(model.stage, model);
         if (onError) onError(m, model);
     };
+    // Taken now, before any wait: false once the wallet session changes at all,
+    // even back to the same address (issue #70, lib/wallet-session.js signingCheck).
+    const stillValid = walletSession.signingCheck(expectedWallet);
     const multisig = multisigStore.find(expectedWallet);
     if (multisig && !multisigHandled) {
         try {
@@ -12607,13 +12610,13 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
             const staleRuntime = liveRuntimeError(globalApi);
             if (staleRuntime) throw new Error(staleRuntime);
             const tx = await buildTx(globalApi);
-            if (!isSameAddress(expectedWallet, getStoredWallet())) throw new Error('The wallet changed. Open the action again.');
+            if (!stillValid()) throw new Error('The wallet changed. Open the action again.');
             return await multisigUI.review({ multisig, callHex: tx.method.toHex(), onSuccess, onEnd: onMultisigEnd });
         } catch (e) { return fail(e.message); }
     }
     const w = await resolveWalletSigner(fail, signingAccount);
     if (!w) return;
-    if (!isSameAddress(expectedWallet, getStoredWallet())) return fail('The wallet changed. Open the action again.');
+    if (!stillValid()) return fail('The wallet changed. Open the action again.');
     // verify: the action's own chain check, used only if the status updates
     // stop (see lib/tx-submit.js); every action also gets the nonce check.
     const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: stage, show: showTxStatus, verify });
@@ -12623,9 +12626,9 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         // builder to read chain state (elections.candidates) at signing time,
         // and an un-awaited async builder would hand signAndSend a Promise.
         const tx = await buildTx(globalApi);
-        if (!isSameAddress(expectedWallet, getStoredWallet())) throw new Error('The wallet changed. Open the action again.');
+        if (!stillValid()) throw new Error('The wallet changed. Open the action again.');
         // stillValid: asked again after the fee check and after the wallet signs, so every caller gets it.
-        await run.send(tx, w.account.address, w.signer, { stillValid: () => isSameAddress(expectedWallet, getStoredWallet()) });   // never throws
+        await run.send(tx, w.account.address, w.signer, { stillValid });   // never throws
     } catch (e) {
         // Only buildTx gets here: the explorer's own guard (the keep-alive
         // refusal, "treasury pallet not available"), shown as written.
