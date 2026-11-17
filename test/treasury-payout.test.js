@@ -952,6 +952,14 @@ describe('help', () => {
         assert.match(t, /expires/);
         assert.doesNotMatch(t, /The explorer has no button for that yet/);
     });
+    test('the transaction status article explains "Payment unverified" without calling it paid (#72)', () => {
+        const t = HELP_TOPICS.find(x => x.slug === 'transaction-status').body;
+        const item = (t.match(/<li><b>Payment unverified<\/b>[\s\S]*?<\/li>/) || [''])[0];
+        assert.ok(item, 'no Payment unverified entry');
+        assert.match(item, /no payment/i);
+        assert.match(item, /expired|voided/i);
+        assert.match(item, /Look up the transaction/);
+    });
 });
 
 describe('wiring', () => {
