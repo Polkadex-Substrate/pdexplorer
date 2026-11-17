@@ -48,8 +48,8 @@ function boxiconsCss() {
     if (!rowsOnly) return full;
     // --rows: keep only the icon classes the shell and the wallet views name (size budget).
     const src = rd('index.html') + ['wallet-picker.js', 'wallet-onboarding.js', 'wallet-picker-view.js', 'walletconnect-view.js'].map(f => rd('lib/' + f)).join('');
-    const used = new Set([...src.matchAll(/\bbx-[a-z0-9-]+/g)].map(m => m[0]));
-    return full.split('}').filter(r => { const m = /\.(bx-[a-z0-9-]+):before/.exec(r); return !m || used.has(m[1]); }).join('}');
+    const used = new Set([...src.matchAll(/\bbx[sl]?-[a-z0-9-]+/g)].map(m => m[0]));
+    return full.split('}').filter(r => { const m = /\.(bx[sl]?-[a-z0-9-]+):before/.exec(r); return !m || used.has(m[1]); }).join('}');
 }
 const STYLES = rd('styles.css');
 const APP_CSS = interCss() + '\n' + STYLES + '\n' + boxiconsCss();
@@ -114,8 +114,8 @@ const SCENES = [
 ];
 
 const ROW_SCENES = [
-    { id: 'rows-options', title: 'Alternating shades: options, 4 rows (lead on row 2, the quiet Get row is not striped)', primary: 1, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true, lastSource: 'talisman' }) },
-    { id: 'rows-accounts', title: 'Alternating shades: 5 accounts of one wallet', primary: 0, build: () => setup({ wallets: [fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings'), acct(15, 'Trading'), acct(16, 'Cold storage')])] }, async (w) => { w.row('talisman').click(); await w.settle(); }) }
+    { id: 'rows-options', title: 'Alternating Primary and Violet rows: options, 4 rows (lead on row 2, the quiet Get row striped too)', primary: 1, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true, lastSource: 'talisman' }) },
+    { id: 'rows-accounts', title: 'Alternating Primary and Violet rows: 5 accounts of one wallet', primary: 0, build: () => setup({ wallets: [fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings'), acct(15, 'Trading'), acct(16, 'Cold storage')])] }, async (w) => { w.row('talisman').click(); await w.settle(); }) }
 ];
 
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
