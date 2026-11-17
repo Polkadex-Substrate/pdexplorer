@@ -301,3 +301,12 @@ describe('property: refused exactly when signing could hold more PDEX for longer
         assert.ok(built > 200 && refused > 100, `enough of both (${built} built, ${refused} refused)`);
     });
 });
+
+describe('the help page says when Cancel vote is refused, both ways', () => {
+    test('a larger earlier lock ending first, and a smaller one ending later; neither as a "larger prior" only', async () => {
+        const { HELP_TOPICS } = await import('../lib/help-topics.js');
+        const body = HELP_TOPICS.find(t => t.slug === 'locked-balance').body.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ');
+        assert.match(body, /Cancel vote is refused before signing when an earlier vote lock runs past the referendum's end and neither it nor your vote's conviction lock is at least as large and at least as long as the other/);
+        assert.match(body, /a larger earlier lock would stay until your vote's later date, or your vote's amount until the earlier lock's later date/);
+    });
+});
