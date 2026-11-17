@@ -74,9 +74,9 @@ Access notes:
   validator this era (active, waiting, not-validator; offline, disabled,
   reported-offline, commission100, blocked, slashed) and banners (no-rewards,
   offline). nominating:false for other accounts
-- GET /api/account/:address/history?list=transactions|events&before=<block>:<rowId>
+- GET /api/account/:address/history?list=transactions|events&before=<block>:<rowId>&limit=1..50
   - older pages of the indexed transactions or events of an address, 200 per
-  page, newest first, read from the index (no RPC). Start from index.next in
+  page (or limit=1..50 rows per page; any other limit is a 400), newest first, read from the index (no RPC). Start from index.next in
   /api/account/:address, then follow the next of each page; next: null means
   nothing older.
 - GET /api/network-info — network metrics (schema below)
@@ -86,7 +86,9 @@ Access notes:
 - GET /api/staking-rewards/:address — per-address reward history
 - GET /api/staking-rewards-status — reward-backfill progress
 - GET /api/wallet/:address — wallet dashboard payload (balances, staking
-  incl. `activeStakedPlanck` u128 string, unpaid rewards, recent activity)
+  incl. `activeStakedPlanck` u128 string, unpaid rewards, recent activity; recentTransactions is the newest 10, with
+  recentTransactionsNext, the <block>:<rowId> cursor for the history route
+  (null when nothing is older), and recentTransactionsTotal, the indexed count)
 
 Two caveats that change what these answers mean:
 

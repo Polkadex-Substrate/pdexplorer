@@ -19,7 +19,8 @@ import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/rew
 import { attributeBatchRewards, isBatchDelimiter, isAttributableBatch } from './lib/reward-attribution.js';
 import { resolveClientIp } from './lib/client-ip.js';
 import { planReorgSweep, hashesDiffer, heightsToVerify } from './lib/reorg.js';
-import { planTxPage, cursorPage, parseCursor, withoutRowId } from './lib/tx-paging.js';
+import { planTxPage, cursorPage, parseCursor } from './lib/tx-paging.js';
+import { parseHistoryLimit, walletRecentFields } from './lib/wallet-recent-tx.js';
 import { buildTxRowFromEventRow, eventTxId, rewardId } from './lib/tx-from-event.js';
 import { attachAccounts, backfillAccountLinks, LINKS_STATE } from './lib/account-links.js';
 import { checkUserText } from './lib/user-text.js';
@@ -4251,8 +4252,8 @@ app.get('/api/search/:query', async (req, res) => {
 const ACCOUNT_PAGE = 200;
 // One page of each account list, newest first, below the `before` cursor when one is given.
 const ACCOUNT_LISTS = {
-    transactions: (acct, before) => db.getTransactionsByAddress(acct.address, ACCOUNT_PAGE, acct.raw, before),
-    events: (acct, before) => db.getEventsByAddress(acct.address, ACCOUNT_PAGE, before)
+    transactions: (acct, before, limit) => db.getTransactionsByAddress(acct.address, limit, acct.raw, before),
+    events: (acct, before, limit) => db.getEventsByAddress(acct.address, limit, before)
 };
 // The :address gate both account routes share; raw also finds rows indexed before normalisation (F-080).
 function gateAccountAddress(req, res) {
@@ -4395,8 +4396,11 @@ app.get('/api/account/:address/history', (req, res) => {
     if (before !== undefined && !cursor) {
         return res.status(400).json({ error: 'before must be the <block>:<rowId> cursor from next.' });
     }
+    // Optional ?limit=1..50 (the wallet dashboard's "Load 50 more"); absent keeps the account page's 200.
+    const { limit, error } = parseHistoryLimit(req.query.limit, ACCOUNT_PAGE);
+    if (error) return res.status(400).json({ error });
     try {
-        const page = cursorPage(ACCOUNT_LISTS[list](acct, cursor), ACCOUNT_PAGE);
+        const page = cursorPage(ACCOUNT_LISTS[list](acct, cursor, limit), limit);
         cacheShort(res);
         res.json({ list, ...page });
     } catch (err) { serverError(res, err, req.path); }
@@ -6759,7 +6763,7 @@ app.get('/api/wallet/:address', async (req, res) => {
                 // "Pay out rewards" action.
                 unpaidEntries: unclaimed.slice(0, 200)
             },
-            recentTransactions: withoutRowId(db.getTransactionsByAddress(address, 10, raw)), // F-080
+            ...walletRecentFields(db, address, raw), // newest 10 + cursor + indexed total (F-080)
             // ── F-085 (wallet route) ─────────────────────────────────────────
             // Marked differently from the account route's block on purpose:
             // test/server-infra.test.js locates that route by searching for its

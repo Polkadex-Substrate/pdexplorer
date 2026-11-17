@@ -656,6 +656,7 @@ h1, h2, h3 { font-weight: 600; }
     font-weight: 500;
 }
 .item-link:hover { color: var(--brand-primary); }
+.item-link.is-inline { text-decoration: underline; }
 
 .item-meta {
     text-align: right;
@@ -4709,6 +4710,12 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px;
     border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: older-spin 0.8s linear infinite;
 }
+.js-older-btn, .js-older-search {
+    min-height: 36px; padding: 8px 20px; background: rgba(230, 0, 122, 0.08); border: 1px solid var(--border-hover);
+    border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; font-size: 0.82rem; cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.js-older-btn:hover, .js-older-search:hover { background: rgba(230, 0, 122, 0.14); border-color: var(--brand-primary); box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 .js-older-btn[aria-busy="true"] { opacity: 0.7; cursor: progress; }
 @keyframes older-spin { to { transform: rotate(360deg); } }
 
@@ -4940,3 +4947,10 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .motion-args .ca-call code { font-size: 0.74rem; }
 .dec-human { margin: 8px 0; }
 .tx-h3 { font-size: 0.95rem; margin: 18px 0 8px; color: var(--text-primary); }
+
+/* Load older / Load 50 more bar: full-width, touch-sized button on phones, count above and status below. */
+@media (max-width: 640px) {
+    .js-older-bar .js-older-count { flex-basis: 100%; text-align: center; }
+    .js-older-bar .js-older-btn { width: 100%; min-height: 44px; }
+}
+.js-older-btn:focus-visible, .js-older-done:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; box-shadow: 0 0 0 3px var(--brand-primary-glow); }
