@@ -66,7 +66,7 @@ import { createMultisigStore } from './lib/multisig.js';
 import { createMultisigUI } from './lib/multisig-view.js';
 import { createCouncilCandidacyUI } from './lib/council-candidacy-view.js';
 import { buildSecondTx } from './lib/democracy-patch.js';
-import { trackSignedTx, recheckSignedTxs } from './lib/tx-submit.js';
+import { trackSignedTx, recheckSignedTxs, WALLET_CHANGED_STALE } from './lib/tx-submit.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
@@ -8057,7 +8057,7 @@ const multisigUI = createMultisigUI({
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
     canAskWallets: canAskWalletsForSigners, askWallets: askWalletsForSigners,
     submit: submitSignedTx, fetchJson: fetchApiJson,
-    refresh: address => refreshWalletDashboardFor(address)
+    refresh: address => refreshWalletDashboardFor(address), revision: () => walletSession.revision()
 });
 const councilCandidacyUI = createCouncilCandidacyUI({
     api: () => globalApi, selected: getStoredWallet,
@@ -10135,11 +10135,13 @@ async function submitClearIdentity() {
     const data = currentWalletData;
     if (!data) return showIdentityError('Wallet data is not loaded.');
     if (!isSameAddress(getStoredWallet(), data.address)) return showIdentityError('Connect this wallet to clear its identity.');
+    const expectedRevision = walletSession.revision();   // with data.address, before confirm() can hold the page
     if (!confirm('Clear your on-chain identity and reclaim the deposit? You can set a new identity at any time.')) return;
     await submitSignedTx({
         buildTx: (api) => api.tx.identity.clearIdentity(),
         label: 'Clear identity',
         expectedWallet: data.address,   // the wallet may change while confirm() is open
+        expectedRevision,
         action: { key: 'identity.clear' },
         button: document.getElementById('clear-identity-tx-btn'),
         busyText: 'Signing…',
@@ -10995,7 +10997,7 @@ async function getWalletSigner(address) {
 // whatever it replaces is revoked.
 function discussSignInFor(address) {
     return signInForDiscussion({ address, fetchFn: (u, o) => fetch(u, o), getSigner: getWalletSigner, wallet: getStoredWallet,
-        isSame: isSameAddress, auth: discussAuthStore(), onEvicted: tokens => tokens.forEach(logoutDiscussToken) });
+        isSame: isSameAddress, valid: walletSession.signingCheck(address), auth: discussAuthStore(), onEvicted: tokens => tokens.forEach(logoutDiscussToken) });
 }
 
 // The account labels panel's explicit "Sign in with wallet".
@@ -12592,7 +12594,7 @@ async function resolveWalletSigner(fail, signingAccount = null) {
 // onError(text, model) keeps the modals' inline error lines; onStage(stage,
 // model) drives the motion cards. No alert popup anywhere on this path.
 // onMultisigEnd(outcome, model): how a multisig review ended (lib/multisig-view.js).
-async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, onMultisigEnd, verify, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet() }) {
+async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, onMultisigEnd, verify, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet(), expectedRevision = null }) {
     const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
     const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
     const fail = (m) => {
@@ -12602,7 +12604,7 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
     };
     // Taken now, before any wait: false once the wallet session changes at all,
     // even back to the same address (issue #70, lib/wallet-session.js signingCheck).
-    const stillValid = walletSession.signingCheck(expectedWallet);
+    const stillValid = walletSession.signingCheck(expectedWallet, expectedRevision);
     const multisig = multisigStore.find(expectedWallet);
     if (multisig && !multisigHandled) {
         try {
@@ -12610,13 +12612,13 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
             const staleRuntime = liveRuntimeError(globalApi);
             if (staleRuntime) throw new Error(staleRuntime);
             const tx = await buildTx(globalApi);
-            if (!stillValid()) throw new Error('The wallet changed. Open the action again.');
+            if (!stillValid()) throw new Error(WALLET_CHANGED_STALE);
             return await multisigUI.review({ multisig, callHex: tx.method.toHex(), onSuccess, onEnd: onMultisigEnd });
         } catch (e) { return fail(e.message); }
     }
     const w = await resolveWalletSigner(fail, signingAccount);
     if (!w) return;
-    if (!stillValid()) return fail('The wallet changed. Open the action again.');
+    if (!stillValid()) return fail(WALLET_CHANGED_STALE);
     // verify: the action's own chain check, used only if the status updates
     // stop (see lib/tx-submit.js); every action also gets the nonce check.
     const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: stage, show: showTxStatus, verify });
@@ -12626,7 +12628,7 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
         // builder to read chain state (elections.candidates) at signing time,
         // and an un-awaited async builder would hand signAndSend a Promise.
         const tx = await buildTx(globalApi);
-        if (!stillValid()) throw new Error('The wallet changed. Open the action again.');
+        if (!stillValid()) throw new Error(WALLET_CHANGED_STALE);
         // stillValid: asked again after the fee check and after the wallet signs, so every caller gets it.
         await run.send(tx, w.account.address, w.signer, { stillValid });   // never throws
     } catch (e) {
