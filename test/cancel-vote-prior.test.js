@@ -14,9 +14,14 @@
 //   - democracy.unlock rejigs: a prior with now >= its block is cleared.
 // The button leads with an unlock whenever a prior is on record, so a prior
 // that ends by the referendum's end is cleared before the remove. One that
-// runs past it, larger than the vote, with an earlier end than the vote's
-// conviction lock, would be held until that later block: refused before
-// signing. The outcome is unknown, so either side may win.
+// runs past it merges with the vote's conviction lock into the larger amount
+// until the later block; unless one of the two locks is at least as large
+// AND lasts at least as long, that holds more PDEX for longer than either
+// alone, in both directions: a larger prior ending first is held until the
+// vote's date, and a smaller prior ending later holds the vote's amount until
+// its own date. Refused before signing. The outcome is unknown, so either
+// side may win. An unreadable VoteLockingPeriod could put the vote's date
+// anywhere, so then only equal amounts are safe.
 //
 // Every amount, block and account here is made up (public repo).
 
@@ -51,10 +56,10 @@ const txApi = (built = []) => ({ democracy: { unlock: (who) => { built.push('unl
     utility: { batchAll: (calls) => ({ batch: calls }) } });
 const cancelSpec = (model, ref = 9) => lockActionSpec('democracy-cancel', model, ME, { connected: ME, isSame: same, ref });
 // Drawn from `drawnDem` at `drawnAt`; signed against the chain as `chainDem` at `signAt`.
-async function cancel(drawnDem, drawnAt, chainDem = drawnDem, signAt = drawnAt, { built = [], over = {} } = {}) {
+async function cancel(drawnDem, drawnAt, chainDem = drawnDem, signAt = drawnAt, { built = [], over = {}, period = PERIOD } = {}) {
     const spec = cancelSpec(describeAccountLocks(snap(drawnDem, drawnAt)));
     assert.equal(spec.error, undefined, spec.error);
-    const chain = democracyChain(chainDem, signAt, { period: PERIOD });
+    const chain = democracyChain(chainDem, signAt, { period });
     const t = await spec.buildTx({ ...chain, tx: txApi(built), ...over });
     return t.batch || [t];
 }
@@ -62,7 +67,7 @@ async function cancel(drawnDem, drawnAt, chainDem = drawnDem, signAt = drawnAt, 
 // The pallet, written here from the rules above (not from the code under
 // test): the prior after `calls` are included at block `at`, with referendum
 // #`index` in state `info` by then.
-function palletRun(dem, index, info, at, calls) {
+function palletRun(dem, index, info, at, calls, period = PERIOD) {
     let prior = { until: Number(dem.prior.until), amount: BigInt(dem.prior.amount) };
     for (const [op, i] of calls) {
         if (op === 'unlock') { if (at >= prior.until) prior = { until: 0, amount: 0n }; continue; }
@@ -70,14 +75,24 @@ function palletRun(dem, index, info, at, calls) {
         assert.equal(i, index);
         const v = dem.votes.find(x => x.index === i);
         if (info.finished && typeof v.aye === 'boolean' && v.aye === info.approved) {
-            const unlockAt = info.end + PERIOD * PERIODS[v.conviction];
+            const unlockAt = info.end + period * PERIODS[v.conviction];
             if (at < unlockAt) prior = { until: Math.max(prior.until, unlockAt), amount: max(prior.amount, BigInt(v.balance)) };
         }
     }
     return prior;
 }
-// A larger earlier lock held past its own end: more than the vote's balance after the prior's block.
-const stretched = (dem, index, after) => after.until > Number(dem.prior.until) && after.amount > BigInt(dem.votes.find(v => v.index === index).balance);
+// More PDEX for longer than either lock alone: the prior after inclusion
+// (`after`) fits inside neither the earlier lock nor the vote's own
+// conviction lock, compared in amount AND date. Catches both directions: a
+// larger prior held past its end, and the vote's amount held to a later
+// prior's end.
+const covers = (lock, after) => after.amount <= lock.amount && after.until <= lock.until;
+function overlocked(dem, index, info, after, period = PERIOD) {
+    const v = dem.votes.find(x => x.index === index);
+    const prior = { until: Number(dem.prior.until), amount: BigInt(dem.prior.amount) };
+    const own = { until: info.end + period * PERIODS[v.conviction], amount: BigInt(v.balance) };
+    return after.amount > 0n && !covers(prior, after) && !covers(own, after);
+}
 // Every way the referendum can stand at inclusion block `at`: running before
 // its scheduled end, finished either way from it.
 const outcomes = (end, at) => (at < end ? [{ ongoing: true, end }] : [{ finished: true, approved: true, end }, { finished: true, approved: false, end }]);
@@ -105,7 +120,10 @@ describe('issue #73: refused before signing when the referendum could end first 
         await assert.rejects(cancel(ISSUE, DRAWN_AT, ISSUE, DRAWN_AT, { built }), isRefused(REFUSED));
         assert.deepEqual(built, []);
         // What it used to sign, included at 1,050 with #9 approved: 500 PDEX until 2,050.
-        assert.deepEqual(palletRun(ISSUE, 9, { finished: true, approved: true, end: END }, END, oldBatch(ISSUE, 9)), { until: 2050, amount: 500n * PDEX });
+        const won = { finished: true, approved: true, end: END };
+        const after = palletRun(ISSUE, 9, won, END, oldBatch(ISSUE, 9));
+        assert.deepEqual(after, { until: 2050, amount: 500n * PDEX });
+        assert.equal(overlocked(ISSUE, 9, won, after), true);
     });
     test('a nay vote is refused too: the outcome is not known when it is signed', async () => {
         const nay = direct([vote(9, false, 'Locked1x', 10n * PDEX)], RUN9, PRIOR_500);
@@ -128,6 +146,46 @@ describe('issue #73: refused before signing when the referendum could end first 
     });
 });
 
+// The mirror (Fable on #73): at block 1,001 a 100 PDEX prior runs until
+// 5,000, and this account voted 600 PDEX at 1x on #9, ending at 1,050. Should
+// #9 end before inclusion with that side winning, the vote's own lock would
+// hold 600 PDEX until 2,050 and the prior 100 PDEX until 5,000; merged, 600
+// PDEX until 5,000.
+const PRIOR_100 = { until: 5000, amount: s(100n * PDEX) };
+const AYE_600 = vote(9, true, 'Locked1x', 600n * PDEX);
+const MIRROR = direct([AYE_600], RUN9, PRIOR_100);
+const REFUSED_MIRROR = 'Cancelling this vote now could keep more PDEX locked for longer. Referendum #9 ends at block 1,050; if it has ended by the time '
+    + 'this transaction is included and your side wins, the 600 PDEX of this vote would stay locked until block 5,000, when your earlier vote lock of 100 PDEX ends, '
+    + 'instead of block 2,050. Leave the vote in place; once the referendum ends, this panel shows when it can be removed.';
+
+describe('the mirror: a smaller earlier lock that ends later would hold the vote\'s amount until its own end', () => {
+    test('as found: 100 PDEX until 5,000, a 600 PDEX 1x vote on #9 ending at 1,050: refused with a plain message, nothing built', async () => {
+        const built = [];
+        await assert.rejects(cancel(MIRROR, DRAWN_AT, MIRROR, DRAWN_AT, { built }), isRefused(REFUSED_MIRROR));
+        assert.deepEqual(built, []);
+        // What it used to sign, included at 1,050 with #9 approved: 600 PDEX until 5,000.
+        const won = { finished: true, approved: true, end: END };
+        const after = palletRun(MIRROR, 9, won, END, oldBatch(MIRROR, 9));
+        assert.deepEqual(after, { until: 5000, amount: 600n * PDEX });
+        assert.equal(overlocked(MIRROR, 9, won, after), true);
+    });
+    test('a nay vote is refused too', async () => {
+        await assert.rejects(cancel(direct([vote(9, false, 'Locked1x', 600n * PDEX)], RUN9, PRIOR_100), DRAWN_AT), isRefused(REFUSED_MIRROR));
+    });
+    test('the vote\'s date follows the conviction: at 2x it would end at 3,050, still before 5,000', async () => {
+        await assert.rejects(cancel(direct([vote(9, true, 'Locked2x', 600n * PDEX)], RUN9, PRIOR_100), DRAWN_AT), isRefused(REFUSED_MIRROR.replace('2,050', '3,050')));
+    });
+    test('a smaller prior created after the panel was drawn: the re-read before signing refuses', async () => {
+        await assert.rejects(cancel(direct([AYE_600], RUN9), DRAWN_AT, MIRROR, DRAWN_AT), isRefused(REFUSED_MIRROR));
+    });
+    test('VoteLockingPeriod cannot be read: the vote\'s own date is unknown, so refuse', async () => {
+        await assert.rejects(cancel(MIRROR, DRAWN_AT, MIRROR, DRAWN_AT, { over: { consts: {} } }), isRefused(
+            'Cancelling this vote now could keep more PDEX locked for longer. Referendum #9 ends at block 1,050; if it has ended by the time '
+            + 'this transaction is included and your side wins, the 600 PDEX of this vote could stay locked until block 5,000, when your earlier vote lock of 100 PDEX ends, '
+            + 'even if its own conviction lock ends sooner. Leave the vote in place; once the referendum ends, this panel shows when it can be removed.'));
+    });
+});
+
 // The cases that keep working, with the calls they sign.
 const KEEP = [
     ['no conviction beside a larger running prior', direct([vote(9, true, 'None', 10n * PDEX)], RUN9, PRIOR_500), [['unlock', ME], ['removeVote', 9]]],
@@ -139,7 +197,10 @@ const KEEP = [
     ['conviction, a larger prior ending before the referendum', direct([AYE_1X], RUN9, { until: 1020, amount: s(500n * PDEX) }), [['unlock', ME], ['removeVote', 9]]],
     ['conviction, a larger prior lasting exactly as long as the vote could', direct([AYE_1X], RUN9, { until: 2050, amount: s(500n * PDEX) }), [['unlock', ME], ['removeVote', 9]]],
     ['conviction, a larger prior lasting longer than the vote could', direct([AYE_1X], RUN9, { until: 3000, amount: s(500n * PDEX) }), [['unlock', ME], ['removeVote', 9]]],
-    ['conviction, a larger prior already over', direct([AYE_1X], RUN9, { until: 900, amount: s(500n * PDEX) }), [['unlock', ME], ['removeVote', 9]]]
+    ['conviction, a larger prior already over', direct([AYE_1X], RUN9, { until: 900, amount: s(500n * PDEX) }), [['unlock', ME], ['removeVote', 9]]],
+    ['conviction, a smaller prior ending when the vote could', direct([AYE_600], RUN9, { until: 2050, amount: s(100n * PDEX) }), [['unlock', ME], ['removeVote', 9]]],
+    ['conviction, a smaller prior ending at the referendum\'s end', direct([AYE_600], RUN9, { until: END, amount: s(100n * PDEX) }), [['unlock', ME], ['removeVote', 9]]],
+    ['conviction, a prior of the same amount ending later', direct([AYE_600], RUN9, { until: 5000, amount: s(600n * PDEX) }), [['unlock', ME], ['removeVote', 9]]]
 ];
 
 describe('votes without conviction, and accounts without such a prior, keep working', () => {
@@ -149,6 +210,10 @@ describe('votes without conviction, and accounts without such a prior, keep work
             assert.deepEqual(calls, oldBatch(dem, 9));
         });
     }
+    test('VoteLockingPeriod cannot be read, a prior of the same amount ending later: built, whatever the vote\'s date', async () => {
+        const dem = direct([AYE_600], RUN9, { until: 5000, amount: s(600n * PDEX) });
+        assert.deepEqual(await cancel(dem, DRAWN_AT, dem, DRAWN_AT, { over: { consts: {} } }), [['unlock', ME], ['removeVote', 9]]);
+    });
 });
 
 describe('the referendum ends between building and inclusion, multisig execution included', () => {
@@ -164,43 +229,75 @@ describe('the referendum ends between building and inclusion, multisig execution
         assert.ok(chain.reads.some(r => r[0] === 'votingOf'), 'the prior was read again before refusing');
     });
     for (const [what, dem] of KEEP) {
-        test(`${what}: built at 1,001, executed at any later block after either outcome, the larger lock is never stretched`, async () => {
+        test(`${what}: built at 1,001, executed at any later block after either outcome, no lock is held larger or longer than either alone`, async () => {
             const calls = await cancel(dem, DRAWN_AT);
             for (const at of LATER) {
                 for (const info of outcomes(END, at)) {
-                    assert.equal(stretched(dem, 9, palletRun(dem, 9, info, at, calls)), false, `${JSON.stringify(info)} at ${at}`);
+                    assert.equal(overlocked(dem, 9, info, palletRun(dem, 9, info, at, calls)), false, `${JSON.stringify(info)} at ${at}`);
                 }
             }
         });
     }
 });
 
-describe('property: refused exactly when signing could stretch a larger earlier lock', () => {
-    test('random votes and priors: every batch built is safe at every inclusion block and outcome; every refusal had a harmful one', async () => {
-        let x = 73;
-        const r = () => { x = (x * 1664525 + 1013904223) >>> 0; return x / 2 ** 32; };
-        const pick = (xs) => xs[Math.floor(r() * xs.length)];
-        const now = 10_000;
+describe('property: refused exactly when signing could hold more PDEX for longer than either lock', () => {
+    // Random vote, prior and timing: the panel drawn at `now`, signed at any
+    // block before the referendum's end, included at any later block with
+    // either outcome. No batch built ever leaves a lock larger, or longer,
+    // than both the earlier lock and the vote's own conviction lock; every
+    // refusal had a harmful inclusion.
+    let x = 73;
+    const r = () => { x = (x * 1664525 + 1013904223) >>> 0; return x / 2 ** 32; };
+    const pick = (xs) => xs[Math.floor(r() * xs.length)];
+    const now = 10_000;
+    const randomCase = () => {
+        const end = now + 1 + Math.floor(r() * 3 * PERIOD);
+        // Amounts from a small set too, so equal amounts come up.
+        const amount = () => (r() < 0.3 ? pick([100n, 600n]) : BigInt(1 + Math.floor(r() * 900))) * PDEX;
+        const v = vote(9, pick([true, false, null]), pick(Object.keys(PERIODS)), amount());
+        const prior = r() < 0.2 ? NO_PRIOR : { until: Math.max(1, now + Math.floor((r() - 0.2) * 40 * PERIOD)), amount: s(amount()) };
+        const signAt = now + Math.floor(r() * (end - now));
+        return { end, v, prior, signAt, dem: direct([v], { 9: { ongoing: true, end } }, prior) };
+    };
+    const blocksFor = ({ end, v, prior, signAt }, period) => {
+        const unlockAt = end + period * PERIODS[v.conviction];
+        return [signAt, end - 1, end, end + 1, Number(prior.until) - 1, Number(prior.until), Number(prior.until) + 1, unlockAt - 1, unlockAt, unlockAt + 1]
+            .filter(b => b >= signAt);
+    };
+    const harmful = (c, calls, period = PERIOD) => blocksFor(c, period).some(at => outcomes(c.end, at)
+        .some(info => overlocked(c.dem, 9, info, palletRun(c.dem, 9, info, at, calls, period), period)));
+
+    test('VoteLockingPeriod known: built never overlocks, in either dimension; refused only when the old batch could', async () => {
         let built = 0, refused = 0;
-        for (let k = 0; k < 1500; k++) {
-            const end = now + 1 + Math.floor(r() * 3 * PERIOD);
-            const v = vote(9, pick([true, false, null]), pick(Object.keys(PERIODS)), BigInt(1 + Math.floor(r() * 900)) * PDEX);
-            const prior = r() < 0.2 ? NO_PRIOR : { until: Math.max(1, now + Math.floor((r() - 0.2) * 40 * PERIOD)), amount: s(BigInt(1 + Math.floor(r() * 900)) * PDEX) };
-            const dem = direct([v], { 9: { ongoing: true, end } }, prior);
-            const unlockAt = end + PERIOD * PERIODS[v.conviction];
-            const blocks = [now, end - 1, end, end + 1, Number(prior.until) - 1, Number(prior.until), Number(prior.until) + 1, unlockAt - 1, unlockAt, unlockAt + 1]
-                .filter(b => b >= now);
-            const harmful = (calls) => blocks.some(at => outcomes(end, at).some(info => stretched(dem, 9, palletRun(dem, 9, info, at, calls))));
+        for (let k = 0; k < 2000; k++) {
+            const c = randomCase();
             let calls = null;
-            try { calls = await cancel(dem, now); } catch (e) {
+            try { calls = await cancel(c.dem, now, c.dem, c.signAt); } catch (e) {
                 assert.match(e.message, /^Cancelling this vote now could keep more PDEX locked for longer\./, `case ${k}`);
                 refused++;
-                assert.equal(harmful(oldBatch(dem, 9)), true, `case ${k}: refused, yet signing could not have stretched anything: ${JSON.stringify({ v, prior, end })}`);
+                assert.equal(harmful(c, oldBatch(c.dem, 9)), true, `case ${k}: refused, yet signing could not have overlocked: ${JSON.stringify(c)}`);
                 continue;
             }
             built++;
-            assert.equal(harmful(calls), false, `case ${k}: built, and it stretches the prior: ${JSON.stringify({ v, prior, end, calls })}`);
+            assert.equal(harmful(c, calls), false, `case ${k}: built, and it overlocks: ${JSON.stringify({ ...c, calls })}`);
         }
-        assert.ok(built > 600 && refused > 60, `enough of both (${built} built, ${refused} refused)`);
+        assert.ok(built > 600 && refused > 300, `enough of both (${built} built, ${refused} refused)`);
+    });
+    test('VoteLockingPeriod unreadable: whatever the real period, a batch built never overlocks', async () => {
+        let built = 0, refused = 0;
+        for (let k = 0; k < 600; k++) {
+            const c = randomCase();
+            let calls = null;
+            try { calls = await cancel(c.dem, now, c.dem, c.signAt, { over: { consts: {} } }); } catch (e) {
+                assert.match(e.message, /^Cancelling this vote now could keep more PDEX locked for longer\./, `case ${k}`);
+                refused++;
+                continue;
+            }
+            built++;
+            for (const period of [1, 7, PERIOD, 50 * PERIOD]) {
+                assert.equal(harmful(c, calls, period), false, `case ${k}, real period ${period}: built, and it overlocks: ${JSON.stringify({ ...c, calls })}`);
+            }
+        }
+        assert.ok(built > 200 && refused > 100, `enough of both (${built} built, ${refused} refused)`);
     });
 });
