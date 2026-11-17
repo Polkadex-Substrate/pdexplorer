@@ -17,7 +17,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readRepo } from './helpers/source.js';
-import { tileHtml, buildOptionRowsHtml } from '../lib/wallet-picker.js';
+import { tileHtml, buildOptionRowsHtml, buildAccountListHtml, chooseLead } from '../lib/wallet-picker.js';
+import { buildGetWalletHtml } from '../lib/wallet-onboarding.js';
+import { mountChooser, fakeWallet, fakePhone, acct, addr, same, short } from './helpers/chooser-world.js';
 import { PHONE_SOURCE } from '../lib/wallet-sources.js';
 import { mountPairingPanel, showDebugReport } from '../lib/walletconnect-view.js';
 import { escapeHtml } from '../lib/html-escape.js';
@@ -70,7 +72,6 @@ describe('lint: greens are for positive states, never for an action', () => {
     // audit leaves for a separate site-wide pass (section 5). Nothing else.
     const EXCEPT = new Map([
         ['.connect-wallet-btn.is-connected i', 'positive state: the connected tick in the header'],
-        ['.wallet-account-row', 'positive state: the Current row border'],
         ['.lock-actions-msg.ok', 'positive state: a success message'],
         ['.council-vote-row.is-selected .council-vote-add-icon', 'positive state: the tick on a chosen candidate'],
         ['.wallet-validator-row:hover', 'outside this branch (audit section 5)'],
@@ -110,7 +111,16 @@ describe('lint: greens are for positive states, never for an action', () => {
 
     test('the three positive states keep their green (audit section 0)', () => {
         assert.match(decl('.wallet-account-badge', 'color'), /--brand-secondary/);
-        assert.match(decl('.wallet-account-row', 'border'), /--brand-secondary/);
+        // The Current row is marked with Primary like the sidebar (brand pass 3.5); only its badge is green.
+        assert.doesNotMatch(decl('.wallet-account-row', 'border'), /--brand-secondary/);
+        assert.equal(decl('.wallet-account-row.is-current', 'border'), '1px solid var(--border-hover)');
+        assert.equal(decl('.wallet-account-row.is-current', 'background'), 'rgba(230, 0, 122, 0.08)');
+        assert.equal(decl('.wallet-account-row.is-current', 'position'), 'relative');
+        assert.equal(decl('.wallet-account-row.is-current', 'overflow'), 'hidden');
+        const bar = '.wallet-account-row.is-current::before';
+        assert.equal(decl(bar, 'content'), "''");
+        for (const [p, v] of [['position', 'absolute'], ['left', '0'], ['top', '0'], ['bottom', '0'], ['width', '3px'], ['background', 'var(--brand-primary)'], ['box-shadow', '0 0 10px var(--brand-primary-glow)']]) assert.equal(decl(bar, p), v, bar + ' ' + p);
+        assert.match(decl('.wallet-account-badge', 'border'), /--brand-secondary/);
         assert.match(decl('.connect-wallet-btn.is-connected i', 'color'), /--brand-secondary/);
     });
 });
@@ -141,9 +151,10 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         ['.ms-compact > summary .wp-help-btn:focus-visible', 'outline', '2px solid var(--brand-primary)'],
         ['.wallet-option-row:focus-visible', 'outline-offset', '2px'],
         ['.wallet-picker-back:focus-visible', 'outline-offset', '2px'],
-        ['.wallet-picker-search:focus-within', 'border-color', 'var(--border-hover)'],
-        // C7 waiting is not a positive state.
-        ['.wallet-option-spin', 'color', 'var(--text-secondary)'],
+        ['.wallet-picker-search:focus-within', 'border-color', 'var(--brand-primary)'],
+        ['.wallet-picker-search:focus-within', 'box-shadow', '0 0 0 2px rgba(230, 0, 122, 0.15)'],
+        // C7 (amended, brand pass 3.0) waiting is not positive, so not green: pink is brand emphasis.
+        ['.wallet-option-spin', 'color', 'var(--brand-primary)'],
         // C8 Approve on your phone.
         ['.wc-pending', 'background', 'var(--bg-surface)'],
         ['.wc-pending', 'border', '1px solid var(--border-hover)'],
@@ -165,8 +176,14 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         ['.wallet-connect-note .item-link', 'color', 'var(--text-primary)'],
         ['.wallet-viewing-note .item-link:hover', 'color', 'var(--brand-primary)'],
         // C12 neutral monogram tiles.
-        ['.wallet-ext-tile', 'background', 'rgba(255, 255, 255, 0.08)'],
+        // (amended, brand pass 3.0) one Polkadex tint for every tile, quiet rows stay quiet.
+        ['.wallet-ext-tile', 'background', 'rgba(230, 0, 122, 0.14)'],
+        ['.wallet-ext-tile', 'border', '1px solid var(--border-hover)'],
         ['.wallet-ext-tile', 'color', 'var(--text-primary)'],
+        ['.wallet-ext-tile.tile-icon', 'color', 'var(--brand-primary)'],
+        ['.wallet-option-row.is-quiet .wallet-ext-tile', 'background', 'rgba(255, 255, 255, 0.08)'],
+        ['.wallet-option-row.is-quiet .wallet-ext-tile', 'border-color', 'transparent'],
+        ['.wallet-option-row.is-quiet .wallet-ext-tile', 'color', 'var(--text-secondary)'],
         // C13 the QR stays dark on white, on palette.
         ['.wc-qr', 'background', 'var(--text-primary)'],
         ['.wc-qr-fallback', 'color', 'var(--bg-dark)'],
@@ -232,11 +249,14 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         assert.deepEqual(coloured, []);
     });
 
-    test('C19: Reload page is the shared neutral button, with its hover and the 44 px phone height', () => {
+    test('C19 (amended, brand pass 3.4): Reload page is its own Solid rule, out of the shared neutral list, with the 44 px phone height', () => {
         const base = RULES.find(r => !r.media && r.selectors.includes('.wallet-option-retry') && 'padding' in r.decls);
-        assert.ok(base.selectors.includes('.wallet-onboarding-reload'), 'not in the neutral button list');
-        assert.ok(RULES.some(r => r.selectors.includes('.wallet-onboarding-reload:hover') && r.decls['border-color'] === 'var(--border-hover)'), 'no hover');
-        assert.ok(!RULES.some(r => r.selectors.length === 1 && r.selectors[0] === '.wallet-onboarding-reload'), 'the one-off rule is still there');
+        assert.ok(!base.selectors.includes('.wallet-onboarding-reload'), 'still in the neutral button list');
+        assert.equal(decl('.wallet-onboarding-reload', 'background'), 'var(--brand-primary)');
+        assert.equal(decl('.wallet-onboarding-reload', 'border-color'), 'var(--brand-primary)');
+        assert.equal(decl('.wallet-onboarding-reload', 'color'), 'var(--text-primary)');
+        assert.equal(decl('.wallet-onboarding-reload', 'min-height'), '36px');
+        assert.equal(decl('.wallet-onboarding-reload', 'border-radius'), 'var(--radius-sm)');
         assert.ok(RULES.some(r => /max-width: 640px/.test(r.media) && r.selectors.includes('.wallet-picker .wallet-onboarding-reload') && r.decls['min-height'] === '44px'), 'no 44 px on phones');
     });
 
@@ -283,6 +303,229 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         assert.equal(r.decls['min-height'], '44px');
         assert.equal(r.decls['line-height'], '44px');
         assert.ok(RULES.some(x => x.selectors.includes('#wallet-switch-btn[hidden]') && x.decls.display === 'none'), 'a hidden Switch wallet still shows (.staking-download-btn sets display)');
+    });
+});
+
+// Brand identity pass, section 3 (cto-team/plans/2026-11-17-brand-identity-pass.md):
+// the chooser shows Polkadex pink at rest. Tints, edges and halos on every row,
+// Solid only where one action is the recommended one.
+describe('brand pass: pink on the chooser, by selector and token', () => {
+    const TINT14 = 'rgba(230, 0, 122, 0.14)', TINT08 = 'rgba(230, 0, 122, 0.08)', HALO = '0 0 0 3px var(--brand-primary-glow)';
+    const table = [
+        // 3.0 shared
+        ['.wallet-option-row:hover', 'border-color', 'var(--border-hover)'],
+        ['.wallet-option-row:hover', 'box-shadow', HALO],
+        ['.wallet-account-btn:hover', 'border-color', 'var(--border-hover)'],
+        ['.wallet-account-btn:hover', 'box-shadow', HALO],
+        ['.wallet-option-row:hover .bx-chevron-right', 'color', 'var(--brand-primary)'],
+        ['.wallet-account-btn:hover .bx-chevron-right', 'color', 'var(--brand-primary)'],
+        ['.wallet-option-row:focus-visible .bx-chevron-right', 'color', 'var(--brand-primary)'],
+        ['.wallet-account-btn:focus-visible .bx-chevron-right', 'color', 'var(--brand-primary)'],
+        ['.wallet-option-row:focus-visible', 'box-shadow', HALO],
+        ['.wallet-account-btn:focus-visible', 'box-shadow', HALO],
+        ['.wallet-picker-back:focus-visible', 'box-shadow', HALO],
+        ['.wallet-option-action', 'padding', '4px 12px'],
+        ['.wallet-option-action', 'border-radius', '999px'],
+        ['.wallet-option-action', 'background', TINT14],
+        ['.wallet-option-action', 'border', '1px solid var(--border-hover)'],
+        ['.wallet-option-action', 'color', 'var(--text-primary)'],
+        ['.wallet-option-action.is-count', 'background', 'none'],
+        ['.wallet-option-action.is-count', 'border', '0'],
+        ['.wallet-option-action.is-count', 'padding', '0'],
+        ['.wallet-option.is-waiting .wallet-option-row', 'border-color', 'var(--border-hover)'],
+        ['.wallet-option.is-waiting .wallet-option-row', 'box-shadow', HALO],
+        ['.wallet-ext-tile', 'background', TINT14],
+        ['.wallet-group-head .wallet-ext-tile', 'background', TINT14],
+        // 3.1 the lead row
+        ['.wallet-option-row.is-primary', 'border-color', 'var(--brand-primary)'],
+        ['.wallet-option-row.is-primary', 'background', TINT08],
+        ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', 'background', 'var(--brand-primary)'],
+        ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', 'border-color', 'var(--brand-primary)'],
+        ['.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', 'background', 'var(--brand-primary)'],
+        ['.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', 'border-color', 'var(--brand-primary)'],
+        ['.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', 'color', 'var(--text-primary)'],
+        ['.wallet-option-row.is-primary .bx-chevron-right', 'color', 'var(--brand-primary)'],
+        // 3.2 the only account
+        ['.wallet-account-btn.is-primary', 'border-color', 'var(--brand-primary)'],
+        ['.wallet-account-btn.is-primary', 'background', TINT08],
+        ['.wallet-account-btn.is-primary .bx-chevron-right', 'color', 'var(--brand-primary)'],
+        // 3.3 pairing
+        ['.wc-qr', 'box-shadow', '0 0 0 1px var(--border-hover), 0 0 24px var(--brand-primary-glow)'],
+        ['.wc-steps li::marker', 'color', 'var(--brand-primary)'],
+        ['.wc-steps li::marker', 'font-weight', '600'],
+        ['.wc-pending', 'box-shadow', '0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 3px var(--brand-primary-glow)'],
+        // 3.4 get a wallet
+        ['.wallet-option-row:hover .bx-link-external', 'color', 'var(--brand-primary)'],
+        ['.wallet-get-check', 'background', TINT08],
+        ['.wallet-get-check', 'border', '1px solid var(--border-hover)'],
+        ['.wallet-get-check', 'color', 'var(--text-primary)'],
+        ['.wallet-get-check:hover', 'background', TINT14],
+        ['.wallet-get-check:hover', 'box-shadow', HALO],
+        // 3.6 the not-connected note
+        ['.wallet-viewing-note.is-readonly', 'padding', '12px 16px'],
+        ['.wallet-viewing-note.is-readonly', 'border', '1px solid var(--border-hover)'],
+        ['.wallet-viewing-note.is-readonly', 'border-radius', 'var(--radius-sm)'],
+        ['.wallet-viewing-note.is-readonly', 'background', TINT08],
+        ['.wallet-viewing-note.is-readonly', 'color', 'var(--text-primary)'],
+        ['.wallet-viewing-note.is-readonly .bx', 'color', 'var(--brand-primary)']
+    ];
+    for (const [sel, prop, want] of table) {
+        test(`${sel} { ${prop}: ${want} }`, () => assert.equal(decl(sel, prop), want, `${sel} has ${prop}: ${decl(sel, prop)}`));
+    }
+
+    test('primary appears on every element the spec names (a token or a Polkadex alpha, never a missing rule)', () => {
+        const PINK = /var\(--brand-primary\)|var\(--border-hover\)|rgba\(230, 0, 122,/;
+        const placements = [
+            ['.wallet-ext-tile', 'background'], ['.wallet-option-action', 'background'], ['.wallet-option-spin', 'color'],
+            ['.wallet-option-row.is-primary', 'border-color'], ['.wallet-account-btn.is-primary', 'border-color'],
+            ['.wc-qr', 'box-shadow'], ['.wc-steps li::marker', 'color'], ['.wallet-get-check', 'background'],
+            ['.wallet-onboarding-reload', 'background'], ['.wallet-account-row.is-current', 'border'],
+            ['.wallet-account-row.is-current::before', 'background'], ['.wallet-viewing-note.is-readonly', 'background'],
+            ['.wallet-viewing-note.is-readonly .bx', 'color'], ['.wc-open', 'background']
+        ];
+        const missing = placements.filter(([s, p]) => !PINK.test(decl(s, p) || '')).map(([s, p]) => `${s} { ${p} }`);
+        assert.deepEqual(missing, []);
+    });
+
+    test('Solid (a bare var(--brand-primary) fill) is only on the places the spec allows', () => {
+        const ALLOWED = new Set([
+            '.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', '.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile',
+            '.wallet-onboarding-reload', '.wc-open', '.wallet-account-row.is-current::before'
+        ]);
+        const found = [];
+        for (const r of RULES) {
+            for (const p of ['background', 'background-color']) {
+                if (r.decls[p] !== 'var(--brand-primary)') continue;
+                const bad = r.selectors.filter(s => !ALLOWED.has(s) && /wallet-(option|account|ext|get|onboarding|picker|group)|\.wc-|\.wp-/.test(s));
+                if (bad.length) found.push(`styles.css:${r.line} ${bad.join(', ')}`);
+            }
+        }
+        assert.deepEqual(found, [], 'a Solid fill outside the spec:\n  ' + found.join('\n  '));
+    });
+});
+
+describe('lint: pink is never the colour of small text', () => {
+    // Pink on the surface is about 4.1:1, under AA for small text. Icons, markers
+    // and fills may be pink; text labels stay --text-primary. A hover or focus
+    // colour on a link is the older site-wide idiom and is left to the hover rule.
+    const PINK = /var\(--brand-primary\)|#e6007a/i;
+    const SCOPE = /wallet-(picker|option|ext|account|group|get|onboarding|viewing|connect|wc)|\.wc-|\.wp-/;
+    const iconLike = (sel) => {
+        const last = sel.split(/[\s>+~]+/).pop();
+        return /^(i|\.bx[\w-]*)(?![\w-])/.test(last) || /::(marker|before|after)$/.test(last) || /:(hover|focus|focus-visible|focus-within)/.test(sel);
+    };
+    const offenders = (rules) => rules.filter(r => PINK.test(r.decls.color || '')).flatMap(r => r.selectors.filter(s => SCOPE.test(s) && !iconLike(s)).map(s => `styles.css:${r.line} ${s} { color: ${r.decls.color} }`));
+
+    test('no chooser or note selector sets a pink text colour (icons, markers and hover states excepted)', () => {
+        const found = offenders(RULES);
+        assert.deepEqual(found, [], 'pink small text:\n  ' + found.join('\n  '));
+    });
+
+    test('the lint sees what it is meant to see (pink text is caught; a Boxicon, a marker and a hover are not)', () => {
+        const probe = parseRules('.wallet-option-name { color: var(--brand-primary); } .wallet-ext-tile.tile-icon .bx { color: var(--brand-primary); } .wc-steps li::marker { color: var(--brand-primary); } .wp-link:hover { color: var(--brand-primary); } .wallet-viewing-note { color: #E6007A; }');
+        assert.deepEqual(offenders(probe).map(x => x.split(' ')[1]), ['.wallet-option-name', '.wallet-viewing-note']);
+    });
+});
+
+describe('brand pass: the lead row and the only account (markup)', () => {
+    const esc = escapeHtml;
+    const ext = (...keys) => keys.map(k => ({ key: k, name: k }));
+    const rows = (o) => { const doc = new Window().document; doc.body.innerHTML = `<ul>${buildOptionRowsHtml({ esc, ...o })}</ul>`; return doc; };
+    const primaries = (doc) => Array.from(doc.querySelectorAll('.is-primary')).map(e => e.getAttribute('data-source') || e.getAttribute('data-action'));
+
+    test('chooseLead, case 1: nothing installed on a computer, the Get a wallet row (even with a phone row)', () => {
+        assert.equal(chooseLead({ sources: [], phone: false, lastSource: '', onMobile: false }), 'get');
+        assert.equal(chooseLead({ sources: [], phone: { connected: false }, lastSource: PHONE_SOURCE, onMobile: false }), 'get');
+    });
+    test('chooseLead, case 2: the wallet used last, if its row is listed', () => {
+        assert.equal(chooseLead({ sources: ext('talisman', 'polkadot-js'), phone: false, lastSource: 'talisman' }), 'talisman');
+        assert.equal(chooseLead({ sources: ext('talisman', 'polkadot-js'), phone: { connected: false }, lastSource: PHONE_SOURCE }), PHONE_SOURCE);
+        assert.equal(chooseLead({ sources: ext('talisman', 'polkadot-js'), phone: false, lastSource: 'subwallet-js' }), '', 'a wallet that is gone leads nothing');
+        assert.equal(chooseLead({ sources: ext('talisman', 'polkadot-js'), phone: false, lastSource: PHONE_SOURCE }), '', 'no phone row, no phone lead');
+    });
+    test('chooseLead, case 3: exactly one row that connects leads', () => {
+        assert.equal(chooseLead({ sources: ext('talisman'), phone: false, lastSource: '' }), 'talisman');
+        assert.equal(chooseLead({ sources: [], phone: { connected: false }, lastSource: '', onMobile: true }), PHONE_SOURCE);
+    });
+    test('chooseLead, case 4: several equal wallets and no history lead nothing', () => {
+        assert.equal(chooseLead({ sources: ext('talisman', 'polkadot-js'), phone: false, lastSource: '' }), '');
+        assert.equal(chooseLead({ sources: ext('talisman'), phone: { connected: false }, lastSource: '' }), '');
+    });
+
+    test('the lead row is the only is-primary of the list, in all four cases', () => {
+        assert.deepEqual(primaries(rows({ sources: [], phone: { connected: false }, lead: 'get' })), ['get']);
+        assert.deepEqual(primaries(rows({ sources: ext('talisman', 'polkadot-js'), lead: 'polkadot-js' })), ['polkadot-js']);
+        assert.deepEqual(primaries(rows({ sources: ext('talisman'), lead: 'talisman' })), ['talisman']);
+        assert.deepEqual(primaries(rows({ sources: [], phone: { connected: false }, lead: PHONE_SOURCE, onMobile: true })), ['phone']);
+        assert.deepEqual(primaries(rows({ sources: ext('talisman', 'polkadot-js'), phone: { connected: false } })), [], 'no lead, no Solid');
+    });
+    test('every Connect row still carries a tinted tile and a Connect chip, lead or not', () => {
+        const doc = rows({ sources: ext('talisman', 'polkadot-js'), phone: { connected: false } });
+        for (const row of doc.querySelectorAll('.wallet-option-row')) {
+            assert.ok(row.querySelector('.wallet-ext-tile'), 'tile');
+            if (row.getAttribute('data-action') !== 'get') assert.equal(row.querySelector('.wallet-option-action').textContent.trim(), 'Connect');
+        }
+    });
+    test('the Get a wallet row is the quiet row unless it is the lead', () => {
+        const doc = rows({ sources: ext('talisman', 'polkadot-js') });
+        assert.ok(doc.querySelector('[data-action="get"].is-quiet'));
+        assert.equal(doc.querySelectorAll('[data-action="get"].is-primary').length, 0);
+    });
+
+    const A1 = { address: addr(1), name: 'One', source: 'talisman' }, A2 = { address: addr(2), name: 'Two', source: 'talisman' };
+    const list = (o) => { const doc = new Window().document; doc.body.innerHTML = buildAccountListHtml({ isSame: same, esc, shortAddr: short, ...o }); return doc; };
+    test('3.2: a wallet that shared exactly one account, in connect mode, marks that row is-primary', () => {
+        assert.equal(list({ accounts: [A1], primary: true }).querySelectorAll('.wallet-account-btn.is-primary').length, 1);
+    });
+    test('3.2: two accounts, no Solid; the choice is the user\'s', () => {
+        assert.equal(list({ accounts: [A1, A2], primary: true }).querySelectorAll('.is-primary').length, 0);
+    });
+    test('3.2: in switch mode (a current account) no account row is primary, whatever the count', () => {
+        assert.equal(list({ accounts: [A1, A2], current: A1.address, currentSource: 'talisman', primary: false }).querySelectorAll('.wallet-account-btn.is-primary').length, 0);
+        assert.equal(list({ accounts: [A1, A2], current: A1.address, currentSource: 'talisman', primary: true }).querySelectorAll('.wallet-account-btn.is-primary').length, 0, 'a current account is never beside a Solid row');
+    });
+
+    const solids = (w) => w.qa('.is-primary').filter(w.visible);
+    test('view: nothing installed on a computer: the one is-primary is Get a wallet', async (t) => {
+        const w = mountChooser(t, {}); await w.picker.ready;
+        assert.deepEqual(solids(w).map(e => e.getAttribute('data-action')), ['get']);
+    });
+    test('view: one extension, no history: its row is the one is-primary', async (t) => {
+        const w = mountChooser(t, { wallets: [fakeWallet('talisman', [acct(10, 'T')])] }); await w.picker.ready;
+        assert.deepEqual(solids(w).map(e => e.getAttribute('data-source')), ['talisman']);
+    });
+    test('view: two extensions, no history: nothing is Solid', async (t) => {
+        const w = mountChooser(t, { wallets: [fakeWallet('talisman', [acct(10, 'T')]), fakeWallet('polkadot-js', [acct(11, 'P')])] }); await w.picker.ready;
+        assert.deepEqual(solids(w), []);
+    });
+    test('view: switching with another wallet remembered as last used: Use a different wallet leads with that row', async (t) => {
+        const wallets = [fakeWallet('talisman', [acct(10, 'T')]), fakeWallet('polkadot-js', [acct(11, 'P')])];
+        const w = mountChooser(t, { wallets, current: addr(11), currentSource: 'polkadot-js', lastSource: 'talisman' }); await w.picker.ready;
+        w.q('#wallet-picker-different').click(); await w.settle();
+        assert.equal(w.q('section.wallet-picker').getAttribute('data-view'), 'options');
+        assert.deepEqual(solids(w).map(e => e.getAttribute('data-source')), ['talisman']);
+    });
+    test('view: one account shared by the one wallet: the account row is the one is-primary', async (t) => {
+        const w = mountChooser(t, { wallets: [fakeWallet('talisman', [acct(10, 'T')])] }); await w.picker.ready;
+        w.row('talisman').click(); await w.settle();
+        assert.equal(w.q('section.wallet-picker').getAttribute('data-view'), 'accounts');
+        assert.deepEqual(solids(w).map(e => e.className.includes('wallet-account-btn')), [true]);
+    });
+    test('view: two accounts shared: no row is Solid', async (t) => {
+        const w = mountChooser(t, { wallets: [fakeWallet('talisman', [acct(10, 'T'), acct(12, 'U')])] }); await w.picker.ready;
+        w.row('talisman').click(); await w.settle();
+        assert.equal(w.q('section.wallet-picker').getAttribute('data-view'), 'accounts');
+        assert.deepEqual(solids(w), []);
+    });
+
+    test('3.4: after a failed check Reload page is rendered (the one Solid); before it, no reload button; three Install chips, no Solid among them', () => {
+        const doc = new Window().document;
+        doc.body.innerHTML = buildGetWalletHtml({ retried: true });
+        assert.equal(doc.querySelectorAll('.wallet-onboarding-reload').length, 1);
+        doc.body.innerHTML = buildGetWalletHtml({ retried: false });
+        assert.equal(doc.querySelectorAll('.wallet-onboarding-reload').length, 0);
+        assert.equal(doc.querySelectorAll('a.wallet-option-row .wallet-option-action').length, 3);
+        assert.equal(doc.querySelectorAll('.is-primary').length, 0);
     });
 });
 
