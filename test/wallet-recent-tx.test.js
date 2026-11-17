@@ -188,7 +188,7 @@ describe('Load 50 more bar', () => {
         assert.match(ui.done.textContent, /^All 62 transactions loaded\b/);
         assert.equal(ui.done.getAttribute('tabindex'), '-1');
         const link = ui.done.querySelector('a');
-        assert.equal(link.textContent, 'View all on the account page');
+        assert.equal(link.textContent, 'Open the account page for events, transfers and filters');
         assert.equal(link.getAttribute('href'), `/account/${ME}`);
         assert.equal(doc.activeElement, ui.done, 'focus must not drop to the top of the page');
     });
@@ -347,7 +347,7 @@ describe('a page that lands after the user left is dropped', () => {
     });
 });
 
-describe('brand audit: neutral pager, plain links (cto-team/plans/2026-11-16-brand-audit-open-ui.md R1, R2)', () => {
+describe('brand audit: tinted pager, plain links (cto-team/plans/2026-11-16-brand-audit-open-ui.md R1, R2)', () => {
     const loader = stripComments(readRepo('lib/account-load-older.js', import.meta.url));
     const css = readRepo('styles.css', import.meta.url);
     const rule = sel => { const i = css.indexOf(sel + ' {'); assert.ok(i !== -1, sel); return css.slice(i, css.indexOf('}', i)); };
@@ -359,13 +359,30 @@ describe('brand audit: neutral pager, plain links (cto-team/plans/2026-11-16-bra
         assert.ok(!/brand-secondary/.test(loader));
     });
 
-    test('the buttons are the neutral secondary style in styles.css', () => {
+    test('the buttons are the primary-tinted secondary in styles.css (brand identity pass, section 4)', () => {
         const base = rule('.js-older-btn, .js-older-search');
-        assert.match(base, /border: 1px solid var\(--border-color\)/);
-        assert.match(base, /background: rgba\(255, 255, 255, 0\.05\)/);
+        assert.match(base, /background: rgba\(230, 0, 122, 0\.08\)/);
+        assert.match(base, /border: 1px solid var\(--border-hover\)/);
         assert.match(base, /color: var\(--text-primary\)/);
-        assert.ok(!/brand-primary|229/.test(base));
-        assert.match(rule('.js-older-btn:hover, .js-older-search:hover'), /border-color: var\(--border-hover\)/);
+        assert.ok(!/229|brand-secondary|var\(--brand-primary\)/.test(base), 'tint is alpha on the 230 token only, text stays white');
+        const hover = rule('.js-older-btn:hover, .js-older-search:hover');
+        assert.match(hover, /background: rgba\(230, 0, 122, 0\.14\)/);
+        assert.match(hover, /border-color: var\(--brand-primary\)/);
+        assert.match(hover, /box-shadow: 0 0 0 3px var\(--brand-primary-glow\)/);
+        assert.match(base, /transition: border-color var\(--transition-fast\), background var\(--transition-fast\), box-shadow var\(--transition-fast\)/);
+    });
+
+    test('the focus ring is the primary outline with the halo', () => {
+        const focus = rule('.js-older-btn:focus-visible, .js-older-done:focus-visible');
+        assert.match(focus, /outline: 2px solid var\(--brand-primary\)/);
+        assert.match(focus, /box-shadow: 0 0 0 3px var\(--brand-primary-glow\)/);
+    });
+
+    test('the end line does not contradict itself: all loaded, then a link that names what the account page adds', async () => {
+        const ui = page(newStore(), { recentTransactionsTotal: 12 }, { queue: [more(10, 2, null)] });
+        ui.btn.click(); await tick();
+        assert.equal(ui.done.textContent, 'All 12 transactions loaded. Open the account page for events, transfers and filters');
+        assert.ok(!/View all/.test(ui.done.textContent));
     });
 
     test('Search all stays hidden until needed, and the rendered buttons have no style attribute colours', () => {
