@@ -27,6 +27,7 @@ import { describeAccountLocks } from '../lib/balance-locks.js';
 import { renderBalanceLocks } from '../lib/balance-locks-view.js';
 import { successCopy } from '../lib/tx-status.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
+import { democracyChain } from './helpers/democracy-chain.js';
 
 const PDEX = 10n ** 12n;
 const s = (v) => v.toString();
@@ -73,24 +74,24 @@ describe('accumulate is the pallet rule: max date and max amount', () => {
 });
 
 describe('a 500 PDEX prior ending soon and a finished 10 PDEX 6x winning vote', () => {
-    test('the projection: removing the vote now would hold 500 PDEX until the vote\'s date, so it is not safe', () => {
+    test('the projection: the vote is still under conviction, so it is not removable and waits for its own end', () => {
         const p = projectDemocracyLocks(SIX_X, { now: BLOCK, period: PERIOD });
         const v = p.votes.find(x => x.index === 4);
         assert.equal(v.accumulates, true);
         assert.equal(v.lockUntil, FAR);
-        assert.deepEqual(v.ifRemoved, { until: FAR, amount: 500n * PDEX });
         assert.equal(v.safe, false);
         assert.deepEqual(p.batch.remove, []);
         assert.equal(p.batch.unlock, false);
-        assert.deepEqual(p.held.map(h => [h.index, h.wait, h.waitUntil, h.frees]), [[4, 'prior', BLOCK + 100, 490n * PDEX]]);
+        assert.deepEqual(p.held, [{ index: 4, amount: 10n * PDEX, until: FAR }]);
     });
-    test('the panel offers no remove: it says wait for the earlier lock, Unlock, then remove the vote', () => {
+    test('the panel offers no remove: it says to remove the vote after its own lock ends', () => {
         const d = lockActions(OVERLOCK).democracy;
         assert.deepEqual(d.remove, []);
         assert.equal(d.unlock, false);
         const h = html(OVERLOCK);
         assert.doesNotMatch(h, /data-lock-action="democracy-unlock"/);
-        assert.match(text(h), new RegExp(`Wait until block ${num(BLOCK + 100)} \\(about ${dayOf(BLOCK + 100)}\\), then Unlock frees 490 PDEX; after that, remove the vote on referendum #4\\.`));
+        assert.match(text(h), new RegExp(`Remove the vote on referendum #4 after block ${num(FAR)} \\(about ${dayOf(FAR)}\\), when its own lock ends\\.`));
+        assert.doesNotMatch(text(h), /Wait until block/);
     });
     test('both locks are shown with their own dates, and 500 PDEX is never said to be locked until the vote\'s date', () => {
         const t = text(html(OVERLOCK));
@@ -106,14 +107,15 @@ describe('a 500 PDEX prior ending soon and a finished 10 PDEX 6x winning vote', 
         const spec = lockActionSpec('democracy-unlock', describeAccountLocks(OVERLOCK), ME, { connected: ME, isSame: same });
         assert.ok(spec.error);
     });
-    test('once the earlier lock has ended: unlock first, then remove; only the vote\'s own 10 PDEX stays', () => {
+    test('once the earlier lock has ended: Unlock frees 490 PDEX; the vote still waits for its own end', () => {
         const later = { ...OVERLOCK, block: BLOCK + 200 };
         const d = lockActions(later).democracy;
-        assert.equal(d.rejigFirst, true);
-        assert.deepEqual(d.remove.map(r => r.index), [4]);
+        assert.deepEqual(d.remove, []);
+        assert.equal(d.unlock, true);
         assert.equal(d.lockAfter, s(10n * PDEX));
-        assert.equal(d.lockedUntil, FAR);
         assert.equal(d.freed, s(490n * PDEX));
+        assert.equal(d.lockedUntil, null, 'no prior is left: the vote stays recorded with its own lock');
+        assert.deepEqual(d.held.map(h => [h.index, h.until]), [[4, FAR]]);
     });
 });
 
@@ -121,16 +123,15 @@ describe('the mirror: a small far-dated prior and a large vote whose own lock en
     const END = BLOCK + 1000 - PERIOD;   // 1x: its own lock ends at BLOCK + 1000
     const PRIOR_FAR = { until: FAR, amount: s(10n * PDEX) };
     const MIRROR = withDem(direct([vote(4, true, 'Locked1x', 500n * PDEX)], { 4: { finished: true, approved: true, end: END } }, PRIOR_FAR), 500n * PDEX);
-    test('not offered: removing now would hold 500 PDEX until the prior\'s date', () => {
+    test('not offered: the vote is still under conviction until its own end', () => {
         const p = projectDemocracyLocks(MIRROR.democracy, { now: BLOCK, period: PERIOD });
-        assert.deepEqual(p.votes[0].ifRemoved, { until: FAR, amount: 500n * PDEX });
         assert.deepEqual(p.batch.remove, []);
-        assert.deepEqual(p.held.map(h => [h.index, h.wait, h.waitUntil]), [[4, 'vote', BLOCK + 1000]]);
+        assert.deepEqual(p.held.map(h => [h.index, h.until]), [[4, BLOCK + 1000]]);
     });
-    test('the panel: remove it after its own lock ends, and says what removing it now would do', () => {
+    test('the panel: remove it after its own lock ends', () => {
         const t = text(html(MIRROR));
         assert.doesNotMatch(html(MIRROR), /data-lock-action="democracy-unlock"/);
-        assert.match(t, new RegExp(`Remove the vote on referendum #4 after block ${num(BLOCK + 1000)} \\(about ${dayOf(BLOCK + 1000)}\\), when its own lock ends; removing it now would keep 500 PDEX locked until block ${num(FAR)} \\(about ${dayOf(FAR)}\\)\\.`));
+        assert.match(t, new RegExp(`Remove the vote on referendum #4 after block ${num(BLOCK + 1000)} \\(about ${dayOf(BLOCK + 1000)}\\), when its own lock ends\\.`));
         assert.match(t, /Earlier vote lock: 10 PDEX until block/);
     });
     test('after its own lock ends the remove is safe again (no accumulate)', () => {
@@ -164,24 +165,24 @@ describe('removes that create no prior stay offered under a running prior', () =
 
 describe('several votes, some safe and some not', () => {
     const REFS = { 1: { finished: true, approved: true, end: 900_000 }, 2: { finished: true, approved: true, end: 900_000 }, 3: { finished: true, approved: true, end: BLOCK + 500 - PERIOD } };
-    test('a larger, later vote takes the prior over; the far small vote waits for it', () => {
+    test('only the losing vote goes; both winning votes wait for their own ends, even #3 that covers the prior', () => {
         // #3: 600 PDEX until BLOCK + 500 covers the 500 PDEX prior (BLOCK + 100) in both amount and date.
         const VOTES = [vote(1, true, 'Locked6x', 10n * PDEX), vote(2, false, 'Locked6x', 50n * PDEX), vote(3, true, 'Locked1x', 600n * PDEX)];
         const d = lockActions(withDem(direct(VOTES, REFS, PRIOR_SOON), 600n * PDEX)).democracy;
-        assert.deepEqual(d.remove.map(r => r.index), [2, 3]);
-        assert.equal(d.lockedUntil, BLOCK + 500);
-        assert.equal(d.lockedUntilAmount, s(600n * PDEX));
-        assert.deepEqual(d.held.map(h => [h.index, h.wait, h.waitUntil]), [[1, 'prior', BLOCK + 500]]);
+        assert.deepEqual(d.remove.map(r => r.index), [2]);
+        assert.equal(d.lockedUntil, BLOCK + 100);
+        assert.equal(d.lockedUntilAmount, s(500n * PDEX));
+        assert.deepEqual(d.held.map(h => [h.index, h.until]), [[1, FAR], [3, BLOCK + 500]]);
     });
     test('an expired prior: a leading unlock clears it, then the removes, then the unlock', async () => {
         const VOTES = [vote(1, true, 'Locked6x', 10n * PDEX), vote(2, false, 'Locked6x', 50n * PDEX)];
         const sn = withDem(direct(VOTES, REFS, { until: BLOCK - 10, amount: s(500n * PDEX) }), 500n * PDEX);
         const d = lockActions(sn).democracy;
         assert.equal(d.rejigFirst, true);
-        assert.deepEqual(d.remove.map(r => r.index), [1, 2]);
+        assert.deepEqual(d.remove.map(r => r.index), [2]);
         assert.equal(d.lockAfter, s(10n * PDEX));
         const spec = lockActionSpec('democracy-unlock', describeAccountLocks(sn), ME, { connected: ME, isSame: same });
-        assert.deepEqual(await spec.buildTx(fakeApi()), { batch: [['unlock', ME], ['removeVote', 1], ['removeVote', 2], ['unlock', ME]] });
+        assert.deepEqual(await spec.buildTx(fakeApi(chainOf(sn))), { batch: [['unlock', ME], ['removeVote', 2], ['unlock', ME]] });
     });
 });
 
@@ -242,9 +243,11 @@ describe('what an unlock frees: another lock, not staking, can be the blocker', 
 });
 
 // The batch the button signs, run through a model of the pallet written here
-// from the rules above (not from the code under test).
-function fakeApi() {
-    return { tx: {
+// from the rules above (not from the code under test). chain: what the button
+// reads again before signing (the snapshot's own state unless a test changes it).
+const chainOf = (sn) => democracyChain(sn.democracy, sn.block, { period: PERIOD });
+function fakeApi(chain = {}) {
+    return { ...chain, tx: {
         democracy: { unlock: (who) => ['unlock', who], removeVote: (i) => ['removeVote', i], undelegate: () => ['undelegate'] },
         utility: { batchAll: (calls) => ({ batch: calls }) }
     } };
@@ -309,7 +312,7 @@ describe('property: the offered batch never holds more PDEX for longer than the 
             const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
             if (spec.error) continue;
             offered++;
-            const tx = await spec.buildTx(fakeApi());
+            const tx = await spec.buildTx(fakeApi(chainOf(sn)));
             const calls = tx.batch || [tx];
             const after = palletRun(dem, now, calls);
             // The locks each removed vote would hold alone, and the prior if it is still running.
@@ -469,11 +472,11 @@ describe('two held votes that do not nest, both behind a running prior', () => {
     // Prior 500 PDEX to BLOCK + 100; #1 300 PDEX to BLOCK + 200; #2 100 PDEX to BLOCK + 400.
     const TWO = direct([vote(1, true, 'Locked1x', 300n * PDEX), vote(2, true, 'Locked1x', 100n * PDEX)],
         { 1: { finished: true, approved: true, end: BLOCK + 200 - PERIOD }, 2: { finished: true, approved: true, end: BLOCK + 400 - PERIOD } }, PRIOR_SOON);
-    test('the second waits for the first one\'s lock, not the prior: removing both when the prior ends would hold 300 PDEX to BLOCK + 400', () => {
+    test('each waits for its own end, not the prior\'s', () => {
         const d = lockActions(withDem(TWO, 500n * PDEX)).democracy;
-        assert.deepEqual(d.held.map(h => [h.index, h.wait, h.waitUntil]), [[1, 'prior', BLOCK + 100], [2, 'prior', BLOCK + 200]]);
+        assert.deepEqual(d.held.map(h => [h.index, h.until]), [[1, BLOCK + 200], [2, BLOCK + 400]]);
         const t = text(html(withDem(TWO, 500n * PDEX)));
-        assert.match(t, new RegExp(`Wait until block ${num(BLOCK + 200)} \\(about ${dayOf(BLOCK + 200)}\\), then press Unlock; after that, remove the vote on referendum #2\\.`));
+        assert.match(t, new RegExp(`Remove the vote on referendum #2 after block ${num(BLOCK + 400)} \\(about ${dayOf(BLOCK + 400)}\\), when its own lock ends\\.`));
     });
     test('following both in order through the pallet model: each step stays covered by a lock it joins', () => {
         let st = palletRun(TWO, BLOCK + 100, [['unlock', ME], ['removeVote', 1]]);
@@ -491,10 +494,11 @@ describe('property, round 2: later inclusion, ties, and following the held guida
         for (let k = 0; k < 800; k++) {
             const c = randomDirect(r, [true, false, 'held'][k % 3]);
             const delay = pick([0, 1, 2, 50, 99, 100, 101, 200, 299, 300, 301, Math.floor(r() * 2 * PERIOD)]);
-            const spec = lockActionSpec('democracy-unlock', describeAccountLocks(withDem(c.dem, lockNowOf(c))), ME, { connected: ME, isSame: same });
+            const sn = withDem(c.dem, lockNowOf(c));
+            const spec = lockActionSpec('democracy-unlock', describeAccountLocks(sn), ME, { connected: ME, isSame: same });
             if (spec.error) continue;
             offered++;
-            const tx = await spec.buildTx(fakeApi());
+            const tx = await spec.buildTx(fakeApi(chainOf(sn)));
             const calls = tx.batch || [tx];
             const at = c.now + delay;
             const after = palletRun(c.dem, at, calls);
@@ -517,10 +521,11 @@ describe('property, round 2: later inclusion, ties, and following the held guida
         const r = rng(7);
         for (let k = 0; k < 600; k++) {
             const c = randomDirect(r, true);
-            const model = describeAccountLocks(withDem(c.dem, lockNowOf(c)));
+            const sn = withDem(c.dem, lockNowOf(c));
+            const model = describeAccountLocks(sn);
             const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
             if (spec.error) continue;
-            const tx = await spec.buildTx(fakeApi());
+            const tx = await spec.buildTx(fakeApi(chainOf(sn)));
             const calls = tx.batch || [tx];
             const after = palletRun(c.dem, c.now, calls);
             const d = model.actions.democracy;
@@ -533,19 +538,17 @@ describe('property, round 2: later inclusion, ties, and following the held guida
         let followed = 0;
         for (let k = 0; k < 1500; k++) {
             const c = randomDirect(r, [true, false, 'held'][k % 3]);
-            const model = describeAccountLocks(withDem(c.dem, lockNowOf(c)));
+            const sn = withDem(c.dem, lockNowOf(c));
+            const model = describeAccountLocks(sn);
             const d = model.actions.democracy;
             if (!d.held || !d.held.length) continue;
             const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
-            const calls = spec.error ? [] : (((t) => t.batch || [t])(await spec.buildTx(fakeApi())));
+            const calls = spec.error ? [] : (((t) => t.batch || [t])(await spec.buildTx(fakeApi(chainOf(sn)))));
             const today = palletRun(c.dem, c.now, calls);
-            // What the panel says to do for h, as the calls it names.
+            // What the panel says to do for h: remove it once its own lock ends.
             const steps = (h) => {
-                const t = text(html(withDem(c.dem, lockNowOf(c))));
-                const ref = `the vote on referendum #${h.index}`;
-                const unlockFirst = h.wait === 'prior';
-                if (unlockFirst) assert.match(t, new RegExp(`Wait until block ${num(h.waitUntil)}[^.]*, then (press Unlock|Unlock frees [^;]+); after that, remove ${ref}\\.`), `case ${k}: the text for #${h.index}`);
-                return unlockFirst ? [['unlock', ME], ['removeVote', h.index]] : [['removeVote', h.index]];
+                assert.match(text(html(sn)), new RegExp(`Remove the vote on referendum #${h.index} after block ${num(h.until)}[^.]*, when its own lock ends\\.`), `case ${k}: the text for #${h.index}`);
+                return [['removeVote', h.index]];
             };
             // The locks running at that block: the prior as the pallet holds it,
             // and the own lock of every vote still recorded (h among them; one
@@ -566,9 +569,9 @@ describe('property, round 2: later inclusion, ties, and following the held guida
             };
             // Done at the block the panel names, or some blocks after it.
             const late = () => (r() < 0.5 ? 0 : Math.floor(r() * 400));
-            for (const h of d.held) { check(today, h, h.waitUntil + late(), 'alone'); followed++; }
+            for (const h of d.held) { check(today, h, h.until + late(), 'alone'); followed++; }
             let st = today, at = 0;
-            for (const h of [...d.held].sort((a, b) => a.waitUntil - b.waitUntil)) { at = Math.max(at, h.waitUntil + late()); st = check(st, h, at, 'in order'); }
+            for (const h of [...d.held].sort((a, b) => a.until - b.until)) { at = Math.max(at, h.until + late()); st = check(st, h, at, 'in order'); }
         }
         assert.ok(followed > 100, `enough held votes followed (${followed})`);
     });
@@ -628,7 +631,7 @@ describe('property, round 2: undelegate', () => {
 // record, whatever its date (with a running prior it changes nothing).
 describe('the leading unlock does not depend on the date the panel was drawn at', () => {
     const PRIOR = { until: BLOCK + 100, amount: s(500n * PDEX) };
-    const calls = async (kind, sn, ref = null, api = fakeApi()) => {
+    const calls = async (kind, sn, ref = null, api = fakeApi(chainOf(sn))) => {
         const spec = lockActionSpec(kind, describeAccountLocks(sn), ME, { connected: ME, isSame: same, ref });
         assert.ok(!spec.error, spec.error);
         const tx = await spec.buildTx(api);
@@ -653,8 +656,8 @@ describe('the leading unlock does not depend on the date the panel was drawn at'
         assert.deepEqual(await calls('democracy-unlock', sn), [['unlock', ME], ['removeVote', 1], ['removeVote', 2], ['unlock', ME]]);
     });
     test('removes under a running prior with no final unlock: unlock, removes', async () => {
-        // #3: 300 PDEX 1x until +50, covered by the 500 PDEX prior: removing it frees nothing now.
-        const sn = withDem(direct([vote(3, true, 'Locked1x', 300n * PDEX)], { 3: { finished: true, approved: true, end: BLOCK + 50 - PERIOD } }, PRIOR), 500n * PDEX);
+        // #3: a losing 300 PDEX vote under the 500 PDEX prior: removing it frees nothing now.
+        const sn = withDem(direct([vote(3, false, 'Locked1x', 300n * PDEX)], { 3: { finished: true, approved: true, end: BLOCK + 50 - PERIOD } }, PRIOR), 500n * PDEX);
         assert.deepEqual(await calls('democracy-unlock', sn), [['unlock', ME], ['removeVote', 3]]);
     });
     test('removes with no prior on record: no leading unlock', async () => {
@@ -702,9 +705,10 @@ describe('the leading unlock does not depend on the date the panel was drawn at'
         let checked = 0;
         for (let k = 0; k < 900; k++) {
             const cs = randomDirect(r, [true, false, 'held'][k % 3]);
-            const spec = lockActionSpec('democracy-unlock', describeAccountLocks(withDem(cs.dem, lockNowOf(cs))), ME, { connected: ME, isSame: same });
+            const sn = withDem(cs.dem, lockNowOf(cs));
+            const spec = lockActionSpec('democracy-unlock', describeAccountLocks(sn), ME, { connected: ME, isSame: same });
             if (spec.error) continue;
-            const c = (((t) => t.batch || [t])(await spec.buildTx(fakeApi())));
+            const c = (((t) => t.batch || [t])(await spec.buildTx(fakeApi(chainOf(sn)))));
             if (!c.some(([op]) => op === 'removeVote')) continue;
             checked++;
             const hasPrior = BigInt(cs.prior.amount) > 0n;

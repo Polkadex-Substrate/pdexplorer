@@ -44,6 +44,7 @@ import { renderBalanceLocks, runLockAction, mountBalanceLocks } from '../lib/bal
 import { successCopy, PENDING_TITLE, ERROR_COPY, ACTION_KEYS } from '../lib/tx-status.js';
 import { HELP_TOPICS } from '../lib/help-topics.js';
 import { registryFromMetadata, loadFixture } from './helpers/extrinsic-builders.js';
+import { democracyChain } from './helpers/democracy-chain.js';
 
 const PDEX = 10n ** 12n;
 const s = (v) => v.toString();
@@ -135,13 +136,13 @@ describe('democracyActions: what removeVote and unlock release now, and when the
             const end = 990_000;
             const a = democracyActions(dem([vote(4, true, conv, 40n * PDEX)], { 4: { finished: true, approved: true, end } }), { ...at, lockAmount: s(40n * PDEX) });
             const until = end + periods * PERIOD;
-            assert.equal(a.remove[0].lockUntil, until > BLOCK ? until : null);
             if (until > BLOCK) {
-                assert.equal(a.unlock, false, 'the prior lock keeps all 40 PDEX, so unlock frees nothing yet');
+                assert.deepEqual(a.remove, [], 'still under conviction: kept out of the batch');
+                assert.deepEqual(a.held, [{ index: 4, amount: s(40n * PDEX), until, eta: NOW + (until - BLOCK) * BLOCK_MS }]);
+                assert.equal(a.unlock, false, 'the vote keeps all 40 PDEX, so unlock frees nothing yet');
                 assert.equal(a.lockAfter, s(40n * PDEX));
-                assert.equal(a.lockedUntil, until);
-                assert.equal(a.lockedUntilEta, NOW + (until - BLOCK) * BLOCK_MS);
             } else {
+                assert.deepEqual(a.remove.map(r => r.index), [4]);
                 assert.equal(a.unlock, true);
                 assert.equal(a.lockAfter, '0');
             }
@@ -149,7 +150,8 @@ describe('democracyActions: what removeVote and unlock release now, and when the
     }
     test('a nay that won (referendum rejected) is locked with its conviction too', () => {
         const a = democracyActions(dem([vote(5, false, 'Locked1x', 10n * PDEX)], { 5: { finished: true, approved: false, end: 950_000 } }), { ...at, lockAmount: s(10n * PDEX) });
-        assert.equal(a.remove[0].lockUntil, 950_000 + PERIOD);
+        assert.deepEqual(a.remove, []);
+        assert.deepEqual(a.held.map(h => [h.index, h.until]), [[5, 950_000 + PERIOD]]);
     });
     test('an ongoing referendum: offered as "cancel" with its end, and its balance stays locked after the others go', () => {
         const a = democracyActions(dem([vote(4, false, 'None', 40n * PDEX), vote(9, true, 'Locked1x', 15n * PDEX)],
@@ -179,13 +181,15 @@ describe('democracyActions: what removeVote and unlock release now, and when the
         assert.equal(a.unlock, false);
         assert.equal(a.lockedUntil, 1_200_000);
     });
-    test('PriorLock::accumulate keeps the larger amount: an expired 50 PDEX prior is cleared first (unlock, removes, unlock)', () => {
+    test('an expired 50 PDEX prior and a winning vote still under conviction: Unlock frees 40 PDEX, the vote waits', () => {
         const a = democracyActions(dem([vote(4, true, 'Locked1x', 10n * PDEX)], { 4: { finished: true, approved: true, end: 900_000 } }, { until: 500_000, amount: s(50n * PDEX) }),
             { ...at, lockAmount: s(50n * PDEX) });
-        assert.equal(a.rejigFirst, true);
-        assert.equal(a.lockAfter, s(10n * PDEX), 'with the expired prior cleared first, only the new 10 PDEX prior remains');
-        assert.equal(a.lockedUntil, 900_000 + PERIOD);
+        assert.deepEqual(a.remove, []);
+        assert.equal(a.rejigFirst, false, 'nothing to remove, so one unlock is enough');
+        assert.equal(a.lockAfter, s(10n * PDEX), 'the expired prior is cleared; the vote keeps its 10 PDEX');
+        assert.equal(a.lockedUntil, null);
         assert.equal(a.unlock, true);
+        assert.deepEqual(a.held.map(h => [h.index, h.until]), [[4, 900_000 + PERIOD]]);
     });
     test('the lock amount defaults to the largest vote or prior when the balances lock is not given', () => {
         const a = democracyActions(dem([vote(4, false, 'None', 12n * PDEX)], { 4: { finished: true, approved: true, end: 900_000 } }), at);
@@ -268,8 +272,9 @@ describe('lockRemoved: the post-inclusion check for migrateCurrency (no event wh
     });
 });
 
-// A fake api.tx that records the calls each button would sign.
-function fakeTxApi({ noMigrate = false, noBatch = false, locksAfter = [] } = {}) {
+// A fake api.tx that records the calls each button would sign. chain: the
+// democracy state Remove votes and unlock reads again before signing.
+function fakeTxApi({ noMigrate = false, noBatch = false, locksAfter = [], chain = null } = {}) {
     const c = (name) => (...args) => ({ call: name, args });
     const tx = {
         staking: { withdrawUnbonded: c('staking.withdrawUnbonded'), ...(noMigrate ? {} : { migrateCurrency: c('staking.migrateCurrency') }) },
@@ -279,7 +284,7 @@ function fakeTxApi({ noMigrate = false, noBatch = false, locksAfter = [] } = {})
     };
     // Cancel vote re-reads the referendum before it signs (still running here).
     const query = { balances: { locks: async () => locksAfter }, democracy: { referendumInfoOf: async () => ({ isSome: true, unwrap: () => ({ isOngoing: true }) }) } };
-    return { tx, query };
+    return chain ? { tx, query: { ...chain.query, balances: query.balances }, consts: chain.consts } : { tx, query };
 }
 const same = (a, b) => String(a) === String(b);
 
@@ -301,21 +306,37 @@ describe('lockActionSpec: the call each button signs, and who may sign it', () =
         assert.match(spec.error, /[Cc]onnect/);
     });
     const demModel = (d) => ({ actions: { democracy: { mode: 'direct', remove: [], cancel: [], unlock: false, rejigFirst: false, lockNow: '0', lockAfter: '0', freed: '0', ...d } } });
+    // A democracy state: the model the panel draws from it at BLOCK, and the
+    // same state on the chain for the re-read before signing.
+    const drawn = (votes, referenda, prior, lockAmount) => {
+        const dem = { delegating: false, lockingPeriod: PERIOD, votes, referenda, prior };
+        const model = { actions: lockActions(snap({ frozen: s(lockAmount), locks: [lock('democrac', lockAmount)], democracy: dem })) };
+        return { model, api: (o = {}) => fakeTxApi({ ...o, chain: democracyChain(dem, BLOCK, { period: PERIOD }) }) };
+    };
+    const lost = (index, amount) => ({ index, aye: false, conviction: 'Locked1x', balance: s(amount) });
+    const running = (index, amount) => ({ index, aye: true, conviction: 'None', balance: s(amount) });
+    const FIN = { finished: true, approved: true, end: 900_000 };
+    const RUN = { ongoing: true, end: 1_050_000 };
+    const NO_PRIOR = { until: 0, amount: '0' };
+    const ENDED = { until: 500_000, amount: s(50n * PDEX) };
     test('democracy: remove every finished vote, then unlock, in one batchAll', async () => {
-        const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }, { index: 7 }], unlock: true, freed: s(5n * PDEX) }), ME, { connected: ME, isSame: same });
+        const { model, api } = drawn([lost(4, 5n * PDEX), lost(7, 5n * PDEX)], { 4: FIN, 7: FIN }, NO_PRIOR, 5n * PDEX);
+        const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
         assert.equal(spec.key, 'democracy.unlock');
-        const t = await spec.buildTx(fakeTxApi());
+        const t = await spec.buildTx(api());
         assert.equal(t.call, 'utility.batchAll');
         assert.deepEqual(t.args[0], [
             { call: 'democracy.removeVote', args: [4] }, { call: 'democracy.removeVote', args: [7] }, { call: 'democracy.unlock', args: [ME] }]);
     });
     test('democracy: only an unlock is a single call', async () => {
-        const spec = lockActionSpec('democracy-unlock', demModel({ unlock: true }), ME, { connected: ME, isSame: same });
-        assert.deepEqual(await spec.buildTx(fakeTxApi()), { call: 'democracy.unlock', args: [ME] });
+        const { model, api } = drawn([], {}, ENDED, 50n * PDEX);
+        const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
+        assert.deepEqual(await spec.buildTx(api()), { call: 'democracy.unlock', args: [ME] });
     });
     test('democracy: an expired prior is cleared before the removes (unlock, removes, unlock)', async () => {
-        const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: true, rejigFirst: true }), ME, { connected: ME, isSame: same });
-        const t = await spec.buildTx(fakeTxApi());
+        const { model, api } = drawn([lost(4, 10n * PDEX)], { 4: FIN }, ENDED, 50n * PDEX);
+        const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
+        const t = await spec.buildTx(api());
         assert.deepEqual(t.args[0].map(x => x.call), ['democracy.unlock', 'democracy.removeVote', 'democracy.unlock']);
     });
     // Fable review, MEDIUM: with an expired larger prior, removeVote's
@@ -323,8 +344,10 @@ describe('lockActionSpec: the call each button signs, and who may sign it', () =
     // the leading unlock (rejig) must go first even when the final unlock is
     // not needed.
     test('democracy: an expired prior is cleared first even when no final unlock is needed (unlock, removes)', async () => {
-        const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: false, rejigFirst: true }), ME, { connected: ME, isSame: same });
-        const t = await spec.buildTx(fakeTxApi());
+        // A running 60 PDEX vote keeps the lock where it is, so no final unlock.
+        const { model, api } = drawn([lost(4, 10n * PDEX), running(9, 60n * PDEX)], { 4: FIN, 9: RUN }, ENDED, 60n * PDEX);
+        const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
+        const t = await spec.buildTx(api());
         assert.equal(t.call, 'utility.batchAll');
         assert.deepEqual(t.args[0].map(x => x.call), ['democracy.unlock', 'democracy.removeVote']);
     });
@@ -336,15 +359,17 @@ describe('lockActionSpec: the call each button signs, and who may sign it', () =
         assert.equal(withUnlock.params.unlock, true);
     });
     test('democracy: removes without an unlock (the lock stays) still record the removals', async () => {
-        const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: false }), ME, { connected: ME, isSame: same });
-        assert.deepEqual(await spec.buildTx(fakeTxApi()), { call: 'democracy.removeVote', args: [4] });
+        const { model, api } = drawn([lost(4, 10n * PDEX), running(9, 60n * PDEX)], { 4: FIN, 9: RUN }, NO_PRIOR, 60n * PDEX);
+        const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
+        assert.deepEqual(await spec.buildTx(api()), { call: 'democracy.removeVote', args: [4] });
     });
     test('democracy: nothing to do is an error, not an empty batch', () => {
         assert.match(lockActionSpec('democracy-unlock', demModel({}), ME, { connected: ME, isSame: same }).error, /[Nn]othing/);
     });
     test('democracy: no batchAll on the runtime and more than one call: the build refuses', async () => {
-        const spec = lockActionSpec('democracy-unlock', demModel({ remove: [{ index: 4 }], unlock: true }), ME, { connected: ME, isSame: same });
-        await assert.rejects(async () => spec.buildTx(fakeTxApi({ noBatch: true })), /batchAll/);
+        const { model, api } = drawn([lost(4, 10n * PDEX)], { 4: FIN }, NO_PRIOR, 10n * PDEX);
+        const spec = lockActionSpec('democracy-unlock', model, ME, { connected: ME, isSame: same });
+        await assert.rejects(async () => spec.buildTx(api({ noBatch: true })), /batchAll/);
     });
     test('democracy: cancel one ongoing vote', async () => {
         const spec = lockActionSpec('democracy-cancel', demModel({ cancel: [{ index: 9, end: 2 }] }), ME, { connected: ME, isSame: same, ref: 9 });
