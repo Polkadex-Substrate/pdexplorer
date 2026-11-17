@@ -4710,11 +4710,11 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: older-spin 0.8s linear infinite;
 }
 .js-older-btn, .js-older-search {
-    min-height: 36px; padding: 8px 20px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color);
+    min-height: 36px; padding: 8px 20px; background: rgba(230, 0, 122, 0.08); border: 1px solid var(--border-hover);
     border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; font-size: 0.82rem; cursor: pointer;
-    transition: border-color var(--transition-fast);
+    transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
 }
-.js-older-btn:hover, .js-older-search:hover { border-color: var(--border-hover); }
+.js-older-btn:hover, .js-older-search:hover { background: rgba(230, 0, 122, 0.14); border-color: var(--brand-primary); box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 .js-older-btn[aria-busy="true"] { opacity: 0.7; cursor: progress; }
 @keyframes older-spin { to { transform: rotate(360deg); } }
 
@@ -4861,4 +4861,4 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .js-older-bar .js-older-count { flex-basis: 100%; text-align: center; }
     .js-older-bar .js-older-btn { width: 100%; min-height: 44px; }
 }
-.js-older-done:focus-visible, .js-older-btn:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+.js-older-btn:focus-visible, .js-older-done:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; box-shadow: 0 0 0 3px var(--brand-primary-glow); }
