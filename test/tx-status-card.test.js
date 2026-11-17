@@ -137,6 +137,20 @@ describe('status card DOM', () => {
         assert.equal(dom.zone().children.length, 0, 'the closed card came back');
     });
 
+    // #72: a payout ended "payment unverified" is finished (it can be pruned
+    // like a failure) but never closes itself.
+    test('an unverified card is finished, not in flight, and never closes itself', () => {
+        const pay = { id: 'u1', key: 'treasury.payout', params: { index: 7 } };
+        showTxStatus(pay, 'unverified', null, null, { txHash: '0x' + 'ab'.repeat(32), sentBlock: 9 });
+        mock.timers.tick(600000);
+        assert.equal(dom.zone().children.length, 1);
+        assert.match(dom.zone().children[0].innerHTML, /payment unverified/);
+        ['v1', 'v2', 'v3'].forEach(id => showTxStatus({ id, key: 'council.vote' }, 'signing'));
+        assert.equal(dom.zone().children.length, 3, 'the unverified card counted as in flight');
+        assert.ok(!dom.zone().children.some(c => /payment unverified/.test(c.innerHTML)));
+        ['v1', 'v2', 'v3'].forEach(dismissTxStatus);
+    });
+
     test('unconfirmed and waiting cards never close themselves', () => {
         showTxStatus({ id: 'w1', key: 'council.vote' }, 'unconfirmed', okEvents, null, { blockNumber: 5 });
         showTxStatus({ id: 'w2', key: 'council.vote' }, 'waiting', null, null, {});

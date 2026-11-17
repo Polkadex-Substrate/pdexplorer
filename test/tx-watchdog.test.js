@@ -67,6 +67,19 @@ describe('txStep: chain checks decide a silent broadcast', () => {
         assert.equal(r.t.done, true);
     });
 
+    // #72: an action check can see a state that does not prove the effect
+    // (a treasury spend gone without a Paid event): 'unverified' ends the
+    // watch neutral, never a success and never an error.
+    test('unverified on chain after Sent ends unverified: terminal, not a success', () => {
+        const r = steps([st('Ready'), { type: 'check', found: 'unverified' }]);
+        assert.equal(r.last.act, 'unverified');
+        assert.ok(!r.last.firstOk);
+        assert.equal(r.t.done, true);
+        assert.equal(r.t.inBlockSeen, false);
+        assert.equal(steps([{ type: 'check', found: 'unverified' }]).last.act, 'ignore', 'not before Sent');
+        assert.equal(steps([st('Ready'), st('InBlock'), { type: 'outcome', stage: 'inBlock', ok: true }, { type: 'check', found: 'unverified' }]).last.act, 'ignore', 'the events decide once In block');
+    });
+
     test('pending, before Sent, while reading, after In block and after the end are ignored', () => {
         assert.equal(steps([st('Ready'), { type: 'check', found: 'pending' }]).last.act, 'ignore');
         assert.equal(steps([{ type: 'check', found: 'applied' }]).last.act, 'ignore');
@@ -143,6 +156,27 @@ describe('buildTxModel: the confirmed, processed and silent-wallet cards', () =>
         assert.ok(m.links.some(l => l.href === `/account/${ADDR}`));
         assert.ok(m.links.some(l => l.href === `/tx/100/${HASH}`));
         assert.equal(m.stageText, 'Processed, result not confirmed');
+    });
+
+    test('unverified is neutral, has its own stage text and links the transaction lookup (#72)', () => {
+        const pay = { id: 'p1', key: 'treasury.payout', params: { index: 7, amount: '1,500', beneficiary: ADDR } };
+        const m = T.buildTxModel(pay, 'unverified', null, null, { txHash: HASH, address: ADDR, sentBlock: 100 });
+        assert.equal(m.stage, 'unverified');
+        assert.equal(m.tone, 'neutral');
+        assert.equal(m.title, 'Spend #7 cleared; payment unverified');
+        assert.equal(m.stageText, 'Payment unverified');
+        assert.doesNotMatch(m.title + m.body + m.stageText, /is paid|confirmed on chain/i);
+        assert.match(m.body, /expired|voided/i);
+        assert.equal(m.links[0].href, `/tx/100/${HASH}`);
+        assert.match(m.links[0].label, /transaction/i);
+        assert.ok(m.links.some(l => l.href === '/treasury'));
+        assert.equal(m.code, null, 'not a failure: no support code');
+        // Any other action: a generic neutral text, still no success claim.
+        const g = T.buildTxModel(action, 'unverified', null, null, { txHash: HASH, sentBlock: 100 });
+        assert.equal(g.tone, 'neutral');
+        assert.equal(g.stageText, 'Result unverified');
+        assert.match(g.body, /could not confirm/i);
+        assert.equal(g.links[0].href, `/tx/100/${HASH}`);
     });
 
     test('a silent wallet gets its own waiting text', () => {
@@ -233,6 +267,24 @@ describe('the tracker never leaves a silent broadcast spinning', () => {
         assert.equal(h.calls.onSuccess, 0);
         assert.deepEqual(h.calls.onError, []);
         assert.equal(h.button.disabled, false);
+    });
+
+    test('an unverified check ends the card neutral: no onSuccess, no onError, button released, watch stopped (#72)', async () => {
+        const h = harness();
+        h.run.start();
+        await h.run.send(h.tx, ADDR, {});
+        await h.emit(READY);
+        h.setVerdict('unverified');
+        h.setNonce(8);   // the nonce moving too: the action's own answer is the more specific one
+        await tick(T.WATCHDOG_MS);
+        assert.equal(h.last().stage, 'unverified');
+        assert.equal(h.calls.onSuccess, 0);
+        assert.deepEqual(h.calls.onError, []);
+        assert.equal(h.button.disabled, false);
+        assert.equal(h.calls.stages[h.calls.stages.length - 1], 'unverified');
+        const n = h.shown.length;
+        await tick(T.PRE_INBLOCK_CAP_MS);
+        assert.equal(h.shown.length, n, 'a timer fired after the end');
     });
 
     test('a transaction still in the pool is not "processed": the pool-aware next index is not the on-chain nonce', async () => {
