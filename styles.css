@@ -1,6 +1,7 @@
 :root {
     /* Polkadex Brand Colors */
     --brand-primary: #E6007A; /* Polkadot/Polkadex Pink */
+    --violet: #6745D2; /* shared-palette Violet (BRAND.md), the second stripe hue in the wallet chooser */
     --brand-secondary: #00E676; /* Accent Green */
     --brand-primary-glow: rgba(230, 0, 122, 0.2);
     
@@ -4766,20 +4767,25 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-option-row.is-quiet .wallet-ext-tile { background: rgba(255, 255, 255, 0.08); border-color: transparent; color: var(--text-secondary); }
 .wallet-account-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .wallet-account-list .wallet-account-btn, .wallet-account-row { min-height: 56px; padding: 8px 16px; box-sizing: border-box; text-align: left; }
+.wallet-account-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.03); color: var(--text-primary); cursor: default; }
+:where(#wallet-accounts .wallet-account-list > li:nth-child(odd)) > :is(.wallet-account-btn, .wallet-account-row) { background: rgba(230, 0, 122, 0.10); border-color: rgba(230, 0, 122, 0.22); }
+:where(#wallet-accounts .wallet-account-list > li:nth-child(even)) > :is(.wallet-account-btn, .wallet-account-row) { background: rgba(103, 69, 210, 0.14); border-color: rgba(103, 69, 210, 0.32); }
 .wallet-account-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .wallet-account-main .wallet-account-name, .wallet-account-main .wallet-account-addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wallet-account-name { display: flex; align-items: center; min-width: 0; }
 .wallet-account-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wallet-account-btn .bx-chevron-right { color: var(--text-secondary); font-size: 20px; flex-shrink: 0; }
-.wallet-account-btn:hover { box-shadow: 0 0 0 3px var(--brand-primary-glow); }
+.wallet-account-btn:hover { background: rgba(255, 255, 255, 0.05); box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 .wallet-account-btn:hover .bx-chevron-right, .wallet-account-btn:focus-visible .bx-chevron-right { color: var(--brand-primary); }
 .wallet-account-btn:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; box-shadow: 0 0 0 3px var(--brand-primary-glow); }
-.wallet-account-btn.is-primary { border-color: var(--brand-primary); background: rgba(230, 0, 122, 0.08); }
+.wallet-account-btn.is-primary { border-color: var(--brand-primary); background: rgba(230, 0, 122, 0.16); box-shadow: inset 0 0 0 1px var(--brand-primary); }
+.wallet-account-btn.is-primary:hover, .wallet-account-btn.is-primary:focus-visible { box-shadow: inset 0 0 0 1px var(--brand-primary), 0 0 0 3px var(--brand-primary-glow); }
 .wallet-account-btn.is-primary .bx-chevron-right { color: var(--brand-primary); }
-.wallet-account-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.03); color: var(--text-primary); cursor: default; }
 .wallet-account-badge { flex-shrink: 0; }
-.wallet-account-row.is-current { position: relative; overflow: hidden; border: 1px solid var(--border-hover); background: rgba(230, 0, 122, 0.08); }
+.wallet-account-row.is-current { position: relative; overflow: hidden; border: 1px solid var(--border-hover); background: rgba(230, 0, 122, 0.16); }
 .wallet-account-row.is-current::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--brand-primary); box-shadow: 0 0 10px var(--brand-primary-glow); }
+#wallet-accounts .wallet-account-list > li:nth-child(odd) > :is(.wallet-account-btn, .wallet-account-row):is(:hover, .is-primary, .is-current) { background: rgba(230, 0, 122, 0.16); }
+#wallet-accounts .wallet-account-list > li:nth-child(even) > :is(.wallet-account-btn, .wallet-account-row):is(:hover, .is-primary, .is-current) { background: rgba(103, 69, 210, 0.22); }
 .wallet-disconnect-link { flex-shrink: 0; min-height: 36px; padding: 0 6px; background: none; border: 0; color: var(--text-secondary); font: inherit; font-size: 0.82rem; cursor: pointer; border-radius: var(--radius-sm); }
 .wallet-disconnect-link:hover, .wallet-disconnect-link:focus-visible { color: var(--error); outline: none; text-decoration: underline; }
 .wallet-skel-account { height: 56px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.04); }
@@ -4797,15 +4803,20 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-option-list[hidden], #wallet-picker-pairing[hidden], #wallet-picker-get[hidden], .wallet-picker-different[hidden], .wallet-picker-back[hidden], #wallet-accounts[hidden], .wallet-picker-divider[hidden], .wallet-picker-more[hidden] { display: none; }
 .wallet-option { position: relative; }
 .wallet-option-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 12px 16px; box-sizing: border-box; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.03); color: var(--text-primary); font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+:where(.wallet-option-list > .wallet-option:nth-child(odd)) > .wallet-option-row { background: rgba(230, 0, 122, 0.10); border-color: rgba(230, 0, 122, 0.22); }
+:where(.wallet-option-list > .wallet-option:nth-child(even)) > .wallet-option-row { background: rgba(103, 69, 210, 0.14); border-color: rgba(103, 69, 210, 0.32); }
 .wallet-option-row:hover { border-color: var(--border-hover); background: rgba(255, 255, 255, 0.05); box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 .wallet-option-row:hover .bx-chevron-right, .wallet-option-row:focus-visible .bx-chevron-right, .wallet-option-row:hover .bx-link-external { color: var(--brand-primary); }
 .wallet-option-row:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; box-shadow: 0 0 0 3px var(--brand-primary-glow); }
-.wallet-option-row.is-quiet { background: none; color: var(--text-secondary); }
+.wallet-option-row.is-quiet { color: var(--text-secondary); }
 .wallet-option-row.is-quiet .wallet-option-name { font-weight: 500; }
-.wallet-option-row.is-primary { border-color: var(--brand-primary); background: rgba(230, 0, 122, 0.08); }
+.wallet-option-row.is-primary { border-color: var(--brand-primary); background: rgba(230, 0, 122, 0.16); box-shadow: inset 0 0 0 1px var(--brand-primary); }
+.wallet-option-row.is-primary:hover, .wallet-option-row.is-primary:focus-visible { box-shadow: inset 0 0 0 1px var(--brand-primary), 0 0 0 3px var(--brand-primary-glow); }
 .wallet-option-row.is-primary .wallet-option-action:not(.is-count) { background: var(--brand-primary); border-color: var(--brand-primary); }
 .wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile { background: var(--brand-primary); border-color: var(--brand-primary); color: var(--text-primary); }
 .wallet-option-row.is-primary .bx-chevron-right { color: var(--brand-primary); }
+.wallet-option-list > .wallet-option:nth-child(odd) > .wallet-option-row:is(:hover, .is-primary) { background: rgba(230, 0, 122, 0.16); }
+.wallet-option-list > .wallet-option:nth-child(even) > .wallet-option-row:is(:hover, .is-primary) { background: rgba(103, 69, 210, 0.22); }
 .wallet-option.is-waiting .wallet-option-row { border-color: var(--border-hover); box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 .wallet-option-row[aria-busy="true"] { cursor: progress; padding-right: 96px; }
 .wallet-option-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
