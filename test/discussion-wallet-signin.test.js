@@ -246,7 +246,7 @@ function page({ wallet = A, stored = [], rejectSign = false, path = '/discussion
         fetch: fetchFn,
         alert: () => {},
         getStoredWallet: () => state.wallet,
-        walletSession: { source: () => 'polkadot-js', lastSource: () => 'polkadot-js' },
+        walletSession: { source: () => 'polkadot-js', lastSource: () => 'polkadot-js', signingCheck: () => () => true },
         // script.js's extension lookup (extensions plus a paired WalletConnect phone); here just the extension.
         allInjected: () => ({ 'polkadot-js': ext }),
         // The one place that asks a wallet (lib/wallet-sources.js), as script.js builds it.

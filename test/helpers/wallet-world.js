@@ -26,6 +26,7 @@ import { createDiscussAuth, signInForDiscussion } from '../../lib/discussion-aut
 import { sourceLabel } from '../../lib/wallet-picker.js';
 import { mountWalletPicker } from '../../lib/wallet-picker-view.js';
 import { safeReturnPath } from '../../lib/safe-return.js';
+import * as txSubmit from '../../lib/tx-submit.js';
 import { Window } from 'happy-dom';
 import { escapeHtml } from '../../lib/html-escape.js';
 import { closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml } from '../../lib/wallet-aware.js';
@@ -172,7 +173,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
         createSourceRegistry, detectSources, signingKeys, findSigner,
-        createDiscussAuth, signInForDiscussion,
+        createDiscussAuth, signInForDiscussion, WALLET_CHANGED_STALE: txSubmit.WALLET_CHANGED_STALE,
         mountWalletPicker, sourceLabel,
         closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
         multisigUI: { mountAccounts() {} },
