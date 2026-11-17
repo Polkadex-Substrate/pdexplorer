@@ -31,7 +31,7 @@ function el(id) {
 }
 
 let saved;
-function world({ threshold = 2, accounts = [{ address: A, name: 'Alice', source: 'talisman' }] } = {}) {
+function world({ threshold = 2, accounts = [{ address: A, name: 'Alice', source: 'talisman' }], revision } = {}) {
     const observers = [];
     const modal = el('multisig-review-modal');
     let display = 'none';
@@ -75,7 +75,7 @@ function world({ threshold = 2, accounts = [{ address: A, name: 'Alice', source:
     const ui = createMultisigUI({
         store: { find: () => multisig }, storage: { getItem: () => null, setItem() {} }, api: () => api,
         accounts: async () => accounts, selected: () => multisig.address, select() {},
-        submit: async (o) => { submits.push(o); }, refresh() {}, fetchJson: async () => ({})
+        submit: async (o) => { submits.push(o); }, refresh() {}, fetchJson: async () => ({}), ...(revision ? { revision } : {})
     });
     const open = (extra = {}) => ui.review({ multisig, callHex: CALL, onSuccess: () => successes.push(1), onEnd: (outcome, model) => ends.push({ outcome, model }), ...extra });
     const sign = () => parts['#multisig-review-sign'].fire('click');
@@ -166,5 +166,19 @@ describe('the multisig review reports how it ended', () => {
         await w.sign();
         w.last().onStage('inBlock', {});
         assert.deepEqual(stages, ['inBlock']);
+    });
+});
+
+describe('#70: the review captures the wallet-session revision when it opens', () => {
+    beforeEach(() => { saved = { document: globalThis.document, MutationObserver: globalThis.MutationObserver }; });
+    afterEach(() => { globalThis.document = saved.document; globalThis.MutationObserver = saved.MutationObserver; });
+
+    test('the signer transaction carries the revision from open, not the one at sign time', async () => {
+        let rev = 'r1';
+        const w = world({ revision: () => rev });
+        await w.open();
+        rev = 'r2';   // the wallet session changed while the review was open
+        await w.sign();
+        assert.equal(w.last().expectedRevision, 'r1');
     });
 });

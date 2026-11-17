@@ -82,7 +82,7 @@ describe('send() re-checks the wallet before signing and before broadcasting', (
         w.run.start();
         await w.run.send(w.tx, 'addr', {}, { stillValid: w.stillValid });
         assert.equal(w.calls.sign + w.calls.signAndSend, 0, 'the wallet was asked to sign for an account that is no longer active');
-        assert.deepEqual(w.calls.onError, ['Your wallet changed; nothing was signed.']);
+        assert.deepEqual(w.calls.onError, ['Your wallet changed, so this request is out of date; nothing was signed. Start the action again.']);
         assert.equal(w.button.disabled, false, 'the button stayed busy');
     });
 
@@ -92,7 +92,7 @@ describe('send() re-checks the wallet before signing and before broadcasting', (
         await w.run.send(w.tx, 'addr', {}, { stillValid: w.stillValid });
         assert.equal(w.calls.sign, 1);
         assert.equal(w.calls.send + w.calls.signAndSend, 0, 'broadcast after the wallet changed');
-        assert.deepEqual(w.calls.onError, ['Your wallet changed after signing; nothing was sent.']);
+        assert.deepEqual(w.calls.onError, ['Your wallet changed after signing, so this request is out of date; nothing was sent. Start the action again.']);
         assert.equal(w.button.disabled, false);
     });
 
@@ -101,7 +101,7 @@ describe('send() re-checks the wallet before signing and before broadcasting', (
         w.api.query.system.account = async () => ({ nonce: 0, data: { free: 0n, reserved: 0n, frozen: 0n } });
         w.run.start();
         await w.run.send(w.tx, 'addr', {}, { stillValid: w.stillValid });
-        assert.deepEqual(w.calls.onError, ['Your wallet changed; nothing was signed.']);
+        assert.deepEqual(w.calls.onError, ['Your wallet changed, so this request is out of date; nothing was signed. Start the action again.']);
         assert.equal(w.calls.sign + w.calls.signAndSend, 0);
     });
 

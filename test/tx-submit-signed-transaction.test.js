@@ -273,7 +273,7 @@ describe('the real Submittable on the checked path: signAsync, re-check, send', 
         await tracked(api, () => valid, errors)(submittableFor(api), w);
         assert.ok(w.returned, 'the wallet was not asked');
         assert.equal(submitted.length, 0, 'broadcast after the wallet changed');
-        assert.deepEqual(errors, ['Your wallet changed after signing; nothing was sent.']);
+        assert.deepEqual(errors, ['Your wallet changed after signing, so this request is out of date; nothing was sent. Start the action again.']);
     });
 
     // signAndSend called the wallet's update(id, result) for every status; on
