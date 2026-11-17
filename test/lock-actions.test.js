@@ -282,8 +282,7 @@ function fakeTxApi({ noMigrate = false, noBatch = false, locksAfter = [], chain 
         elections: { removeVoter: c('elections.removeVoter') },
         utility: noBatch ? {} : { batchAll: c('utility.batchAll') }
     };
-    // Cancel vote re-reads the referendum before it signs (still running here).
-    const query = { balances: { locks: async () => locksAfter }, democracy: { referendumInfoOf: async () => ({ isSome: true, unwrap: () => ({ isOngoing: true }) }) } };
+    const query = { balances: { locks: async () => locksAfter } };
     return chain ? { tx, query: { ...chain.query, balances: query.balances }, consts: chain.consts } : { tx, query };
 }
 const same = (a, b) => String(a) === String(b);
@@ -372,9 +371,11 @@ describe('lockActionSpec: the call each button signs, and who may sign it', () =
         await assert.rejects(async () => spec.buildTx(api({ noBatch: true })), /batchAll/);
     });
     test('democracy: cancel one ongoing vote', async () => {
-        const spec = lockActionSpec('democracy-cancel', demModel({ cancel: [{ index: 9, end: 2 }] }), ME, { connected: ME, isSame: same, ref: 9 });
+        // Cancel vote reads votingOf, the referendum and the block again before it signs.
+        const { model, api } = drawn([running(9, 5n * PDEX)], { 9: RUN }, NO_PRIOR, 5n * PDEX);
+        const spec = lockActionSpec('democracy-cancel', model, ME, { connected: ME, isSame: same, ref: 9 });
         assert.equal(spec.key, 'democracy.removeVote');
-        assert.deepEqual(await spec.buildTx(fakeTxApi()), { call: 'democracy.removeVote', args: [9] });
+        assert.deepEqual(await spec.buildTx(api()), { call: 'democracy.removeVote', args: [9] });
     });
     test('democracy: cancel refuses a referendum it did not offer', () => {
         assert.ok(lockActionSpec('democracy-cancel', demModel({ cancel: [{ index: 9, end: 2 }] }), ME, { connected: ME, isSame: same, ref: 10 }).error);

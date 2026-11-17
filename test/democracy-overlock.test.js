@@ -373,27 +373,30 @@ describe('undelegate: "wait for the earlier lock" only when waiting really holds
 });
 
 describe('Cancel vote re-reads the referendum before it signs', () => {
-    const RUNNING = withDem(direct([vote(9, true, 'Locked6x', 10n * PDEX)], { 9: { ongoing: true, end: BLOCK + 50 } }, PRIOR_SOON), 500n * PDEX);
-    const api = (info) => {
-        const asked = [];
-        return { asked, tx: fakeApi().tx, query: { democracy: { referendumInfoOf: async (i) => { asked.push(i); return info; } } } };
-    };
+    // The 500 PDEX prior ends at +20, before the referendum's end at +50, so
+    // the leading unlock clears it first (one running past +50 would be
+    // stretched to the 6x date: issue #73, test/cancel-vote-prior.test.js).
+    const PRIOR_FIRST = { until: BLOCK + 20, amount: s(500n * PDEX) };
+    const at = (referenda) => direct([vote(9, true, 'Locked6x', 10n * PDEX)], referenda, PRIOR_FIRST);
+    const RUNNING = withDem(at({ 9: { ongoing: true, end: BLOCK + 50 } }), 500n * PDEX);
+    // The chain as it is when the button is pressed.
+    const api = (referenda) => fakeApi(democracyChain(at(referenda), BLOCK, { period: PERIOD }));
     const spec = () => lockActionSpec('democracy-cancel', describeAccountLocks(RUNNING), ME, { connected: ME, isSame: same, ref: 9 });
     const ENDED = /^This referendum has just ended; reload to see the safe options\.$/;
     test('still running: removeVote(9), after an unlock for the prior on record', async () => {
-        const a = api({ isSome: true, unwrap: () => ({ isOngoing: true, isFinished: false }) });
+        const a = api({ 9: { ongoing: true, end: BLOCK + 50 } });
         assert.deepEqual(await spec().buildTx(a), { batch: [['unlock', ME], ['removeVote', 9]] });
-        assert.deepEqual(a.asked, [9]);
+        assert.deepEqual(a.reads.filter(r => r[0] === 'referendumInfoOf'), [['referendumInfoOf', 9]]);
     });
     test('ended (approved) since the panel was drawn: refuses, so the remove cannot merge a conviction lock', async () => {
-        const a = api({ isSome: true, unwrap: () => ({ isOngoing: false, isFinished: true, asFinished: { approved: true, end: BLOCK } }) });
-        await assert.rejects(async () => spec().buildTx(a), (e) => ENDED.test(e.message));
+        await assert.rejects(async () => spec().buildTx(api({ 9: { finished: true, approved: true, end: BLOCK } })), (e) => ENDED.test(e.message));
     });
     test('no referendum info any more: refuses too', async () => {
-        await assert.rejects(async () => spec().buildTx(api({ isSome: false })), (e) => ENDED.test(e.message));
+        await assert.rejects(async () => spec().buildTx(api({})), (e) => ENDED.test(e.message));
     });
-    test('the referendum cannot be read: refuses', async () => {
-        await assert.rejects(async () => spec().buildTx({ tx: fakeApi().tx, query: {} }), (e) => ENDED.test(e.message));
+    test('the account cannot be read: refuses and asks for a reload', async () => {
+        await assert.rejects(async () => spec().buildTx({ tx: fakeApi().tx, query: {} }),
+            (e) => e.message === 'Your votes or locks changed since this page loaded. Reload to see the safe options.');
     });
 });
 
@@ -668,15 +671,14 @@ describe('the leading unlock does not depend on the date the panel was drawn at'
         const sn = withDem(direct([], {}, { until: BLOCK - 1, amount: s(500n * PDEX) }), 500n * PDEX);
         assert.deepEqual(await calls('democracy-unlock', sn), [['unlock', ME]]);
     });
-    const ongoing = (info) => ({ tx: fakeApi().tx, query: { democracy: { referendumInfoOf: async () => info } } });
-    const RUNNING_INFO = { isSome: true, unwrap: () => ({ isOngoing: true }) };
     test('Cancel vote with a prior on record: unlock, then removeVote', async () => {
-        const sn = withDem(direct([vote(9, true, 'Locked2x', 20n * PDEX)], { 9: { ongoing: true, end: BLOCK + 50 } }, PRIOR), 500n * PDEX);
-        assert.deepEqual(await calls('democracy-cancel', sn, 9, ongoing(RUNNING_INFO)), [['unlock', ME], ['removeVote', 9]]);
+        // The referendum ends at +150, after the prior: a prior running past it is issue #73's refusal.
+        const sn = withDem(direct([vote(9, true, 'Locked2x', 20n * PDEX)], { 9: { ongoing: true, end: BLOCK + 150 } }, PRIOR), 500n * PDEX);
+        assert.deepEqual(await calls('democracy-cancel', sn, 9), [['unlock', ME], ['removeVote', 9]]);
     });
     test('Cancel vote with no prior: a single removeVote', async () => {
         const sn = withDem(direct([vote(9, true, 'Locked2x', 20n * PDEX)], { 9: { ongoing: true, end: BLOCK + 50 } }), 20n * PDEX);
-        assert.deepEqual(await calls('democracy-cancel', sn, 9, ongoing(RUNNING_INFO)), [['removeVote', 9]]);
+        assert.deepEqual(await calls('democracy-cancel', sn, 9), [['removeVote', 9]]);
     });
     test('property: Cancel vote included after the prior ended and the referendum closed never carries the ended prior', async () => {
         const r = rng(31337);
@@ -687,7 +689,12 @@ describe('the leading unlock does not depend on the date the panel was drawn at'
             const prior = r() < 0.15 ? { until: 0, amount: '0' } : { until: BLOCK + pick([-10, 0, 50, 100, 300]), amount: s(pick([10n, 300n, 500n, 700n]) * PDEX) };
             const conviction = pick(Object.keys(PERIODS));
             const dem = direct([vote(9, r() < 0.7, conviction, amount)], { 9: { ongoing: true, end: BLOCK + 50 } }, prior);
-            const c = await calls('democracy-cancel', withDem(dem, lockNowOf({ votes: dem.votes, prior })), 9, ongoing(RUNNING_INFO));
+            let c;
+            try { c = await calls('democracy-cancel', withDem(dem, lockNowOf({ votes: dem.votes, prior })), 9); } catch (e) {
+                // Issue #73: refused before signing, so nothing is included.
+                if (/^Cancelling this vote now could keep more PDEX locked for longer\./.test(e.message)) continue;
+                throw e;
+            }
             // The re-read said running; by inclusion the referendum may have closed.
             const at = BLOCK + pick([0, 1, 51, 101, 301, Math.floor(r() * 2 * PERIOD)]);
             const end = Math.min(at, BLOCK + 50);
