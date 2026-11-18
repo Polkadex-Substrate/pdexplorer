@@ -20,6 +20,7 @@
 // Addresses are synthetic (32 bytes of one repeated value). They belong to no one.
 
 import { test, describe } from 'node:test';
+import { enhanceInputActions } from '../lib/input-actions.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
@@ -320,16 +321,21 @@ describe('keyboard and screen reader', () => {
         assert.equal(w.calls.closes, 1, 'the second Escape closes the page through the X');
     });
 
-    test('the search clear button empties the field', async (t) => {
+    test('the shared Clear (lib/input-actions.js) empties the search and shows every account again', async (t) => {
         const many = Array.from({ length: 10 }, (_, i) => acct(30 + i, 'Account ' + i));
         const w = mount(t, { accounts: many });
         await w.picker.ready;
+        enhanceInputActions(w.root);
         type(w, w.q('#wallet-picker-search'), 'Account 3');
-        const clear = w.q('#wallet-picker-search-clear');
-        assert.equal(clear.getAttribute('aria-label'), 'Clear search');
+        assert.equal(w.qa('.wallet-account-btn').length, 1);
+        assert.equal(w.q('#wallet-picker-search-clear'), null, 'the bespoke clear button is gone');
+        const clear = w.q('#wallet-picker-search-wrap .ia-clear');
+        assert.equal(clear.getAttribute('aria-label'), 'Clear');
         clear.click();
+        await new Promise(r => setTimeout(r, 0));
         assert.equal(w.q('#wallet-picker-search').value, '');
         assert.equal(w.qa('.wallet-account-btn').length, 10);
+        assert.equal(w.doc.activeElement, w.q('#wallet-picker-search'));
     });
 
     test('rows are native buttons, so Enter and Space work without extra code', async (t) => {
