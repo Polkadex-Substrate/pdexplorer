@@ -28,7 +28,7 @@ const root = new URL('../../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
 const out = process.argv[2];
 const selftest = process.argv.includes('--selftest');
-// --rows: the small two-scene preview of the alternating row shades (no note scene, Inter 400 and 600 only).
+// --rows: the small preview of the chooser rows (Revision 3 contrast pass: options, accounts, switching; no note scene, Inter 400 and 600 only).
 const rowsOnly = process.argv.includes('--rows');
 const b64 = (p) => rd(p, null).toString('base64');
 
@@ -114,8 +114,9 @@ const SCENES = [
 ];
 
 const ROW_SCENES = [
-    { id: 'rows-options', title: 'Alternating Primary and Violet rows: options, 4 rows (lead on row 2, the quiet Get row striped too)', primary: 1, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true, lastSource: 'talisman' }) },
-    { id: 'rows-accounts', title: 'Alternating Primary and Violet rows: 5 accounts of one wallet', primary: 0, build: () => setup({ wallets: [fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings'), acct(15, 'Trading'), acct(16, 'Cold storage')])] }, async (w) => { w.row('talisman').click(); await w.settle(); }) }
+    { id: 'rows-options', title: 'Revision 3, options: 4 neutral rows with Primary and Violet edges, the lead on row 2 (gradient border, the one gradient Connect)', primary: 1, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true, lastSource: 'talisman' }) },
+    { id: 'rows-accounts', title: 'Revision 3, accounts: 5 accounts of one wallet, neutral rows with alternating edges', primary: 0, build: () => setup({ wallets: [fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings'), acct(15, 'Trading'), acct(16, 'Cold storage')])] }, async (w) => { w.row('talisman').click(); await w.settle(); }) },
+    { id: 'rows-switching', title: 'Revision 3, Switch wallet: the Current row (gradient border, bar and violet wash) above neutral rows', primary: 0, need: '.wallet-account-row.is-current', build: () => setup({ wallets: [TALISMAN(), POLKADOT()], current: addr(10, 42), currentSource: 'talisman', lastSource: 'talisman' }) }
 ];
 
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
@@ -130,6 +131,7 @@ async function renderScene(s) {
     if (!w.doc.querySelector('.wallet-ext-tile')) err.push('no .wallet-ext-tile');
     const n = Q(w, '.wallet-picker .is-primary');
     if (n !== s.primary) err.push(`${n} .is-primary rows visible, the spec wants ${s.primary}`);
+    if (s.need && Q(w, s.need) !== 1) err.push(`${Q(w, s.need)} of ${s.need} visible, the scene needs exactly 1`);
     if (s.solidExtra && Q(w, s.solidExtra) !== 1) err.push(`${Q(w, s.solidExtra)} of ${s.solidExtra} visible, the spec wants exactly 1`);
     if (err.length) throw new Error(`scene "${s.id}": ${err.join('; ')}`);
     return app.outerHTML;
