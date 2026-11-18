@@ -13,7 +13,10 @@
 //                                    removals once seeded (a full quota, or a private window)
 //   hang: [key]                      those extensions never answer enable() (the auto-pick stays 'restoring')
 //   steps: [ { click: selector, nth }, { event: 'visibilitychange' }, { storage: { key: value|null } },
-//            { go: '/path' } (an SPA navigation: pushState, then popstate) ]
+//            { go: '/path' } (an SPA navigation: pushState, then popstate),
+//            { setScroll: y } (the reader scrolled to y), { back: true } (history.back()) ]
+//   scrollLog: true                  window.scrollTo is recorded (happy-dom has no layout, so scrollY is a stub
+//                                    that scrollTo sets); result.scroll = { restoration, atLoad }, steps[i].scrollCalls
 // }
 // Prints one line: RESULT {"first": header, "steps": [header...], "final": {...}}.
 // Nothing reaches the network: fetch is a stub, WebSocket never opens, and the
@@ -56,6 +59,14 @@ Object.defineProperty(win, 'localStorage', { value: local, configurable: true })
 Object.defineProperty(win, 'sessionStorage', { value: session, configurable: true });
 for (const [k, v] of Object.entries(scenario.seed || {})) local.setItem(k, v);
 refuse.on = !!scenario.refuseWalletWrites;
+
+// scrollLog: record every window.scrollTo(x, y); scrollY follows the last call.
+const scroll = { y: 0, calls: [] };
+if (scenario.scrollLog) {
+    win.scrollTo = (x, y) => { scroll.calls.push([x, typeof y === 'number' ? y : (x && x.top) || 0]); scroll.y = scroll.calls[scroll.calls.length - 1][1]; };
+    Object.defineProperty(win, 'scrollY', { get: () => scroll.y, configurable: true });
+    Object.defineProperty(win, 'pageYOffset', { get: () => scroll.y, configurable: true });
+}
 
 const g = globalThis;
 for (const k of ['window', 'document', 'localStorage', 'sessionStorage', 'location', 'history', 'HTMLElement', 'Element', 'Node',
@@ -114,9 +125,14 @@ g.setTimeout = realSetTimeout;
 const first = header();   // after every top-level statement, before any await resolved
 
 await tick(30);
+const atLoad = scroll.calls.splice(0);
 const steps = [];
 for (const step of scenario.steps || []) {
-    if (step.click) {
+    if (step.setScroll !== undefined) {
+        scroll.y = step.setScroll;
+    } else if (step.back) {
+        win.history.back();
+    } else if (step.click) {
         const el = document.querySelectorAll(step.click)[step.nth || 0];
         if (!el) errors.push('no element for ' + step.click);
         else el.click();
@@ -138,7 +154,7 @@ for (const step of scenario.steps || []) {
         refuse.on = was;
     }
     await tick(step.wait || 60);
-    steps.push({ ...header(), path: location.pathname + location.search, dashboard: dashboard() });
+    steps.push({ ...header(), path: location.pathname + location.search, dashboard: dashboard(), ...(scenario.scrollLog ? { scrollCalls: scroll.calls.splice(0) } : {}) });
 }
 
 const result = {
@@ -152,6 +168,7 @@ const result = {
     },
     errors
 };
+if (scenario.scrollLog) result.scroll = { restoration: win.history.scrollRestoration, atLoad };
 // The preview generator asks for the rendered shell (test/helpers/preview-chooser.mjs).
 if (scenario.dumpHtml) { const app = document.querySelector('.app-container'); result.appHtml = app ? app.outerHTML : ''; }
 process.stdout.write('RESULT ' + JSON.stringify(result) + '\n');
