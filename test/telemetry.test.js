@@ -12,7 +12,7 @@ import { EventEmitter } from 'node:events';
 import express from 'express';
 import { FEED_VERSION, POLKADEX_GENESIS, ACTION, LIMITS, decodeFrame, cleanText, createNodeStore, findNodes } from '../lib/telemetry-feed.js';
 import { createTelemetryReader, backoffDelay, BACKOFF_BASE_MS, BACKOFF_MAX_MS, MESSAGE_TIMEOUT_MS, PING_INTERVAL_MS } from '../lib/telemetry-reader.js';
-import { telemetryConfig, encodeSnapshot, decodeSnapshot, startTelemetryRelay, receiveTelemetry, startLocalTelemetry, TELEMETRY_MESSAGE, RELAY_INTERVAL_MS, RELAY_HEARTBEAT_MS, SNAPSHOT_STALE_MS, PARITY_FEED_URL } from '../lib/telemetry-relay.js';
+import { telemetryConfig, telemetryHostName, encodeSnapshot, decodeSnapshot, startTelemetryRelay, receiveTelemetry, startLocalTelemetry, TELEMETRY_MESSAGE, RELAY_INTERVAL_MS, RELAY_HEARTBEAT_MS, SNAPSHOT_STALE_MS, PARITY_FEED_URL } from '../lib/telemetry-relay.js';
 import { registerTelemetryRoute, parseNodeName, TELEMETRY_NODE_ROUTE, NAME_MAX } from '../lib/telemetry-api.js';
 
 const G = POLKADEX_GENESIS;
@@ -391,7 +391,7 @@ describe('the relay: one connection in the cluster primary, snapshots to the wor
     const snap = (over = {}) => ({ feed: 'ok', reason: '', at: 5, chainSeen: true, subscribed: true, nodes: [{ id: 1, name: 'golf', version: '7.0.0', best: 10, finalized: 8, peers: 4, validator: true, networkId: 'peer', updatedAt: 3, stale: false }], ...over });
     test('encode and decode round trip; decode refuses anything else and cleans names', () => {
         const back = decodeSnapshot(encodeSnapshot(snap()));
-        assert.deepEqual(back, { feed: 'ok', reason: '', at: 5, chainSeen: true, nodes: [{ name: 'golf', version: '7.0.0', best: 10, finalized: 8, peers: 4, validator: true, networkId: 'peer', updatedAt: 3, stale: false }] });
+        assert.deepEqual(back, { feed: 'ok', reason: '', at: 5, chainSeen: true, subscribed: true, nodes: [{ name: 'golf', version: '7.0.0', best: 10, finalized: 8, peers: 4, validator: true, networkId: 'peer', updatedAt: 3, stale: false }] });
         for (const bad of [null, {}, { ...encodeSnapshot(snap()), type: 'other' }, { ...encodeSnapshot(snap()), v: 2 }, { ...encodeSnapshot(snap()), feed: 'great' }, { ...encodeSnapshot(snap()), nodes: 'x' }]) assert.equal(decodeSnapshot(bad), null);
         const m = encodeSnapshot(snap());
         m.nodes.push(['\u0007hotel‮', 'v', -1, 'x', 2.5, 0, 'p', 1, 0], 'junk', [''] );
@@ -517,7 +517,7 @@ describe('GET /api/telemetry/node', () => {
         const r = await get('?name=kilo');
         enabled = true;
         assert.equal(r.status, 200);
-        assert.deepEqual({ ...r.body, release: undefined }, { feed: 'off', name: 'kilo', head: null, release: undefined, count: 0, nodes: [], similar: [] });
+        assert.deepEqual({ ...r.body, release: undefined }, { feed: 'off', name: 'kilo', feedHost: null, head: null, release: undefined, count: 0, nodes: [], similar: [] });
         assert.deepEqual(r.body.release, { state: 'pending', version: null });
     });
     test('no snapshot yet: connecting; feed down: no nodes served even if the snapshot had some', async () => {
@@ -528,35 +528,35 @@ describe('GET /api/telemetry/node', () => {
         assert.deepEqual([r.body.feed, r.body.nodes, r.body.count], ['down', [], 0]);
     });
     test('found: one node, blocks behind the explorer head, seconds since the feed last said anything; Short tier', async () => {
-        snapshot = { feed: 'ok', at: clock, nodes: [n('mike'), n('november', { best: 900 })] };
+        snapshot = { feed: 'ok', subscribed: true, at: clock, nodes: [n('mike'), n('november', { best: 900 })] };
         const r = await get('?name=%20mike%20');
         assert.equal(r.status, 200);
         assert.equal(r.cache, SHORT);
-        assert.deepEqual(r.body, { feed: 'ok', name: 'mike', head: 1010, release: { state: 'pending', version: null }, count: 1, similar: [],
+        assert.deepEqual(r.body, { feed: 'ok', name: 'mike', feedHost: null, head: 1010, release: { state: 'pending', version: null }, count: 1, similar: [],
             nodes: [{ name: 'mike', version: '7.0.0-566b080ba1a', best: 1008, finalized: 1006, peers: 6, validator: false, networkId: '12D3KooWPeermike', stale: false, secondsAgo: 4, behind: 2, versionVsRelease: null }] });
     });
     test('the version against a published release', async () => {
         release = { version: '7.0.1', binaryUrl: 'https://github.com/Polkadex-Substrate/polkadex-node/releases/download/v7.0.1/polkadex-node', binarySha256: 'a'.repeat(64),
             image: 'docker.io/polkadex/polkadex-node:7.0.1@sha256:' + 'b'.repeat(64), chainSpecUrl: 'https://github.com/Polkadex-Substrate/polkadex-node/releases/download/v7.0.1/customSpecRaw.json', chainSpecSha256: 'c'.repeat(64),
             releaseNotesUrl: 'https://github.com/Polkadex-Substrate/polkadex-node/releases/tag/v7.0.1' };
-        snapshot = { feed: 'ok', at: clock, nodes: [n('oscar')] };
+        snapshot = { feed: 'ok', subscribed: true, at: clock, nodes: [n('oscar')] };
         const r = await get('?name=oscar');
         release = undefined;
         assert.deepEqual(r.body.release, { state: 'published', version: '7.0.1' });
         assert.equal(r.body.nodes[0].versionVsRelease, 'older');
     });
     test('several nodes with the name; at most 10 served, count says how many', async () => {
-        snapshot = { feed: 'ok', at: clock, nodes: Array.from({ length: 12 }, () => n('papa')) };
+        snapshot = { feed: 'ok', subscribed: true, at: clock, nodes: Array.from({ length: 12 }, () => n('papa')) };
         const r = await get('?name=papa');
         assert.deepEqual([r.body.count, r.body.nodes.length], [12, 10]);
     });
     test('not found: similar names', async () => {
-        snapshot = { feed: 'ok', at: clock, nodes: [n('quebec-1'), n('quebec-2'), n('romeo')] };
+        snapshot = { feed: 'ok', subscribed: true, at: clock, nodes: [n('quebec-1'), n('quebec-2'), n('romeo')] };
         const r = await get('?name=quebec');
         assert.deepEqual([r.body.count, r.body.nodes, r.body.similar, r.body.head], [0, [], ['quebec-1', 'quebec-2'], null]);
     });
     test('the head is the explorer node\'s, kept 5 s; unreadable: head and behind null, still 200', async () => {
-        snapshot = { feed: 'ok', at: clock, nodes: [n('sierra')] };
+        snapshot = { feed: 'ok', subscribed: true, at: clock, nodes: [n('sierra')] };
         clock += 10_000;
         snapshot.nodes[0].updatedAt = clock;
         headCalls = 0;
@@ -567,5 +567,74 @@ describe('GET /api/telemetry/node', () => {
         const r = await get('?name=sierra');
         headFails = false;
         assert.deepEqual([r.status, r.body.head, r.body.nodes[0].behind], [200, null, null]);
+    });
+});
+
+describe('Fable finding 1: the feed is not ready until SubscribedTo and the node list have arrived', () => {
+    test('reader: Version only is feed ok but not subscribed; SubscribedTo plus AddedNode is; a reconnect resets it', () => {
+        const { r, c, ws } = reader();
+        r.start();
+        ws().open();
+        ws().msg(frame(V));
+        assert.deepEqual([r.snapshot().feed, r.snapshot().subscribed, r.snapshot().nodes.length], ['ok', false, 0]);
+        ws().msg(frame([ACTION.TelemetryInfo, { git_hash: 'abc' }], [ACTION.AddedChain, ['Polkadex', G, 2]]));
+        assert.equal(r.snapshot().subscribed, false, 'subscribe sent, SubscribedTo not yet received');
+        ws().msg(frame([ACTION.SubscribedTo, G], [ACTION.AddedNode, node(0, 'tango')]));
+        assert.deepEqual([r.snapshot().subscribed, r.snapshot().nodes.map(n => n.name)], [true, ['tango']]);
+        ws().drop();
+        assert.deepEqual([r.snapshot().feed, r.snapshot().subscribed], ['down', false]);
+        c.advance(BACKOFF_BASE_MS);
+        ws().open();
+        ws().msg(frame(V));
+        assert.deepEqual([r.snapshot().feed, r.snapshot().subscribed, r.snapshot().nodes.length], ['ok', false, 0]);
+    });
+    test('relay: the flag crosses the process boundary; a message without it decodes as not subscribed; no snapshot yet is not subscribed', () => {
+        const base = { feed: 'ok', reason: '', at: 5, chainSeen: true, nodes: [] };
+        assert.equal(encodeSnapshot({ ...base, subscribed: true }).subscribed, true);
+        assert.equal(encodeSnapshot({ ...base, subscribed: false }).subscribed, false);
+        assert.equal(decodeSnapshot(encodeSnapshot({ ...base, subscribed: true })).subscribed, true);
+        assert.equal(decodeSnapshot(encodeSnapshot({ ...base, subscribed: false })).subscribed, false);
+        const old = encodeSnapshot({ ...base, subscribed: true }); delete old.subscribed;
+        assert.equal(decodeSnapshot(old).subscribed, false);
+        const proc = new EventEmitter();
+        const rx = receiveTelemetry({ proc, now: () => 0 });
+        assert.equal(rx.snapshot().subscribed, false);
+    });
+    describe('route', () => {
+        let server, base, snapshot = null;
+        const nn = (name) => ({ name, version: '7.0.0', best: 10, finalized: 8, peers: 5, validator: false, networkId: 'p' + name, updatedAt: 1_000_000 - 1000, stale: false });
+        before(async () => {
+            const app = express();
+            registerTelemetryRoute(app, { enabled: true, source: () => snapshot, head: async () => 12, cacheShort: (res) => res.set('Cache-Control', 'public, max-age=5'),
+                serverError: (res) => res.status(500).json({}), now: () => 1_000_000, feedHost: 'telemetry.example.org' });
+            await new Promise(r => { server = app.listen(0, '127.0.0.1', r); });
+            base = `http://127.0.0.1:${server.address().port}`;
+        });
+        after(() => { if (server) server.close(); });
+        const get = async (q) => { const r = await fetch(base + TELEMETRY_NODE_ROUTE + q); return { cache: r.headers.get('cache-control'), body: await r.json() }; };
+        test('feed ok but not subscribed: connecting, no nodes, never cached as a miss; subscribed: found; reconnect: connecting again', async () => {
+            snapshot = { feed: 'ok', subscribed: false, at: 1_000_000, nodes: [nn('uniform')] };
+            let r = await get('?name=uniform');
+            assert.deepEqual([r.body.feed, r.body.count, r.body.nodes, r.body.similar, r.cache], ['connecting', 0, [], [], 'no-store']);
+            snapshot = { feed: 'ok', subscribed: true, at: 1_000_000, nodes: [nn('uniform')] };
+            r = await get('?name=uniform');
+            assert.deepEqual([r.body.feed, r.body.count, r.body.nodes[0].name, r.cache], ['ok', 1, 'uniform', 'public, max-age=5']);
+            snapshot = { feed: 'ok', subscribed: false, at: 1_000_000, nodes: [] };
+            assert.equal((await get('?name=uniform')).body.feed, 'connecting');
+        });
+        test('the feed host the guide names is the configured one', async () => {
+            snapshot = { feed: 'ok', subscribed: true, at: 1_000_000, nodes: [] };
+            assert.equal((await get('?name=victor')).body.feedHost, 'telemetry.example.org');
+        });
+    });
+});
+
+describe('Fable finding 3: the feed host is derived from the configured URL', () => {
+    test('telemetryHostName: the host without the feed. label; nothing for an unusable URL', () => {
+        assert.equal(telemetryHostName(PARITY_FEED_URL), 'telemetry.polkadot.io');
+        assert.equal(telemetryHostName('wss://feed.telemetry.example.org/feed'), 'telemetry.example.org');
+        assert.equal(telemetryHostName('ws://127.0.0.1:8000/feed'), '127.0.0.1');
+        assert.equal(telemetryHostName('wss://telemetry.example.org/feed'), 'telemetry.example.org');
+        for (const bad of ['', 'nope', undefined, null]) assert.equal(telemetryHostName(bad), null);
     });
 });

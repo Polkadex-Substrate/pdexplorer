@@ -37,7 +37,7 @@ const RELEASE = Object.freeze({
 });
 const PENDING = Object.freeze(Object.fromEntries(Object.keys(RELEASE).map(k => [k, null])));
 const node = (over = {}) => ({ name: 'alpha-node', version: '7.0.0-566b080ba1a', best: 1_000_000, finalized: 999_998, peers: 12, validator: false, networkId: '12D3KooWExamplePeerIdForTests01', stale: false, secondsAgo: 3, behind: 0, versionVsRelease: null, ...over });
-const ok = (over = {}) => ({ feed: 'ok', name: 'alpha-node', head: 1_000_002, release: { state: 'pending', version: null }, count: 1, nodes: [node()], similar: [], ...over });
+const ok = (over = {}) => ({ feed: 'ok', feedHost: 'telemetry.polkadot.io', name: 'alpha-node', head: 1_000_002, release: { state: 'pending', version: null }, count: 1, nodes: [node()], similar: [], ...over });
 
 describe('the release constant (D1): one place, pending or fully valid', () => {
     test('the shipped constant is pending (every field null) or fully published, never half filled', () => {
@@ -321,11 +321,11 @@ describe('the node guide: commands, flags, keys, checklist (design 3.2 to 3.4)',
         assert.match(html, /Never kill -9 or docker kill\./);
         assert.match(html, /Reporting to telemetry is recommended, not required/);
     });
-    test('the security checklist: seven real checkboxes, each labelled; ticks are not saved', () => {
+    test('the security checklist: eight real checkboxes, each labelled; ticks are not saved', () => {
         const { el } = dom(); el.innerHTML = html;
         const boxes = el.querySelectorAll('.validate-checklist input[type="checkbox"]');
-        assert.equal(boxes.length, 7);
-        assert.equal(CHECKLIST.length, 7);
+        assert.equal(boxes.length, 8);
+        assert.equal(CHECKLIST.length, 8);
         for (const b of boxes) assert.ok(el.querySelector(`label[for="${b.id}"]`), b.id);
         assert.match(html, /The ticks are not saved\./);
         for (const f of ['lib/validator-node-guide.js', 'lib/node-check-view.js', 'lib/node-check.js']) assert.doesNotMatch(stripComments(readRepo(f, import.meta.url)), /localStorage|sessionStorage|document\.cookie/, f);
@@ -588,5 +588,33 @@ describe('/validate/node in the real page', () => {
         for (const u of [...r.fetched, ...r.sockets]) assert.doesNotMatch(u, /telemetry\.polkadot|feed\.telemetry/, u);
         assert.equal(r.final.path, '/validate/node?node=hotel');
         assert.deepEqual(r.errors, []);
+    });
+});
+
+describe('Fable findings 2, 3 and 4 on the node guide and Check my node', () => {
+    const NO_PROXY = 'Never proxy or forward port 9944 (reverse proxy, SSH tunnel to 127.0.0.1): --rpc-methods=auto exposes every method to anything that reaches localhost.';
+    test('finding 2: the run notes and the checklist both say never to proxy or forward 9944', () => {
+        const html = renderNodeGuide({ esc, release: PENDING });
+        assert.ok(CHECKLIST.includes(NO_PROXY));
+        assert.ok(html.split(esc(NO_PROXY)).length === 3, 'once in the notes, once in the checklist');
+    });
+    test('finding 3: the host named in "not found" is the configured feed host, never hard-coded', () => {
+        const nf = (o) => ({ feed: 'ok', name: 'alpha-node', count: 0, nodes: [], similar: [], ...o });
+        const m = nodeCheckModel(nf({ feedHost: 'telemetry.example.org' }));
+        assert.match(m.text, /^No node named alpha-node is reporting to telemetry\.example\.org right now\./);
+        assert.match(nodeTelemetryRow(nf({ feedHost: 'telemetry.example.org' })).text, /^No node named alpha-node is reporting to telemetry\.example\.org\. /);
+        const bare = nodeCheckModel(nf({}));
+        assert.match(bare.text, /^No node named alpha-node is reporting to telemetry right now\./);
+        assert.doesNotMatch(bare.text + nodeTelemetryRow(nf({})).text, /polkadot\.io/);
+        assert.doesNotMatch(stripComments(readRepo('lib/node-check.js', import.meta.url)), /polkadot\.io/);
+    });
+    test('finding 4: no empty header cell in the hardware table; every th has a scope', () => {
+        const { el } = dom(); el.innerHTML = renderNodeGuide({ esc, release: PENDING });
+        const ths = [...el.querySelectorAll('th')];
+        assert.ok(ths.length > 0);
+        for (const th of ths) {
+            assert.ok(th.textContent.trim().length > 0, 'empty th: ' + th.outerHTML);
+            assert.match(th.getAttribute('scope') || '', /^(col|row)$/, th.outerHTML);
+        }
     });
 });
