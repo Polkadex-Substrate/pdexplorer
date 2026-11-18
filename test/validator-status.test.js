@@ -830,7 +830,7 @@ describe('the flag (FEATURE_FLAGS.validate, ?validate=1)', () => {
     });
     test('help topics for the flag are hidden while it is off', () => {
         const flagged = HELP_TOPICS.filter(t => t.flag === 'validate').map(t => t.slug);
-        assert.deepEqual(flagged.sort(), ['session-keys', 'validator-status']);
+        assert.deepEqual(flagged.sort(), ['run-a-validator', 'session-keys', 'validator-status']);
         assert.ok(!visibleHelpTopics(HELP_TOPICS, { validate: false }).some(t => t.flag));
         assert.equal(visibleHelpTopics(HELP_TOPICS, { validate: true }).length, HELP_TOPICS.length);
     });
