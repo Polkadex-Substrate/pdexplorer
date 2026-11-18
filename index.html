@@ -260,7 +260,7 @@
                 </div>
                 <div class="search-container">
                     <i class='bx bx-search'></i>
-                    <input type="text" id="search-input" placeholder="Search by Block / Extrinsic / Account / Hash">
+                    <input type="text" id="search-input" data-input-kind="search" placeholder="Search by Block / Extrinsic / Account / Hash">
                 </div>
                 <div class="network-status">
                     <div class="status-indicator live"></div>
@@ -457,11 +457,7 @@
                         <p class="staking-search-hint">Shows your connected wallet's claimed staking reward history, or enter any Polkadex address. Download it as CSV or JSON.</p>
                         <div class="staking-search-bar">
                             <div style="flex: 1 1 320px; position: relative; display: flex; align-items: center;">
-                                <input type="text" id="staking-address-input" placeholder="Polkadex address (e.g. esxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)" autocomplete="off" spellcheck="false" style="width: 100%; padding-right: 70px;">
-                                <div style="position: absolute; right: 10px; display: flex; gap: 5px;">
-                                    <button id="staking-clear-btn" style="background: none; border: none; padding: 5px; color: var(--text-secondary); display: none; min-width: auto; height: auto;" title="Clear"><i class='bx bx-x' style="font-size: 20px;"></i></button>
-                                    <button id="staking-paste-btn" style="background: none; border: none; padding: 5px; color: var(--text-secondary); min-width: auto; height: auto;" title="Paste"><i class='bx bx-paste' style="font-size: 18px;"></i></button>
-                                </div>
+                                <input type="text" id="staking-address-input" data-input-kind="address" placeholder="Polkadex address (e.g. esxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)" autocomplete="off" spellcheck="false" style="width: 100%;">
                             </div>
                             <button id="staking-search-btn"><i class='bx bx-search'></i> Search</button>
                         </div>
@@ -658,7 +654,7 @@
                                 <span>Available candidates</span>
                                 <span class="council-vote-count" id="council-vote-available-count">—</span>
                             </div>
-                            <input type="text" id="council-vote-search" placeholder="Search by identity or address…" autocomplete="off" spellcheck="false">
+                            <input type="text" id="council-vote-search" data-input-kind="search" placeholder="Search by identity or address…" autocomplete="off" spellcheck="false">
                             <div class="council-vote-list" id="council-vote-available-list">
                                 <div class="council-vote-empty">Loading candidates…</div>
                             </div>
@@ -684,7 +680,7 @@
                                  free balance has been queried from chain. -->
                             <span id="council-vote-votable" style="color: var(--text-muted); font-size: 0.78rem;">Available: <strong style="color: var(--text-secondary);">—</strong> PDEX</span>
                         </label>
-                        <input type="number" id="vote-stake-input" placeholder="100.0" step="0.1" min="0" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.9rem;">
+                        <input type="number" id="vote-stake-input" data-input-kind="amount" placeholder="100.0" step="0.1" min="0" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.9rem;">
                         <div style="color: var(--text-muted); font-size: 0.78rem; margin-top: 6px;">The full stake is locked across all candidates you vote for, weighted equally. Locked until you submit a new vote or call <code>removeVoter</code>. Voting locks overlap with staking — the larger lock wins, so you don't double-pay.</div>
                     </div>
 
@@ -710,14 +706,14 @@
                     <div id="treasury-spend-connect"></div>
                     <div id="treasury-spend-form" style="display: none;">
                         <label class="stake-label" for="treasury-spend-beneficiary">Beneficiary</label>
-                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-beneficiary" placeholder="es… Polkadex address" autocomplete="off" spellcheck="false"></div>
+                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-beneficiary" data-input-kind="address" placeholder="es… Polkadex address" autocomplete="off" spellcheck="false"></div>
                         <label class="stake-label" for="treasury-spend-amount" style="margin-top: 12px;">Amount (PDEX)</label>
-                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-amount" placeholder="0.0" inputmode="decimal" autocomplete="off"></div>
+                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-amount" data-input-kind="amount" placeholder="0.0" inputmode="decimal" autocomplete="off"></div>
                         <div class="stake-hint" id="treasury-spend-cap"></div>
                         <label class="stake-label" for="treasury-spend-valid-from" style="margin-top: 12px;">Valid from block (optional)</label>
-                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-valid-from" placeholder="Empty: claimable as soon as the motion runs" inputmode="numeric" autocomplete="off"></div>
+                        <div class="stake-amount-wrap"><input type="text" id="treasury-spend-valid-from" data-input-kind="integer" placeholder="Empty: claimable as soon as the motion runs" inputmode="numeric" autocomplete="off"></div>
                         <label class="stake-label" for="treasury-spend-threshold" style="margin-top: 12px;">Threshold (Ayes needed)</label>
-                        <div class="stake-amount-wrap"><input type="number" id="treasury-spend-threshold" step="1"></div>
+                        <div class="stake-amount-wrap"><input type="number" id="treasury-spend-threshold" data-no-input-actions="numeric stepper: the browser arrows already fill this narrow field" step="1"></div>
                         <div class="stake-hint" id="treasury-spend-threshold-hint"></div>
                     </div>
                     <div id="treasury-spend-review" style="display: none; margin-top: 14px;"></div>
@@ -778,7 +774,7 @@
 
                     <div style="margin-bottom: 14px;">
                         <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Amount to lock (PDEX)</label>
-                        <input type="number" id="referendum-vote-amount" placeholder="100.0" step="0.1" min="0" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit;">
+                        <input type="number" id="referendum-vote-amount" data-input-kind="amount" placeholder="100.0" step="0.1" min="0" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit;">
                     </div>
 
                     <div style="margin-bottom: 18px;">
@@ -817,7 +813,7 @@
                         <div>
                             <label class="stake-label">Additional amount to bond (PDEX)</label>
                             <div class="stake-amount-wrap">
-                                <input type="number" id="stake-amount-input" placeholder="0.0" step="0.0001" min="0">
+                                <input type="number" id="stake-amount-input" data-input-kind="amount" placeholder="0.0" step="0.0001" min="0">
                                 <button type="button" id="stake-max-btn" class="stake-max-btn">Max</button>
                             </div>
                             <div class="stake-hint">Available: <span id="stake-available">--</span> PDEX. Leave at 0 to only update nominations.</div>
@@ -835,7 +831,7 @@
                         <div class="stake-picker">
                             <div class="stake-picker-head">
                                 <span>Available validators</span>
-                                <input type="text" id="stake-validator-search" placeholder="Search by name or address" autocomplete="off">
+                                <input type="text" id="stake-validator-search" data-input-kind="search" placeholder="Search by name or address" autocomplete="off">
                             </div>
                             <div id="stake-validator-list" class="stake-picker-list">
                                 <div class="stake-empty">Loading validators…</div>
@@ -894,13 +890,13 @@
 
                     <label class="stake-label">Recipient address</label>
                     <div class="stake-amount-wrap">
-                        <input type="text" id="send-to-input" placeholder="es… Polkadex address" autocomplete="off" spellcheck="false">
+                        <input type="text" id="send-to-input" data-input-kind="address" placeholder="es… Polkadex address" autocomplete="off" spellcheck="false">
                     </div>
                     <div class="stake-hint" id="send-to-hint" style="margin-bottom: 14px;">Paste a valid Polkadex (SS58 prefix 88) address.</div>
 
                     <label class="stake-label">Amount (PDEX)</label>
                     <div class="stake-amount-wrap">
-                        <input type="number" id="send-amount-input" placeholder="0.0" step="0.0001" min="0" inputmode="decimal">
+                        <input type="number" id="send-amount-input" data-input-kind="amount" placeholder="0.0" step="0.0001" min="0" inputmode="decimal">
                         <button type="button" id="send-max-btn" class="stake-max-btn">Max</button>
                     </div>
                     <div class="stake-hint">Available: <span id="send-available">--</span> PDEX. A small buffer is reserved for the network fee.</div>
@@ -946,7 +942,7 @@
 
                     <label class="stake-label">Amount to unbond (PDEX)</label>
                     <div class="stake-amount-wrap">
-                        <input type="number" id="unstake-amount-input" placeholder="0.0" step="0.0001" min="0">
+                        <input type="number" id="unstake-amount-input" data-input-kind="amount" placeholder="0.0" step="0.0001" min="0">
                         <button type="button" id="unstake-max-btn" class="stake-max-btn">Max</button>
                     </div>
 
@@ -980,27 +976,27 @@
 
                     <!-- Form fields. All optional individually; at least one must be set. -->
                     <label class="stake-label" for="identity-display">Display name <span style="color: var(--text-muted); font-weight: 400;">— shown across the explorer</span></label>
-                    <input type="text" id="identity-display" maxlength="32" placeholder="Satoshi" autocomplete="off" spellcheck="false"
+                    <input type="text" id="identity-display" data-input-kind="text" maxlength="32" placeholder="Satoshi" autocomplete="off" spellcheck="false"
                            style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
 
                     <label class="stake-label" for="identity-legal">Legal name <span style="color: var(--text-muted); font-weight: 400;">— optional</span></label>
-                    <input type="text" id="identity-legal" maxlength="32" placeholder="" autocomplete="off"
+                    <input type="text" id="identity-legal" data-input-kind="text" maxlength="32" placeholder="" autocomplete="off"
                            style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
 
                     <label class="stake-label" for="identity-email">Email</label>
-                    <input type="email" id="identity-email" maxlength="32" placeholder="you@example.com" autocomplete="off"
+                    <input type="email" id="identity-email" data-input-kind="text" maxlength="32" placeholder="you@example.com" autocomplete="off"
                            style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
 
                     <label class="stake-label" for="identity-twitter">Twitter / X <span style="color: var(--text-muted); font-weight: 400;">— handle, with or without @</span></label>
-                    <input type="text" id="identity-twitter" maxlength="32" placeholder="@satoshi" autocomplete="off"
+                    <input type="text" id="identity-twitter" data-input-kind="text" maxlength="32" placeholder="@satoshi" autocomplete="off"
                            style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
 
                     <label class="stake-label" for="identity-web">Website</label>
-                    <input type="url" id="identity-web" maxlength="32" placeholder="https://example.com" autocomplete="off"
+                    <input type="url" id="identity-web" data-input-kind="text" maxlength="32" placeholder="https://example.com" autocomplete="off"
                            style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
 
                     <label class="stake-label" for="identity-riot">Matrix / Element <span style="color: var(--text-muted); font-weight: 400;">— e.g. @you:matrix.org</span></label>
-                    <input type="text" id="identity-riot" maxlength="32" placeholder="@you:matrix.org" autocomplete="off"
+                    <input type="text" id="identity-riot" data-input-kind="text" maxlength="32" placeholder="@you:matrix.org" autocomplete="off"
                            style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 6px;">
 
                     <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; margin-bottom: 16px;">Each field is limited to 32 bytes by the runtime. Leave any field blank to omit it; you must fill at least one.</p>
@@ -1244,7 +1240,7 @@
                     <aside class="help-sidebar glass">
                         <div class="help-search-wrap">
                             <i class='bx bx-search' style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 16px;"></i>
-                            <input type="search" id="help-search" placeholder="Search help…" aria-label="Search help" autocomplete="off"
+                            <input type="search" id="help-search" data-input-kind="search" placeholder="Search help…" aria-label="Search help" autocomplete="off"
                                    style="width: 100%; padding: 10px 12px 10px 36px; border: 1px solid var(--border-color); background: rgba(255,255,255,0.04); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.9rem;">
                         </div>
                         <nav id="help-sidebar-nav" aria-label="Help topics"></nav>

@@ -366,6 +366,34 @@ describe('Paste', () => {
         assert.equal(p.$('#s').value, 'esA1\nesB2\nesC3');
     });
 
+    test('an address list that already ends in a line break gets no blank line between', async (t) => {
+        const p = page(t, { html: '<textarea id="s" data-input-kind="address-list">esA1\n</textarea>', clipboard: 'esB2' });
+        enhanceInputActions(p.doc.body);
+        pasteBtn(p.$('#s')).click(); await settle();
+        assert.equal(p.$('#s').value, 'esA1\nesB2');
+    });
+
+    test('text pasted into the middle of a near-full field is cut to the room left, caret after the piece', async (t) => {
+        const p = page(t, { html: '<input id="f" type="text" maxlength="10" data-input-kind="text" value="abcdefgh">', clipboard: 'XYZ123' });
+        enhanceInputActions(p.doc.body);
+        const f = p.$('#f');
+        f.focus(); f.setSelectionRange(3, 3);
+        pasteBtn(f).click(); await settle();
+        assert.equal(f.value, 'abcXYdefgh');
+        assert.equal(f.selectionStart, 5);
+        assert.match(f.closest('.ia-wrap').querySelector('.ia-hint').textContent, /cut to 10 characters/);
+    });
+
+    test('a text field already full refuses a paste with the limit named', async (t) => {
+        const p = page(t, { html: '<input id="f" type="text" maxlength="4" data-input-kind="text" value="abcd">', clipboard: 'zz' });
+        enhanceInputActions(p.doc.body);
+        const f = p.$('#f');
+        f.focus(); f.setSelectionRange(4, 4);
+        pasteBtn(f).click(); await settle();
+        assert.equal(f.value, 'abcd');
+        assert.match(f.closest('.ia-wrap').querySelector('.ia-hint').textContent, /longer than this field allows \(4 characters\)/);
+    });
+
     test('an empty clipboard says so and leaves the field alone', async (t) => {
         const p = page(t, { html: '<input id="f" data-input-kind="search" value="keep">', clipboard: '' });
         enhanceInputActions(p.doc.body);
