@@ -83,11 +83,11 @@ const opt = (v) => (v == null ? { isSome: false, isNone: true } : { isSome: true
 const num = (v) => ({ toNumber: () => Number(v), toString: () => String(v), toBigInt: () => BigInt(v) });
 const keysCodec = (k) => ({ toJSON: () => ({ grandpa: k.grandpa, babe: k.babe, imOnline: k.im_online, authorityDiscovery: k.authority_discovery, mixnet: k.mixnet, beefy: k.beefy }) });
 function fakeApi(o = {}) {
-    const st = { bonded: null, ledger: null, nextKeys: null, validating: false, free: 1250n * PDEX, ...o };
+    const st = { bonded: null, ledger: null, nextKeys: null, validating: false, free: 1250n * PDEX, fee: 21_400_000_000n, ...o };
     const validators = async () => ({});
     validators.size = async () => num(st.validating ? 5 : 0);
-    const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); if (sec === 'utility') c.paymentInfo = async () => ({ partialFee: num(21_400_000_000n) }); return c; } }) });
-    return { registry, tx, runtimeVersion: { specVersion: num(393) }, consts: { balances: { existentialDeposit: num(PDEX) } },
+    const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); if (sec === 'utility') c.paymentInfo = async () => ({ partialFee: num(st.fee) }); return c; } }) });
+    return { st, registry, tx, runtimeVersion: { specVersion: num(393) }, consts: { balances: { existentialDeposit: num(PDEX) } },
         query: {
             system: { account: async () => ({ data: { free: num(st.free), reserved: num(0), frozen: num(0) } }) },
             staking: { minValidatorBond: async () => num(100n * PDEX), minCommission: async () => num(0), maxValidatorsCount: async () => opt(null), counterForValidators: async () => num(217),
@@ -104,7 +104,7 @@ const BODY = html.slice(html.indexOf('<body'), html.lastIndexOf('</body>') + 7).
 const tick = (ms = 10) => new Promise(r => setTimeout(r, ms));
 const settle = async () => { for (let i = 0; i < 8; i++) await tick(5); };
 
-async function scene({ api = fakeApi(), drive = async () => {} }) {
+async function scene({ api = fakeApi(), drive = async () => {}, submit = () => {} }) {
     const w = new Window({ url: 'http://localhost/validate/setup', width: 1280, height: 900 });
     const doc = w.document;
     doc.body.outerHTML = BODY;
@@ -117,7 +117,7 @@ async function scene({ api = fakeApi(), drive = async () => {} }) {
     nav.hidden = false; nav.classList.add('active');
     for (const img of app.querySelectorAll('img[src="logo.png"]')) img.setAttribute('src', 'data:image/png;base64,LOGO_ONCE');
     const el = doc.getElementById('validate-root');
-    await mountValidatorSetup(el, { account: { status: 'connected', address: STASH }, getApi: () => api, isMultisig: () => false, revision: () => 'r1', submit: () => {},
+    await mountValidatorSetup(el, { account: { status: 'connected', address: STASH }, getApi: () => api, isMultisig: () => false, revision: () => 'r1', submit,
         fetchJson: async (u) => { if (u === '/api/validator/params') return PARAMS; throw new Error('unexpected ' + u); },
         esc: escapeHtml, shortAddr: (a) => a.slice(0, 8) + '...' + a.slice(-6), isAddress: () => true,
         helpIcon: (slug, tip) => `<a href="/help/${slug}" class="help-icon" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}"><i class='bx bx-help-circle'></i></a>`,
@@ -138,6 +138,7 @@ const SCENES = [
     { id: 'step2-keys', title: 'Step 2: the keys pasted and parsed (6 keys, 193 bytes); "Use these keys" enabled', build: () => scene({ drive: async (h) => { await toKeys(h); await h.type('#validate-setup-keys', BLOB); } }), need: ['#validate-setup-keys[data-input-kind="hex"]', '.validate-setup-cmd'], primary: 1 },
     { id: 'step3-bond', title: 'Step 3: bond against the live minimum and the lowest elected backing, three payee choices', build: () => scene({ drive: async (h) => { await toBond(h); await h.type('#validate-setup-bond', '500'); } }), need: ['#validate-setup-bond[data-input-kind="amount"]', 'fieldset.validate-setup-payee'], primary: 1 },
     { id: 'step5-review', title: 'Step 5, review: each call in plain words, the call name and its arguments; fee, one signature, the slashing panel ticked, timing', build: () => scene({ drive: toReview }), need: ['ol.validate-review > li', '.validate-warnings', '#validate-setup-ack:checked'], primary: 1 },
+    { id: 'result-short-bond', title: 'Result: confirmed, but the chain bonded less than asked for (the balance changed before the block); bond more next', build: () => { const api = fakeApi(); const subs = []; return scene({ api, submit: (o) => subs.push(o), drive: async (h) => { await toReview(h); await h.click('[data-setup-action="sign"]'); subs[0].onStage('inBlock', { stageText: 'In block #8,123,456' }); Object.assign(api.st, { bonded: STASH, ledger: { stash: STASH, total: num(420n * PDEX), active: num(420n * PDEX) }, nextKeys: KEYS, validating: true }); subs[0].onSuccess(); await settle(); } }); }, need: ['[role="status"]'], primary: 1 },
     { id: 'resume-bonded-keys', title: 'Resume: already bonded with keys registered: opens at Commission, steps 2 and 3 "Done on chain"', build: () => scene({ api: fakeApi(BONDED) }), need: ['.validate-step-done', '#validate-setup-commission'], primary: 1 },
     { id: 'resume-review', title: 'Resume review: the batch holds staking.validate only', build: () => scene({ api: fakeApi(BONDED), drive: async (h) => { await h.type('#validate-setup-commission', '5'); await h.click('[data-setup-action="next"]'); } }), need: ['ol.validate-review > li'], primary: 1 }
 ];
