@@ -79,6 +79,7 @@ import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipie
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
+import { createScrollMemory } from './lib/scroll-reset.js';
 // The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
 const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
 
@@ -4405,6 +4406,9 @@ function safeRouteToken(raw) {
 // How many history entries THIS SPA session has pushed (F-129). Session-
 // scoped on purpose: a fresh tab starts at 0 regardless of referrer.
 let spaNavDepth = 0;
+// The window is the scroller and the link's default is prevented, so a pushed
+// navigation resets the scroll itself; Back/Forward restore per entry (lib/scroll-reset.js).
+const scrollMemory = createScrollMemory({ win: window });
 
 function navigateTo(target, { replace = false } = {}) {
     if (!target || target === 'home') target = '';
@@ -4413,18 +4417,21 @@ function navigateTo(target, { replace = false } = {}) {
     const currentPath = window.location.pathname + window.location.hash;
     if (newPath !== currentPath || window.location.hash) {
         const fn = replace ? 'replaceState' : 'pushState';
+        const state = scrollMemory.beforeNavigate({ replace });
         try {
-            history[fn](null, '', newPath || '/');
+            history[fn](state, '', newPath || '/');
             if (!replace) spaNavDepth++;   // F-129
         }
         catch (e) { /* same-origin / sandboxed iframes can throw; fall back below */ }
     }
     routeTo(newPath.slice(1) || 'home');   // routeTo matches "account/x", not "/account/x"
+    scrollMemory.afterNavigate(newPath, { replace });   // top, unless a replace or a #fragment
 }
 
 // One-time wiring: clean-URL routing, popstate, click delegation, legacy
 // hash-URL redirect. Called at the bottom of init.
 function bootSeoRouter() {
+    scrollMemory.boot();   // scrollRestoration = 'manual'; never scrolls
     // Rewrite any legacy "#X" URLs people might have bookmarked into clean URLs
     // so canonical/og:url match what the user sees.
     // F-107: `'/' + legacyHash` turned "#/evil.com" into "//evil.com", a
@@ -4446,7 +4453,9 @@ function bootSeoRouter() {
         // nothing again, which is the very no-op it was written to avoid.
         // popstate alone owns the decrement (the close control no longer takes one).
         spaNavDepth = Math.max(0, spaNavDepth - 1);
+        scrollMemory.beforePopstate();
         routeTo(readRouteFromLocation());
+        scrollMemory.afterPopstate();
     });
 
     // Delegated click handler for internal links. Catches both new clean
