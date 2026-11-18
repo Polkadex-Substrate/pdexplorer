@@ -504,9 +504,9 @@ describe('wiring: server, docs, shell, script, help, brand', () => {
     const html = readRepo('index.html', import.meta.url);
     test('server.js: the route, the relay in the cluster primary, the snapshot in HTTP workers, the reader in-process with WORKERS=1', () => {
         assert.match(server, /import \{ registerTelemetryRoute \} from '\.\/lib\/telemetry-api\.js'/);
-        assert.match(server, /import \{ telemetryConfig, startTelemetryRelay, receiveTelemetry, startLocalTelemetry \} from '\.\/lib\/telemetry-relay\.js'/);
+        assert.match(server, /import \{ telemetryConfig, telemetryHostName, startTelemetryRelay, receiveTelemetry, startLocalTelemetry \} from '\.\/lib\/telemetry-relay\.js'/);
         assert.match(server, /const TELEMETRY = telemetryConfig\(process\.env\);/);
-        assert.match(server, /registerTelemetryRoute\(app, \{ enabled: TELEMETRY\.enabled, source: [^}]*rateOk: telemetryRateOk,\s*head: [^\n]*cacheShort, serverError \}\)/);
+        assert.match(server, /registerTelemetryRoute\(app, \{ enabled: TELEMETRY\.enabled, source: [^}]*rateOk: telemetryRateOk,\s*head: [^\n]*cacheShort, serverError,\s*feedHost: telemetryHostName\(TELEMETRY\.url\) \}\)/);
         const primary = server.slice(server.indexOf('if (cluster.isPrimary)'));
         assert.ok(primary.indexOf("startTelemetryRelay({ config: TELEMETRY, cluster") > 0 && primary.indexOf("startTelemetryRelay(") < primary.indexOf("cluster.on('exit'"), 'the relay starts in the primary');
         assert.match(server, /if \(TELEMETRY\.enabled && process\.env\.INDEXER_ROLE !== 'on'\) telemetrySource = receiveTelemetry\(\);\s*runWorker\(\{ indexer: process\.env\.INDEXER_ROLE === 'on', clustered: true \}\)/);

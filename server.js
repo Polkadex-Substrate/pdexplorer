@@ -39,7 +39,7 @@ import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
 import { registerValidatorRoutes, createKeyCheckLimiter } from './lib/validator-status-api.js';
 import { registerTelemetryRoute } from './lib/telemetry-api.js';
-import { telemetryConfig, startTelemetryRelay, receiveTelemetry, startLocalTelemetry } from './lib/telemetry-relay.js';
+import { telemetryConfig, telemetryHostName, startTelemetryRelay, receiveTelemetry, startLocalTelemetry } from './lib/telemetry-relay.js';
 import { registerTreasurySpendsRoute } from './lib/treasury-payout-api.js';
 import { argEntries, callToTree, eventToTree, collectAssetIds } from './lib/call-tree.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
@@ -4107,7 +4107,8 @@ function telemetryRateOk(req) {
     return telemetryLimiter(clientIp(req));
 }
 registerTelemetryRoute(app, { enabled: TELEMETRY.enabled, source: () => (telemetrySource ? telemetrySource.snapshot() : null), rateOk: telemetryRateOk,
-    head: async () => (globalApi ? (await globalApi.rpc.chain.getHeader()).number.toNumber() : null), cacheShort, serverError });
+    head: async () => (globalApi ? (await globalApi.rpc.chain.getHeader()).number.toNumber() : null), cacheShort, serverError,
+    feedHost: telemetryHostName(TELEMETRY.url) });
 
 app.get('/api/validator/:address', async (req, res) => {
     if (!requireRpc(res)) return;
