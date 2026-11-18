@@ -600,3 +600,102 @@ describe('never a seed', () => {
         assert.match(S.keysForSetup(BLOB, { layout: null }).message, /session key format is different/);
     });
 });
+
+// ── review round (Fable findings 1 to 4) ──
+describe('the fee probe is the batch that will be signed (finding 1)', () => {
+    const st = { ...fresh, balance: { free: String(1000n * PDEX), reserved: '0', frozen: '0' } };
+    test('fresh, no keys pasted yet: bond, a same-length placeholder setKeys and validate, at their largest encodings', () => {
+        const p = S.feeProbeSteps(st, { hexLength: 388 });
+        assert.deepEqual(p.map(s => s.kind), ['bond', 'setKeys', 'validate']);
+        assert.equal(p[1].keysHex.length, 388);
+        assert.equal(p[0].value, 1000n * PDEX, 'the free balance: no bond can encode longer');
+        assert.equal(p[0].payee.kind, 'account', 'the longest payee');
+        assert.equal(p[2].commission, S.PERBILL - 1);
+        assert.doesNotThrow(() => S.buildSetupTx({ tx: ex }, p), 'the probe encodes with the real codecs');
+    });
+    test('pasted keys are used as they are; kept keys add no setKeys', () => {
+        assert.equal(S.feeProbeSteps(st, { keysHex: BLOB, hexLength: 388 })[1].keysHex, BLOB);
+        assert.deepEqual(S.feeProbeSteps(st, { keep: true, hexLength: 388 }).map(s => s.kind), ['bond', 'validate']);
+    });
+    test('bonded: bondExtra; validating: no validate', () => {
+        const b = { ...st, bonded: true, controller: STASH, active: String(500n * PDEX), validating: true };
+        assert.deepEqual(S.feeProbeSteps(b, { keep: true }).map(s => s.kind), ['bondExtra']);
+    });
+});
+
+describe('a bond below the existential deposit (finding 4)', () => {
+    test('refused in plain words even when MinValidatorBond is 0', () => {
+        const r = S.bondCheck(PDEX / 2n, { minValidatorBond: '0', max: 1000n * PDEX, ed: String(PDEX) });
+        assert.deepEqual(r, { ok: false, message: 'A new bond must be at least the existential deposit, 1 PDEX.', warning: '' });
+        assert.equal(S.bondCheck(PDEX, { minValidatorBond: '0', max: 1000n * PDEX, ed: String(PDEX) }).ok, true);
+    });
+    test('adding to an existing bond is not held to it', () => {
+        assert.equal(S.bondCheck(PDEX / 2n, { minValidatorBond: '0', max: 1000n * PDEX, ed: String(PDEX), active: String(200n * PDEX), optional: true }).ok, true);
+    });
+    test('the header does not claim bond raises ControllerDeprecated', async () => {
+        const { readFileSync } = await import('node:fs');
+        const src = readFileSync(new URL('../lib/validator-setup.js', import.meta.url), 'utf8');
+        assert.doesNotMatch(src, /Controller as payee is rejected \(ControllerDeprecated\)/);
+    });
+});
+
+describe('safe mode and paused calls are refused before the wallet is asked (finding 3)', () => {
+    const steps = () => S.planSetup(fresh, input).steps;
+    test('pauseProblems: safe mode, then each paused call by its pallet and call name', () => {
+        assert.deepEqual(S.pauseProblems({ safeModeUntil: null, paused: [] }), []);
+        assert.deepEqual(S.pauseProblems({ safeModeUntil: 1234, paused: [] }),
+            ['The network is in safe mode until block #1,234, so it would refuse this transaction. Nothing was signed. Try again after that block.']);
+        assert.deepEqual(S.pauseProblems({ safeModeUntil: null, paused: ['Session.set_keys'] }),
+            ['The network has paused Session.set_keys, so it would refuse this transaction. Nothing was signed. Try again once the pause is lifted.']);
+    });
+    test('pausableCalls: the batch and each call in it, by metadata name', () => {
+        assert.deepEqual(S.pausableCalls(steps()), [['Utility', 'batch_all'], ['Staking', 'bond'], ['Session', 'set_keys'], ['Staking', 'validate']]);
+        const s = { ...fresh, bonded: true, controller: STASH, active: String(500n * PDEX) };
+        assert.deepEqual(S.pausableCalls(S.planSetup(s, { ...input, bond: 0n, extra: PDEX }).steps)[1], ['Staking', 'bond_extra']);
+    });
+    const withPause = (api, { until = null, paused = [] } = {}) => Object.assign(api.query, {
+        safeMode: { enteredUntil: async () => opt(until == null ? null : num(until)) },
+        txPause: { pausedCalls: async ([p, c]) => opt(paused.includes(`${p}.${c}`) ? {} : null) }
+    }) && api;
+    const reviewFor = async (api) => ({ stash: STASH, steps: steps(), keys: parsed(BLOB), keysHex: BLOB, bond: 500n * PDEX, extra: 0n, commission: 50_000_000, state: fresh, limits: await C.readSetupLimits(api) });
+    test('buildCheckedSetupTx: safe mode entered is refused', async () => {
+        const api = withPause(fakeApi(), { until: 99 });
+        await assert.rejects(C.buildCheckedSetupTx(api, await reviewFor(api)), /safe mode until block #99/);
+    });
+    test('buildCheckedSetupTx: a paused staking.validate is refused', async () => {
+        const api = withPause(fakeApi(), { paused: ['Staking.validate'] });
+        await assert.rejects(C.buildCheckedSetupTx(api, await reviewFor(api)), /paused Staking\.validate/);
+    });
+    test('neither entered nor paused, or the pallets absent: builds', async () => {
+        const a = withPause(fakeApi());
+        assert.equal((await C.buildCheckedSetupTx(a, await reviewFor(a))).method, 'batchAll');
+        const b = fakeApi();
+        assert.equal((await C.buildCheckedSetupTx(b, await reviewFor(b))).method, 'batchAll');
+    });
+});
+
+describe('a bond lower than asked for is not plain success (finding 2)', () => {
+    const steps = () => S.planSetup(fresh, input).steps;
+    const act = (requested) => ({ ...setupAction(steps()), params: { ...setupAction(steps()).params, bondRequested: String(requested) } });
+    const evs = (amount) => [ev('staking', 'Bonded', [STASH, String(amount)]), ...OK_EVENTS.slice(1)];
+    test('Bonded amount below the request: a warning with both numbers and the next step', () => {
+        const m = buildTxModel(act(500n * PDEX), IN1, evs(400n * PDEX), null, { registry, blockNumber: 42 });
+        assert.notEqual(m.stage, 'failed');
+        assert.equal(m.tone, 'warn');
+        assert.match(m.body, /Bonded 400 PDEX of the 500 PDEX you asked for\./);
+        assert.match(m.body, /Your validator entry was set with the smaller bond\./);
+        assert.match(m.next, /bond more/i);
+        assert.doesNotMatch(m.body, /The chain reported every step/);
+    });
+    test('Bonded equal to the request: plain success', () => {
+        const m = buildTxModel(act(500n * PDEX), IN1, evs(500n * PDEX), null, { registry, blockNumber: 42 });
+        assert.notEqual(m.tone, 'warn');
+        assert.match(m.body, /The chain reported every step/);
+    });
+    test('setupApplied: the ledger shows less than was asked for', () => {
+        const review = { stash: STASH, steps: steps(), keysHex: BLOB, state: fresh, bond: 500n * PDEX, extra: 0n };
+        const after = { ...fresh, bonded: true, controller: STASH, active: String(400n * PDEX), validating: true, nextKeys: KEYS };
+        assert.deepEqual(S.setupApplied(after, review), { applied: true, missing: [], bondShort: { bonded: 400n * PDEX, requested: 500n * PDEX } });
+        assert.deepEqual(S.setupApplied({ ...after, active: String(500n * PDEX) }, review), { applied: true, missing: [] });
+    });
+});

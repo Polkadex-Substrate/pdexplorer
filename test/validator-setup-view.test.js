@@ -48,7 +48,7 @@ function fakeApi(o = {}) {
     const st = { minBond: 123n * PDEX, minComm: 30_000_000, bonded: null, ledger: null, validating: false, nextKeys: null, nominators: null, owners: {}, free: 1000n * PDEX, fee: 2n * 10n ** 10n, ...o };
     const validators = async () => ({ commission: num(0), blocked: { isTrue: false } });
     validators.size = async (a) => num(String(a) === STASH && st.validating ? 5 : 0);
-    const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); if (sec === 'utility') c.paymentInfo = async () => ({ partialFee: num(st.fee) }); return c; } }) });
+    const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); if (sec === 'utility') c.paymentInfo = async () => ({ partialFee: num(st.feeFor ? st.feeFor(args[0]) : st.fee) }); return c; } }) });
     return {
         st, registry, tx, runtimeVersion: { specVersion: num(393) },
         consts: { balances: { existentialDeposit: num(PDEX) } },
@@ -436,5 +436,82 @@ describe('/validate/setup in the real page', () => {
         assert.equal(r.page, 'validate');
         assert.equal(r.probe['#validate-root .validate-setup'].count, 1);
         assert.deepEqual(r.errors, []);
+    });
+});
+
+// ── review round (Fable findings 1, 2, 4 and 5) ──
+describe('Max and the review use the fee of the batch that will be signed (finding 1)', () => {
+    const ack = async (el) => { const b = el.querySelector('#validate-setup-ack'); b.checked = true; b.dispatchEvent(new b.ownerDocument.defaultView.Event('change', { bubbles: true })); await settle(); };
+    async function atBond(api) {
+        const { el } = dom(); const d = deps({ api }); await mountValidatorSetup(el, d); await settle();
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-keys', BLOB);
+        await click(el, '[data-setup-action="use-keys"]');
+        return { el, d };
+    }
+    const toCommission = async (el) => {
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-commission', '5');
+        await click(el, '[data-setup-action="next"]');
+    };
+    test('the fee differs with setKeys in the batch: Max uses it, and Max then review then sign succeeds', async () => {
+        const api = fakeApi({ feeFor: (calls) => (Array.from(calls).some(c => /set_?keys/i.test(String(c.method))) ? 3n * 10n ** 10n : 2n * 10n ** 10n) });
+        const { el, d } = await atBond(api);
+        await click(el, '[data-setup-action="max"]');
+        assert.equal(el.querySelector('#validate-setup-bond').value, '997.97');
+        await toCommission(el);
+        assert.equal(heading(el), 'Review');
+        await ack(el);
+        await click(el, '[data-setup-action="sign"]');
+        const tx = await d.submits[0].buildTx(d.api);
+        assert.equal(`${tx.section}.${tx.method}`, 'utility.batchAll');
+    });
+    test('the fee rose after Max: back to the bond step with the fee and the new most', async () => {
+        const api = fakeApi();
+        const { el } = await atBond(api);
+        await click(el, '[data-setup-action="max"]');
+        api.st.fee = 5n * 10n ** 10n;
+        await toCommission(el);
+        assert.equal(heading(el), 'Bond from your stash');
+        assert.equal(el.querySelector('#validate-setup-bond-msg').textContent, 'The network fee is 0.05 PDEX, so the most you can bond is 997.95 PDEX.');
+        await click(el, '[data-setup-action="max"]');
+        assert.equal(el.querySelector('#validate-setup-bond').value, '997.95');
+    });
+    test('a new bond below the existential deposit is refused even when MinValidatorBond is 0 (finding 4)', async () => {
+        const { el } = await atBond(fakeApi({ minBond: 0n }));
+        await type(el, '#validate-setup-bond', '0.5');
+        await click(el, '[data-setup-action="next"]');
+        assert.equal(el.querySelector('#validate-setup-bond-msg').textContent, 'A new bond must be at least the existential deposit, 1 PDEX.');
+    });
+});
+
+describe('a bond lower than asked for (finding 2)', () => {
+    test('the request carries the amount asked for; the result says what was bonded, not plain success', async () => {
+        const d = deps();
+        const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toReview(el);
+        const box = el.querySelector('#validate-setup-ack'); box.checked = true; box.dispatchEvent(new box.ownerDocument.defaultView.Event('change', { bubbles: true })); await settle();
+        await click(el, '[data-setup-action="sign"]');
+        const o = d.submits[0];
+        assert.equal(o.action.params.bondRequested, String(500n * PDEX));
+        o.onStage('inBlock', { stageText: 'In block #42' });
+        Object.assign(d.api.st, { bonded: STASH, ledger: { controller: STASH, stash: STASH, active: 400n * PDEX }, nextKeys: KEYS, validating: true });
+        o.onSuccess();
+        await settle();
+        assert.match(el.textContent, /Bonded 400 PDEX of the 500 PDEX you asked for/);
+        assert.match(el.textContent, /bond more/i);
+        assert.doesNotMatch(el.textContent, /Submitted and confirmed in block #42\. You are now waiting for election\./);
+    });
+});
+
+describe('the done tick is neutral, as the design says (finding 5)', () => {
+    test('no green on the tick; the header comment says neutral', () => {
+        const css = readRepo('styles.css', import.meta.url).replace(/\/\*[\s\S]*?\*\//g, '');
+        const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m => /\.validate-step-done/.test(m[1]));
+        assert.ok(rules.length >= 1);
+        for (const r of rules) assert.doesNotMatch(r[2], /--success|--brand-secondary|#[0-9a-f]{3,8}\b/i, r[1]);
+        const src = readRepo('lib/validator-setup-view.js', import.meta.url);
+        assert.doesNotMatch(src, /green only on\s+(\/\/\s*)?the done tick/);
+        assert.match(src, /done tick is neutral/);
     });
 });
