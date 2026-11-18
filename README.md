@@ -479,12 +479,12 @@ Schema: subscribers live in `email_subscribers`, dispatch idempotency in `email_
 | `SITEMAP_TOP_HOLDERS`         | `100`   | How many top holders (account pages) to include        |
 | `SITEMAP_CACHE_TTL_MS`        | `300000`| How long the rendered XML is cached                    |
 
-### WalletConnect ("Connect with your phone", dark launch)
+### WalletConnect ("Phone wallet")
 
-A phone wallet (Nova Wallet, SubWallet) can sign over WalletConnect v2. It ships **off**; nothing WalletConnect is downloaded and the relay is never contacted unless a visitor turns it on and chooses it.
+A phone wallet (Nova Wallet, SubWallet) can sign over WalletConnect v2. It is **on for everyone**. Nothing WalletConnect is downloaded and the relay is never contacted until a visitor chooses Phone wallet, or reopens the explorer with a phone session already paired in that browser.
 
-- **Everyone:** set `FEATURE_FLAGS.walletConnect = true` in `lib/wallet-links.js`.
-- **One browser, for testing:** open any page with `?wc=1` (stores `pdex_wc_enabled=1` in that browser). `?wc=0` removes it again.
+- **Everyone:** `FEATURE_FLAGS.walletConnect = true` in `lib/wallet-links.js` (set it back to `false` to roll back).
+- **One browser, opt out:** open any page with `?wc=0` (stores `pdex_wc_enabled=0`, which wins over the flag). `?wc=1` turns it back on (and opts a browser in if the flag is ever false).
 - **Settings:** project id, chain id (Polkadex mainnet `polkadot:3920bcb4960a1eef5580cd5367ff3f43`), relay and app metadata live in `lib/walletconnect-config.js` only. The project id is public; restrict it to `explorer.polkadex.ee` in the Reown dashboard's domain allowlist.
 - **CSP:** `nginx.conf` allows `wss://relay.walletconnect.org` (the only relay the SDK dials, `WC_RELAY_URL`) in `connect-src`, nothing else of WalletConnect (no telemetry, no Verify frame). If the relay URL in the config changes, change the CSP with it.
 - **License:** `@walletconnect/universal-provider` and its `core`, `sign-client`, `types` and `utils` packages are under the WalletConnect Community License (Reown, Inc.), not MIT. Its required notice and a copy of the license are in `public/THIRD-PARTY-NOTICES.txt`, served at `/THIRD-PARTY-NOTICES.txt` and linked from the footer. Re-copy the license text from `node_modules` after a version bump (a test checks it). Above 500 monthly active users or 2,500,000 RPCs a month the license requires a paid commercial license from Reown.
