@@ -38,6 +38,8 @@ import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
 import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
 import { registerValidatorRoutes, createKeyCheckLimiter } from './lib/validator-status-api.js';
+import { registerTelemetryRoute } from './lib/telemetry-api.js';
+import { telemetryConfig, startTelemetryRelay, receiveTelemetry, startLocalTelemetry } from './lib/telemetry-relay.js';
 import { registerTreasurySpendsRoute } from './lib/treasury-payout-api.js';
 import { argEntries, callToTree, eventToTree, collectAssetIds } from './lib/call-tree.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
@@ -4090,6 +4092,22 @@ function parseValidatorAddress(raw) {
 }
 registerValidatorRoutes(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), parseAddress: parseValidatorAddress,
     cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk, statusRateOk: validatorStatusRateOk });
+
+// "Check my node" (lib/telemetry-api.js): the Polkadex nodes on the telemetry
+// feed, from memory. Off unless TELEMETRY_FEED_URL is set. One connection per
+// explorer: the cluster primary holds it and sends snapshots to the workers
+// (lib/telemetry-relay.js, wired in bootstrapCluster); the browser never
+// contacts telemetry. Per-IP limit TELEMETRY_LOOKUP_PER_MIN, divided across workers.
+const TELEMETRY = telemetryConfig(process.env);
+let telemetrySource = null;
+const TELEMETRY_LOOKUP_PER_MIN = readPositiveInteger(process.env.TELEMETRY_LOOKUP_PER_MIN, 30);
+let telemetryLimiter = null;
+function telemetryRateOk(req) {
+    if (!telemetryLimiter) telemetryLimiter = createKeyCheckLimiter({ perMinute: TELEMETRY_LOOKUP_PER_MIN, workers: WORKERS });
+    return telemetryLimiter(clientIp(req));
+}
+registerTelemetryRoute(app, { enabled: TELEMETRY.enabled, source: () => (telemetrySource ? telemetrySource.snapshot() : null), rateOk: telemetryRateOk,
+    head: async () => (globalApi ? (await globalApi.rpc.chain.getHeader()).number.toNumber() : null), cacheShort, serverError });
 
 app.get('/api/validator/:address', async (req, res) => {
     if (!requireRpc(res)) return;
@@ -11466,6 +11484,7 @@ function bootstrapCluster() {
         if (!wantsIndexer) console.log('[cluster] single-process mode with INDEXER_ROLE=off — serving HTTP only, no indexing');
         // clustered:false — this process is alone, so it owns the schema step
         // outright even when it is not the indexer (F-139).
+        telemetrySource = startLocalTelemetry({ config: TELEMETRY, log: (m) => console.warn('[telemetry] ' + m) });
         runWorker({ indexer: wantsIndexer, clustered: false });
         return;
     }
@@ -11486,6 +11505,9 @@ function bootstrapCluster() {
 
         forkOne('indexer');
         for (let i = 1; i < WORKERS; i++) forkOne('http');
+        // The one telemetry connection (TELEMETRY_FEED_URL), relayed to the workers.
+        startTelemetryRelay({ config: TELEMETRY, cluster, log: (m) => console.warn('[telemetry] ' + m) });
+        console.log(TELEMETRY.enabled ? `[telemetry] reading ${TELEMETRY.url} for ${TELEMETRY.genesis}` : `[telemetry] off: ${TELEMETRY.reason}`);
 
         // Audit F-145: refork was immediate and unconditional. A worker that
         // dies on startup — a bad migration, a missing module (this actually
@@ -11520,6 +11542,7 @@ function bootstrapCluster() {
         });
     } else {
         // Inside a worker — INDEXER_ROLE was set by the primary above.
+        if (TELEMETRY.enabled && process.env.INDEXER_ROLE !== 'on') telemetrySource = receiveTelemetry();
         runWorker({ indexer: process.env.INDEXER_ROLE === 'on', clustered: true });
     }
 }

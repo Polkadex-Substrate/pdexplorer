@@ -82,6 +82,7 @@ import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage } from './lib/validator-status-view.js';
+import { mountNodeGuide } from './lib/validator-node-guide.js';
 // The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
 const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
 const SHOWN_HELP_TOPICS = visibleHelpTopics(HELP_TOPICS, { validate: VALIDATE_ON });
@@ -7403,9 +7404,13 @@ function onStakingRewardsWalletChange(change) {
 }
 
 // /validate (the connected wallet, following it) and /validate/<address> (any stash): lib/validator-status-view.js.
+// /validate/node: the node guide (lib/validator-node-guide.js). ?node=NAME is the telemetry name, kept in the URL only.
 function initValidatePage(address) {
+    const nodeName = new URLSearchParams(window.location.search).get('node') || '';
+    const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(null, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
+    if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
     const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
-        fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress });
+        fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName });
     pageScope.add(walletSession.onActiveAccountChange((change) => {
         const viewed = readRouteFromLocation().slice('validate/'.length);
         const follow = viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress });
