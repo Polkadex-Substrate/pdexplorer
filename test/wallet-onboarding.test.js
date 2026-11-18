@@ -172,8 +172,8 @@ describe('"Check again" re-detects without a reload', () => {
 });
 
 describe('the phone row (WalletConnect)', () => {
-    test('the flag is off by default and nothing mentions WalletConnect', async (t) => {
-        assert.equal(FEATURE_FLAGS.walletConnect, false);
+    test('the flag is on for everyone; a browser that opted out (no controller) shows nothing about WalletConnect', async (t) => {
+        assert.equal(FEATURE_FLAGS.walletConnect, true);
         for (const onMobile of [false, true]) {
             const w = mountChooser(t, { onMobile });
             await w.picker.ready;

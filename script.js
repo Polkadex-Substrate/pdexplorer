@@ -8053,7 +8053,7 @@ const walletSession = createWalletSession({
 });
 reconcileDiscussSession();   // a token for any wallet but the active one is signed out on load
 function getStoredWallet() { return walletSession.connected(); }
-// WalletConnect ("Connect with your phone"): dark unless FEATURE_FLAGS.walletConnect or ?wc=1 (?wc=0 undoes it).
+// WalletConnect ("Connect with your phone"): on for everyone (FEATURE_FLAGS.walletConnect); ?wc=0 opts this browser out (?wc=1 undoes it).
 // The WalletConnect code is a lazy chunk, loaded on Connect or to restore a session made here (lib/walletconnect-gate.js).
 const wcGate = createWalletConnectGate({
     enabled: walletConnectEnabled({ flag: FEATURE_FLAGS.walletConnect, storage: localStorage, search: window.location.search }),
