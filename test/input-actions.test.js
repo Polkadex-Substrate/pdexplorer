@@ -92,15 +92,23 @@ describe('cleanPaste: amounts are money, so nothing is guessed', () => {
 
 describe('cleanPaste: maxlength', () => {
     test('text is cut to fit and the note carries the number', () => {
-        const r = cleanPaste('text', 'x'.repeat(40), { maxLength: 32 });
+        const r = cleanPaste('text', 'x'.repeat(40), { maxLength: 32, multiline: true });
         assert.equal(r.ok, true);
         assert.equal(r.value, 'x'.repeat(32));
         assert.equal(r.note, 'Pasted text was cut to 32 characters.');
     });
     test('text inserted into existing text is cut to the room left', () => {
-        const r = cleanPaste('text', 'abcdef', { maxLength: 10, room: 4 });
+        const r = cleanPaste('text', 'abcdef', { maxLength: 10, room: 4, multiline: true });
         assert.equal(r.value, 'abcd');
         assert.match(r.note, /10 characters/);
+    });
+    test('a single-line text field refuses an over-long paste, it is never cut', () => {
+        const r = cleanPaste('text', 'x'.repeat(40), { maxLength: 32 });
+        assert.equal(r.ok, false);
+        assert.match(r.message, /32 characters/);
+        assert.equal(cleanPaste('text', 'abcdef', { maxLength: 10, room: 4 }).ok, false);
+        assert.equal(cleanPaste('search', 'x'.repeat(40), { maxLength: 32 }).ok, false);
+        assert.equal(cleanPaste(undefined, 'x'.repeat(40), { maxLength: 32 }).ok, false);
     });
     test('an address over the limit is refused, not cut', () => {
         const r = cleanPaste('address', ADDR, { maxLength: 20 });
@@ -350,8 +358,8 @@ describe('Paste', () => {
         assert.equal(f.selectionStart, 11);
     });
 
-    test('a long paste into a 32-character text field is cut, and the hint says so', async (t) => {
-        const p = page(t, { html: '<input id="f" type="text" maxlength="32" data-input-kind="text">', clipboard: 'y'.repeat(40) });
+    test('a long paste into a 32-character text area is cut, and the hint says so', async (t) => {
+        const p = page(t, { html: '<textarea id="f" maxlength="32" data-input-kind="text"></textarea>', clipboard: 'y'.repeat(40) });
         enhanceInputActions(p.doc.body);
         const f = p.$('#f');
         pasteBtn(f).click(); await settle();
@@ -373,8 +381,8 @@ describe('Paste', () => {
         assert.equal(p.$('#s').value, 'esA1\nesB2');
     });
 
-    test('text pasted into the middle of a near-full field is cut to the room left, caret after the piece', async (t) => {
-        const p = page(t, { html: '<input id="f" type="text" maxlength="10" data-input-kind="text" value="abcdefgh">', clipboard: 'XYZ123' });
+    test('text pasted into the middle of a near-full text area is cut to the room left, caret after the piece', async (t) => {
+        const p = page(t, { html: '<textarea id="f" maxlength="10" data-input-kind="text">abcdefgh</textarea>', clipboard: 'XYZ123' });
         enhanceInputActions(p.doc.body);
         const f = p.$('#f');
         f.focus(); f.setSelectionRange(3, 3);
