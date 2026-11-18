@@ -37,6 +37,7 @@ import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-de
 import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
 import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
+import { registerValidatorRoutes, createKeyCheckLimiter } from './lib/validator-status-api.js';
 import { registerTreasurySpendsRoute } from './lib/treasury-payout-api.js';
 import { argEntries, callToTree, eventToTree, collectAssetIds } from './lib/call-tree.js';
 import { describeCall, readReferendumInfo, readDepositOf, readNextExternal, readPublicProp, readCollectiveVoting, notedPreimageLen } from './lib/gov-chain-read.js';
@@ -4065,6 +4066,23 @@ app.get('/api/extrinsic-by-hash/:txHash', async (req, res) => {
         serverError(res, err, req.path);
     }
 });
+
+// The Validate page (lib/validator-status-api.js): live validator parameters,
+// one stash's status, and the session keys check. Registered before
+// /api/validator/:address, or "params" would be read as an address. The keys
+// check is limited per IP (SESSION_KEYS_CHECK_PER_MIN, divided across workers).
+const SESSION_KEYS_CHECK_PER_MIN = readPositiveInteger(process.env.SESSION_KEYS_CHECK_PER_MIN, 30);
+let keyCheckLimiter = null;
+function keyCheckRateOk(req) {
+    if (!keyCheckLimiter) keyCheckLimiter = createKeyCheckLimiter({ perMinute: SESSION_KEYS_CHECK_PER_MIN, workers: WORKERS });
+    return keyCheckLimiter(clientIp(req));
+}
+function parseValidatorAddress(raw) {
+    if (!isValidAddress(raw)) return null;
+    try { return normalizeAddress(raw); } catch (e) { return null; }
+}
+registerValidatorRoutes(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), parseAddress: parseValidatorAddress,
+    cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk });
 
 app.get('/api/validator/:address', async (req, res) => {
     if (!requireRpc(res)) return;

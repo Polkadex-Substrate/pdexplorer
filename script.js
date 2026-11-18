@@ -24,6 +24,7 @@ import { mergeRows, blockRank, txRank, txIdentity } from './lib/merge-rows.js';
 import { safeReturnPath } from './lib/safe-return.js';
 import { escapeHtml as sharedEscapeHtml } from './lib/html-escape.js';
 import { HELP_CATEGORIES, HELP_TOPICS } from './lib/help-topics.js';
+import { visibleHelpTopics } from './lib/help-topics.js';
 import { createConfirmDialog } from './lib/confirm-dialog.js';
 import { closeControlHtml, closeToParent, wireCloseControls, onDialogKeydown, createFocusReturn, clearDrafts } from './lib/close-control.js';
 import { summarizeExtrinsicAmount } from './lib/extrinsic-summary.js';
@@ -79,6 +80,12 @@ import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipie
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
+import { validateEnabled } from './lib/validate-gate.js';
+import { mountValidatePage } from './lib/validator-status-view.js';
+// The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
+const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
+const SHOWN_HELP_TOPICS = visibleHelpTopics(HELP_TOPICS, { validate: VALIDATE_ON });
+if (VALIDATE_ON) document.querySelectorAll('#nav-validate, .validate-flag-link').forEach(n => { n.hidden = false; });
 // The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
 const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
 
@@ -3556,6 +3563,7 @@ const ROUTE_SEO = {
                             description: 'Live event log from the Polkadex Mainnet runtime: balances, staking rewards, council motions, treasury approvals, democracy referenda — filterable by section and method.' },
     'validators':         { title: 'Validators — Polkadex Mainnet Explorer',
                             description: 'Active and waiting validators on the Polkadex Mainnet: commission, total stake (own + nominated), real 30-day APY, slash history, and identity. The data you need to pick who to nominate.' },
+    'validate':           { title: 'Validator status | Polkadex Mainnet Explorer', description: 'The status of a Polkadex validator stash, and a session keys checker.', noindex: true },
     'staking-rewards':    { title: 'Staking Rewards Lookup — Polkadex Mainnet Explorer',
                             description: 'Look up any Polkadex address to see full staking reward history, realized 30-day / 90-day / all-time APR, claim payouts, stake more, unstake, and export year-end tax CSV.' },
     'democracy':          { title: 'Democracy & Referenda — Polkadex Mainnet Explorer',
@@ -3821,7 +3829,7 @@ function wireCookiesResetButton() {
 // renders it; only the array moved.
 
 // O(1) lookup
-const HELP_BY_SLUG = Object.fromEntries(HELP_TOPICS.map(t => [t.slug, t]));
+const HELP_BY_SLUG = Object.fromEntries(HELP_TOPICS.map(t => [t.slug, t]).filter(([, t]) => SHOWN_HELP_TOPICS.includes(t)));   // flagged topics stay hidden
 
 function renderHelpLanding(searchQuery = '') {
     const article = document.getElementById('help-article');
@@ -3834,7 +3842,7 @@ function renderHelpLanding(searchQuery = '') {
     // Build the category-grouped sidebar (filters in place during search).
     let sidebarHtml = '';
     for (const cat of HELP_CATEGORIES) {
-        const topics = HELP_TOPICS.filter(t => {
+        const topics = SHOWN_HELP_TOPICS.filter(t => {
             if (t.category !== cat.id) return false;
             if (!isFiltered) return true;
             const hay = (t.title + ' ' + (t.keywords || '') + ' ' + t.body).toLowerCase();
@@ -3860,7 +3868,7 @@ function renderHelpLanding(searchQuery = '') {
         to find a specific concept.</p>
     </header>`;
     for (const cat of HELP_CATEGORIES) {
-        const topics = HELP_TOPICS.filter(t => t.category === cat.id);
+        const topics = SHOWN_HELP_TOPICS.filter(t => t.category === cat.id);
         if (!topics.length) continue;
         landingHtml += `<section class="help-cat-section">
             <h2>${stakingEscapeHtml(cat.label)}</h2>
@@ -3916,9 +3924,9 @@ function renderHelpArticle(slug) {
     });
 
     // Prev/next nav within the flat topic list
-    const idx = HELP_TOPICS.findIndex(t => t.slug === slug);
-    const prev = idx > 0 ? HELP_TOPICS[idx - 1] : null;
-    const next = idx < HELP_TOPICS.length - 1 ? HELP_TOPICS[idx + 1] : null;
+    const idx = SHOWN_HELP_TOPICS.findIndex(t => t.slug === slug);
+    const prev = idx > 0 ? SHOWN_HELP_TOPICS[idx - 1] : null;
+    const next = idx < SHOWN_HELP_TOPICS.length - 1 ? SHOWN_HELP_TOPICS[idx + 1] : null;
     const prevHtml = prev ? `<a href="/help/${stakingEscapeHtml(prev.slug)}" class="help-prevnext prev">
         <span>← Previous</span><strong>${stakingEscapeHtml(prev.title)}</strong></a>` : '<span></span>';
     const nextHtml = next ? `<a href="/help/${stakingEscapeHtml(next.slug)}" class="help-prevnext next">
@@ -3945,7 +3953,7 @@ function renderHelpSidebar(activeSlug) {
     if (!nav) return;
     let html = '';
     for (const cat of HELP_CATEGORIES) {
-        const topics = HELP_TOPICS.filter(t => t.category === cat.id);
+        const topics = SHOWN_HELP_TOPICS.filter(t => t.category === cat.id);
         if (!topics.length) continue;
         html += `<div class="help-cat"><h4>${stakingEscapeHtml(cat.label)}</h4><ul>`;
         for (const t of topics) {
@@ -4618,6 +4626,9 @@ function routeTo(target) {
         mainTarget = 'tx-details';
         detailId = target.split('/')[1];
         detailId2 = target.split('/')[2];
+    } else if (target === 'validate' || target.startsWith('validate/')) {
+        mainTarget = VALIDATE_ON ? 'validate' : 'not-found';   // lib/validate-gate.js
+        detailId = target.substring('validate/'.length);
     } else if (target.startsWith('staking-rewards/')) {
         mainTarget = 'staking-rewards';
         detailId = target.substring('staking-rewards/'.length);
@@ -4725,6 +4736,8 @@ function routeTo(target) {
                 fetchTxDetails(detailId, detailId2);
             } else if (mainTarget === 'staking-rewards') {
                 initStakingRewardsPage(detailId);
+            } else if (mainTarget === 'validate') {
+                initValidatePage(detailId);
             } else if (mainTarget === 'wallet') {
                 initWalletPage(detailId);
             } else if (mainTarget === 'donate') {
@@ -7387,6 +7400,19 @@ function onStakingRewardsWalletChange(change) {
     }
     try { history.replaceState(null, '', '/staking-rewards'); } catch (e) { /* sandboxed */ }
     showStakingRewardsFor('');
+}
+
+// /validate (the connected wallet, following it) and /validate/<address> (any stash): lib/validator-status-view.js.
+function initValidatePage(address) {
+    const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
+        fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress });
+    pageScope.add(walletSession.onActiveAccountChange((change) => {
+        const viewed = readRouteFromLocation().slice('validate/'.length);
+        const follow = viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress });
+        if (follow && viewed) { try { history.replaceState(null, '', '/validate'); } catch (e) { /* sandboxed */ } }
+        mount(follow ? '' : viewed);
+    }));
+    mount(address || '');
 }
 
 function submitStakingSearch() {
