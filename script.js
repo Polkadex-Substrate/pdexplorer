@@ -36,6 +36,7 @@ import { kindLabel, kindFilterOptions, renderLifecycleLinks, referendumDiscussCe
 import { isGovDetailRoute, govItemPath, legacyGovRedirect, itemPathForThread } from './lib/gov-detail.js';
 import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } from './lib/gov-detail-view.js';
 import { renderCallHtml, installCallArgCopy } from './lib/call-args-format.js';
+import { callToTree } from './lib/call-tree.js';
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
 import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
 import { validatorsWithStakeState } from './lib/stake-display.js';
@@ -83,6 +84,7 @@ import { mountNominationStatus } from './lib/nomination-status-view.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
+import { mountValidatorSetup } from './lib/validator-setup-view.js';
 // The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
 const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
 const SHOWN_HELP_TOPICS = visibleHelpTopics(HELP_TOPICS, { validate: VALIDATE_ON });
@@ -7409,6 +7411,7 @@ function initValidatePage(address) {
     const nodeName = new URLSearchParams(window.location.search).get('node') || '';
     const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(null, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
     if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
+    if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
     const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
         fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName });
     pageScope.add(walletSession.onActiveAccountChange((change) => {
@@ -7418,6 +7421,14 @@ function initValidatePage(address) {
         mount(follow ? '' : viewed);
     }));
     mount(address || '');
+}
+
+// /validate/setup (lib/validator-setup-view.js): signs through submitSignedTx; remounted on a wallet change.
+function validateSetupDeps(watch) {
+    if (watch) pageScope.add(walletSession.onActiveAccountChange(() => mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(false))));
+    return { account: walletSession.getActiveAccount(), getApi: () => globalApi, isMultisig: (a) => !!multisigStore.find(a), revision: () => walletSession.revision(),
+        submit: (o) => submitSignedTx(o), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, isAddress: isSearchableAddress,
+        isSame: isSameAddress, renderCall: (c) => renderCallHtml(callToTree(c), {}, { raw: false }) };
 }
 
 function submitStakingSearch() {

@@ -5038,6 +5038,43 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-node-result { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .validate-node-verdict { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
 .validate-node-table td, .validate-node-table th { overflow-wrap: anywhere; }
+/* Validator setup wizard (Sprint 3, lib/validator-setup-view.js). Brand: one primary per
+   view (.validate-primary), no colour of its own; green stays on Active and Heartbeat only,
+   so "Done on chain" is a word with a neutral tick. */
+.validate-setup-body { display: grid; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); gap: 24px; padding: 24px; align-items: start; }
+.validate-setup-body > .validate-headline, .validate-setup-body > p, .validate-setup-body > a, .validate-setup-body > button, .validate-setup-body > .validate-skeleton { grid-column: 1 / -1; }
+.validate-setup-progress { display: none; margin: 0; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
+.validate-steps { list-style: none; counter-reset: validate-step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.validate-step { counter-increment: validate-step; display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-left: 2px solid var(--border-color); color: var(--text-secondary); font-size: 0.9rem; }
+.validate-step::before { content: counter(validate-step) ". "; font-weight: 600; }
+.validate-step.is-current { border-left-color: var(--brand-primary); color: var(--text-primary); font-weight: 600; }
+.validate-step-name { color: inherit; }
+.validate-step-done { font-size: 0.82rem; font-weight: 400; color: var(--text-primary); }
+.validate-step-done .bx { color: var(--text-primary); }
+.validate-setup-step { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.validate-setup-step input[type="text"], .validate-setup-step textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
+.validate-setup-step input[aria-invalid="true"], .validate-setup-step textarea[aria-invalid="true"] { border-color: var(--border-hover); }
+.validate-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.validate-setup-note { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
+.validate-setup-cmd { margin: 0; padding: 12px 16px; overflow-x: auto; white-space: pre; font-size: 0.82rem; line-height: 1.6; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); }
+.validate-setup-cmd:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
+.validate-setup-payee { margin: 0; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 8px; }
+.validate-setup-choice { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; color: var(--text-primary); }
+.validate-setup-choice input { accent-color: var(--brand-primary); }
+.validate-review { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; }
+.validate-review li { line-height: 1.6; }
+.validate-review-text { font-weight: 600; color: var(--text-primary); }
+.validate-review-args { margin-top: 4px; font-size: 0.82rem; overflow-wrap: anywhere; }
+.validate-warnings { padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); }
+.validate-warnings ul { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
+.validate-ack { display: flex; gap: 8px; align-items: center; margin: 0; font-weight: 600; color: var(--text-primary); }
+.validate-ack input { width: 18px; height: 18px; accent-color: var(--brand-primary); }
+.validate-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (max-width: 768px) {
+    .validate-setup-body { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+    .validate-setup-progress { display: block; }
+    .validate-steps { display: none; }
+}
 @media (max-width: 640px) {
     .validate-rows { grid-template-columns: 1fr; }
     .validate-row dd { border-top: none; padding-top: 0; }

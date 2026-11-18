@@ -217,9 +217,9 @@ describe('formatting helpers', () => {
     test('aboutDuration', () => {
         assert.deepEqual([aboutDuration(12 * 60), aboutDuration(2 * 3600), aboutDuration(3 * 3600 + 20 * 60), aboutDuration(26 * 3600)], ['about 12 min', 'about 2 h', 'about 3 h 20 min', 'about 1 d 2 h']);
     });
-    test('ctaFor: Sprint 1 has no validator actions; only "Connect wallet" when nothing is connected', () => {
+    test('ctaFor: "Connect wallet" when nothing is connected; no primary when nothing is urgent (setup CTAs: Sprint 3)', () => {
         assert.deepEqual(ctaFor('none', { connected: false }), { label: 'Connect wallet', href: '/wallet?returnTo=%2Fvalidate' });
-        for (const s of ['not-bonded', 'waiting', 'active', 'disabled']) assert.equal(ctaFor(s, { connected: true }), null);
+        for (const s of ['waiting', 'active', 'disabled']) assert.equal(ctaFor(s, { connected: true }), null);
     });
 });
 
@@ -830,7 +830,7 @@ describe('the flag (FEATURE_FLAGS.validate, ?validate=1)', () => {
     });
     test('help topics for the flag are hidden while it is off', () => {
         const flagged = HELP_TOPICS.filter(t => t.flag === 'validate').map(t => t.slug);
-        assert.deepEqual(flagged.sort(), ['run-a-validator', 'session-keys', 'validator-status']);
+        assert.deepEqual(flagged.sort(), ['run-a-validator', 'session-keys', 'validator-setup', 'validator-status']);
         assert.ok(!visibleHelpTopics(HELP_TOPICS, { validate: false }).some(t => t.flag));
         assert.equal(visibleHelpTopics(HELP_TOPICS, { validate: true }).length, HELP_TOPICS.length);
     });
