@@ -5014,7 +5014,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 /* Never a second X in a search field. */
 .ia-wrap > input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
 /* One line under the field, out of the flow so nothing moves. */
-.ia-hint { position: absolute; left: 0; top: 100%; margin-top: 2px; font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; pointer-events: none; z-index: 2; }
+.ia-hint { position: absolute; left: 0; right: 0; top: 100%; margin-top: 2px; font-size: 0.78rem; color: var(--text-muted); white-space: normal; pointer-events: none; z-index: 2; }
 @media (pointer: coarse) {
     .ia-actions .ia-btn { width: 36px; }
     .ia-actions .ia-btn::after { content: ""; position: absolute; inset: -8px 0; }
@@ -5022,6 +5022,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .ia-wrap > input[data-ia="compact"], .ia-wrap > input[data-ia="clear"] { padding-right: 48px !important; }
     /* Table filters keep the 28 px box (the stretched hit area still applies), so the filter bar height does not change. */
     .table-filter-bar .ia-actions .ia-btn { width: 28px; }
-    .table-filter-bar .ia-wrap > input[data-ia] { padding-right: 40px !important; }
+    .table-filter-bar .ia-wrap > input[data-ia="both"] { padding-right: 72px !important; }
+    .table-filter-bar .ia-wrap > input[data-ia="compact"], .table-filter-bar .ia-wrap > input[data-ia="clear"] { padding-right: 40px !important; }
 }
 /* --- end Paste and Clear --- */

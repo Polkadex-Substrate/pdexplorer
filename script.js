@@ -79,7 +79,7 @@ import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipie
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
-import { startInputActionsObserver } from './lib/input-actions.js';
+import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 // The release buttons in the balance breakdown sign through submitSignedTx (fee preflight, watchdog).
 const lockActionDeps = () => ({ submit: submitSignedTx, api: () => globalApi, connected: getStoredWallet, isSame: isSameAddress });
 
@@ -647,6 +647,8 @@ function makeTable(config) {
             });
         });
 
+        // Buttons go in now, not a frame later, so the focused filter box never shifts.
+        enhanceInputActions(container);
         restoreFocus(focusSnap);
         if (hooks.onRender) hooks.onRender();
     }

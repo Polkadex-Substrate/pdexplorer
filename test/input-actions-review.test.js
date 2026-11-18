@@ -101,7 +101,7 @@ describe('finding 5: refuse, not cut, outside free-text areas', () => {
 
 describe('finding 6: execCommand only on the focused field', () => {
     test('an unfocused field is set directly and execCommand is not called', async (t) => {
-        const p = page(t, '<input id="f" data-input-kind="text" value="old"><input id="g">', 'new');
+        const p = page(t, '<input id="f" data-input-kind="address" value="old"><input id="g">', 'new');
         enhanceInputActions(p.doc.body);
         let calls = 0;
         p.doc.execCommand = () => { calls++; return true; };
@@ -124,7 +124,7 @@ describe('finding 7: bidirectional control marks', () => {
         assert.equal(cleanPaste('hex', `0x${bidi}ab12`).value, '0xab12');
         assert.equal(cleanPaste('amount', `${bidi}12.5${bidi}`).value, '12.5');
         assert.equal(cleanPaste('ref', `0x${bidi}ab12`).value, '0xab12');
-        assert.equal(cleanPaste('address-list', `es1${bidi}\nes2`).value, 'es1\nes2');
+        assert.equal(cleanPaste('address-list', `es1${bidi}\nes2`, { multiline: true }).value, 'es1\nes2');
     });
     test('a paste of only marks counts as empty', () => {
         assert.equal(cleanPaste('address', bidi).ok, false);
