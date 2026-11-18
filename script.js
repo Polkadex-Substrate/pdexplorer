@@ -4441,7 +4441,7 @@ function bootSeoRouter() {
     // be replaceState. Validate before building the URL.
     const legacyHash = safeRouteToken(window.location.hash.replace(/^#/, '').trim());
     if (legacyHash && (window.location.pathname === '/' || window.location.pathname === '')) {
-        try { history.replaceState(null, '', '/' + legacyHash); }
+        try { history.replaceState(history.state, '', '/' + legacyHash); }
         catch (e) { /* ignore */ }
     }
 
@@ -4589,7 +4589,7 @@ function routeTo(target) {
     if (!target) target = 'home';
     // /democracy?ref=N and friends (emails, calendar, bookmarks) -> the item's own page.
     const legacyGov = legacyGovRedirect(target.split(/[?#]/)[0], window.location.search);
-    if (legacyGov) { try { history.replaceState(null, '', '/' + legacyGov); } catch (e) { /* sandboxed */ } target = legacyGov; }
+    if (legacyGov) { try { history.replaceState(history.state, '', '/' + legacyGov); } catch (e) { /* sandboxed */ } target = legacyGov; }
 
     // Strip query string and hash fragment before doing the route lookup. The
     // page sections are matched by `data-page="<route>"` (e.g. "treasury"),
@@ -5470,7 +5470,7 @@ async function renderChainStatePage() {
             const share = new URLSearchParams({ pallet: palletSel.value, item: itemSel.value });
             if (args.length) share.set('args', args.join(','));
             if (at) share.set('at', at);
-            history.replaceState({}, '', `/chain-state?${share}`);
+            history.replaceState(history.state, '', `/chain-state?${share}`);
         } catch (e) {
             $('cs-status').innerHTML = `<span class="cs-err">${escapeHtml(e.message)}</span>`;
         } finally {
@@ -5763,7 +5763,7 @@ async function renderDecodePage() {
             renderDecodeResult(data);
             const share = new URLSearchParams({ block });
             if (method) share.set('method', method);
-            history.replaceState({}, '', `/decode?${share}`);
+            history.replaceState(history.state, '', `/decode?${share}`);
         } catch (e) {
             $('dec-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`;
         }
@@ -6504,7 +6504,7 @@ async function fetchTxDetails(block, hash) {
         // they know what happened.
         let correctionBanner = '';
         if (data.correctedFrom != null && Number.isFinite(data.block) && data.block !== data.correctedFrom) {
-            try { history.replaceState(null, '', '/tx/' + data.block + '/' + data.hash); } catch (_) {}
+            try { history.replaceState(history.state, '', '/tx/' + data.block + '/' + data.hash); } catch (_) {}
             correctionBanner = `<div style="margin: 0 20px 12px; padding: 10px 14px; background: rgba(245, 166, 35, 0.1); border: 1px solid rgba(245, 166, 35, 0.3); border-radius: 4px; font-size: 0.82rem; color: var(--text-secondary);">
                 <i class='bx bx-info-circle' style="vertical-align: middle; color: #f5a623;"></i>
                 The link pointed at block #${data.correctedFrom}, but the transaction is actually in block #${data.block}. The URL has been corrected — likely a chain reorg between when the link was generated and when it was opened.
@@ -7394,7 +7394,7 @@ function onStakingRewardsWalletChange(change) {
     if (!viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress })) {
         return renderStakingRewardsNote(stakingRewardsPlan({ urlAddress: viewed, account: walletSession.getActiveAccount(), isSame: isSameAddress }));
     }
-    try { history.replaceState(null, '', '/staking-rewards'); } catch (e) { /* sandboxed */ }
+    try { history.replaceState(history.state, '', '/staking-rewards'); } catch (e) { /* sandboxed */ }
     showStakingRewardsFor('');
 }
 
@@ -8393,7 +8393,7 @@ function initWalletPage(address) {
         if (isValidPolkadexAddress(address)) {
             const pdex = toPolkadexAddress(address);
             if (pdex && pdex !== address) {
-                try { history.replaceState(null, '', '/wallet/' + pdex); } catch (e) { /* ignore */ }
+                try { history.replaceState(history.state, '', '/wallet/' + pdex); } catch (e) { /* ignore */ }
                 address = pdex;
             }
         }

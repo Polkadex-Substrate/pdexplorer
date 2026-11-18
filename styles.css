@@ -4824,6 +4824,8 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 }
 .wallet-option-row.is-primary:hover, .wallet-option-row.is-primary:focus-visible,
 .wallet-account-btn.is-primary:hover, .wallet-account-btn.is-primary:focus-visible { box-shadow: 0 0 0 3px var(--brand-primary-glow); }
+/* A waiting lead keeps its gradient border: no pink border and no left edge over it. */
+.wallet-option.is-waiting .wallet-option-row.is-primary { border-color: transparent; box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 .wallet-option-row.is-primary .wallet-option-action:not(.is-count) { padding: 5px 13px; border: 0; background: var(--brand-gradient); color: var(--text-primary); }
 .wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile { border: 0; background: var(--brand-gradient); color: var(--text-primary); }
 .wallet-option-row.is-primary .bx-chevron-right, .wallet-account-btn.is-primary .bx-chevron-right { color: var(--brand-primary); }

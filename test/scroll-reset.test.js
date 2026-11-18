@@ -24,7 +24,7 @@ const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
 // A happy-dom window whose scrollTo is recorded and whose scrollY is a stub.
 // `maxY` plays a page too short for the wanted position (the browser clamps).
-function world(path = '/blocks') {
+function world(path = '/blocks', retryMs = 5) {
     const win = new Window({ url: 'http://localhost' + path });
     const calls = [];
     const s = { y: 0, maxY: Infinity };
@@ -34,7 +34,7 @@ function world(path = '/blocks') {
     const frames = [];
     win.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
     const flush = () => { while (frames.length) frames.shift()(); };
-    const mem = createScrollMemory({ win, retryMs: 5 });
+    const mem = createScrollMemory({ win, retryMs });
     // The router as script.js wires it.
     const go = (target, opts = {}) => {
         const state = mem.beforeNavigate(opts);
@@ -239,12 +239,12 @@ describe('review round: anchors, user scroll, replaceState, reload', () => {
 
     test('2: a pending retry is cancelled by a wheel, touch or scroll key, not by other keys', async () => {
         for (const [type, init, cancels] of [['wheel', {}, true], ['touchmove', {}, true], ['keydown', { key: 'PageDown' }, true], ['keydown', { key: 'a' }, false]]) {
-            const w = world('/blocks'); w.mem.boot();
+            const w = world('/blocks', 80); w.mem.boot();
             w.s.y = 1000; w.go('b'); w.s.y = 0; w.s.maxY = 100;
             await w.back(); w.flush();
             w.calls.length = 0;
             w.win.dispatchEvent(type === 'keydown' ? new w.win.KeyboardEvent(type, init) : new w.win.Event(type, init));
-            await tick(30);
+            await tick(150);
             assert.equal(w.calls.some(c => c[1] === 1000), !cancels, type + ' ' + (init.key || ''));
         }
     });
