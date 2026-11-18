@@ -527,12 +527,12 @@ describe('brand pass: the lead row and the only account (markup)', () => {
         const w = mountChooser(t, { wallets: [fakeWallet('talisman', [acct(10, 'T')]), fakeWallet('polkadot-js', [acct(11, 'P')])] }); await w.picker.ready;
         assert.deepEqual(solids(w), []);
     });
-    test('view: switching with another wallet remembered as last used: Use a different wallet leads with that row', async (t) => {
+    test('view: switching with another wallet remembered as last used: Use a different wallet marks no lead beside the Current row', async (t) => {
         const wallets = [fakeWallet('talisman', [acct(10, 'T')]), fakeWallet('polkadot-js', [acct(11, 'P')])];
         const w = mountChooser(t, { wallets, current: addr(11), currentSource: 'polkadot-js', lastSource: 'talisman' }); await w.picker.ready;
         w.q('#wallet-picker-different').click(); await w.settle();
         assert.equal(w.q('section.wallet-picker').getAttribute('data-view'), 'options');
-        assert.deepEqual(solids(w).map(e => e.getAttribute('data-source')), ['talisman']);
+        assert.deepEqual(solids(w), [], 'the Current row is on screen, so no lead row');
     });
     test('view: one account shared by the one wallet: the account row is the one is-primary', async (t) => {
         const w = mountChooser(t, { wallets: [fakeWallet('talisman', [acct(10, 'T')])] }); await w.picker.ready;
@@ -870,6 +870,17 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
         await w.picker.ready;
         assert.equal(w.qa('.wallet-account-row.is-current').filter(w.visible).length, 1, 'the Current row is on screen');
         assert.deepEqual(w.qa('.is-primary').filter(w.visible), []);
+        w.q('#wallet-picker-different').click(); await w.settle();
+        assert.equal(w.q('section.wallet-picker').getAttribute('data-view'), 'options');
+        assert.equal(w.qa('.wallet-account-row.is-current').filter(w.visible).length, 1, 'the Current row is still on screen');
+        assert.deepEqual(w.qa('.is-primary').filter(w.visible), [], 'no lead row beside the Current row after Use a different wallet');
+    });
+    test('5b: a waiting lead row lets the gradient border win: no pink border, no left edge', () => {
+        const i = RULES.findIndex(r => !r.media && r.selectors.includes('.wallet-option-row.is-primary'));
+        const j = RULES.findIndex(r => !r.media && r.selectors.includes('.wallet-option.is-waiting .wallet-option-row.is-primary'));
+        assert.ok(j > i, 'a waiting-lead rule after the lead rule');
+        assert.equal(RULES[j].decls['border-color'], 'transparent');
+        assert.equal(RULES[j].decls['box-shadow'], '0 0 0 3px var(--brand-primary-glow)');
     });
     test('7: order guard, the lead rules come after their hover rules and Current after the row base', () => {
         assert.deepEqual(checkOrder(CSS), [], msg(checkOrder(CSS)));

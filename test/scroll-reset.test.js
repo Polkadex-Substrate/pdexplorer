@@ -92,12 +92,14 @@ describe('createScrollMemory', () => {
         assert.deepEqual(w.calls, []);
     });
 
-    test('each pushed entry gets its own key; a replace keeps no key (null state, as before)', () => {
+    test('each pushed entry gets its own key; a replace keeps the entry\'s existing state (and its key)', () => {
         const w = world(); w.mem.boot();
         const a = w.mem.beforeNavigate({}), b = w.mem.beforeNavigate({});
         assert.ok(a && typeof a.scrollKey === 'string' && a.scrollKey.length > 0);
         assert.notEqual(a.scrollKey, b.scrollKey);
-        assert.equal(w.mem.beforeNavigate({ replace: true }), null);
+        assert.equal(w.mem.beforeNavigate({ replace: true }), null, 'an entry with no state stays without');
+        w.win.history.pushState(a, '', '/a');
+        assert.deepEqual(w.mem.beforeNavigate({ replace: true }), a, 'a keyed entry keeps its key through a replace');
     });
 
     test('Back restores the position the entry was left at, and Forward restores the next one', async () => {
@@ -217,6 +219,65 @@ describe('script.js wiring', () => {
         assert.equal([...code.matchAll(/scrollMemory\.afterPopstate\(/g)].length, 1);
         assert.doesNotMatch(stripComments(bodyOf(SCRIPT, 'routeTo')), /scrollTo|scrollMemory/, 'routeTo itself never scrolls (boot, replace hops and re-renders call it)');
         assert.doesNotMatch(stripComments(bodyOf(SCRIPT, 'onWalletChanged')), /scrollTo|scrollMemory/);
+    });
+});
+
+describe('review round: anchors, user scroll, replaceState, reload', () => {
+    test('1: Back or Forward onto a #fragment entry that names an element does not restore over the smooth anchor scroll; an unknown fragment still restores', async () => {
+        const w = world('/blocks'); w.mem.boot();
+        w.win.document.body.innerHTML = '<h2 id="cors">x</h2>';
+        w.s.y = 300; w.go('blocks#cors'); w.s.y = 800; w.go('other');
+        w.calls.length = 0;
+        await w.back(); w.flush();
+        assert.equal(w.win.location.hash, '#cors');
+        assert.deepEqual(w.calls, [], 'the anchor scroll is left alone');
+        w.go('other2'); w.go('blocks#nothere'); w.s.y = 640; w.go('other3');
+        w.calls.length = 0;
+        await w.back(); w.flush();
+        assert.deepEqual(w.calls[0], [0, 640], 'a fragment with no element is restored as before');
+    });
+
+    test('2: a pending retry is cancelled by a wheel, touch or scroll key, not by other keys', async () => {
+        for (const [type, init, cancels] of [['wheel', {}, true], ['touchmove', {}, true], ['keydown', { key: 'PageDown' }, true], ['keydown', { key: 'a' }, false]]) {
+            const w = world('/blocks'); w.mem.boot();
+            w.s.y = 1000; w.go('b'); w.s.y = 0; w.s.maxY = 100;
+            await w.back(); w.flush();
+            w.calls.length = 0;
+            w.win.dispatchEvent(type === 'keydown' ? new w.win.KeyboardEvent(type, init) : new w.win.Event(type, init));
+            await tick(30);
+            assert.equal(w.calls.some(c => c[1] === 1000), !cancels, type + ' ' + (init.key || ''));
+        }
+    });
+
+    test('3: replaceState keeps the scroll key, so Forward after a replace still finds its position', async () => {
+        const w = world('/blocks'); w.mem.boot();
+        w.s.y = 700; w.go('wallet'); w.s.y = 50;
+        w.go('wallet/abc', { replace: true });
+        assert.ok(w.win.history.state && w.win.history.state.scrollKey, 'the key survived the replace');
+        w.go('x'); await w.back(); await w.back();
+        w.calls.length = 0; await w.forward(); w.flush();
+        assert.deepEqual(w.calls[0], [0, 50]);
+    });
+
+    test('3b: script.js never rewrites an entry with a null state', () => {
+        const src = stripComments(readRepo('script.js', import.meta.url));
+        assert.doesNotMatch(src, /replaceState\(\s*null/);
+        assert.doesNotMatch(src, /replaceState\(\s*\{\}/);
+    });
+
+    test('4: positions survive a reload through sessionStorage, bounded to 50, and a throwing storage is harmless', () => {
+        const w = world('/blocks'); w.mem.boot();
+        w.s.y = 900; w.go('b'); w.s.y = 10; w.go('c');
+        const w2 = createScrollMemory({ win: w.win });
+        assert.ok(w2.size() >= 2, 'a new module on the same tab starts with the saved positions');
+        const many = world('/blocks'); many.mem.boot();
+        for (let i = 0; i < 70; i++) { many.s.y = i; many.go('p' + i); }
+        const saved = JSON.parse(many.win.sessionStorage.getItem('pdex-scroll-v1'));
+        assert.equal(saved.length, 50);
+        const broken = world('/blocks');
+        Object.defineProperty(broken.win, 'sessionStorage', { get() { throw new Error('blocked'); } });
+        const m = createScrollMemory({ win: broken.win }); m.boot(); m.beforeNavigate({}); m.beforePopstate(); m.afterPopstate();
+        assert.ok(m.size() >= 0);
     });
 });
 
