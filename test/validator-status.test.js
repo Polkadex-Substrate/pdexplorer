@@ -125,6 +125,12 @@ describe('validatorStatusModel: the rows under the headline', () => {
         assert.equal(row(model({ inSession: false }), 'online').text, 'Not in the active set this session.');
         assert.equal(row(model({ imOnline: false }), 'online').text, 'The explorer cannot tell: this runtime has no imOnline module.');
         assert.equal(row(model({ heartbeat: null, blocks: null }), 'online').text, 'Could not be read.');
+        // review finding 3: the heartbeat read failed and no block was seen: unknown, never Offline
+        for (const sessionProgress of [0.5, 0.9, 0.99]) {
+            const u = row(model({ heartbeat: null, blocks: 0, sessionProgress }), 'online');
+            assert.deepEqual([u.word, u.text, u.tone], ['Unknown', 'Could not be read.', 'neutral'], String(sessionProgress));
+        }
+        assert.equal(row(model({ heartbeat: null, blocks: 3 }), 'online').word, 'Online');
     });
     test('era points and rewards', () => {
         assert.equal(row(model(), 'points').text, 'Era points this era: 1,200 (rank 10 of 200). Last era: 7,000 points, about 37 PDEX in rewards.');
@@ -148,7 +154,18 @@ describe('validatorStatusModel: the rows under the headline', () => {
     test('nominators: count and payout pages (256 per page)', () => {
         assert.equal(row(model(), 'nominators').text, '300 nominators, 2 payout pages.');
         assert.equal(row(model({ exposure: { ...snap().exposure, nominatorCount: 1, pageCount: 1 } }), 'nominators').text, '1 nominator, 1 payout page.');
-        assert.equal(row(model({ exposure: null }), 'nominators').text, 'Counted at election: known once elected.');
+        assert.equal(row(model({ inSession: false, exposure: null }), 'nominators').text, 'Nominations for a waiting validator are not counted here yet.');
+    });
+    test('a validator in the active set whose exposure could not be read is never "not elected" (review finding 1)', () => {
+        const m = model({ exposure: null });
+        assert.equal(m.state, 'active');
+        const stake = row(m, 'stake'), nom = row(m, 'nominators');
+        assert.match(stake.text, /could not be read/);
+        assert.match(nom.text, /could not be read/);
+        for (const r of [stake, nom]) assert.doesNotMatch(r.text, /Not elected|known once elected|waiting validator/);
+        assert.equal(nom.retry, true);
+        assert.ok(!row(model(), 'nominators').retry);
+        assert.ok(!row(model({ inSession: false, exposure: null }), 'nominators').retry);
     });
     test('commission: value, the live minimum, the median, and the blocked flag', () => {
         assert.equal(row(model(), 'commission').text, '5%. Minimum on Polkadex: 3%. Median of active validators: 10%.');
@@ -372,7 +389,7 @@ function fakeLayoutRegistry(fields) {
     return { metadata: { pallets: [{ name: { toString: () => 'Session' }, calls: { isSome: true, unwrap: () => ({ type: 1 }) } }] }, lookup: { getSiType: (id) => types[Number(id)] } };
 }
 describe('the routes', () => {
-    let server, base, api, ready = true, clock = 1_000_000, allow = true;
+    let server, base, api, ready = true, clock = 1_000_000, allow = true, statusAllow = true;
     const SHORT = 'public, max-age=5, s-maxage=10, stale-while-revalidate=30';
     const MEDIUM = 'public, max-age=30, s-maxage=60, stale-while-revalidate=120';
     const isAddr = (s) => /^e[1-9A-HJ-NP-Za-km-z]{46,}$/.test(String(s || ''));
@@ -399,6 +416,7 @@ describe('the routes', () => {
             serverError: (res) => { res.set('Cache-Control', 'no-store'); res.status(500).json({ error: 'Internal error.' }); },
             incidents: () => [], nameOf: async () => null,
             rateOk: () => allow,
+            statusRateOk: () => statusAllow,
             now: () => clock
         });
         await new Promise(r => { server = app.listen(0, '127.0.0.1', r); });
@@ -458,6 +476,36 @@ describe('the routes', () => {
         ready = false;
         try { const r = await get(`/api/validator/${OTHER}/status`); assert.equal(r.status, 503); } finally { ready = true; }
     });
+    test('status: rate limited per IP like the keys check (429, no-store) and nothing is read from the node', async () => {
+        statusAllow = false;
+        const before = api.reads.length;
+        try {
+            const r = await get(`/api/validator/${addr(80)}/status`);
+            assert.equal(r.status, 429);
+            assert.equal(r.cache, 'no-store');
+            assert.equal(r.body.code, 'RATE_LIMITED');
+            const hit = await get(`/api/validator/${V2}/status`);
+            assert.equal(hit.status, 429, 'a cached address is limited too');
+            assert.equal(api.reads.length, before);
+        } finally { statusAllow = true; }
+    });
+    test('status: concurrent requests for one address share a single read of the node (in-flight dedupe)', async () => {
+        const a = addr(81);
+        const before = api.reads.filter(x => x === 'bonded').length;
+        const real = api.query.staking.bonded;   // a slow node, so the three requests overlap
+        api.query.staking.bonded = async (x) => { await new Promise(r => setTimeout(r, 80)); return real(x); };
+        let rs;
+        try { rs = await Promise.all([get(`/api/validator/${a}/status`), get(`/api/validator/${a}/status`), get(`/api/validator/${a}/status`)]); } finally { api.query.staking.bonded = real; }
+        assert.deepEqual(rs.map(r => r.status), [200, 200, 200]);
+        assert.equal(api.reads.filter(x => x === 'bonded').length - before, 1);
+    });
+    test('status: a failed read is not remembered by the dedupe (the next request reads again)', async () => {
+        const a = addr(82);
+        const real = api.query.staking.bonded;
+        api.query.staking.bonded = async () => { throw new Error('rpc blip'); };
+        try { assert.equal((await get(`/api/validator/${a}/status`)).status, 500); } finally { api.query.staking.bonded = real; }
+        assert.equal((await get(`/api/validator/${a}/status`)).status, 200);
+    });
     test('check: 200 no-store; each key with its result; the babe key registered to another account is a conflict', async () => {
         const r = await get(`/api/session-keys/check?keys=${BLOB}&for=${STASH}`);
         assert.equal(r.status, 200);
@@ -492,7 +540,7 @@ describe('the routes', () => {
             const r = await get(`/api/session-keys/check?keys=${BLOB}`);
             assert.equal(r.status, 409);
             assert.equal(r.body.code, 'LAYOUT_MISMATCH');
-            assert.match(r.body.error, /session key layout changed \(spec 393\)/);
+            assert.match(r.body.error, /session key format is different from what this checker knows/);
             assert.equal(api.reads.filter(x => x === 'keyOwner').length, before);
         } finally { api.registry = saved; clock += 61_000; }
     });
@@ -576,11 +624,72 @@ describe('renderValidatorStatus and renderKeysChecker', () => {
     });
     test('layout mismatch: the copy and no form', () => {
         const html = renderKeysChecker({ params: params({ specVersion: 394, layout: { ok: false, reason: '7 keys' } }), esc: escapeHtml });
-        assert.match(html, /session key layout changed \(spec 394\)/);
+        assert.match(html, /session key format is different from what this checker knows\. Use your node&#39;s author_rotateKeys output and the chain&#39;s own validation\./);
         assert.doesNotMatch(html, /<textarea/);
     });
     test('the statement: never asks for a seed, keys come from your own node', () => {
         assert.equal(VALIDATE_STATEMENT, 'The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet.');
+    });
+});
+
+describe('the status view: live region, focus, table headers, retry on a row (review finding 4)', () => {
+    test('the status slot is a polite live region, present before the answer arrives', async () => {
+        const { el } = dom();
+        let release; const gate = new Promise(r => { release = r; });
+        const d = deps(); const real = d.fetchJson;
+        d.fetchJson = async (u) => { if (/\/status$/.test(u)) await gate; return real(u); };
+        const p = mountValidatePage(el, d); await flush();
+        const slot = el.querySelector('#validate-status-slot');
+        assert.equal(slot.getAttribute('aria-live'), 'polite');
+        release(); await p; await flush();
+        assert.equal(el.querySelector('#validate-status-slot').getAttribute('aria-live'), 'polite');
+    });
+    test('after the status loads the headline takes focus; so it does after a failure', async () => {
+        const { el, doc } = dom(); el.setAttribute('id', 'root'); 
+        await mountValidatePage(el, deps()); await flush();
+        assert.equal(doc.activeElement && doc.activeElement.id, 'validate-headline');
+        const { el: e2, doc: d2 } = dom();
+        await mountValidatePage(e2, deps({ fetchJson: async (u) => { if (u === '/api/validator/params') return params(); const e = new Error('x'); e.status = 503; throw e; } })); await flush();
+        assert.equal(d2.activeElement && d2.activeElement.id, 'validate-headline');
+    });
+    test('the loading headline is not focused (nothing to read yet)', async () => {
+        const { el, doc } = dom();
+        let release; const gate = new Promise(r => { release = r; });
+        const d = deps(); const real = d.fetchJson;
+        d.fetchJson = async (u) => { if (/\/status$/.test(u)) await gate; return real(u); };
+        const p = mountValidatePage(el, d); await flush();
+        assert.notEqual(doc.activeElement && doc.activeElement.id, 'validate-headline');
+        release(); await p;
+    });
+    test('the keys table: scope="col" on every column header, scope="row" on the key name', async () => {
+        const { el, w } = dom(); const d = deps();
+        await mountValidatePage(el, d); await flush();
+        el.querySelector('#validate-keys-input').value = BLOB;
+        el.querySelector('#validate-keys-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
+        await flush(20);
+        const heads = Array.from(el.querySelectorAll('.validate-keys-table thead th'));
+        assert.equal(heads.length, 4);
+        for (const h of heads) assert.equal(h.getAttribute('scope'), 'col');
+        const rowHeads = Array.from(el.querySelectorAll('.validate-keys-table tbody th'));
+        assert.equal(rowHeads.length, 6);
+        for (const h of rowHeads) assert.equal(h.getAttribute('scope'), 'row');
+        assert.match(rowHeads[0].textContent, /grandpa/);
+    });
+    test('a row that asks for a retry shows a secondary Retry button that reads the status again', async () => {
+        const { el, w } = dom();
+        let calls = 0;
+        const d = deps(); const real = d.fetchJson;
+        d.fetchJson = async (u) => {
+            if (/\/status$/.test(u)) { calls++; return { ...validatorStatusModel(snap({ address: STASH, exposure: null }), params()), address: STASH }; }
+            return real(u);
+        };
+        await mountValidatePage(el, d); await flush();
+        const btn = el.querySelector('.validate-rows [data-validate-action="retry"]');
+        assert.ok(btn);
+        assert.ok(!btn.classList.contains('validate-primary'));
+        assert.equal(calls, 1);
+        btn.dispatchEvent(new w.Event('click', { cancelable: true })); await flush();
+        assert.equal(calls, 2);
     });
 });
 

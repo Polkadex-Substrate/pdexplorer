@@ -73,17 +73,52 @@ describe('checkLayout: a layout that differs switches the checker off', () => {
         assert.equal(r.ok, false);
         assert.match(r.reason, /7 keys/);
     });
-    test('a key resized, renamed or reordered: mismatch', () => {
+    test('a key resized or renamed: mismatch', () => {
         assert.equal(checkLayout(live.map((k, i) => (i === 5 ? { ...k, bytes: 32 } : k))).ok, false);
         assert.equal(checkLayout(live.map((k, i) => (i === 0 ? { ...k, name: 'grandpa2' } : k))).ok, false);
-        assert.equal(checkLayout([live[1], live[0], ...live.slice(2)]).ok, false);
     });
     test('an unreadable layout (null) is a mismatch too: never validate against a guess', () => {
         assert.equal(checkLayout(null).ok, false);
     });
-    test('the mismatch copy (section 5.5) names the spec and says existing keys are not affected', () => {
-        assert.equal(layoutMismatchText(394),
-            "The chain's session key layout changed (spec 394). The explorer has not been updated for it yet, so key registration is switched off here. Your existing keys are not affected.");
+    test('the mismatch copy is accurate and points at the node and the chain, not at a change that may not have happened', () => {
+        const want = "This network's session key format is different from what this checker knows. Use your node's author_rotateKeys output and the chain's own validation.";
+        assert.equal(layoutMismatchText(394), want);
+        assert.equal(layoutMismatchText(null), want);
+        assert.doesNotMatch(layoutMismatchText(394), /changed|switched off|not been updated/);
+    });
+});
+
+describe('the layout comes from the metadata where the keys are ones the explorer knows (review finding 2)', () => {
+    const KNOWN = { grandpa: 'gran', babe: 'babe', im_online: 'imon', authority_discovery: 'audi', mixnet: 'mixn', beefy: 'beef' };
+    test('393 fixture: six keys, 193 bytes, ok, each with its KeyTypeId', () => {
+        const r = checkLayout(layoutFromRegistry(registryFromMetadata(loadFixture('metadata-testnet-393.json').metadata)));
+        assert.equal(r.ok, true);
+        assert.equal(r.bytes, 193);
+        assert.deepEqual(r.layout.map(k => [k.name, k.typeId]), Object.entries(KNOWN));
+    });
+    test('373 fixture (orderbook and thea keys): not ok, the reason names the keys the explorer does not know, no layout is used', () => {
+        const live = layoutFromRegistry(registryFromMetadata(loadFixture('metadata-mainnet-373.json').metadata));
+        assert.deepEqual(live.map(k => k.name), ['grandpa', 'babe', 'im_online', 'authority_discovery', 'orderbook', 'thea']);
+        const r = checkLayout(live);
+        assert.equal(r.ok, false);
+        assert.match(r.reason, /orderbook/);
+        assert.match(r.reason, /thea/);
+        assert.equal(r.layout, null);
+    });
+    test('a future layout of known keys in another order (or one fewer) works automatically, in the metadata order', () => {
+        const live = [{ name: 'babe', bytes: 32 }, { name: 'grandpa', bytes: 32 }, { name: 'im_online', bytes: 32 }, { name: 'beefy', bytes: 33 }];
+        const r = checkLayout(live);
+        assert.equal(r.ok, true);
+        assert.equal(r.bytes, 129);
+        assert.equal(r.hexLength, 260);
+        assert.deepEqual(r.layout.map(k => [k.name, k.typeId, k.bytes]), [['babe', 'babe', 32], ['grandpa', 'gran', 32], ['im_online', 'imon', 32], ['beefy', 'beef', 33]]);
+        const blob = '0x' + rep('01', 32) + rep('02', 32) + rep('03', 32) + '02' + rep('04', 32);
+        const parsed = parseSessionKeys(blob, { layout: r.layout });
+        assert.equal(parsed.ok, true);
+        assert.deepEqual(parsed.keys.map(k => k.name), ['babe', 'grandpa', 'im_online', 'beefy']);
+    });
+    test('a known name at a size the explorer does not know is still not ok (never a guess)', () => {
+        assert.equal(checkLayout([{ name: 'grandpa', bytes: 31 }, { name: 'babe', bytes: 32 }]).ok, false);
     });
 });
 
