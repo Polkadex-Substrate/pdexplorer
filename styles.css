@@ -5013,6 +5013,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-alert { padding: 12px 16px; border: 1px solid rgba(255, 77, 77, 0.35); border-radius: var(--radius-sm); background: rgba(255, 77, 77, 0.08); color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
 .validate-mismatch { margin: 0; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); }
 .validate-keys-table td { overflow-wrap: anywhere; }
+.validate-keys-table tbody th { padding: 13px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 0.85rem; font-weight: 400; text-align: left; color: var(--text-primary); vertical-align: middle; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
     .validate-rows { grid-template-columns: 1fr; }
     .validate-row dd { border-top: none; padding-top: 0; }

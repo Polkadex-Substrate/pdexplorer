@@ -4077,12 +4077,19 @@ function keyCheckRateOk(req) {
     if (!keyCheckLimiter) keyCheckLimiter = createKeyCheckLimiter({ perMinute: SESSION_KEYS_CHECK_PER_MIN, workers: WORKERS });
     return keyCheckLimiter(clientIp(req));
 }
+// The status route has its own per-IP window (VALIDATOR_STATUS_PER_MIN) so page loads never spend the keys check allowance.
+const VALIDATOR_STATUS_PER_MIN = readPositiveInteger(process.env.VALIDATOR_STATUS_PER_MIN, 60);
+let statusLimiter = null;
+function validatorStatusRateOk(req) {
+    if (!statusLimiter) statusLimiter = createKeyCheckLimiter({ perMinute: VALIDATOR_STATUS_PER_MIN, workers: WORKERS });
+    return statusLimiter(clientIp(req));
+}
 function parseValidatorAddress(raw) {
     if (!isValidAddress(raw)) return null;
     try { return normalizeAddress(raw); } catch (e) { return null; }
 }
 registerValidatorRoutes(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), parseAddress: parseValidatorAddress,
-    cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk });
+    cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk, statusRateOk: validatorStatusRateOk });
 
 app.get('/api/validator/:address', async (req, res) => {
     if (!requireRpc(res)) return;
