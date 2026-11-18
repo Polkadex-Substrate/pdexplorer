@@ -123,15 +123,16 @@ describe('lint: greens are for positive states, never for an action', () => {
 
     test('the three positive states keep their green (audit section 0)', () => {
         assert.match(decl('.wallet-account-badge', 'color'), /--brand-secondary/);
-        // The Current row is marked with Primary like the sidebar (brand pass 3.5); only its badge is green.
+        // The Current row is marked with the brand gradient (contrast pass Revision 3, 5.5); only its badge is green.
         assert.doesNotMatch(decl('.wallet-account-row', 'border'), /--brand-secondary/);
-        assert.equal(decl('.wallet-account-row.is-current', 'border'), '1px solid var(--border-hover)');
-        assert.equal(decl('.wallet-account-row.is-current', 'background'), 'rgba(230, 0, 122, 0.16)');
+        assert.equal(decl('.wallet-account-row.is-current', 'border'), '1px solid transparent');
+        assert.match(decl('.wallet-account-row.is-current', 'background'), /var\(--brand-gradient\) border-box$/);
+        assert.doesNotMatch(decl('.wallet-account-row.is-current', 'background'), /--brand-secondary|--success/);
         assert.equal(decl('.wallet-account-row.is-current', 'position'), 'relative');
         assert.equal(decl('.wallet-account-row.is-current', 'overflow'), 'hidden');
         const bar = '.wallet-account-row.is-current::before';
         assert.equal(decl(bar, 'content'), "''");
-        for (const [p, v] of [['position', 'absolute'], ['left', '0'], ['top', '0'], ['bottom', '0'], ['width', '3px'], ['background', 'var(--brand-primary)'], ['box-shadow', '0 0 10px var(--brand-primary-glow)']]) assert.equal(decl(bar, p), v, bar + ' ' + p);
+        for (const [p, v] of [['position', 'absolute'], ['left', '0'], ['top', '0'], ['bottom', '0'], ['width', '3px'], ['background', 'linear-gradient(180deg, var(--brand-primary), var(--violet))'], ['box-shadow', '0 0 10px var(--brand-primary-glow)']]) assert.equal(decl(bar, p), v, bar + ' ' + p);
         assert.match(decl('.wallet-account-badge', 'border'), /--brand-secondary/);
         assert.match(decl('.connect-wallet-btn.is-connected i', 'color'), /--brand-secondary/);
     });
@@ -302,6 +303,11 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         const end = CSS.indexOf('/* Human-readable call arguments');
         assert.ok(start > 0 && end > start, 'the wallet section markers moved');
         const region = CSS.slice(start, end);
+        // Revision 3 row-position properties are set on the chooser li, not in :root; each must be declared in the region.
+        for (const local of ['--row-border', '--row-hover', '--row-fill', '--row-edge']) {
+            assert.match(region, new RegExp(local + ':\\s*(rgba\\(255, 255, 255, 0\\.\\d+\\)|var\\(--(brand-primary|violet)\\))'), local + ' is declared in the wallet rules');
+            defined.add(local);
+        }
         const missing = [...new Set([...region.matchAll(/var\((--[\w-]+)/g)].map(m => m[1]).filter(t => !defined.has(t)))];
         assert.deepEqual(missing, [], 'undefined tokens render their fallback hex, a new colour');
         const rawHex = region.replace(/var\([^)]*\)/g, '').match(/#[0-9a-f]{3,8}\b/gi) || [];
@@ -707,6 +713,7 @@ describe('privacy and cookie pages (audit section 4)', () => {
 describe('chooser contrast pass: neutral rows, brand colour as accent (revision 3)', () => {
     const WHITE = [255, 255, 255], SECONDARY = [0x9C, 0xA3, 0xAF], PINK = [230, 0, 122], VIOLET = [103, 69, 210], GREEN = [0, 0xE6, 0x76], SURFACE = [0x12, 0x12, 0x1A];
     const GRADIENT = 'linear-gradient(47.94deg, var(--brand-primary) 0%, var(--violet) 98.88%)';
+    const TILE_TINT = 'linear-gradient(47.94deg, rgba(230, 0, 122, 0.22) 0%, rgba(103, 69, 210, 0.22) 98.88%)';
     const OPT_LI = '.wallet-option-list > .wallet-option', ACC_LI = '#wallet-accounts .wallet-account-list > li';
     const POS = [
         [[OPT_LI, ACC_LI], { '--row-border': 'rgba(255, 255, 255, 0.12)', '--row-hover': 'rgba(255, 255, 255, 0.09)' }],
@@ -738,8 +745,15 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
             if (/nth-child/.test(s) && ['background', 'background-color', 'border-color'].some(p => p in r.decls)) err.push(`styles.css:${r.line} "${s}" is an :nth-child rule with a background or border-color`);
             if (/:where\(/.test(s) && /wallet-(option|account)/.test(s)) err.push(`styles.css:${r.line} "${s}" is a :where( stripe rule`);
         }
+        // Scoped to the chooser (other pages use these alphas for their own badges); the one exemption
+        // is the Revision 3 tile tint itself, whose violet stop is 0.22 by the spec (section 4).
+        const CHOOSER = /wallet-(option|account|ext|get|onboarding|picker|group)|\.wc-|\.wp-/;
         for (const gone of ['rgba(230, 0, 122, 0.10)', 'rgba(230, 0, 122, 0.16)', 'rgba(103, 69, 210, 0.14)', 'rgba(103, 69, 210, 0.22)', 'rgba(103, 69, 210, 0.32)']) {
-            for (const r of rules) for (const [p, v] of Object.entries(r.decls)) if (v.includes(gone)) err.push(`styles.css:${r.line} "${r.selectors.join(', ')}" { ${p}: ${v} } uses the Revision 2 alpha ${gone}`);
+            for (const r of rules) for (const [p, v] of Object.entries(r.decls)) {
+                if (!v.includes(gone) || !r.selectors.some(s => CHOOSER.test(s))) continue;
+                if (p === 'background' && v === TILE_TINT && r.selectors.length === 1 && r.selectors[0] === '.wallet-ext-tile') continue;
+                err.push(`styles.css:${r.line} "${r.selectors.join(', ')}" { ${p}: ${v} } uses the Revision 2 alpha ${gone}`);
+            }
         }
         return err;
     }
@@ -905,11 +919,14 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
             const lis = Array.from(d.querySelectorAll(listSel + ' > li'));
             assert.ok(lis.length >= 4, listSel);
             lis.forEach((li, i) => {
-                const cs = w.getComputedStyle(li), want = i % 2 ? ['var(--violet)', 'rgba(255, 255, 255, 0.06)'] : ['var(--brand-primary)', 'rgba(255, 255, 255, 0.03)'];
+                const cs = w.getComputedStyle(li), want = i % 2 ? ['#6745D2', 'rgba(255, 255, 255, 0.06)'] : ['#E6007A', 'rgba(255, 255, 255, 0.03)'];
                 const got = [cs.getPropertyValue('--row-edge').trim(), cs.getPropertyValue('--row-fill').trim()];
                 if (JSON.stringify(got) !== JSON.stringify(want)) err.push(`${listSel} > li:nth-child(${i + 1}) has ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
             });
         }
+        const quiet = Array.from(d.querySelectorAll('.wallet-option-row.is-quiet'));
+        assert.ok(quiet.length >= 1, 'the options list has a quiet row');
+        for (const q of quiet) if (w.getComputedStyle(q).getPropertyValue('--row-edge').trim() !== 'transparent') err.push(`quiet row ${q.className} keeps a coloured edge`);
         assert.deepEqual(err, [], msg(err));
     });
 
