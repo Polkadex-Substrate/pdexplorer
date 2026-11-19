@@ -567,3 +567,163 @@ describe('a follower who later signs up through the general alerts button gets t
         assert.match(route, /db\.adoptDefaultPrefsIfEmpty\(\w+, prefs\)/);
     });
 });
+
+// ---------------------------------------------------------------- Sprint 6 check fixes
+
+import { MAX_OBSERVATION_AGE_MS } from '../lib/validator-alerts-run.js';
+
+const withClock = (offsetMs, fn) => {
+    const real = Date.now;
+    Date.now = () => real() + offsetMs;
+    try { return fn(); } finally { Date.now = real; }
+};
+const obsKey = `validator-alerts:obs:${S1}`;
+
+describe('partial reads never alert (null guards)', () => {
+    test('keys: a null on either side is no alert; two known and different keys still are', () => {
+        assert.deepEqual(detectValidatorEvents(obs({ keys: null }), obs({ keys: 'k2' })), []);
+        assert.deepEqual(detectValidatorEvents(obs({ keys: 'k1' }), obs({ keys: null })), []);
+        assert.deepEqual(kinds(detectValidatorEvents(obs({ keys: 'k1' }), obs({ keys: 'k2' }))), ['keys-changed']);
+    });
+    test('slashed: an unknown previous value does not turn an old slash into an alert; a recent first slash still alerts', () => {
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: null }), obs({ lastSlashEra: 3 })), [], 'era 3 seen from era 10 is history');
+        assert.deepEqual(kinds(detectValidatorEvents(obs({ lastSlashEra: null }), obs({ lastSlashEra: 10 }))), ['slashed']);
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: 9 }), obs({ lastSlashEra: null })), []);
+    });
+    test('not-elected: an unknown previous election state is no alert', () => {
+        assert.deepEqual(detectValidatorEvents(obs({ elected: null, intent: null }), obs({ elected: false })), []);
+        assert.deepEqual(kinds(detectValidatorEvents(obs({ elected: true }), obs({ elected: false }))), ['not-elected']);
+    });
+    test('commission: a null on either side is no alert', () => {
+        assert.deepEqual(detectValidatorEvents(obs({ commission: null }), obs({ commission: 9 })), []);
+        assert.deepEqual(detectValidatorEvents(obs({ commission: 9 }), obs({ commission: null })), []);
+    });
+});
+
+describe('runValidatorAlertsTick: stale baselines and flaky reads', () => {
+    test('the age limit is 2 hours', () => { assert.equal(MAX_OBSERVATION_AGE_MS, 2 * 3600_000); });
+
+    test('a restart after 3 hours sends nothing and rebases; the next change after that does alert', async () => {
+        fresh();
+        follow(mail(), S1);
+        const h = harness([obs(), obs({ commission: 100_000_000, block: 1500 }), obs({ commission: 100_000_000, block: 1501 }), obs({ commission: 1, block: 1600 })]);
+        await h.tick();
+        const stored = db.getKv(obsKey);
+        db.setKv(obsKey, { ...stored, at: Date.now() - 3 * 3600_000 });
+        await h.tick();
+        assert.equal(h.sent.length, 0, 'a change seen after downtime is not mailed');
+        const rebased = db.getKv(obsKey);
+        assert.equal(rebased.obs.commission, 100_000_000);
+        assert.ok(Date.now() - rebased.at < 60_000, 'the baseline is fresh');
+        await h.tick();
+        assert.equal(h.sent.length, 0);
+        await h.tick();
+        assert.deepEqual(h.sent.map(m => m.tag), ['validator.commission-changed']);
+    });
+
+    test('an observation just under 2 hours old is still a baseline', async () => {
+        fresh();
+        follow(mail(), S1);
+        const h = harness([obs(), obs({ commission: 100_000_000 })]);
+        await h.tick();
+        db.setKv(obsKey, { ...db.getKv(obsKey), at: Date.now() - (2 * 3600_000 - 60_000) });
+        await h.tick();
+        assert.equal(h.sent.length, 1);
+    });
+
+    test('a stored observation with no timestamp is treated as stale', async () => {
+        fresh();
+        follow(mail(), S1);
+        const h = harness([obs(), obs({ commission: 100_000_000 })]);
+        await h.tick();
+        db.setKv(obsKey, { obs: db.getKv(obsKey).obs });
+        await h.tick();
+        assert.equal(h.sent.length, 0);
+    });
+
+    test('a null read between two good reads sends nothing and keeps the good baseline', async () => {
+        fresh();
+        follow(mail(), S1);
+        const good = { keys: 'k1', commission: 50_000_000, lastSlashEra: 9, elected: true };
+        const bad = { keys: null, commission: null, lastSlashEra: null, elected: null, intent: null };
+        const h = harness([obs(good), obs({ ...bad, block: 1010 }), obs({ ...good, block: 1020 })]);
+        await h.tick();
+        await h.tick();
+        const kept = db.getKv(obsKey).obs;
+        assert.equal(kept.keys, 'k1');
+        assert.equal(kept.commission, 50_000_000);
+        assert.equal(kept.lastSlashEra, 9);
+        assert.equal(kept.elected, true);
+        await h.tick();
+        assert.equal(h.sent.length, 0, 'the return of the same values is not a change');
+    });
+
+    test('after a null read, a real change against the kept baseline still alerts', async () => {
+        fresh();
+        follow(mail(), S1);
+        const h = harness([obs({ keys: 'k1' }), obs({ keys: null }), obs({ keys: 'k2', block: 1100 })]);
+        await h.tick(); await h.tick(); await h.tick();
+        assert.deepEqual(h.sent.map(m => m.tag), ['validator.keys-changed']);
+    });
+});
+
+describe('validator_alert_follows: pending expiry and the cap on reconfirming', () => {
+    test('a pending follow older than 24 hours stops counting toward the cap, and is cleaned up on the next follow', () => {
+        fresh();
+        const e = mail();
+        follow(e, addr(91), { confirm: false, maxPerEmail: 2 });
+        follow(e, addr(92), { confirm: false, maxPerEmail: 2 });
+        assert.equal(follow(e, addr(93), { maxPerEmail: 2 }).status, 'cap');
+        withClock(25 * 3600_000, () => {
+            assert.equal(follow(e, addr(93), { maxPerEmail: 2, confirm: false }).status, 'pending');
+            assert.equal(follow(e, addr(94), { maxPerEmail: 2, confirm: false }).status, 'pending');
+            assert.equal(db.getValidatorAlertFollowByConfirmationToken('nothing'), null);
+        });
+    });
+
+    test('an expired pending row is removed, so its old link is gone; a confirmed follow is never expired', () => {
+        fresh();
+        const e = mail();
+        const p = follow(e, addr(91), { confirm: false });
+        const c = follow(e, addr(92));
+        withClock(26 * 3600_000, () => { follow(e, addr(93), { confirm: false }); });
+        assert.equal(db.getValidatorAlertFollowByConfirmationToken(p.follow.confirmationToken), null);
+        assert.equal(db.getActiveValidatorAlertFollows().length, 1);
+        assert.equal(db.getActiveValidatorAlertFollows()[0].stash, c.follow.stash);
+    });
+
+    test('a pending follow younger than 24 hours still counts', () => {
+        fresh();
+        const e = mail();
+        follow(e, addr(91), { confirm: false, maxPerEmail: 1 });
+        withClock(23 * 3600_000, () => { assert.equal(follow(e, addr(92), { maxPerEmail: 1 }).status, 'cap'); });
+    });
+
+    test('re-confirming an unsubscribed follow re-checks the cap', () => {
+        fresh();
+        const e = mail();
+        const first = follow(e, addr(91), { maxPerEmail: 2 });
+        db.unsubscribeValidatorAlertFollow(first.follow.unsubscribeToken);
+        const again = follow(e, addr(91), { maxPerEmail: 2, confirm: false });
+        assert.equal(again.status, 'pending');
+        follow(e, addr(92), { maxPerEmail: 2 });
+        follow(e, addr(93), { maxPerEmail: 2 });
+        const r = db.confirmValidatorAlertFollow(again.follow.confirmationToken, { maxPerEmail: 2 });
+        assert.equal(r.capReached, true);
+        assert.equal(db.getActiveValidatorAlertFollows().filter(f => f.stash === addr(91)).length, 0, 'it stays off');
+    });
+
+    test('re-confirming with a free place works; a first confirmation is not blocked by its own row', () => {
+        fresh();
+        const e = mail();
+        const a = follow(e, addr(91), { confirm: false, maxPerEmail: 1 });
+        const ok = db.confirmValidatorAlertFollow(a.follow.confirmationToken, { maxPerEmail: 1 });
+        assert.ok(!ok.capReached);
+        assert.ok(ok.confirmedAt);
+        db.unsubscribeValidatorAlertFollow(a.follow.unsubscribeToken);
+        const b = follow(e, addr(91), { confirm: false, maxPerEmail: 1 });
+        const back = db.confirmValidatorAlertFollow(b.follow.confirmationToken, { maxPerEmail: 1 });
+        assert.ok(!back.capReached);
+        assert.equal(db.getActiveValidatorAlertFollows().length, 1);
+    });
+});

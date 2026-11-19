@@ -53,9 +53,9 @@ async function boot(over = {}) {
     const sent = [];
     const state = { enabled: true, canMint: true };
     const limiters = over.limiters || createValidatorAlertLimiters(db, { VALIDATOR_ALERT_IP_PER_HOUR: '1000', VALIDATOR_ALERT_ADDRESS_PER_HOUR: '1000' });
-    registerValidatorAlertRoutes(app, {
+    const routes = registerValidatorAlertRoutes(app, {
         db,
-        send: async (m) => { sent.push(m); return over.sendResult || { providerId: 'p' }; },
+        send: async (m) => { if (over.sendGate) await over.sendGate; if (over.sendFail) throw new Error('smtp down'); sent.push(m); return over.sendResult || { providerId: 'p' }; },
         enabled: () => state.enabled,
         canMint: () => state.canMint,
         origin: () => ORIGIN,
@@ -70,12 +70,15 @@ async function boot(over = {}) {
     });
     const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
     const base = `http://127.0.0.1:${server.address().port}`;
-    const post = (p, body, headers = {}) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    // The mail work runs after the response (so every case answers alike); settle() waits for it.
+    const postRaw = (p, body, headers = {}) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    const post = async (p, body, headers = {}) => { const r = await postRaw(p, body, headers); await routes.idle(); return r; };
     const form = (p, token) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `token=${encodeURIComponent(token)}` });
     const get = (p) => fetch(base + p);
     const close = () => new Promise((r) => { server.close(r); server.closeAllConnections && server.closeAllConnections(); });
-    return { base, sent, state, post, form, get, close };
+    return { base, sent, state, post, postRaw, settle: () => routes.idle(), form, get, close };
 }
+const SAME_MESSAGE = 'If this address can receive alerts, a confirmation email is on its way.';
 const tokenFrom = (mailText, route) => new RegExp(`/api/validator-alerts/${route}\\?token=([0-9a-zA-Zx]+)`).exec(mailText)[1];
 
 describe('GET /api/validator-alerts/status', () => {
@@ -96,7 +99,7 @@ describe('POST /api/validator-alerts/subscribe: double opt-in', () => {
         const t = await boot();
         const r = await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });
         assert.equal(r.status, 200);
-        assert.deepEqual(await r.json(), { status: 'pending', email: 'a@example.com', stash: S1 });
+        assert.deepEqual(await r.json(), { status: 'requested', message: SAME_MESSAGE });
         assert.equal(t.sent.length, 1);
         const m = t.sent[0];
         assert.equal(m.to, 'a@example.com');
@@ -129,7 +132,8 @@ describe('POST /api/validator-alerts/subscribe: double opt-in', () => {
         const t = await boot();
         const other = encodeAddress(decodeAddress(S1), 42);
         const r = await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: other });
-        assert.equal((await r.json()).stash, S1);
+        assert.equal(r.status, 200);
+        assert.ok(t.sent[0].text.includes(S1), 'the mail names the chain-form stash');
         await t.close();
     });
 
@@ -159,18 +163,19 @@ describe('POST /api/validator-alerts/subscribe: double opt-in', () => {
         const t = await boot({ maxPerEmail: 2 });
         for (const n of [1, 2]) assert.equal((await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: addr(40 + n) })).status, 200);
         const r = await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: addr(49) });
-        assert.equal(r.status, 409);
-        assert.match((await r.json()).error, /at most 2/i);
-        assert.equal(t.sent.length, 2);
+        assert.equal(r.status, 200, 'the cap answers like every other request');
+        assert.deepEqual(await r.json(), { status: 'requested', message: SAME_MESSAGE });
+        assert.equal(t.sent.length, 2, 'and sends nothing');
         await t.close();
     });
 
-    test('an address that unsubscribed from all explorer mail gets a 409 and no mail', async () => {
+    test('an address that unsubscribed from all explorer mail gets the same answer and no mail', async () => {
         const t = await boot();
         const sub = db.createEmailSubscriberIfMissing({ email: 'a@example.com', confirmationToken: 'q1', unsubscribeToken: 'q2', eventPrefs: {}, source: 'x' }).subscriber;
         db.unsubscribeEmailSubscriber(sub.unsubscribeToken);
         const r = await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });
-        assert.equal(r.status, 409);
+        assert.equal(r.status, 200, 'a blocked address is not told apart');
+        assert.deepEqual(await r.json(), { status: 'requested', message: SAME_MESSAGE });
         assert.equal(t.sent.length, 0);
         await t.close();
     });
@@ -187,13 +192,110 @@ describe('POST /api/validator-alerts/subscribe: double opt-in', () => {
         await t.close();
     });
 
-    test('a confirmed follow asked for again is "already-confirmed" and sends nothing', async () => {
+    test('a confirmed follow asked for again gets the same answer and sends nothing', async () => {
         const t = await boot();
         await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });
         await t.form('/api/validator-alerts/confirm', tokenFrom(t.sent[0].text, 'confirm'));
         const r = await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });
-        assert.equal((await r.json()).status, 'already-confirmed');
+        assert.deepEqual(await r.json(), { status: 'requested', message: SAME_MESSAGE });
         assert.equal(t.sent.length, 1);
+        await t.close();
+    });
+});
+
+describe('subscribe answers every well-formed request alike (no address enumeration)', () => {
+    const body = (r) => r.clone().text();
+    test('new, pending-again, confirmed, blocked and over-cap: one status, one body, byte for byte', async () => {
+        const t = await boot({ maxPerEmail: 1 });
+        const seen = [];
+        const ask = async (email, stash) => { const r = await t.post('/api/validator-alerts/subscribe', { email, stash }); seen.push([r.status, await body(r), r.headers.get('content-type'), r.headers.get('cache-control')]); };
+        await ask('new@example.com', S1);                    // new address: mail
+        await ask('new@example.com', S1);                    // pending again: fresh mail
+        await t.form('/api/validator-alerts/confirm', tokenFrom(t.sent[1].text, 'confirm'));
+        await ask('new@example.com', S1);                    // confirmed: nothing
+        await ask('new@example.com', S2);                    // over the cap of 1: nothing
+        const sub = db.createEmailSubscriberIfMissing({ email: 'gone@example.com', confirmationToken: 'q1', unsubscribeToken: 'q2', eventPrefs: {}, source: 'x' }).subscriber;
+        db.unsubscribeEmailSubscriber(sub.unsubscribeToken);
+        await ask('gone@example.com', S1);                   // blocked: nothing
+        assert.equal(seen.length, 5);
+        for (const row of seen) assert.deepEqual(row, seen[0]);
+        assert.equal(seen[0][0], 200);
+        assert.deepEqual(JSON.parse(seen[0][1]), { status: 'requested', message: SAME_MESSAGE });
+        assert.equal(t.sent.length, 2, 'only the two real requests produced mail');
+        assert.ok(t.sent.every(m => m.to === 'new@example.com'));
+        await t.close();
+    });
+
+    test('the response is decided before the mail is sent: a slow or failing mail server changes nothing', async () => {
+        let release; const gate = new Promise(r => { release = r; });
+        const t = await boot({ sendGate: gate });
+        const r = await t.postRaw('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });
+        assert.equal(r.status, 200, 'answered while the mail is still waiting');
+        assert.deepEqual(await r.json(), { status: 'requested', message: SAME_MESSAGE });
+        assert.equal(t.sent.length, 0);
+        release(); await t.settle();
+        assert.equal(t.sent.length, 1);
+        await t.close();
+        const f = await boot({ sendFail: true });
+        const r2 = await f.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });
+        assert.equal(r2.status, 200, 'a failed send is not shown to the asker');
+        assert.deepEqual(await r2.json(), { status: 'requested', message: SAME_MESSAGE });
+        await f.close();
+    });
+
+    test('a blocked address and an already-confirmed follow get no mail at all', async () => {
+        const t = await boot();
+        const sub = db.createEmailSubscriberIfMissing({ email: 'gone@example.com', confirmationToken: 'q1', unsubscribeToken: 'q2', eventPrefs: {}, source: 'x' }).subscriber;
+        db.unsubscribeEmailSubscriber(sub.unsubscribeToken);
+        await t.post('/api/validator-alerts/subscribe', { email: 'gone@example.com', stash: S1 });
+        assert.equal(t.sent.length, 0);
+        await t.close();
+    });
+
+    test('the route source no longer names the revealing statuses', () => {
+        const src = stripComments(readRepo('lib/validator-alerts-api.js'));
+        assert.ok(!/already-confirmed/.test(src));
+        assert.ok(!/status\(409\)\.json\(\{ error: `You can follow/.test(src));
+    });
+});
+
+describe('daily cap on confirmation mails per address', () => {
+    test('the limiter defaults to 5 per 24 hours on top of 3 per hour, and the env sets it', () => {
+        fresh();
+        const l = createValidatorAlertLimiters(db, { VALIDATOR_ALERT_ADDRESS_PER_HOUR: '1000' });
+        const r = []; for (let i = 0; i < 7; i++) r.push(l.address('d@example.com'));
+        assert.equal(r.filter(Boolean).length, 5);
+        const l2 = createValidatorAlertLimiters(db, { VALIDATOR_ALERT_ADDRESS_PER_HOUR: '1000', VALIDATOR_ALERT_ADDRESS_PER_DAY: '2' });
+        const r2 = []; for (let i = 0; i < 4; i++) r2.push(l2.address('e@example.com'));
+        assert.equal(r2.filter(Boolean).length, 2);
+    });
+    test('over the route: the sixth request in a day is a 429 even when the hourly cap is not reached, and the hour passing does not reset the day', async () => {
+        const t = await boot({ limiters: createValidatorAlertLimiters(db, { VALIDATOR_ALERT_IP_PER_HOUR: '1000', VALIDATOR_ALERT_ADDRESS_PER_HOUR: '1000' }) });
+        const codes = [];
+        for (let i = 0; i < 6; i++) codes.push((await t.post('/api/validator-alerts/subscribe', { email: 'v@example.com', stash: addr(60 + i) }, { 'x-test-ip': `10.2.0.${i}` })).status);
+        assert.deepEqual(codes, [200, 200, 200, 200, 200, 429]);
+        assert.equal(t.sent.length, 5);
+        const real = Date.now;
+        Date.now = () => real() + 3 * 3600_000;
+        try { assert.equal((await t.post('/api/validator-alerts/subscribe', { email: 'v@example.com', stash: addr(70) }, { 'x-test-ip': '10.2.1.1' })).status, 429); } finally { Date.now = real; }
+        await t.close();
+    });
+});
+
+describe('confirm: re-confirming an unsubscribed follow re-checks the cap', () => {
+    test('over the cap the confirm is refused with a clear page and the follow stays off', async () => {
+        const t = await boot({ maxPerEmail: 2 });
+        await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });
+        const c1 = tokenFrom(t.sent[0].text, 'confirm'), u1 = tokenFrom(t.sent[0].text, 'unsubscribe');
+        await t.form('/api/validator-alerts/confirm', c1);
+        await t.form('/api/validator-alerts/unsubscribe', u1);
+        await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 });     // a fresh link for the left follow
+        const again = tokenFrom(t.sent[1].text, 'confirm');
+        for (const n of [1, 2]) await t.post('/api/validator-alerts/subscribe', { email: 'a@example.com', stash: addr(40 + n) });
+        const r = await t.form('/api/validator-alerts/confirm', again);
+        assert.equal(r.status, 409);
+        assert.match(await r.text(), /at most 2/i);
+        assert.equal(db.getActiveValidatorAlertFollows().filter(f => f.stash === S1).length, 0);
         await t.close();
     });
 });
@@ -427,7 +529,7 @@ describe('the control on the validator status page', () => {
         const { el, w } = dom(); const posts = [];
         let release; const gate = new Promise(r => { release = r; });
         await mountAlertsControl(el, { stash: S1, esc: escapeHtml, fetchJson: async () => ({ enabled: true, maxPerEmail: 5 }),
-            postJson: async (u, b) => { posts.push([u, b]); await gate; return { status: 'pending', email: b.email, stash: b.stash }; } });
+            postJson: async (u, b) => { posts.push([u, b]); await gate; return { status: 'requested', message: SAME_MESSAGE }; } });
         el.querySelector('input[type="email"]').value = ' a@example.com ';
         el.querySelector('form').dispatchEvent(new w.Event('submit', { cancelable: true }));
         await flush();
@@ -435,8 +537,9 @@ describe('the control on the validator status page', () => {
         release(); await flush();
         assert.deepEqual(posts, [['/api/validator-alerts/subscribe', { email: 'a@example.com', stash: S1 }]]);
         const msg = el.querySelector('[aria-live="polite"]').textContent;
-        assert.match(msg, /Check your inbox/i);
-        assert.match(msg, /a@example\.com/);
+        assert.match(msg, /If this address can receive alerts, a confirmation email is on its way\./);
+        assert.match(msg, /24 hours/);
+        assert.doesNotMatch(msg, /already/i);
         assert.equal(el.querySelector('button[type="submit"]').disabled, false);
     });
 
@@ -451,14 +554,16 @@ describe('the control on the validator status page', () => {
         assert.equal(el.querySelector('input[type="email"]').value, 'a@example.com');
     });
 
-    test('already-confirmed is said plainly', async () => {
+    test('the same words are shown whatever the server knows about the address', async () => {
         const { el, w } = dom();
         await mountAlertsControl(el, { stash: S1, esc: escapeHtml, fetchJson: async () => ({ enabled: true, maxPerEmail: 5 }),
-            postJson: async () => ({ status: 'already-confirmed', email: 'a@example.com', stash: S1 }) });
+            postJson: async () => ({ status: 'requested', message: SAME_MESSAGE }) });
         el.querySelector('input[type="email"]').value = 'a@example.com';
         el.querySelector('form').dispatchEvent(new w.Event('submit', { cancelable: true }));
         await flush();
-        assert.match(el.querySelector('[aria-live="polite"]').textContent, /already/i);
+        const msg = el.querySelector('[aria-live="polite"]').textContent;
+        assert.match(msg, /confirmation email is on its way/);
+        assert.doesNotMatch(msg, /already|at most|unsubscribed/i);
     });
 
     test('a stash with a script in it is escaped in the markup', () => {
