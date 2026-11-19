@@ -26,6 +26,7 @@ import { createDiscussAuth, signInForDiscussion } from '../../lib/discussion-aut
 import { sourceLabel } from '../../lib/wallet-picker.js';
 import { mountWalletPicker } from '../../lib/wallet-picker-view.js';
 import { safeReturnPath } from '../../lib/safe-return.js';
+import { createScrollMemory } from '../../lib/scroll-reset.js';
 import * as txSubmit from '../../lib/tx-submit.js';
 import { Window } from 'happy-dom';
 import { escapeHtml } from '../../lib/html-escape.js';
@@ -196,6 +197,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
             createElement: (t) => win.document.createElement(t)
         },
         spaNavDepth: 0,
+        scrollMemory: null,   // set below: the real lib/scroll-reset.js on this tab's window stand-in
         stakingEscapeHtml: escapeHtml,
         stakingShortAddress: (a) => String(a).slice(0, 6) + '...' + String(a).slice(-4),
         helpIcon: () => '', closeControlHtml, detectInjectedWalletEnv: () => ({ id: 'test', name: 'Test wallet' }), isMobileDevice: () => false,
@@ -235,6 +237,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         get: () => (profile.extensions.length ? Object.fromEntries(profile.extensions.map(e => [e.key, e.provider])) : undefined)
     });
 
+    ctx.scrollMemory = createScrollMemory({ win: ctx.window });
     vm.createContext(ctx);
     const prelude = `
         const DISCUSS_TOKEN_KEY = 'pdex_discuss_session';

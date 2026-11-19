@@ -81,6 +81,7 @@ import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipie
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
+import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage } from './lib/validator-status-view.js';
@@ -4383,6 +4384,9 @@ function safeRouteToken(raw) {
 // How many history entries THIS SPA session has pushed (F-129). Session-
 // scoped on purpose: a fresh tab starts at 0 regardless of referrer.
 let spaNavDepth = 0;
+// The window is the scroller and the link's default is prevented, so a pushed
+// navigation resets the scroll itself; Back/Forward restore per entry (lib/scroll-reset.js).
+const scrollMemory = createScrollMemory({ win: window });
 
 function navigateTo(target, { replace = false } = {}) {
     if (!target || target === 'home') target = '';
@@ -4391,18 +4395,21 @@ function navigateTo(target, { replace = false } = {}) {
     const currentPath = window.location.pathname + window.location.hash;
     if (newPath !== currentPath || window.location.hash) {
         const fn = replace ? 'replaceState' : 'pushState';
+        const state = scrollMemory.beforeNavigate({ replace });
         try {
-            history[fn](null, '', newPath || '/');
+            history[fn](state, '', newPath || '/');
             if (!replace) spaNavDepth++;   // F-129
         }
         catch (e) { /* same-origin / sandboxed iframes can throw; fall back below */ }
     }
     routeTo(newPath.slice(1) || 'home');   // routeTo matches "account/x", not "/account/x"
+    scrollMemory.afterNavigate(newPath, { replace });   // top, unless a replace or a #fragment
 }
 
 // One-time wiring: clean-URL routing, popstate, click delegation, legacy
 // hash-URL redirect. Called at the bottom of init.
 function bootSeoRouter() {
+    scrollMemory.boot();   // scrollRestoration = 'manual'; never scrolls
     // Rewrite any legacy "#X" URLs people might have bookmarked into clean URLs
     // so canonical/og:url match what the user sees.
     // F-107: `'/' + legacyHash` turned "#/evil.com" into "//evil.com", a
@@ -4412,7 +4419,7 @@ function bootSeoRouter() {
     // be replaceState. Validate before building the URL.
     const legacyHash = safeRouteToken(window.location.hash.replace(/^#/, '').trim());
     if (legacyHash && (window.location.pathname === '/' || window.location.pathname === '')) {
-        try { history.replaceState(null, '', '/' + legacyHash); }
+        try { history.replaceState(history.state, '', '/' + legacyHash); }
         catch (e) { /* ignore */ }
     }
 
@@ -4424,7 +4431,9 @@ function bootSeoRouter() {
         // nothing again, which is the very no-op it was written to avoid.
         // popstate alone owns the decrement (the close control no longer takes one).
         spaNavDepth = Math.max(0, spaNavDepth - 1);
+        scrollMemory.beforePopstate();
         routeTo(readRouteFromLocation());
+        scrollMemory.afterPopstate();
     });
 
     // Delegated click handler for internal links. Catches both new clean
@@ -4558,7 +4567,7 @@ function routeTo(target) {
     if (!target) target = 'home';
     // /democracy?ref=N and friends (emails, calendar, bookmarks) -> the item's own page.
     const legacyGov = legacyGovRedirect(target.split(/[?#]/)[0], window.location.search);
-    if (legacyGov) { try { history.replaceState(null, '', '/' + legacyGov); } catch (e) { /* sandboxed */ } target = legacyGov; }
+    if (legacyGov) { try { history.replaceState(history.state, '', '/' + legacyGov); } catch (e) { /* sandboxed */ } target = legacyGov; }
 
     // Strip query string and hash fragment before doing the route lookup. The
     // page sections are matched by `data-page="<route>"` (e.g. "treasury"),
@@ -5444,7 +5453,7 @@ async function renderChainStatePage() {
             const share = new URLSearchParams({ pallet: palletSel.value, item: itemSel.value });
             if (args.length) share.set('args', args.join(','));
             if (at) share.set('at', at);
-            history.replaceState({}, '', `/chain-state?${share}`);
+            history.replaceState(history.state, '', `/chain-state?${share}`);
         } catch (e) {
             $('cs-status').innerHTML = `<span class="cs-err">${escapeHtml(e.message)}</span>`;
         } finally {
@@ -5737,7 +5746,7 @@ async function renderDecodePage() {
             renderDecodeResult(data);
             const share = new URLSearchParams({ block });
             if (method) share.set('method', method);
-            history.replaceState({}, '', `/decode?${share}`);
+            history.replaceState(history.state, '', `/decode?${share}`);
         } catch (e) {
             $('dec-status').innerHTML = `<span class="cs-err">${stakingEscapeHtml(e.message)}</span>`;
         }
@@ -6478,7 +6487,7 @@ async function fetchTxDetails(block, hash) {
         // they know what happened.
         let correctionBanner = '';
         if (data.correctedFrom != null && Number.isFinite(data.block) && data.block !== data.correctedFrom) {
-            try { history.replaceState(null, '', '/tx/' + data.block + '/' + data.hash); } catch (_) {}
+            try { history.replaceState(history.state, '', '/tx/' + data.block + '/' + data.hash); } catch (_) {}
             correctionBanner = `<div style="margin: 0 20px 12px; padding: 10px 14px; background: rgba(245, 166, 35, 0.1); border: 1px solid rgba(245, 166, 35, 0.3); border-radius: 4px; font-size: 0.82rem; color: var(--text-secondary);">
                 <i class='bx bx-info-circle' style="vertical-align: middle; color: #f5a623;"></i>
                 The link pointed at block #${data.correctedFrom}, but the transaction is actually in block #${data.block}. The URL has been corrected — likely a chain reorg between when the link was generated and when it was opened.
@@ -7368,7 +7377,7 @@ function onStakingRewardsWalletChange(change) {
     if (!viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress })) {
         return renderStakingRewardsNote(stakingRewardsPlan({ urlAddress: viewed, account: walletSession.getActiveAccount(), isSame: isSameAddress }));
     }
-    try { history.replaceState(null, '', '/staking-rewards'); } catch (e) { /* sandboxed */ }
+    try { history.replaceState(history.state, '', '/staking-rewards'); } catch (e) { /* sandboxed */ }
     showStakingRewardsFor('');
 }
 
@@ -7376,7 +7385,7 @@ function onStakingRewardsWalletChange(change) {
 // /validate/node: the node guide (lib/validator-node-guide.js). ?node=NAME is the telemetry name, kept in the URL only.
 function initValidatePage(address) {
     const nodeName = new URLSearchParams(window.location.search).get('node') || '';
-    const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(null, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
+    const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(history.state, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
     if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
     if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
     const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
@@ -7384,7 +7393,7 @@ function initValidatePage(address) {
     pageScope.add(walletSession.onActiveAccountChange((change) => {
         const viewed = readRouteFromLocation().slice('validate/'.length);
         const follow = viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress });
-        if (follow && viewed) { try { history.replaceState(null, '', '/validate'); } catch (e) { /* sandboxed */ } }
+        if (follow && viewed) { try { history.replaceState(history.state, '', '/validate'); } catch (e) { /* sandboxed */ } }
         mount(follow ? '' : viewed);
     }));
     mount(address || '');
@@ -8393,7 +8402,7 @@ function initWalletPage(address) {
         if (isValidPolkadexAddress(address)) {
             const pdex = toPolkadexAddress(address);
             if (pdex && pdex !== address) {
-                try { history.replaceState(null, '', '/wallet/' + pdex); } catch (e) { /* ignore */ }
+                try { history.replaceState(history.state, '', '/wallet/' + pdex); } catch (e) { /* ignore */ }
                 address = pdex;
             }
         }

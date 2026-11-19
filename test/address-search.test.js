@@ -4,6 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
+import { createScrollMemory } from '../lib/scroll-reset.js';
 
 const src = stripComments(readRepo('script.js', import.meta.url));
 const ADDR = 'esoEt6uZ9vs23yW8aqTACLf1tViGpSLZKnhPXt5Nq7vQwHGew';
@@ -13,8 +14,8 @@ function navigate(target, opts) {
     const seen = {};
     const history = { pushState: (s, t, url) => { seen.url = url; }, replaceState: (s, t, url) => { seen.url = url; } };
     const window = { location: { pathname: '/search', hash: '' } };
-    const navigateTo = new Function('window', 'history', 'routeTo',
-        `let spaNavDepth = 0; ${bodyOf(src, 'navigateTo')} return navigateTo;`)(window, history, r => { seen.route = r; });
+    const navigateTo = new Function('window', 'history', 'routeTo', 'scrollMemory',
+        `let spaNavDepth = 0; ${bodyOf(src, 'navigateTo')} return navigateTo;`)(window, history, r => { seen.route = r; }, createScrollMemory({ win: window }));
     navigateTo(target, opts);
     return seen;
 }
