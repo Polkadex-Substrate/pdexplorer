@@ -98,12 +98,13 @@ describe('the signer: the stash, or the legacy controller for controller calls; 
         assert.equal(M.signerProblem('chill', s, CTRL, { isSame }), null);
         assert.equal(M.signerProblem('bondExtra', s, CTRL, { isSame }), `Bonding more and registering session keys are signed by the stash ${STASH}. Connect it to do this.`);
     });
-    test('a proxy of the stash is detected and told proxy signing comes later; a Staking proxy cannot rotate keys at all', () => {
+    // Sprint 5 (intentional change): a proxy of the stash now acts through
+    // proxy.proxy for what its type allows (test/validator-delegate.test.js).
+    test('a proxy of the stash is detected; a Staking proxy may change commission but cannot rotate keys at all', () => {
         const s = { ...STATE, proxies: [{ delegate: PROXY, type: 'Staking', delay: 0 }] };
         assert.equal(M.roleOf(s, PROXY, { isSame }).role, 'proxy');
-        assert.equal(M.signerProblem('commission', s, PROXY, { isSame }),
-            'You are connected as a Staking proxy of this stash. Acting for a stash through a proxy comes in a later release: connect the stash itself to make this change.');
-        assert.match(M.signerProblem('keys', s, PROXY, { isSame }), /A Staking proxy cannot register session keys on this runtime: key rotation needs the stash\.$/);
+        assert.equal(M.signerProblem('commission', s, PROXY, { isSame }), null);
+        assert.match(M.signerProblem('keys', s, PROXY, { isSame }), /^Key rotation needs the stash on this runtime\. A Staking proxy cannot register session keys\. Connect the stash\.$/);
     });
     test('an unrelated account: no role, and the sentence for a watched account', () => {
         assert.equal(M.roleOf(STATE, OTHER, { isSame }).role, null);
@@ -489,7 +490,7 @@ describe('chain reads: the live limits and the stash state', () => {
         assert.deepEqual(s.unlocking, [{ value: String(50n * PDEX), era: 520 }]);
         assert.deepEqual(s.prefs, { commission: 50_000_000, blocked: false });
         assert.deepEqual(s.payee, { kind: 'account', account: PAYEE });
-        assert.deepEqual(s.proxies, [{ delegate: PROXY, type: 'Staking' }]);
+        assert.deepEqual(s.proxies, [{ delegate: PROXY, type: 'Staking', delay: 0 }], 'Sprint 5: the delay is kept (a proxy with a delay must announce)');
         assert.deepEqual(s.nextKeys, KEYS);
         assert.equal(s.currentEra, 500);
         assert.deepEqual(s.balance, { free: String(1000n * PDEX), reserved: '0', frozen: String(500n * PDEX) });
