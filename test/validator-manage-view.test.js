@@ -409,7 +409,7 @@ describe('wiring, inputs and brand', () => {
         assert.ok(rules.length >= 3, 'the manage styles exist');
         for (const r of rules) assert.doesNotMatch(r.body, /--success|--brand-secondary|--error|#[0-9a-f]{3,8}\b|rgba?\(/i, r.sel);
         assert.doesNotMatch(stripComments(readRepo('lib/validator-manage-view.js', import.meta.url)), /style="/);
-        for (const f of ['lib/validator-manage.js', 'lib/validator-manage-chain.js', 'lib/validator-manage-view.js']) assert.ok(!/[–—]/.test(readRepo(f, import.meta.url)), f);
+        for (const f of ['lib/validator-manage.js', 'lib/validator-manage-chain.js', 'lib/validator-manage-view.js']) assert.ok(!/[\u2013\u2014]/.test(readRepo(f, import.meta.url)), f);
     });
     test('the explorer never asks for a seed here either', () => {
         const src = ['lib/validator-manage.js', 'lib/validator-manage-chain.js', 'lib/validator-manage-view.js'].map(f => stripComments(readRepo(f, import.meta.url))).join('\n');
