@@ -108,7 +108,11 @@ describe('every text box on main declares its kind or why it has none', () => {
             'help-search': 'search', 'inline-search-input': 'search', 'cs-at': 'ref', 'rpc-params': 'code', 'ut-addr': 'address',
             'ut-hash-in': 'text', 'ut-vf-sig': 'hex', 'discuss-post-input': 'text', 'proxy-add-delegate': 'address',
             'multisig-signers': 'address-list', 'account-label-input': 'text', 'multisig-review-call': 'hex',
-            'wallet-manual-input': 'address', 'wallet-picker-search': 'search', 'email-subscribe-input': 'text'
+            'wallet-manual-input': 'address', 'wallet-picker-search': 'search', 'email-subscribe-input': 'text',
+            // the Validate area (origin/main 9df2ee1): spec rows 61 to 63 and the setup wizard
+            'validate-lookup-input': 'address', 'validate-keys-input': 'hex', 'node-check-input': 'text',
+            'validate-setup-node': 'text', 'validate-setup-keys': 'hex', 'validate-setup-bond': 'amount', 'validate-setup-extra': 'amount',
+            'validate-setup-payee-account': 'address', 'validate-setup-commission': 'amount'
         };
         for (const [id, kind] of Object.entries(expect)) assert.equal(kindOf(id), kind, id);
     });

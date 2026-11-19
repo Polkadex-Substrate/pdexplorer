@@ -4973,6 +4973,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
    primary action), never a success colour (a paste is not a success state). */
 .ia-wrap { position: relative; display: inline-block; }
 .ia-wrap-ta { display: block; }
+.ia-wrap[hidden] { display: none !important; }   /* a hidden field hides its buttons (beats the wrapper's inline display) */
 .ia-actions { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 4px; z-index: 1; }
 .ia-actions[hidden] { display: none !important; }
 .ia-actions-top { position: static; transform: none; display: flex; justify-content: flex-end; height: 28px; }
