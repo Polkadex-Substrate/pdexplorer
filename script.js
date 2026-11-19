@@ -81,6 +81,7 @@ import { ss58PrefixOf, sendRecipientProblem, proxyDelegateProblem, renderRecipie
 import { createSpendMotionUI } from './lib/treasury-spend-view.js';
 import { createSpendPayoutUI } from './lib/treasury-payout-view.js';
 import { mountNominationStatus } from './lib/nomination-status-view.js';
+import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
@@ -462,14 +463,14 @@ function makeTable(config) {
             if (anySearchable) {
                 parts.push(`<div class="table-filter-search">
                     <i class='bx bx-search'></i>
-                    <input type="text" class="table-global-search" placeholder="Search…" value="${stakingEscapeHtml(globalSearch)}" autocomplete="off">
+                    <input type="text" class="table-global-search" data-input-kind="search" placeholder="Search…" value="${stakingEscapeHtml(globalSearch)}" autocomplete="off">
                 </div>`);
             }
         }
         for (const col of filterableCols) {
             const val = colFilters[col.key] || '';
             if (col.filter.type === 'text') {
-                parts.push(`<input type="text" class="table-col-filter" data-col="${stakingEscapeHtml(col.key)}" placeholder="${stakingEscapeHtml(col.filter.placeholder || col.label)}" value="${stakingEscapeHtml(val)}" autocomplete="off">`);
+                parts.push(`<input type="text" class="table-col-filter" data-input-kind="search" data-input-actions="compact" data-col="${stakingEscapeHtml(col.key)}" placeholder="${stakingEscapeHtml(col.filter.placeholder || col.label)}" value="${stakingEscapeHtml(val)}" autocomplete="off">`);
             } else if (col.filter.type === 'select') {
                 const opts = ['<option value="">All ' + stakingEscapeHtml(col.label) + '</option>']
                     .concat((col.filter.options || []).map(o => {
@@ -656,6 +657,8 @@ function makeTable(config) {
             });
         });
 
+        // Buttons go in now, not a frame later, so the focused filter box never shifts.
+        enhanceInputActions(container);
         restoreFocus(focusSnap);
         if (hooks.onRender) hooks.onRender();
     }
@@ -1646,7 +1649,7 @@ function renderEmailSubscribeForm(source) {
         <div id="email-subscribe-error" style="display:none;margin-bottom:14px;padding:10px 12px;background:rgba(255,82,82,0.12);border:1px solid rgba(255,82,82,0.4);border-radius:8px;color:#ffb4b4;font-size:0.86rem;"></div>
         <form id="email-subscribe-form" novalidate>
             <label for="email-subscribe-input" style="display:block;margin-bottom:6px;color:var(--text-secondary,rgba(255,255,255,0.7));font-size:0.85rem;">Email address</label>
-            <input type="email" id="email-subscribe-input" required autocomplete="email"
+            <input type="email" id="email-subscribe-input" data-input-kind="text" required autocomplete="email"
                 placeholder="you@example.com"
                 style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:#fff;font-size:0.95rem;margin-bottom:18px;">
 
@@ -3071,20 +3074,10 @@ function renderSearchPrompt(note, prefillQuery) {
             ${note ? `<div style="color: var(--brand-secondary); font-size: 0.85rem; margin-bottom: 14px;">${stakingEscapeHtml(note)}</div>` : ''}
             <div class="staking-search-bar" style="max-width: 640px; margin: 0 auto;">
                 <div style="flex: 1 1 320px; position: relative; display: flex; align-items: center;">
-                    <input id="inline-search-input" type="text" inputmode="search"
+                    <input id="inline-search-input" data-input-kind="search" type="text" inputmode="search"
                         placeholder="12345 · 0xhash · es1…address"
                         autocomplete="off" spellcheck="false"
-                        style="width: 100%; padding-right: 70px;">
-                    <div style="position: absolute; right: 10px; display: flex; gap: 5px;">
-                        <button id="inline-search-clear-btn" type="button" title="Clear" aria-label="Clear"
-                            style="background: none; border: none; padding: 5px; color: var(--text-secondary); display: none; min-width: auto; height: auto; cursor: pointer;">
-                            <i class='bx bx-x' style="font-size: 20px;"></i>
-                        </button>
-                        <button id="inline-search-paste-btn" type="button" title="Paste" aria-label="Paste from clipboard"
-                            style="background: none; border: none; padding: 5px; color: var(--text-secondary); min-width: auto; height: auto; cursor: pointer;">
-                            <i class='bx bx-paste' style="font-size: 18px;"></i>
-                        </button>
-                    </div>
+                        style="width: 100%;">
                 </div>
                 <button id="inline-search-submit-btn" type="button"><i class='bx bx-search'></i> Search</button>
             </div>
@@ -3095,18 +3088,6 @@ function renderSearchPrompt(note, prefillQuery) {
 
     const inputEl  = document.getElementById('inline-search-input');
     const submitBtn = document.getElementById('inline-search-submit-btn');
-    const pasteBtn  = document.getElementById('inline-search-paste-btn');
-    const clearBtn  = document.getElementById('inline-search-clear-btn');
-
-    // The Clear button only makes sense when there's text to clear — toggle
-    // its visibility based on the input's current content. Mirrors the
-    // staking-rewards page behavior.
-    const syncClearVisibility = () => {
-        if (clearBtn && inputEl) {
-            clearBtn.style.display = inputEl.value.length > 0 ? 'inline-flex' : 'none';
-        }
-    };
-
     const submit = () => {
         const q = (inputEl && inputEl.value || '').trim();
         if (!q) { if (inputEl) inputEl.focus(); return; }
@@ -3119,11 +3100,9 @@ function renderSearchPrompt(note, prefillQuery) {
     if (submitBtn) submitBtn.addEventListener('click', submit);
     if (inputEl) {
         inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
-        inputEl.addEventListener('input', syncClearVisibility);
         // Pre-fill from the previous query when the user closed a result via
         // the header X, so they can tweak and re-submit instead of retyping.
         if (prefillQuery) inputEl.value = prefillQuery;
-        syncClearVisibility();
         // Focus on next tick so the cursor lands in the field after layout settles.
         // When pre-filled, place the caret at the end of the existing text so the
         // user can immediately append or correct it.
@@ -3135,19 +3114,6 @@ function renderSearchPrompt(note, prefillQuery) {
             }
         }, 30);
     }
-    if (pasteBtn) pasteBtn.addEventListener('click', async () => {
-        try {
-            const text = await navigator.clipboard.readText();
-            if (text && inputEl) { inputEl.value = text.trim(); inputEl.focus(); syncClearVisibility(); }
-        } catch (e) {
-            // Clipboard API unavailable (insecure context, or user denied).
-            // Fall back to selecting the field so the user can paste manually.
-            if (inputEl) inputEl.focus();
-        }
-    });
-    if (clearBtn) clearBtn.addEventListener('click', () => {
-        if (inputEl) { inputEl.value = ''; inputEl.focus(); syncClearVisibility(); }
-    });
 }
 
 if (deepSearchBtn) {
@@ -4243,6 +4209,7 @@ function renderBrandPage() {
                 await navigator.clipboard.writeText(value);
             } catch (_) {
                 const ta = document.createElement('textarea');
+                ta.setAttribute('data-no-input-actions', 'temporary copy buffer');
                 ta.value = value; document.body.appendChild(ta);
                 ta.select(); try { document.execCommand('copy'); } catch (_) {}
                 document.body.removeChild(ta);
@@ -5360,7 +5327,7 @@ async function renderChainStatePage() {
                 </label>
                 <label class="cs-field cs-field-at">
                     <span>At block <em>(optional — blank = latest)</em></span>
-                    <input id="cs-at" type="text" inputmode="numeric" placeholder="e.g. 12250870 or 0x…" autocomplete="off">
+                    <input id="cs-at" data-input-kind="ref" type="text" inputmode="numeric" placeholder="e.g. 12250870 or 0x…" autocomplete="off">
                 </label>
             </div>
             <div id="cs-keys" class="cs-keys"></div>
@@ -5432,7 +5399,7 @@ async function renderChainStatePage() {
         box.innerHTML = s.keyTypes.map((t, i) => `
             <label class="cs-field">
                 <span>Key ${s.keyCount > 1 ? i + 1 : ''} <em>${escapeHtml(t)}</em></span>
-                <input class="cs-key" data-i="${i}" type="text" autocomplete="off"
+                <input class="cs-key" data-input-kind="code" data-i="${i}" type="text" autocomplete="off"
                        value="${values && values[i] ? escapeHtml(values[i]) : ''}"
                        placeholder="${escapeHtml(t)}">
             </label>`).join('')
@@ -5728,11 +5695,11 @@ async function renderDecodePage() {
             <div class="cs-controls">
                 <label class="cs-field">
                     <span>Block <em>number or hash</em></span>
-                    <input id="dec-block" type="text" placeholder="e.g. 12250870 or 0x…" value="${stakingEscapeHtml(qBlock)}" autocomplete="off">
+                    <input id="dec-block" data-input-kind="ref" type="text" placeholder="e.g. 12250870 or 0x…" value="${stakingEscapeHtml(qBlock)}" autocomplete="off">
                 </label>
                 <label class="cs-field">
                     <span>Filter by method <em>optional</em></span>
-                    <input id="dec-method" type="text" placeholder="e.g. submit_snapshot" value="${stakingEscapeHtml(qMethod)}" autocomplete="off">
+                    <input id="dec-method" data-input-kind="search" type="text" placeholder="e.g. submit_snapshot" value="${stakingEscapeHtml(qMethod)}" autocomplete="off">
                 </label>
             </div>
             <div class="cs-actions">
@@ -5876,7 +5843,7 @@ async function renderRuntimePage() {
             <div class="cs-controls">
                 <label class="cs-field">
                     <span>At block <em>optional — blank = latest</em></span>
-                    <input id="rt-at" type="text" placeholder="e.g. 12250870" autocomplete="off">
+                    <input id="rt-at" data-input-kind="ref" type="text" placeholder="e.g. 12250870" autocomplete="off">
                 </label>
             </div>
             <div class="cs-actions">
@@ -5905,7 +5872,7 @@ async function renderRuntimePage() {
                 <label class="cs-field"><span>Method</span><select id="rpc-method"><option>Loading…</option></select></label>
                 <label class="cs-field cs-field-at">
                     <span>Params <em>JSON array</em></span>
-                    <input id="rpc-params" type="text" placeholder='e.g. [12250870]' value="[]" autocomplete="off">
+                    <input id="rpc-params" data-input-kind="code" type="text" placeholder='e.g. [12250870]' value="[]" autocomplete="off">
                 </label>
             </div>
             <div class="cs-actions">
@@ -6024,7 +5991,7 @@ function renderUtilitiesPage() {
             <h2 class="rt-h2">SS58 address converter</h2>
             <div class="cs-controls">
                 <label class="cs-field"><span>Address or 0x public key</span>
-                    <input id="ut-addr" type="text" placeholder="esoEt6… or 5Grwva… or 0x…" autocomplete="off"></label>
+                    <input id="ut-addr" data-input-kind="address" type="text" placeholder="esoEt6… or 5Grwva… or 0x…" autocomplete="off"></label>
                 <label class="cs-field"><span>Target prefix</span>
                     <select id="ut-prefix">
                         <option value="88">88 — Polkadex</option>
@@ -6042,7 +6009,7 @@ function renderUtilitiesPage() {
             <h2 class="rt-h2">Hashing</h2>
             <div class="cs-controls">
                 <label class="cs-field cs-field-at"><span>Input <em>text, or 0x… for raw bytes</em></span>
-                    <input id="ut-hash-in" type="text" placeholder="hello  or  0xdeadbeef" autocomplete="off"></label>
+                    <input id="ut-hash-in" data-input-kind="text" type="text" placeholder="hello  or  0xdeadbeef" autocomplete="off"></label>
             </div>
             <div class="cs-actions"><button id="ut-hash-run" class="wallet-action-btn primary" type="button">Hash</button>
                 <span id="ut-hash-status" class="cs-status"></span></div>
@@ -6052,9 +6019,9 @@ function renderUtilitiesPage() {
         <div class="cs-panel glass" style="margin-top:18px;">
             <h2 class="rt-h2">Verify signature</h2>
             <div class="cs-controls">
-                <label class="cs-field"><span>Signer address</span><input id="ut-vf-addr" type="text" autocomplete="off"></label>
-                <label class="cs-field"><span>Message <em>text or 0x…</em></span><input id="ut-vf-msg" type="text" autocomplete="off"></label>
-                <label class="cs-field"><span>Signature <em>0x…</em></span><input id="ut-vf-sig" type="text" autocomplete="off"></label>
+                <label class="cs-field"><span>Signer address</span><input id="ut-vf-addr" data-input-kind="address" type="text" autocomplete="off"></label>
+                <label class="cs-field"><span>Message <em>text or 0x…</em></span><input id="ut-vf-msg" data-input-kind="text" type="text" autocomplete="off"></label>
+                <label class="cs-field"><span>Signature <em>0x…</em></span><input id="ut-vf-sig" data-input-kind="hex" type="text" autocomplete="off"></label>
             </div>
             <div class="cs-actions"><button id="ut-vf-run" class="wallet-action-btn primary" type="button">Verify</button>
                 <span id="ut-vf-status" class="cs-status"></span></div>
@@ -10392,8 +10359,8 @@ function validateSendRecipient() {
 // Elements that can hold focus, in DOM order, excluding anything disabled or
 // deliberately removed from the tab order.
 const FOCUSABLE_SELECTOR = [
-    'a[href]', 'button:not([disabled])', 'input:not([disabled])',
-    'select:not([disabled])', 'textarea:not([disabled])',
+    'a[href]:not([tabindex="-1"])', 'button:not([disabled]):not([tabindex="-1"])', 'input:not([disabled]):not([tabindex="-1"])',
+    'select:not([disabled]):not([tabindex="-1"])', 'textarea:not([disabled]):not([tabindex="-1"])',
     '[tabindex]:not([tabindex="-1"])'
 ].join(',');
 
@@ -10822,6 +10789,7 @@ function initDonatePage() {
             // Fall back to execCommand, and if BOTH fail say so out loud.
             const fallbackCopy = () => {
                 const ta = document.createElement('textarea');
+                ta.setAttribute('data-no-input-actions', 'temporary copy buffer');
                 ta.value = addr;
                 ta.setAttribute('readonly', '');
                 ta.style.position = 'fixed';
@@ -10990,7 +10958,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
         isEditable: p => !!wallet && canEditPost(p, thread, wallet, isSameAddress), actions: renderCopyLinkButton });
     // Connected: the composer at once, signing at the first Post. Not connected: one link to the picker.
     const composer = discussComposerHtml({ thread, wallet, session, esc: stakingEscapeHtml, shortAddr: stakingShortAddress,
-        composer: composerHtml('<textarea id="discuss-post-input" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000" aria-label="Write a post"></textarea>'),
+        composer: composerHtml('<textarea id="discuss-post-input" data-input-kind="text" data-input-actions-mount=".md-toolbar" class="discussion-textarea" placeholder="Share your thoughts…" maxlength="4000" aria-label="Write a post"></textarea>'),
         returnTo: (window.location.pathname || '/') + (window.location.search || '') });
 
     // Posts of the earlier lifecycle threads (council motion, external proposal):
@@ -11513,45 +11481,13 @@ function renderDemocracyCharts(d) {
 const stakingSearchBtn = document.getElementById('staking-search-btn');
 if (stakingSearchBtn) stakingSearchBtn.addEventListener('click', submitStakingSearch);
 const stakingAddressInput = document.getElementById('staking-address-input');
-const stakingClearBtn = document.getElementById('staking-clear-btn');
-const stakingPasteBtn = document.getElementById('staking-paste-btn');
-
 if (stakingAddressInput) {
     stakingAddressInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') submitStakingSearch();
     });
-    stakingAddressInput.addEventListener('input', () => {
-        if (stakingClearBtn) {
-            stakingClearBtn.style.display = stakingAddressInput.value.length > 0 ? 'inline-block' : 'none';
-        }
-    });
 }
-
-if (stakingClearBtn) {
-    stakingClearBtn.addEventListener('click', () => {
-        if (stakingAddressInput) {
-            stakingAddressInput.value = '';
-            stakingClearBtn.style.display = 'none';
-            stakingAddressInput.focus();
-        }
-    });
-}
-
-if (stakingPasteBtn) {
-    stakingPasteBtn.addEventListener('click', async () => {
-        try {
-            const text = await navigator.clipboard.readText();
-            if (stakingAddressInput) {
-                stakingAddressInput.value = text.trim();
-                if (stakingClearBtn) stakingClearBtn.style.display = 'inline-block';
-                stakingAddressInput.focus();
-            }
-        } catch (err) {
-            console.error('Failed to read clipboard contents: ', err);
-            alert('Failed to access clipboard. Please paste manually.');
-        }
-    });
-}
+// Paste and Clear in every text box, including the ones rendered later (lib/input-actions.js).
+startInputActionsObserver(document);
 const connectWalletBtn = document.getElementById('connect-wallet-btn');
 // Connected: My Account opens a menu (view / switch / disconnect). Not connected: it connects.
 walletMenu = wireWalletMenu({ doc: document, button: connectWalletBtn, menu: document.getElementById('wallet-menu'),
@@ -13369,11 +13305,11 @@ async function renderAddProxyForm(address) {
     el.innerHTML = `
         <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Add a proxy</h4>
         <div style="display:grid;grid-template-columns:1fr 180px 100px auto;gap:8px;align-items:center;">
-            <input type="text" id="proxy-add-delegate" placeholder="Delegate address (es…)" autocomplete="off" spellcheck="false" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
+            <input type="text" id="proxy-add-delegate" data-input-kind="address" placeholder="Delegate address (es…)" autocomplete="off" spellcheck="false" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
             <select id="proxy-add-type" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
                 ${cachedProxyTypes.map(t => `<option value="${stakingEscapeHtml(t)}">${stakingEscapeHtml(t)}</option>`).join('')}
             </select>
-            <input type="number" id="proxy-add-delay" placeholder="Delay" min="0" value="0" title="Delay in blocks before this proxy can sign" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
+            <input type="number" id="proxy-add-delay" data-no-input-actions="numeric stepper: the browser arrows already fill this narrow field" placeholder="Delay" min="0" value="0" title="Delay in blocks before this proxy can sign" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
             <button type="button" id="proxy-add-submit" class="staking-download-btn" style="padding:8px 16px;font-size:0.82rem;background:var(--brand-primary);color:white;border-color:var(--brand-primary);">Add proxy</button>
         </div>
         <div id="proxy-add-error" class="staking-error" style="display:none;margin-top:8px;font-size:0.78rem;"></div>`;
@@ -13417,10 +13353,10 @@ function renderMultisigCalculator() {
     el.innerHTML = `
         <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Multisig address calculator</h4>
         <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px;">Paste one address per line and pick a threshold. The address below is the deterministic <span class="glossary-term" data-term="multisig">multisig</span> account for those signers.</div>
-        <textarea id="multisig-signers" rows="4" placeholder="es… (one per line)" spellcheck="false" style="width:100%;padding:10px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:monospace;font-size:0.82rem;resize:vertical;"></textarea>
+        <textarea id="multisig-signers" data-input-kind="address-list" rows="4" placeholder="es… (one per line)" spellcheck="false" style="width:100%;padding:10px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:monospace;font-size:0.82rem;resize:vertical;"></textarea>
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
             <label style="font-size:0.82rem;color:var(--text-secondary);">Threshold</label>
-            <input type="number" id="multisig-threshold" min="1" value="2" style="width:80px;padding:6px 10px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
+            <input type="number" id="multisig-threshold" data-no-input-actions="numeric stepper: the browser arrows already fill this narrow field" min="1" value="2" style="width:80px;padding:6px 10px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
             <button type="button" id="multisig-calc-go" class="staking-download-btn" style="padding:6px 14px;font-size:0.78rem;">Derive address</button>
         </div>
         <div id="multisig-result" style="margin-top:10px;font-size:0.85rem;"></div>`;
@@ -13688,7 +13624,7 @@ async function renderAccountLabelEditor(address) {
         suggestForm = `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-color);">
                 <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">${isOwner ? 'Set your label' : 'Suggest a label'}</h4>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <input type="text" id="account-label-input" maxlength="64" placeholder="${isOwner ? 'Foundation Wallet, Cold Storage #1, …' : 'Binance hot wallet, Polkadex Sudo, …'}" value="${stakingEscapeHtml(mineLabel ? mineLabel.label : '')}" style="flex:1;min-width:220px;padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
+                    <input type="text" id="account-label-input" data-input-kind="text" maxlength="64" placeholder="${isOwner ? 'Foundation Wallet, Cold Storage #1, …' : 'Binance hot wallet, Polkadex Sudo, …'}" value="${stakingEscapeHtml(mineLabel ? mineLabel.label : '')}" style="flex:1;min-width:220px;padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
                     <button type="button" id="account-label-save" class="staking-download-btn" style="padding:8px 16px;font-size:0.82rem;background:var(--brand-primary);color:white;border-color:var(--brand-primary);">${mineLabel ? 'Update' : (isOwner ? 'Set label' : 'Suggest')}</button>
                 </div>
                 <div id="account-label-status" style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">${isOwner

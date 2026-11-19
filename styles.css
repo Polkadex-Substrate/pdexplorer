@@ -4966,6 +4966,68 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 }
 .js-older-btn:focus-visible, .js-older-done:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 
+/* --- Paste and Clear inside text boxes (lib/input-actions.js; spec 2026-11-17-input-paste-clear) ---
+   Clear (bx-x, only while the field has text) and Paste (bx-paste) at the right edge
+   inside the field; a row above a textarea; the end of the Markdown toolbar in the
+   discussion composer. Tokens only: never the brand fill (the submit button is the one
+   primary action), never a success colour (a paste is not a success state). */
+.ia-wrap { position: relative; display: inline-block; }
+.ia-wrap-ta { display: block; }
+.ia-wrap[hidden] { display: none !important; }   /* a hidden field hides its buttons (beats the wrapper's inline display) */
+.ia-actions { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 4px; z-index: 1; }
+.ia-actions[hidden] { display: none !important; }
+.ia-actions-top { position: static; transform: none; display: flex; justify-content: flex-end; height: 28px; }
+.ia-actions-toolbar { position: static; transform: none; margin-left: 4px; padding-left: 4px; border-left: 1px solid var(--border-color); }
+.ia-actions .ia-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-secondary);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+    transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+.ia-actions .ia-btn[hidden], .ia-actions .ia-btn.md-tool[hidden] { display: none !important; }
+.ia-actions .ia-btn i { font-size: 16px; line-height: 1; }
+.ia-actions .ia-btn:hover, .ia-actions .ia-btn:focus-visible { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); opacity: 1; transform: none; }
+.ia-actions .ia-btn:focus-visible { outline: 2px solid var(--brand-primary-glow); outline-offset: 0; }
+.ia-actions-toolbar .ia-btn { width: 32px; height: 32px; }   /* the toolbar's own md-tool size */
+/* Room for the buttons from the first paint, so typed text never jumps. Textareas keep
+   theirs: the buttons sit above them. */
+.ia-wrap > input[data-ia="both"] { padding-right: 72px !important; }
+.ia-wrap > input[data-ia="compact"], .ia-wrap > input[data-ia="clear"] { padding-right: 40px !important; }
+/* No native spinner under the buttons (arrow keys still step); the opted-out steppers keep theirs. */
+.ia-wrap > input[type="number"]:not([data-ia="none"]) { -moz-appearance: textfield; appearance: textfield; }
+.ia-wrap > input[type="number"]:not([data-ia="none"])::-webkit-inner-spin-button,
+.ia-wrap > input[type="number"]:not([data-ia="none"])::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+/* Never a second X in a search field. */
+.ia-wrap > input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+/* One line under the field, out of the flow so nothing moves. */
+.ia-hint { position: absolute; left: 0; right: 0; top: 100%; margin-top: 2px; font-size: 0.78rem; color: var(--text-muted); white-space: normal; pointer-events: none; z-index: 2; }
+@media (pointer: coarse) {
+    .ia-actions .ia-btn { width: 36px; }
+    .ia-actions .ia-btn::after { content: ""; position: absolute; inset: -8px 0; }
+    .ia-wrap > input[data-ia="both"] { padding-right: 88px !important; }
+    .ia-wrap > input[data-ia="compact"], .ia-wrap > input[data-ia="clear"] { padding-right: 48px !important; }
+    /* Table filters keep the 28 px box (the stretched hit area still applies), so the filter bar height does not change. */
+    .table-filter-bar .ia-actions .ia-btn { width: 28px; }
+    .table-filter-bar .ia-wrap > input[data-ia="both"] { padding-right: 72px !important; }
+    .table-filter-bar .ia-wrap > input[data-ia="compact"], .table-filter-bar .ia-wrap > input[data-ia="clear"] { padding-right: 40px !important; }
+}
+/* --- end Paste and Clear --- */
+
 /* ── Validate page (lib/validator-status-view.js; Sprint 1, read-only) ──
    BRAND.md: one primary per view, green only for the Active pill and the
    Heartbeat word, the error colour only for Disabled, Slashed and a duplicated

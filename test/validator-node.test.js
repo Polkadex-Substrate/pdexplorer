@@ -618,3 +618,16 @@ describe('Fable findings 2, 3 and 4 on the node guide and Check my node', () => 
         }
     });
 });
+
+// Paste and Clear (spec row 63): the node name is free text, wrapped when the card is wired.
+describe('Check my node: Paste and Clear', () => {
+    test('the field is kind text and wired with the shared buttons', () => {
+        const { el } = dom();
+        el.innerHTML = renderNodeCheckCard({ esc });
+        const input = el.querySelector('#node-check-input');
+        assert.equal(input.getAttribute('data-input-kind'), 'text');
+        wireNodeCheck(el, { esc, fetchJson: async () => ({}) });
+        assert.ok(input.closest('.ia-wrap'));
+        assert.ok(input.closest('#node-check-form'));
+    });
+});
