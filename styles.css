@@ -5178,3 +5178,5 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-manage-rule { font-weight: 700; color: var(--text-primary); }
 .validate-manage-facts { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
 .validate-manage .validate-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
+.validate-alerts { margin-top: 20px; }
+.validate-alerts .validate-lookup-row input[type="email"] { flex: 1 1 220px; min-width: 0; }

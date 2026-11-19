@@ -319,6 +319,20 @@ describe('readValidatorStatus: the chain reads behind the status', () => {
         assert.equal(s.controller, CTRL);
         assert.equal(ledgerFor, CTRL);
     });
+    test('slashRead tells a successful read with no record from a failed read; the page text is unchanged', async () => {
+        const none = await readValidatorStatus(fakeApi(), STASH);
+        assert.deepEqual([none.lastSlashEra, none.slashRead], [null, true]);
+        assert.equal(row(validatorStatusModel(none, params()), 'offences').text.endsWith('No slash.'), true);
+        const api = fakeApi();
+        api.query.staking.slashingSpans = async () => { throw new Error('rpc'); };
+        const failed = await readValidatorStatus(api, STASH);
+        assert.deepEqual([failed.lastSlashEra, failed.slashRead], [null, false]);
+        assert.equal(row(validatorStatusModel(failed, params()), 'offences').text.endsWith('No slash.'), true);
+        const api2 = fakeApi();
+        api2.query.staking.slashingSpans = async () => opt({ lastNonzeroSlash: num(0) });
+        const zero = await readValidatorStatus(api2, STASH);
+        assert.deepEqual([zero.lastSlashEra, zero.slashRead], [0, true]);
+    });
     test('a failed heartbeat read is unknown (null), never offline', async () => {
         const api = fakeApi();
         api.query.imOnline.receivedHeartbeats = async () => { throw new Error('rpc'); };
@@ -680,7 +694,7 @@ describe('the status view: live region, focus, table headers, retry on a row (re
         let calls = 0;
         const d = deps(); const real = d.fetchJson;
         d.fetchJson = async (u) => {
-            if (/\/status$/.test(u)) { calls++; return { ...validatorStatusModel(snap({ address: STASH, exposure: null }), params()), address: STASH }; }
+            if (/^\/api\/validator\/[^/]+\/status$/.test(u)) { calls++; return { ...validatorStatusModel(snap({ address: STASH, exposure: null }), params()), address: STASH }; }
             return real(u);
         };
         await mountValidatePage(el, d); await flush();
