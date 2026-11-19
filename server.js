@@ -5460,9 +5460,11 @@ app.post('/api/email/subscribe', async (req, res) => {
 
     const confirmationToken = randomAsHex(24);
     const unsubscribeToken  = randomAsHex(24);
-    const { created, subscriber } = db.createEmailSubscriberIfMissing({
+    const { created, subscriber: found } = db.createEmailSubscriberIfMissing({
         email, confirmationToken, unsubscribeToken, eventPrefs: prefs, source, walletAddress
     });
+    // A row a validator follow made has no preferences: give it this signup's defaults.
+    const subscriber = created ? found : db.adoptDefaultPrefsIfEmpty(found, prefs);
 
     // Already-confirmed AND still subscribed: short-circuit, no email.
     //

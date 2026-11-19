@@ -534,17 +534,18 @@ describe('runValidatorAlertsTick: a replay of recorded observations', () => {
 });
 
 describe('a follower who later signs up through the general alerts button gets the default preferences', () => {
+    const existingSub = (e) => db.createEmailSubscriberIfMissing({ email: e, confirmationToken: 'x', unsubscribeToken: 'y', eventPrefs: { never: true }, source: 'general' }).subscriber;
     const DEFAULTS = { governance: { referenda: true }, network: { upgrades: true } };
     test('an email-only subscriber made by a follow has empty prefs; the general signup fills them and leaves the follows alone', () => {
         fresh();
         const e = mail();
         follow(e, S1);
         follow(e, S2, { confirm: false });
-        const before = db.getEmailSubscriberByEmail(e);
+        const before = existingSub(e);
         assert.deepEqual(before.eventPrefs, {});
         const after = db.adoptDefaultPrefsIfEmpty(before, DEFAULTS);
         assert.deepEqual(after.eventPrefs, DEFAULTS);
-        assert.deepEqual(db.getEmailSubscriberByEmail(e).eventPrefs, DEFAULTS);
+        assert.deepEqual(existingSub(e).eventPrefs, DEFAULTS);
         const live = db.getActiveValidatorAlertFollows().filter(f => f.email === e || f.subscriberId === after.id);
         assert.equal(live.length, 1, 'the confirmed follow is untouched');
         assert.equal(live[0].stash, S1);
@@ -553,9 +554,9 @@ describe('a follower who later signs up through the general alerts button gets t
         fresh();
         const e = mail();
         follow(e, S1);
-        const sub = db.getEmailSubscriberByEmail(e);
+        const sub = existingSub(e);
         db.setEmailSubscriberPrefs(sub.unsubscribeToken, { governance: { referenda: false } });
-        const again = db.adoptDefaultPrefsIfEmpty(db.getEmailSubscriberByEmail(e), DEFAULTS);
+        const again = db.adoptDefaultPrefsIfEmpty(existingSub(e), DEFAULTS);
         assert.deepEqual(again.eventPrefs, { governance: { referenda: false } });
     });
     test('the general subscribe route calls it for an existing row', async () => {

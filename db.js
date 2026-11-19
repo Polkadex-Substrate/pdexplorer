@@ -3077,6 +3077,16 @@ export function createEmailSubscriberIfMissing({ email, confirmationToken, unsub
     return { created: true, subscriber: getEmailSubscriberByEmail(lc) };
 }
 
+// A row made by a validator follow has empty preferences (it receives no
+// governance mail). When that person later signs up through the general alerts
+// button they must get the same defaults as any new general subscriber: fill the
+// preferences from this signup, only when the stored set is empty. A row with
+// preferences is returned as it is. Validator follows are not touched.
+export function adoptDefaultPrefsIfEmpty(subscriber, prefs) {
+    if (!subscriber || !prefs || Object.keys(subscriber.eventPrefs || {}).length > 0) return subscriber;
+    return setEmailSubscriberPrefs(subscriber.unsubscribeToken, prefs) || subscriber;
+}
+
 // Mark a subscriber confirmed. Returns the (post-update) row, or null if no
 // such confirmation token exists. Idempotent — re-confirming is a no-op.
 export function confirmEmailSubscriber(token) {
