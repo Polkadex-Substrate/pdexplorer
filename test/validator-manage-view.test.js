@@ -416,3 +416,86 @@ describe('wiring, inputs and brand', () => {
         assert.doesNotMatch(src, /type="password"|mnemonic|seed phrase/i);
     });
 });
+
+describe('review round 5: the menu follows the live chain, not the page model fetched at mount', () => {
+    const labels = (el) => Array.from(el.querySelectorAll('[data-manage-action]')).map(b => b.textContent.trim());
+    test('after a confirmed chill, Back to manage offers no Change commission and no Stop validating', async () => {
+        const { el, d } = await mount();
+        await click(el, '[data-manage-action="chill"]');
+        await click(el, '[data-manage-action="sign"]');
+        d.api.st.validating = false;
+        d.submits[0].onSuccess();
+        await settle();
+        await click(el, '[data-manage-action="done"]');
+        const l = labels(el);
+        assert.ok(!l.includes('Change commission'), l.join());
+        assert.ok(!l.includes('Stop validating'), l.join());
+        assert.ok(l.includes('Rotate keys') && l.includes('Bond more') && l.includes('Change payee'), l.join());
+        assert.doesNotMatch(el.textContent, /Commission: /);
+    });
+    test('after a confirmed commission change, the menu shows the new commission', async () => {
+        const { el, d } = await mount();
+        await click(el, '[data-manage-action="commission"]');
+        await type(el, '#validate-manage-commission', '7');
+        await click(el, '[data-manage-action="review"]');
+        await click(el, '[data-manage-action="sign"]');
+        d.api.st.commission = 70_000_000;
+        d.submits[0].onSuccess();
+        await settle();
+        await click(el, '[data-manage-action="done"]');
+        assert.match(el.querySelector('.validate-setup-note').textContent, /Commission: 7%/);
+        assert.ok(labels(el).includes('Change commission'));
+    });
+    test('Back to manage after a confirmed action also refreshes the status page when it can', async () => {
+        let refreshed = 0;
+        const x = dom();
+        const d = deps();
+        await mountValidatorManage(x.el, d, { stash: STASH, model: MODEL('active'), refresh: () => { refreshed++; } });
+        await settle();
+        await click(x.el, '[data-manage-action="chill"]');
+        await click(x.el, '[data-manage-action="sign"]');
+        d.api.st.validating = false;
+        d.submits[0].onSuccess();
+        await settle();
+        await click(x.el, '[data-manage-action="done"]');
+        assert.equal(refreshed, 1);
+    });
+    test('a waiting validator that is not validating any more gets the same trimmed menu', async () => {
+        const api = fakeApi({ validating: false });
+        const { el } = await mount({ api }, { state: 'waiting' });
+        assert.ok(!labels(el).includes('Change commission'));
+        assert.ok(!labels(el).includes('Stop validating'));
+    });
+    test('commission with the active bond below the live MinValidatorBond: refused in the form, with a Bond more link, nothing to sign', async () => {
+        const api = fakeApi({ minBond: 600n * PDEX });
+        const { el, d } = await mount({ api });
+        await click(el, '[data-manage-action="commission"]');
+        await type(el, '#validate-manage-commission', '7');
+        await click(el, '[data-manage-action="review"]');
+        assert.equal(el.querySelector('[data-manage-action="sign"]'), null);
+        assert.match(el.querySelector('#validate-manage-msg').textContent, /at least 600 PDEX bonded/);
+        assert.match(el.querySelector('#validate-manage-msg').textContent, /Bond more/);
+        assert.ok(el.querySelector('[data-manage-action="goto-bond"]'));
+        await click(el, '[data-manage-action="goto-bond"]');
+        assert.equal(el.querySelector('#validate-manage-panel-title').textContent.trim(), 'Bond more');
+        assert.equal(d.submits.length, 0);
+    });
+    test('the status page hands the manage panel a refresh that reads the status again', () => {
+        const src = stripComments(readRepo('lib/validator-status-view.js', import.meta.url));
+        assert.match(src, /mountValidatorManage\([^)]*refresh:/);
+    });
+});
+
+describe('review round 5: /unstake route card and the Max warning in the Unstake modal', () => {
+    const script = stripComments(readRepo('script.js', import.meta.url));
+    test('Max on the Unstake modal reads whether the stash validates and shows the consequences before signing', () => {
+        assert.match(script, /import \{[^}]*readMaxUnbondWarning[^}]*\} from '\.\/lib\/validator-manage-chain\.js'/);
+        assert.match(script, /unstakeMax\.addEventListener\('click'[\s\S]{0,1600}readMaxUnbondWarning\(globalApi, data\.address\)/);
+        assert.match(script, /unstake-modal-warning/);
+        assert.match(readRepo('index.html', import.meta.url), /id="unstake-modal-warning"[^>]*role="status"/);
+    });
+    test('the warning is cleared when the amount is typed or the modal reopens', () => {
+        assert.match(script, /unstakeAmtInputEl\.addEventListener\('input'[\s\S]{0,400}clearUnstakeWarning\(\)/);
+        assert.match(script, /function openUnstakeModal\(\)[\s\S]{0,900}clearUnstakeWarning\(\)/);
+    });
+});

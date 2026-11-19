@@ -620,3 +620,64 @@ describe('lib/tx-submit.js with the manage action (fake api, real card model)', 
         assert.deepEqual(h.calls.onError, [WALLET_CHANGED_UNSIGNED]);
     });
 });
+
+// ── review round 5 ──
+describe('review round 5: a failed read never blocks a nominator, the live state gates validator actions', () => {
+    test('Validators.size failing does not block a nominator partial unbond (fail open for the validator rule)', async () => {
+        const api = manageApi({ validating: false, nominators: [OTHER] });
+        api.query.staking.validators.size = async () => { throw new Error('rpc down'); };
+        const tx = await C.buildCheckedUnbondTx(api, { signer: STASH, value: String(100n * PDEX) });
+        assert.equal(`${tx.section}.${tx.method}`, 'staking.unbond');
+    });
+    test('with the read failing, the nominator minimum is still enforced', async () => {
+        const api = manageApi({ validating: false, nominators: [OTHER] });
+        api.query.staking.validators.size = async () => { throw new Error('rpc down'); };
+        await assert.rejects(C.buildCheckedUnbondTx(api, { signer: STASH, value: String(480n * PDEX) }), /This stash nominates, so it must keep at least 50 PDEX bonded/);
+    });
+    test('menu state from the live chain: a chilled stash is no longer offered commission or stop validating', () => {
+        for (const s of ['active', 'elected-next', 'waiting']) assert.equal(M.liveMenuState(s, false), 'active-leaving', s);
+        for (const s of ['active', 'elected-next', 'waiting', 'active-leaving', 'disabled']) assert.equal(M.liveMenuState(s, true), s, s);
+        assert.equal(M.liveMenuState('disabled', false), 'disabled');
+        assert.equal(M.liveMenuState('nothing-yet', false), 'nothing-yet');
+        assert.deepEqual(M.manageMenu(M.liveMenuState('active', false)).actions.map(a => a.kind), ['keys', 'bondExtra', 'payee']);
+    });
+    test('commission and stop validating are refused explicitly when the stash is not validating (not a NaN comparison)', () => {
+        const idle = { ...STATE, validating: false, prefs: null };
+        for (const step of [{ kind: 'commission', commission: 70_000_000, blocked: false }, { kind: 'chill' }]) {
+            const p = M.manageSignTimeProblems({ limits: LIMITS, state: idle, owners: null, fee: null }, { kind: step.kind, stash: STASH, step, state: idle, limits: LIMITS });
+            assert.equal(p.length, 1);
+            assert.match(p[0], /This stash is not asking to validate now/);
+            assert.doesNotMatch(p[0], /NaN/);
+        }
+        assert.equal(M.notValidatingProblem('commission', false).includes('Bond more'), false);
+        assert.equal(M.notValidatingProblem('keys', false), null);
+        assert.equal(M.notValidatingProblem('commission', true), null);
+    });
+    test('commission below the live MinValidatorBond is refused before signing, telling the operator to bond more', () => {
+        const p = M.commissionBondProblem({ active: String(100n * PDEX), minValidatorBond: String(123n * PDEX) });
+        assert.match(p, /at least 123 PDEX bonded/);
+        assert.match(p, /bond more/i);
+        assert.match(p, /100 PDEX/);
+        assert.equal(M.commissionBondProblem({ active: String(123n * PDEX), minValidatorBond: String(123n * PDEX) }), null);
+        assert.equal(M.commissionBondProblem({ active: '1', minValidatorBond: null }), null);
+        const low = { ...STATE, active: String(100n * PDEX) };
+        const sign = M.manageSignTimeProblems({ limits: LIMITS, state: low, owners: null, fee: null }, { kind: 'commission', stash: STASH, step: { kind: 'commission', commission: 70_000_000, blocked: false }, state: low, limits: LIMITS });
+        assert.ok(sign.some(x => /at least 123 PDEX bonded/.test(x)), sign.join('|'));
+    });
+    test('buildCheckedManageTx refuses a commission change below the live MinValidatorBond before the wallet', async () => {
+        const api = manageApi({ minBond: 600n * PDEX });
+        const state = await C.readManageState(api, STASH);
+        await assert.rejects(C.buildCheckedManageTx(api, { kind: 'commission', stash: STASH, signer: STASH, step: { kind: 'commission', commission: 70_000_000, blocked: false }, state, limits: await C.readManageLimits(api) }), /at least 600 PDEX bonded/);
+    });
+    test('the max-unbond warning names the consequences; a read failure gives no warning', async () => {
+        const w = M.maxUnbondWarning({ eraEndsIn: 5 * 3600, activeEra: 500, currentEra: 500 });
+        assert.match(w, /Max unbonds your whole bond/);
+        assert.match(w, /stops this stash validating/);
+        assert.match(w, /keep the node running until era 500 ends/);
+        assert.match(await C.readMaxUnbondWarning(manageApi(), STASH), /stops this stash validating/);
+        assert.equal(await C.readMaxUnbondWarning(manageApi({ validating: false }), STASH), null);
+        const bad = manageApi();
+        bad.query.staking.validators.size = async () => { throw new Error('rpc down'); };
+        assert.equal(await C.readMaxUnbondWarning(bad, STASH), null);
+    });
+});

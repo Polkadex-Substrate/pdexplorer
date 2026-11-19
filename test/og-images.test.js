@@ -109,6 +109,8 @@ describe('OG route rule (lib/og-route.js)', () => {
         assert.equal(ogRouteFor('/democracy/referendum/5').route.card, 'democracy');
         assert.equal(ogRouteFor('/democracy/referendum/5').deep, true);
         assert.equal(ogRouteFor('/stake').route.card, 'stake');
+        assert.equal(ogRouteFor('/unstake').route.card, 'stake');
+        assert.equal(ogRouteFor('/unstake').route.canonical, '/wallet');
         assert.equal(ogRouteFor('/wallet/esabc').route.card, 'wallet');
         assert.equal(ogRouteFor('/block/123'), null);
         assert.equal(ogRouteFor('/help/brand-kit'), null);
@@ -248,7 +250,7 @@ describe('crawler shells (tools/og/shells.mjs)', () => {
             return '/index.html';
         };
         const cases = ['/', '/blocks', '/blocks/', '/democracy/referendum/5', '/council/motion/0xabc',
-            '/treasury/proposal/3', '/stake', '/staking', '/wallet/esabc', '/staking-rewards/esabc',
+            '/treasury/proposal/3', '/stake', '/staking', '/unstake', '/wallet/esabc', '/staking-rewards/esabc',
             '/discussions/12', '/chain-state', '/block/123', '/help/brand-kit', '/nope', '/og'];
         for (const uri of cases) {
             const served = shell(resolve(uri).replace(/^\/+/, ''));
