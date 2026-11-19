@@ -610,7 +610,7 @@ describe('pending unbond, withdrawUnbonded, bond and utility.batch: re-checked, 
         const v = D.pendingValidatorOps([row(1, ex.staking.unbond(5n * PDEX)), row(2, ex.staking.withdrawUnbonded(0)), row(3, ex.staking.bond(10n * PDEX, 'Staked')), row(4, ex.utility.batch([ex.staking.chill()]))], m, { isSame });
         assert.deepEqual(v.ops.map(o => o.rechecked), [true, false, false, false]);
         assert.equal(D.NOT_RECHECKED, 'Not re-checked by the explorer; the chain decides.');
-        assert.doesNotMatch(D.NOT_RECHECKED, /[–—]/);
+        assert.doesNotMatch(D.NOT_RECHECKED, /[\u2013\u2014]/);
     });
     test('the manage view labels a pending op that is not re-checked', () => {
         const src = stripComments(readRepo('lib/validator-manage-view.js', import.meta.url));
