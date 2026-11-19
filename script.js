@@ -9127,7 +9127,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
         canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), data.address), openPicker: (keep) => openStakeModal(keep) });
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
     // Design 5.1: a Validator card only for an account that validates or has session keys.
-    if (VALIDATE_ON && isOwnWallet && globalApi) readWalletValidator(globalApi, data.address).then(v => { const s = document.getElementById('wallet-validator-slot'); if (s) s.innerHTML = walletValidatorCard(v, stakingEscapeHtml); });
+    if (VALIDATE_ON && isOwnWallet && globalApi) readWalletValidator(globalApi, data.address).then(v => { const s = document.getElementById('wallet-validator-slot'); if (s && v && isSameAddress(v.address, currentWalletData?.address)) s.innerHTML = walletValidatorCard(v, stakingEscapeHtml); });
     refreshWalletMultisigs();
     // Average APR card — runs after the rest of the dashboard so the
     // ranked widget order on slow connections is: balance/staking →
@@ -13355,8 +13355,8 @@ async function renderAddProxyForm(address) {
         </div>
         <div id="proxy-add-error" class="staking-error" style="display:none;margin-top:8px;font-size:0.78rem;"></div>`;
 
-    // "Add a staking proxy" from the validator manage panel: Staking, delay 0, the limits (design 5.4).
-    const pre = proxyPrefill(window.location.search);
+    // "Add a staking proxy" from the validator manage panel: Staking, delay 0, the limits (design 5.4). Only while the validate flag is on.
+    const pre = VALIDATE_ON && proxyPrefill(window.location.search);
     if (pre && cachedProxyTypes.includes(pre.type)) {
         document.getElementById('proxy-add-type').value = pre.type; document.getElementById('proxy-add-delay').value = String(pre.delay);
         el.insertAdjacentHTML('beforeend', `<p class="validate-setup-note" style="margin-top:8px;font-size:0.82rem;">${stakingEscapeHtml(pre.note)}</p>`);

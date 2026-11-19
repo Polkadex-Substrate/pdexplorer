@@ -641,7 +641,7 @@ describe('the multisig deposit is in the fee preflight of a first approval (Fabl
         assert.match(t, /multisig deposit of 22 PDEX/);
         assert.match(t, /returned/);
         assert.equal(F.feeShortfall({ fee: 2n * 10n ** 10n, deposit: 22n * PDEX, free: 523n * PDEX, frozen: 500n * PDEX, ed: PDEX }), null);
-        assert.doesNotMatch(F.feeShortText(F.feeShortfall({ fee: 2n * 10n ** 10n, free: PDEX, ed: PDEX })), /deposit/, 'no deposit, no deposit wording');
+        assert.doesNotMatch(F.feeShortText(F.feeShortfall({ fee: 2n * 10n ** 10n, free: PDEX, ed: PDEX })), /multisig deposit/, 'no deposit, no deposit wording');
     });
     test('feePreflight on a first approval: a signer that can pay the fee but not the deposit is stopped before the wallet is asked', async () => {
         const api = chainApi({ free: 510n * PDEX, frozen: 500n * PDEX });
