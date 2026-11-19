@@ -88,7 +88,7 @@ import { mountValidatePage } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
-import { validatorCallGuard, readWalletValidator } from './lib/validator-delegate-chain.js';
+import { validatorCallGuard, validatorCallNote, readWalletValidator } from './lib/validator-delegate-chain.js';
 import { walletValidatorCard, proxyPrefill, proxyTypesOf } from './lib/validator-delegate.js';
 // The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
 const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
@@ -8086,7 +8086,8 @@ const multisigUI = createMultisigUI({
     submit: submitSignedTx, fetchJson: fetchApiJson,
     refresh: address => refreshWalletDashboardFor(address), revision: () => walletSession.revision(),
     // A multisig stash's validator change: the Sprint 3 and 4 rules again at the approval that runs it.
-    callGuard: (api, call, m) => validatorCallGuard(api, call, m.address)
+    callGuard: (api, call, m) => validatorCallGuard(api, call, m.address),
+    callNote: (api, call, m) => validatorCallNote(api, call, m.address)
 });
 const councilCandidacyUI = createCouncilCandidacyUI({
     api: () => globalApi, selected: getStoredWallet,

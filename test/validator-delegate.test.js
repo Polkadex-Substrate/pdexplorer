@@ -655,3 +655,42 @@ describe('the multisig deposit is in the fee preflight of a first approval (Fabl
         assert.equal(ok.status, 'ok');
     });
 });
+
+// ── Fable low follow-ups (Sprint 5 round 2) ──
+describe('validatorCallGuard round 2: pass-through cases and a visible note when the read fails', () => {
+    test('A1: a multisig that is the legacy controller of another stash: staking.validate passes to the chain', async () => {
+        const call = registry.createType('Call', ex.staking.validate({ commission: 50_000_000, blocked: false }).toHex());
+        const api = chainApi({ bonded: null, validating: false, nextKeys: null, ledger: { controller: STASH, stash: OTHER, active: 500n * PDEX, total: 500n * PDEX, unlocking: [] } });
+        assert.deepEqual(await DC.validatorCallGuard(api, call, STASH), []);
+    });
+    test('A2: a non-validator multisig batchAll without validate or setKeys passes, even with an over-ask the chain clamps', async () => {
+        const base = { bonded: STASH, validating: false, nextKeys: null };
+        const call = registry.createType('Call', ex.utility.batchAll([ex.staking.bondExtra(5000n * PDEX)]).toHex());
+        assert.deepEqual(await DC.validatorCallGuard(chainApi(base), call, STASH), []);
+    });
+    test('A2: a non-validator batch that contains staking.validate is still a setup', async () => {
+        const base = { bonded: STASH, validating: false, nextKeys: null, minBond: 900n * PDEX };
+        const call = registry.createType('Call', ex.utility.batchAll([ex.staking.validate({ commission: 50_000_000, blocked: false })]).toHex());
+        assert.match((await DC.validatorCallGuard(chainApi(base), call, STASH)).join(' '), /minimum bond/);
+    });
+    test('A3: validators.size fails: the guard still passes (fail open) and validatorCallNote says so', async () => {
+        const call = registry.createType('Call', ex.staking.chill().toHex());
+        const api = chainApi();
+        api.query.staking.validators.size = async () => { throw new Error('rpc down'); };
+        assert.deepEqual(await DC.validatorCallGuard(api, call, STASH), []);
+        assert.equal(await DC.validatorCallNote(api, call, STASH), 'Could not check validator rules; the chain will decide.');
+    });
+    test('A3: no note when the read works, or when the call is not a validator operation', async () => {
+        const chill = registry.createType('Call', ex.staking.chill().toHex());
+        assert.equal(await DC.validatorCallNote(chainApi(), chill, STASH), '');
+        const other = registry.createType('Call', ex.balances.transferKeepAlive(OTHER, 5n * PDEX).toHex());
+        const api = chainApi();
+        api.query.staking.validators.size = async () => { throw new Error('rpc down'); };
+        assert.equal(await DC.validatorCallNote(api, other, STASH), '');
+    });
+    test('A3: the review shows the note (multisig-view takes callNote, script wires it)', async () => {
+        const fs = await import('node:fs');
+        assert.match(fs.readFileSync(new URL('../lib/multisig-view.js', import.meta.url), 'utf8'), /callNote/);
+        assert.match(fs.readFileSync(new URL('../script.js', import.meta.url), 'utf8'), /callNote: \(api, call, m\) => validatorCallNote\(api, call, m\.address\)/);
+    });
+});
