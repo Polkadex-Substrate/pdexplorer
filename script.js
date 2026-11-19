@@ -87,7 +87,7 @@ import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
-import { buildCheckedUnbondTx } from './lib/validator-manage-chain.js';
+import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
 // The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
 const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
 const SHOWN_HELP_TOPICS = visibleHelpTopics(HELP_TOPICS, { validate: VALIDATE_ON });
@@ -9666,7 +9666,15 @@ async function submitPayoutTx() {
 let unstakeFullUnbondIntent = false;
 let unstakeMaxPlanck = null;
 
+// A validator stash that unbonds everything is chilled by the chain: the
+// warning says so before signing (set by Max, cleared by typing or reopening).
+function clearUnstakeWarning() {
+    const el = document.getElementById('unstake-modal-warning');
+    if (el) { el.hidden = true; el.textContent = ''; }
+}
+
 function openUnstakeModal() {
+    clearUnstakeWarning();
     const data = currentWalletData;
     if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const errEl = document.getElementById('unstake-modal-error');
@@ -10655,12 +10663,18 @@ async function submitSendTx() {
         // cleanly into 4-decimal PDEX.
         unstakeFullUnbondIntent = true;
         unstakeMaxPlanck = (data.staking && data.staking.activeStakedPlanck) || null;
+        clearUnstakeWarning();
+        if (globalApi) readMaxUnbondWarning(globalApi, data.address).then((text) => {
+            const el = document.getElementById('unstake-modal-warning');
+            if (el && text && unstakeFullUnbondIntent) { el.textContent = text; el.hidden = false; }
+        }, () => {});
     });
     // Any keystroke in the amount field means the user has picked a custom
     // amount — clear the full-unbond intent so submitUnstakeTx falls back to
     // the partial-unbond code path (with its residue check).
     const unstakeAmtInputEl = document.getElementById('unstake-amount-input');
     if (unstakeAmtInputEl) unstakeAmtInputEl.addEventListener('input', () => {
+        clearUnstakeWarning();
         unstakeFullUnbondIntent = false;
         unstakeMaxPlanck = null;
     });

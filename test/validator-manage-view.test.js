@@ -393,7 +393,7 @@ describe('wiring, inputs and brand', () => {
         assert.match(script, /intent === 'unstake'[\s\S]{0,200}openUnstakeModal\(\)/);
     });
     test('the existing partial unbond reads the validator rule at signing (buildCheckedUnbondTx)', () => {
-        assert.match(script, /import \{ buildCheckedUnbondTx \} from '\.\/lib\/validator-manage-chain\.js'/);
+        assert.match(script, /import \{ buildCheckedUnbondTx, readMaxUnbondWarning \} from '\.\/lib\/validator-manage-chain\.js'/);
         assert.match(script, /buildTx: \(api\) => buildCheckedUnbondTx\(api, \{ signer: data\.address, value: pdexToPlanck\(amtStr\) \}\)/);
     });
     test('every new text box declares its paste kind; amounts are strict', () => {
@@ -482,7 +482,7 @@ describe('review round 5: the menu follows the live chain, not the page model fe
     });
     test('the status page hands the manage panel a refresh that reads the status again', () => {
         const src = stripComments(readRepo('lib/validator-status-view.js', import.meta.url));
-        assert.match(src, /mountValidatorManage\([^)]*refresh:/);
+        assert.match(src, /mountValidatorManage\([\s\S]{0,200}refresh:/);
     });
 });
 
