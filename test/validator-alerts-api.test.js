@@ -615,6 +615,8 @@ describe('wiring and documents', () => {
         assert.match(env, /^# VALIDATOR_ALERTS_SEND=1/m);
         assert.match(env, /VALIDATOR_ALERTS_CHECK_MS/);
         assert.match(env, /VALIDATOR_ALERT_ADDRESS_PER_HOUR/);
+        assert.match(env, /^# VALIDATOR_ALERT_ADDRESS_PER_DAY=5/m);
+        assert.match(readRepo('README.md'), /VALIDATOR_ALERT_ADDRESS_PER_DAY/);
     });
     test('the privacy page says an address is stored for validator alerts, what triggers mail and how to stop it', () => {
         const html = readRepo('index.html');

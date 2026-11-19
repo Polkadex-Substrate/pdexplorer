@@ -3212,6 +3212,9 @@ export function addValidatorAlertFollow({ email, stash, subscriberConfirmationTo
     }
     if (sub.unsubscribedAt) return { status: 'blocked', follow: null };
     const now = Date.now();
+    // Lazy clean-up: a follow that was never confirmed and whose link has expired is dropped, so it
+    // stops counting toward the cap (no background job needed; this runs on every subscribe).
+    db.prepare('DELETE FROM validator_alert_follows WHERE confirmed_at IS NULL AND updated_at < ?').run(now - CONFIRM_TOKEN_TTL_MS);
     const existing = db.prepare('SELECT id, confirmed_at, unsubscribed_at FROM validator_alert_follows WHERE subscriber_id = ? AND stash = ?').get(sub.id, stash);
     if (existing && existing.confirmed_at && !existing.unsubscribed_at) return { status: 'exists', follow: getFollowById(existing.id) };
     if (existing) {
@@ -3227,10 +3230,16 @@ export function addValidatorAlertFollow({ email, stash, subscriberConfirmationTo
     return { status: 'pending', follow: getFollowById(Number(r.lastInsertRowid)) };
 }
 
-// Confirm by the follow's token. Reactivates a follow the person left earlier.
-export function confirmValidatorAlertFollow(token) {
+// Confirm by the follow's token. Reactivates a follow the person left earlier, which takes a
+// place again, so the per-address cap is checked then: over it, nothing changes and the row
+// comes back with capReached: true.
+export function confirmValidatorAlertFollow(token, { maxPerEmail = 5 } = {}) {
     const row = getValidatorAlertFollowByConfirmationToken(token);
     if (!row) return null;
+    if (row.unsubscribedAt) {
+        const live = db.prepare('SELECT COUNT(*) AS c FROM validator_alert_follows WHERE subscriber_id = ? AND unsubscribed_at IS NULL').get(row.subscriberId).c;
+        if (live >= maxPerEmail) return { ...row, capReached: true };
+    }
     if (!row.confirmedAt || row.unsubscribedAt) {
         db.prepare('UPDATE validator_alert_follows SET confirmed_at = ?, unsubscribed_at = NULL, updated_at = ? WHERE id = ?')
             .run(row.confirmedAt || Date.now(), Date.now(), row.id);

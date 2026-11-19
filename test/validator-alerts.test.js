@@ -179,7 +179,7 @@ describe('detectValidatorEvents: one function per rule, over two observations', 
         assert.match(ev[0].occurrence, /^keys:.+@1200$/);
         assert.deepEqual(detectValidatorEvents(obs(), obs({ keys: 'k1' })), []);
         assert.deepEqual(detectValidatorEvents(obs(), obs({ keys: null })), []);
-        assert.deepEqual(kinds(detectValidatorEvents(obs({ keys: null }), obs({ keys: 'k2' }))), ['keys-changed']);
+        assert.deepEqual(detectValidatorEvents(obs({ keys: null }), obs({ keys: 'k2' })), [], 'an unknown previous value is not a change');
     });
 
     test('several events in one step are all returned, each with its own occurrence', () => {

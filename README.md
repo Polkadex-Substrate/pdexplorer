@@ -812,7 +812,7 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 - `GET /api/email/unsubscribe?token=<t>` — renders an unsubscribe page with a button. **Read-only.**
 - `POST /api/email/unsubscribe` (`token` form field) — performs the unsubscribe; also the RFC 8058 `List-Unsubscribe-Post` target
 - `GET /api/validator-alerts/status` - whether validator alerts are switched on (`VALIDATOR_ALERTS_SEND=1`, default off)
-- `POST /api/validator-alerts/subscribe` (JSON `email`, `stash`) - double opt-in signup for alerts about one validator; rate-limited per IP and per address, at most 5 live follows per address
+- `POST /api/validator-alerts/subscribe` (JSON `email`, `stash`) - double opt-in signup for alerts about one validator; rate-limited per IP and per address (3 an hour and `VALIDATOR_ALERT_ADDRESS_PER_DAY`, default 5 a day), at most 5 live follows per address. Every well-formed request gets the same answer (`{ status: "requested", message }`), whatever is stored about the address; the mail is sent after the response. A follow never confirmed stops counting after 24 hours. After downtime longer than 2 hours the alert tick rebases without sending, and a failed or partial read never raises an alert
 - `POST /api/validator-alerts/confirm` (`token` form field) - performs the confirmation (the GET renders a button page)
 - `POST /api/validator-alerts/unsubscribe` (`token` form field) - ends one validator follow; also the RFC 8058 target
 
