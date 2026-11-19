@@ -1223,9 +1223,13 @@ async function getIdentity(api, address) {
 // this; the other workers read the same SQLite file.
 const identityDerivedRefresher = createDebouncedRefresher({
     refresh: (accounts) => refreshDerivedNames(accounts, {
-        getName: (a) => getIdentity(globalApi, a),
+        getName: (a) => identityResolver.resolve(globalApi, a),
         setters: [db.updateValidatorName, db.updateHolderName]
-    })
+    }),
+    // A flood of identity events: one pass over every stored name instead.
+    refreshAll: () => refreshDerivedNames(
+        [...new Set([...db.getValidators().validators, ...db.getHolders().holders].map(r => r.address))],
+        { getName: (a) => identityResolver.resolve(globalApi, a), setters: [db.updateValidatorName, db.updateHolderName] })
 });
 const identityInvalidator = createIdentityInvalidator({
     resolver: identityResolver,

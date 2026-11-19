@@ -397,7 +397,7 @@ describe('derived caches: the validators list and holders', () => {
             clearTimer: (t) => { t.cleared = true; }
         });
         r.add([A]); r.add([B, A]);
-        assert.equal(timers.filter(t => !t.cleared).length, 1);
+        assert.equal(timers.filter(t => !t.cleared).length, 2, 'one quiet-period timer and one max-wait timer');
         assert.equal(timers[0].ms, 2000);
         await timers.find(t => !t.cleared).fn();
         assert.deepEqual(calls, [[A, B].sort()]);
