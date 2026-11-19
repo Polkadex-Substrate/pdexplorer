@@ -268,14 +268,15 @@ describe('unbond: the pallet rule for a validator (InsufficientBond, chill first
         assert.match(M.unbondProblem(460n * PDEX, { ...ctx, validating: false, nominating: true }), /^This stash nominates, so it must keep at least 50 PDEX bonded\./);
         assert.equal(M.unbondProblem(460n * PDEX, { ...ctx, validating: false }), null);
     });
-    test('MaxUnlockingChunks: full and nothing matured is refused; a matured chunk or the same era is fine', () => {
+    test('MaxUnlockingChunks: full and nothing matured is refused, even when the new chunk would merge (the length check comes first); a matured chunk is withdrawn first, so it is fine', () => {
         const full = Array.from({ length: 32 }, (_, i) => ({ value: String(PDEX), era: 501 + i }));
-        assert.equal(M.unbondProblem(PDEX, { ...ctx, validating: false, unlocking: full, total: 532n * PDEX }),
-            'This stash already has 32 unbonding amounts, the most the chain allows. Withdraw the ones that have finished, or wait until one finishes, then unbond again.');
+        const refused = 'This stash already has 32 unbonding amounts, the most the chain allows. Withdraw the ones that have finished, or wait until one finishes, then unbond again.';
+        assert.equal(M.unbondProblem(PDEX, { ...ctx, validating: false, unlocking: full, total: 532n * PDEX }), refused);
         const matured = [{ value: String(PDEX), era: 499 }, ...full.slice(1)];
         assert.equal(M.unbondProblem(PDEX, { ...ctx, validating: false, unlocking: matured, total: 532n * PDEX }), null);
+        // do_unbond: ensure!(ledger.unlocking.len() < MaxUnlockingChunks, NoMoreChunks) runs before the same-era merge.
         const sameEra = [...full.slice(0, 31), { value: String(PDEX), era: 528 }];
-        assert.equal(M.unbondProblem(PDEX, { ...ctx, validating: false, unlocking: sameEra, total: 532n * PDEX }), null);
+        assert.equal(M.unbondProblem(PDEX, { ...ctx, validating: false, unlocking: sameEra, total: 532n * PDEX }), refused);
     });
 });
 
@@ -441,7 +442,7 @@ function manageApi(o = {}) {
     const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); c.paymentInfo = async () => ({ partialFee: num(st.fee) }); return c; } }) });
     return {
         reads, st, registry, tx, runtimeVersion: { specVersion: num(393) },
-        consts: { balances: { existentialDeposit: num(PDEX) }, staking: { maxUnlockingChunks: num(32), bondingDuration: num(st.bondingDuration), sessionsPerEra: num(6) } },
+        consts: { balances: { existentialDeposit: num(PDEX) }, staking: { maxUnlockingChunks: num(32), get bondingDuration() { return num(st.bondingDuration); }, sessionsPerEra: num(6) } },
         query: {
             system: { account: async () => ({ nonce: num(0), data: { free: num(st.free), reserved: num(0), frozen: num(st.frozen) } }) },
             staking: {

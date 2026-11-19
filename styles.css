@@ -5158,3 +5158,19 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .validate-body, .validate-keys-body { padding: 0 16px 16px; }
     .validate-cmd-pre { padding: 12px; }
 }
+
+/* ── Validate manage panel (lib/validator-manage-view.js; Sprint 4) ──
+   Under the status. Secondary buttons for the actions, one form at a time.
+   "Stop validating" is an outline button, never the error colour. Existing
+   tokens only; no colour of its own. */
+.validate-manage { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--border-color); }
+.validate-manage-title { margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+.validate-manage-actions { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+.validate-manage-links { margin: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.9rem; }
+.validate-manage-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.validate-manage-panel input[type="text"], .validate-manage-panel textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
+.validate-manage-panel .validate-lookup-row input[type="text"] { flex: 1 1 200px; width: auto; }
+.validate-manage-panel input[aria-invalid="true"], .validate-manage-panel textarea[aria-invalid="true"] { border-color: var(--border-hover); }
+.validate-manage-rule { font-weight: 700; color: var(--text-primary); }
+.validate-manage-facts { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
+.validate-manage .validate-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
