@@ -7418,7 +7418,7 @@ function onStakingRewardsWalletChange(change) {
 // /validate/node: the node guide (lib/validator-node-guide.js). ?node=NAME is the telemetry name, kept in the URL only.
 function initValidatePage(address) {
     const nodeName = new URLSearchParams(window.location.search).get('node') || '';
-    const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(null, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
+    const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(history.state, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
     if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
     if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
     const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
@@ -7426,7 +7426,7 @@ function initValidatePage(address) {
     pageScope.add(walletSession.onActiveAccountChange((change) => {
         const viewed = readRouteFromLocation().slice('validate/'.length);
         const follow = viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress });
-        if (follow && viewed) { try { history.replaceState(null, '', '/validate'); } catch (e) { /* sandboxed */ } }
+        if (follow && viewed) { try { history.replaceState(history.state, '', '/validate'); } catch (e) { /* sandboxed */ } }
         mount(follow ? '' : viewed);
     }));
     mount(address || '');

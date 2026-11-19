@@ -303,4 +303,16 @@ describe('the real page', () => {
         assert.equal(r.steps[3].path, '/blocks');
         assert.deepEqual(r.steps[3].scrollCalls[0], [0, 2400], 'Back went to where the list was left');
     });
+    test('the Validate routes (origin/main 9df2ee1) reset and restore like any other: sidebar in, node guide link, Back', async () => {
+        const r = await page({ path: 'blocks', seed: { pdex_validate_enabled: '1' }, scrollLog: true, steps: [
+            { setScroll: 2400 }, { click: '#nav-validate' }, { setScroll: 300 }, { click: 'a[href="/validate/node"]' }, { back: true }, { back: true }] });
+        assert.equal(r.steps[1].path, '/validate');
+        assert.deepEqual(r.steps[1].scrollCalls.slice(0, 2), [[0, 0], [0, 0]], 'into /validate at the top');
+        assert.equal(r.steps[3].path, '/validate/node');
+        assert.deepEqual(r.steps[3].scrollCalls.slice(0, 2), [[0, 0], [0, 0]], 'into the node guide at the top');
+        assert.equal(r.steps[4].path, '/validate');
+        assert.deepEqual(r.steps[4].scrollCalls[0], [0, 300], 'Back to where /validate was left');
+        assert.equal(r.steps[5].path, '/blocks');
+        assert.deepEqual(r.steps[5].scrollCalls[0], [0, 2400]);
+    });
 });
