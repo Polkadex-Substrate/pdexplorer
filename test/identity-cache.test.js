@@ -428,3 +428,283 @@ describe('wiring in server.js', () => {
         assert.ok(/receiveIdentityInvalidations\(/.test(src));
     });
 });
+
+// ---------------------------------------------------------------------------
+// Review round 2: read outcomes, stale-while-error, flood-safe debounce, LRU,
+// and end-to-end event invalidation.
+// ---------------------------------------------------------------------------
+
+describe('three read outcomes: found / none / failed', () => {
+    const dirs2 = [];
+    after(() => { for (const d of dirs2) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} } });
+    function seedDb() {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-ident2-'));
+        dirs2.push(dir);
+        db.initDb(dir, false, { awaitMigrator: false });
+        db.replaceValidators([{ address: A, name: 'Stored Good Name', totalStake: 10, commission: 5, realApy: 1 }], { totalCount: 1, lastSync: 1, status: 'Synced' });
+        db.replaceHolders([{ address: A, rank: 1, name: 'Stored Good Name', balance: 5, share: 1 }], { totalCount: 1, lastSync: 1, status: 'Synced' });
+    }
+    const setters = () => [db.updateValidatorName, db.updateHolderName];
+
+    test('resolve reports found, none and failed distinctly', async () => {
+        const { chain, resolver } = setup({}, { [A]: 'Synthetic Validator' });
+        assert.deepEqual(await resolver.resolve(API, A), { name: 'Synthetic Validator', status: 'found' });
+        assert.deepEqual(await resolver.resolve(API, B), { name: 'Unknown', status: 'none' });
+        chain.fail = true;
+        assert.deepEqual(await resolver.resolve(API, 'stash-cccc'), { name: 'Unknown', status: 'failed' });
+        assert.deepEqual(await resolver.resolve(null, 'stash-dddd'), { name: 'Unknown', status: 'failed' }, 'unusable api is a failed read too');
+    });
+
+    test('a failed chain read during the derived refresh keeps the stored name, in both tables', async () => {
+        seedDb();
+        const { chain, resolver } = setup({}, { [A]: 'Synthetic Validator' });
+        chain.fail = true;
+        const changed = await refreshDerivedNames([A], { getName: (a) => resolver.resolve(API, a), setters: setters() });
+        assert.equal(changed, 0);
+        assert.equal(db.getValidators().validators[0].name, 'Stored Good Name');
+        assert.equal(db.getHolders().holders[0].name, 'Stored Good Name');
+    });
+
+    test('a confirmed no-identity still overwrites the stored name with Unknown', async () => {
+        seedDb();
+        const { resolver } = setup({}, {});
+        const changed = await refreshDerivedNames([A], { getName: (a) => resolver.resolve(API, a), setters: setters() });
+        assert.equal(changed, 2);
+        assert.equal(db.getValidators().validators[0].name, 'Unknown');
+    });
+
+    test('a plain-string getName (older callers) is still written as before', async () => {
+        seedDb();
+        const changed = await refreshDerivedNames([A], { getName: async () => 'Plain Name', setters: setters() });
+        assert.equal(changed, 2);
+    });
+});
+
+describe('stale-while-error', () => {
+    const BACKOFF = 30 * 1000;
+
+    test('an expired positive entry whose refresh read fails serves the last known name, marked stale', async () => {
+        const { c, chain, resolver } = setup({}, { [A]: 'Synthetic Validator' });
+        assert.equal(await resolver.getIdentity(API, A), 'Synthetic Validator');
+        c.advance(IDENTITY_TTL_FOUND_MS + 1);
+        chain.fail = true;
+        assert.deepEqual(await resolver.resolve(API, A), { name: 'Synthetic Validator', status: 'stale' });
+        assert.equal(await resolver.getIdentity(API, A), 'Synthetic Validator');
+    });
+
+    test('while stale it does not hammer the chain: one retry only after the backoff', async () => {
+        const { c, chain, resolver } = setup({}, { [A]: 'Synthetic Validator' });
+        await resolver.getIdentity(API, A);
+        c.advance(IDENTITY_TTL_FOUND_MS + 1);
+        chain.fail = true;
+        await resolver.getIdentity(API, A);
+        const reads = chain.reads;
+        c.advance(BACKOFF - 1000);
+        await resolver.getIdentity(API, A);
+        await resolver.getIdentity(API, A);
+        assert.equal(chain.reads, reads, 'inside the backoff: served stale, no read');
+        c.advance(2000);
+        chain.fail = false; chain.table[A] = 'Renamed Validator';
+        assert.equal(await resolver.getIdentity(API, A), 'Renamed Validator');
+        assert.equal(chain.reads, reads + 1);
+        assert.equal((await resolver.resolve(API, A)).status, 'found');
+    });
+
+    test('if the retry succeeds with no identity, the stale name is dropped (identity was cleared)', async () => {
+        const { c, chain, resolver } = setup({}, { [A]: 'Synthetic Validator' });
+        await resolver.getIdentity(API, A);
+        c.advance(IDENTITY_TTL_FOUND_MS + 1);
+        chain.fail = true;
+        await resolver.getIdentity(API, A);
+        c.advance(BACKOFF + 1);
+        chain.fail = false; delete chain.table[A];
+        assert.deepEqual(await resolver.resolve(API, A), { name: 'Unknown', status: 'none' });
+    });
+
+    test('an invalidation removes the last known name too: a failed read after an event is Unknown, not stale', async () => {
+        const { c, chain, resolver } = setup({}, { [A]: 'Synthetic Validator' });
+        await resolver.getIdentity(API, A);
+        c.advance(IDENTITY_TTL_FOUND_MS + 1);
+        chain.fail = true;
+        await resolver.getIdentity(API, A);
+        resolver.invalidate([A]);
+        assert.deepEqual(await resolver.resolve(API, A), { name: 'Unknown', status: 'failed' });
+    });
+
+    test('a failed read with nothing known is Unknown and uncached', async () => {
+        const { chain, cache, resolver } = setup({}, {});
+        chain.fail = true;
+        assert.deepEqual(await resolver.resolve(API, A), { name: 'Unknown', status: 'failed' });
+        assert.equal(cache.size(), 0);
+    });
+
+    test('the last-known store is bounded by the cache cap', async () => {
+        const { c, chain, cache, resolver } = setup({ max: 3 }, {});
+        for (let i = 0; i < 6; i++) chain.table[`k${i}`] = `Name ${i}`;
+        for (let i = 0; i < 3; i++) await resolver.getIdentity(API, `k${i}`);
+        c.advance(IDENTITY_TTL_FOUND_MS + 1);
+        for (let i = 0; i < 3; i++) cache.get(`k${i}`);
+        for (let i = 3; i < 6; i++) await resolver.getIdentity(API, `k${i}`);
+        c.advance(IDENTITY_TTL_FOUND_MS + 1);
+        for (let i = 3; i < 6; i++) cache.get(`k${i}`);
+        assert.ok(cache.lastKnownSize() <= 3);
+    });
+});
+
+describe('debounce max-wait, pending cap, coalescing', () => {
+    function rig(opts = {}) {
+        const timers = []; const calls = []; const alls = [];
+        const r = createDebouncedRefresher({
+            refresh: async (list) => { calls.push([...list].sort()); },
+            refreshAll: async () => { alls.push(1); },
+            setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; },
+            clearTimer: (t) => { t.cleared = true; },
+            ...opts
+        });
+        const live = () => timers.filter(t => !t.cleared);
+        return { r, timers, calls, alls, live };
+    }
+
+    test('a steady stream cannot defer the refresh forever: a 5 s max-wait timer starts at the first item and is not reset', async () => {
+        const { r, timers, calls, live } = rig();
+        r.add([A]);
+        const maxTimer = timers.find(t => t.ms === 5000);
+        assert.ok(maxTimer, 'a max-wait timer of 5000 ms exists');
+        for (let i = 0; i < 20; i++) r.add([`s${i}`]);
+        assert.equal(maxTimer.cleared, false, 'new arrivals never reset the max-wait');
+        assert.equal(timers.filter(t => t.ms === 5000).length, 1);
+        await maxTimer.fn();
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].length, 21);
+        assert.equal(live().length, 0, 'the quiet-period timer is cleared when the max-wait fires');
+    });
+
+    test('the quiet-period flush still works and clears the max-wait timer', async () => {
+        const { r, timers, calls, live } = rig();
+        r.add([A]); r.add([B]);
+        const quiet = timers.find(t => t.ms === 2000 && !t.cleared);
+        await quiet.fn();
+        assert.deepEqual(calls, [[A, B].sort()]);
+        assert.equal(live().length, 0);
+        r.add([S1]);
+        assert.ok(live().some(t => t.ms === 5000), 'a new batch gets a new max-wait');
+    });
+
+    test('duplicates coalesce and do not count toward the cap', async () => {
+        const { r, calls, alls, live } = rig({ maxPending: 3 });
+        for (let i = 0; i < 100; i++) r.add([A, B]);
+        await live().find(t => t.ms === 2000).fn();
+        assert.deepEqual(calls, [[A, B].sort()]);
+        assert.equal(alls.length, 0);
+    });
+
+    test('past the pending cap it drops the set and runs one full refresh instead', async () => {
+        const { r, calls, alls, live } = rig({ maxPending: 2000 });
+        const many = Array.from({ length: 2001 }, (_, i) => `acct-${i}`);
+        r.add(many);
+        r.add(['one-more']);
+        for (const t of live()) await t.fn();
+        assert.equal(alls.length, 1, 'exactly one full refresh');
+        assert.equal(calls.length, 0, 'no per-account refresh of a huge list');
+        r.add([A]);
+        await live().find(t => t.ms === 2000).fn();
+        assert.deepEqual(calls, [[A]], 'back to normal afterwards');
+    });
+
+    test('pending memory is bounded: the set never exceeds the cap', () => {
+        const { r } = rig({ maxPending: 10 });
+        for (let i = 0; i < 1000; i++) r.add([`x${i}`]);
+        assert.ok(r.pendingCount() <= 10);
+    });
+});
+
+describe('least-recently-used eviction', () => {
+    test('a read refreshes recency: the entry evicted is the one not touched longest', () => {
+        const c = clock();
+        const cache = createIdentityCache({ now: c.now, max: 3 });
+        cache.set('k1', 'n1'); cache.set('k2', 'n2'); cache.set('k3', 'n3');
+        assert.equal(cache.get('k1'), 'n1');
+        cache.set('k4', 'n4');
+        assert.equal(cache.get('k2'), undefined, 'k2 was least recently used');
+        assert.equal(cache.get('k1'), 'n1');
+        assert.equal(cache.get('k3'), 'n3');
+    });
+
+    test('a hot validator name survives a flood of one-off public account lookups', async () => {
+        const V = 'validator-vvvv';
+        const table = { [V]: 'Hot Validator' };
+        for (let i = 0; i < 40; i++) table[`pub-${i}`] = `Public ${i}`;
+        const { chain, resolver } = setup({ max: 5 }, table);
+        await resolver.getIdentity(API, V);
+        for (let i = 0; i < 40; i++) {
+            await resolver.getIdentity(API, `pub-${i}`);
+            if (i % 2 === 0) await resolver.getIdentity(API, V);
+        }
+        const reads = chain.reads;
+        assert.equal(await resolver.getIdentity(API, V), 'Hot Validator');
+        assert.equal(chain.reads, reads, 'still cached after the flood');
+        assert.equal(chain.reads, 41, 'the validator was read from the chain exactly once');
+    });
+});
+
+describe('identity events invalidate exactly the right accounts, end to end', () => {
+    const rec = (method, ...data) => ({ event: { section: 'identity', method, data: data.map(d => ({ toString: () => d })) } });
+    const mk = (table, parents) => {
+        const s = setup({}, table, parents);
+        const inv = createIdentityInvalidator({ resolver: s.resolver, proc: {} });
+        return { ...s, fire: (...records) => inv.invalidate(identityEventAccounts(records)) };
+    };
+    async function warm(resolver, keys) { for (const k of keys) await resolver.getIdentity(API, k); }
+
+    test('JudgementGiven drops the target only, not the registrar slot or bystanders', async () => {
+        const { chain, resolver, fire } = mk({ [A]: 'Target', [B]: 'Bystander', '0': 'RegistrarIndexLooksLikeAnAccount' });
+        await warm(resolver, [A, B, '0']);
+        chain.table[A] = 'Target Verified';
+        assert.deepEqual(fire(rec('JudgementGiven', A, '0')), [A]);
+        const before = chain.reads;
+        assert.equal(await resolver.getIdentity(API, A), 'Target Verified');
+        await resolver.getIdentity(API, B); await resolver.getIdentity(API, '0');
+        assert.equal(chain.reads, before + 1, 'only the target was re-read');
+    });
+
+    test('JudgementRequested and JudgementUnrequested drop the requesting account', async () => {
+        for (const m of ['JudgementRequested', 'JudgementUnrequested']) {
+            const { chain, resolver, fire } = mk({ [A]: 'One', [B]: 'Two' });
+            await warm(resolver, [A, B]);
+            chain.table[A] = 'Changed';
+            fire(rec(m, A, '1'));
+            assert.equal(await resolver.getIdentity(API, A), 'Changed', m);
+            assert.equal(await resolver.getIdentity(API, B), 'Two', m);
+        }
+    });
+
+    test('SubIdentityRenamed drops the sub, the main account and every other cached sub of that main', async () => {
+        const { chain, resolver, fire } = mk({ [P]: 'Parent Co', [S1]: 'one', [S2]: 'two', [B]: 'Other' }, { [S1]: P, [S2]: P });
+        await warm(resolver, [P, S1, S2, B]);
+        chain.table[S1] = 'one renamed';
+        const affected = fire(rec('SubIdentityRenamed', S1, P));
+        assert.deepEqual([...affected].sort(), [P, S1, S2].sort());
+        assert.equal(await resolver.getIdentity(API, S1), 'Parent Co / one renamed');
+        const before = chain.reads;
+        await resolver.getIdentity(API, B);
+        assert.equal(chain.reads, before, 'the unrelated account stays cached');
+    });
+
+    test('SubIdentityRemoved: the removed sub is re-read and no longer shows the parent prefix', async () => {
+        const { chain, resolver, fire } = mk({ [P]: 'Parent Co', [S1]: 'one', [S2]: 'two' }, { [S1]: P, [S2]: P });
+        await warm(resolver, [P, S1, S2]);
+        delete chain.parents[S1]; delete chain.table[S1];
+        const affected = fire(rec('SubIdentityRemoved', S1, P, '5'));
+        assert.deepEqual([...affected].sort(), [P, S1, S2].sort());
+        assert.equal(await resolver.getIdentity(API, S1), 'Unknown');
+        assert.equal(await resolver.getIdentity(API, S2), 'Parent Co / two', 'sibling re-read and still named');
+    });
+
+    test('SubIdentityRevoked and SubIdentitiesSet drop the main account and its subs', async () => {
+        const { resolver, fire } = mk({ [P]: 'Parent Co', [S1]: 'one' }, { [S1]: P });
+        await warm(resolver, [P, S1]);
+        assert.deepEqual([...fire(rec('SubIdentityRevoked', S1, P, '5'))].sort(), [P, S1].sort());
+        await warm(resolver, [P, S1]);
+        assert.deepEqual([...fire(rec('SubIdentitiesSet', P, '2', '9'))].sort(), [P, S1].sort());
+    });
+});
