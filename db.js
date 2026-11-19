@@ -1250,6 +1250,15 @@ export function replaceValidators(list, meta) {
     // guard existed, which reads back as true.
     setSyncState('validators', { totalCount: meta.totalCount, lastSync: meta.lastSync, status: meta.status, stakeDataOk: meta.stakeDataOk !== false });
 }
+// Rewrite the stored display name of one validator / holder row (identity
+// events refresh these without waiting for the next full sync). Returns the
+// number of rows changed: 0 when the account has no row or the name is the same.
+export function updateValidatorName(address, name) {
+    return Number(db.prepare('UPDATE validators SET name = ? WHERE address = ? AND (name IS NOT ?)').run(name, address, name).changes);
+}
+export function updateHolderName(address, name) {
+    return Number(db.prepare('UPDATE holders SET name = ? WHERE address = ? AND (name IS NOT ?)').run(name, address, name).changes);
+}
 export function getValidators() {
     // Audit F-044, found by checking the LIVE endpoint rather than the tests.
     //

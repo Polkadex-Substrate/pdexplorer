@@ -57,6 +57,10 @@ import { COLLECTIVES, findProposalBlock, findCloseBlock, missingIndices, neighbo
 // file and the debug probes both import. Two copies of it drifted apart across
 // a runtime upgrade once; see the header of lib/identity.js.
 import { getOnChainIdentity } from './lib/identity.js';
+import {
+    createIdentityCache, createIdentityResolver, createIdentityInvalidator, createDebouncedRefresher,
+    refreshDerivedNames, identityEventAccounts, startIdentityRelay, receiveIdentityInvalidations
+} from './lib/identity-cache.js';
 // Audit F-154/F-155 — the /developers route list and the RPC-outage envelope
 // live in ONE module that both this file and script.js render from. See the
 // header of lib/api-reference.js for what four hand-maintained copies cost.
@@ -736,7 +740,7 @@ let lastHeadAdvanceAt = Date.now();
 let chainStaleSince = null;            // timestamp when head first went stale
 let chainStaleRebuildAttempted = false;
 let chainSS58 = 88; // Polkadex SS58 prefix; refreshed from the chain registry on connect.
-const identityCache = new Map();
+// Identity names: see lib/identity-cache.js (expiring, bounded, event-invalidated).
 
 // ─── LRU caches for immutable chain reads ──────────────────────────────────
 // Substrate RPC calls that reference a specific block hash (or a block number
@@ -1197,34 +1201,41 @@ async function computeNetworkInfo() {
 // the DISPLAY_NAME_OVERRIDES policy. A standalone probe must not inherit
 // either: an override would make the probe report a name the chain does not
 // have, which defeats the purpose of running it.
-async function getIdentity(api, address) {
-    const cacheKey = address.toString();
-    const hasOverride = DISPLAY_NAME_OVERRIDES.has(cacheKey);
-    if (!hasOverride && identityCache.has(cacheKey)) return identityCache.get(cacheKey);
-
-    // If the api is currently unusable (in flight during a reconnect, for
-    // example), return Unknown to the caller WITHOUT writing it to the cache.
-    // Otherwise a brief reconnect window would poison the cache with false-
-    // negative "Unknown" entries for addresses that DO have on-chain
-    // identities, and we'd never look them up again.
-    if (!api || !api.query || !api.query.identity) {
-        return DISPLAY_NAME_OVERRIDES.get(cacheKey) || "Unknown";
-    }
-
+// The cache is lib/identity-cache.js: "no identity" expires in 5 minutes, a
+// found name in an hour, and identity pallet events drop the account at once
+// (noteIdentityEvents below). Unusable api and failed reads are never cached;
+// that rule now lives in the resolver.
+const identityResolver = createIdentityResolver({
+    cache: createIdentityCache(),
+    overrides: DISPLAY_NAME_OVERRIDES,
     // onError keeps the previous per-address warn. It is passed in rather than
     // baked into the helper so the probes can stay silent (or louder) without
     // changing what production logs.
-    const onChainName = await getOnChainIdentity(api, address, {
-        onError: (e, addr) => console.warn(`Identity lookup failed for ${String(addr)}:`, e.message)
-    });
-    if (onChainName !== "Unknown") {
-        identityCache.set(cacheKey, onChainName);
-        return onChainName;
-    }
-
-    const fallbackName = DISPLAY_NAME_OVERRIDES.get(cacheKey) || "Unknown";
-    if (!hasOverride) identityCache.set(cacheKey, fallbackName);
-    return fallbackName;
+    readChain: (api, address, hooks) => getOnChainIdentity(api, address, hooks),
+    warn: (e, addr) => console.warn(`Identity lookup failed for ${String(addr)}:`, e.message)
+});
+async function getIdentity(api, address) {
+    return identityResolver.getIdentity(api, address);
+}
+// After an identity event the stored copies of the name (validators and holders
+// tables) are rewritten for the affected accounts, a couple of seconds later so
+// a burst is one refresh. Only the indexer process scans blocks, so only it runs
+// this; the other workers read the same SQLite file.
+const identityDerivedRefresher = createDebouncedRefresher({
+    refresh: (accounts) => refreshDerivedNames(accounts, {
+        getName: (a) => getIdentity(globalApi, a),
+        setters: [db.updateValidatorName, db.updateHolderName]
+    })
+});
+const identityInvalidator = createIdentityInvalidator({
+    resolver: identityResolver,
+    onAffected: (affected) => identityDerivedRefresher.add(affected)
+});
+// Called by the block scanner with a block's event records, BEFORE it looks up
+// the author and signer names so the names stored on that block are fresh.
+function noteIdentityEvents(records) {
+    const accounts = identityEventAccounts(records);
+    if (accounts.length) identityInvalidator.invalidate(accounts);
 }
 
 // Audit F-114: the fallback was Date.now() — so a block whose timestamp.set
@@ -8834,6 +8845,7 @@ async function scanSingleBlock(blockNumber) {
 
     // Author is best-effort — derived from the consensus digest via
     // derive.chain.getHeader, which does NOT decode events (safe on old blocks).
+    noteIdentityEvents(allEvents);
     let authorAddr = 'System';
     try {
         const h = await globalApi.derive.chain.getHeader(hash);
@@ -11508,6 +11520,8 @@ function bootstrapCluster() {
         for (let i = 1; i < WORKERS; i++) forkOne('http');
         // The one telemetry connection (TELEMETRY_FEED_URL), relayed to the workers.
         startTelemetryRelay({ config: TELEMETRY, cluster, log: (m) => console.warn('[telemetry] ' + m) });
+        // Identity invalidations from the indexer worker, to every other worker.
+        startIdentityRelay({ cluster });
         console.log(TELEMETRY.enabled ? `[telemetry] reading ${TELEMETRY.url} for ${TELEMETRY.genesis}` : `[telemetry] off: ${TELEMETRY.reason}`);
 
         // Audit F-145: refork was immediate and unconditional. A worker that
@@ -11543,6 +11557,7 @@ function bootstrapCluster() {
         });
     } else {
         // Inside a worker — INDEXER_ROLE was set by the primary above.
+        receiveIdentityInvalidations({ resolver: identityResolver });
         if (TELEMETRY.enabled && process.env.INDEXER_ROLE !== 'on') telemetrySource = receiveTelemetry();
         runWorker({ indexer: process.env.INDEXER_ROLE === 'on', clustered: true });
     }
