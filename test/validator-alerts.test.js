@@ -24,7 +24,7 @@ import { encodeAddress } from '@polkadot/util-crypto';
 import * as db from '../db.js';
 import {
     ALERT_KINDS, HEARTBEAT_ALERT_PROGRESS, MAX_FOLLOWS_PER_EMAIL, validatorAlertsSendEnabled,
-    observationFromStatus, detectValidatorEvents, alertMail, confirmMail
+    observationFromStatus, detectValidatorEvents, mergeBaseline, alertMail, confirmMail
 } from '../lib/validator-alerts.js';
 import { runValidatorAlertsTick } from '../lib/validator-alerts-run.js';
 
@@ -42,7 +42,7 @@ after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, forc
 
 const obs = (o = {}) => ({
     stash: S1, block: 1000, era: 10, session: 60, progress: 0.1, intent: true, elected: true, inSession: true, disabled: false,
-    heartbeat: true, blocks: 3, lastSlashEra: null, commission: 50_000_000, keys: 'k1', ...o
+    heartbeat: true, blocks: 3, lastSlashEra: 'none', commission: 50_000_000, keys: 'k1', ...o
 });
 const kinds = (events) => events.map(e => e.kind);
 
@@ -67,6 +67,13 @@ describe('observationFromStatus: the chain snapshot reduced to what the detector
         disabled: false, heartbeat: true, blocks: 2, lastSlashEra: null, prefs: { commission: 100_000_000, blocked: false },
         nextKeys: { grandpa: '0xaa', babe: '0xbb' }
     };
+    test('the slash field has three states: the era, the known-none marker (read succeeded) and null (failed read)', () => {
+        assert.equal(observationFromStatus({ ...snap, lastSlashEra: 7, slashRead: true }).lastSlashEra, 7);
+        assert.equal(observationFromStatus({ ...snap, lastSlashEra: null, slashRead: true }).lastSlashEra, 'none', 'no slashing spans record');
+        assert.equal(observationFromStatus({ ...snap, lastSlashEra: 0, slashRead: true }).lastSlashEra, 'none', 'lastNonzeroSlash 0');
+        assert.equal(observationFromStatus({ ...snap, lastSlashEra: null, slashRead: false }).lastSlashEra, null, 'failed read');
+        assert.equal(observationFromStatus({ ...snap, lastSlashEra: null }).lastSlashEra, null, 'a snapshot without the flag is unknown');
+    });
     test('copies the fields and takes the block from the caller', () => {
         const o = observationFromStatus(snap, { block: 4242 });
         assert.deepEqual(o, { stash: S1, block: 4242, era: 10, session: 60, progress: 0.4, intent: true, elected: true, inSession: true,
@@ -585,10 +592,42 @@ describe('partial reads never alert (null guards)', () => {
         assert.deepEqual(detectValidatorEvents(obs({ keys: 'k1' }), obs({ keys: null })), []);
         assert.deepEqual(kinds(detectValidatorEvents(obs({ keys: 'k1' }), obs({ keys: 'k2' }))), ['keys-changed']);
     });
-    test('slashed: an unknown previous value does not turn an old slash into an alert; a recent first slash still alerts', () => {
-        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: null }), obs({ lastSlashEra: 3 })), [], 'era 3 seen from era 10 is history');
-        assert.deepEqual(kinds(detectValidatorEvents(obs({ lastSlashEra: null }), obs({ lastSlashEra: 10 }))), ['slashed']);
+    test('slashed: three states. known none or a lower era then a higher era alerts, however old that era is', () => {
+        assert.deepEqual(kinds(detectValidatorEvents(obs({ lastSlashEra: 'none' }), obs({ lastSlashEra: 3 }))), ['slashed'], 'a first slash that names an older era is still news');
+        assert.equal(detectValidatorEvents(obs({ lastSlashEra: 'none' }), obs({ lastSlashEra: 3 }))[0].occurrence, 'slashed:e3');
+        assert.deepEqual(kinds(detectValidatorEvents(obs({ lastSlashEra: 2 }), obs({ lastSlashEra: 3 }))), ['slashed']);
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: 'none' }), obs({ lastSlashEra: 'none' })), []);
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: 3 }), obs({ lastSlashEra: 3 })), []);
+    });
+    test('slashed: an unknown previous value (failed read, or a baseline stored in the old shape) adopts the current value and never alerts', () => {
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: null }), obs({ lastSlashEra: 10 })), [], 'even a slash of the current era');
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: null }), obs({ lastSlashEra: 3 })), []);
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: null }), obs({ lastSlashEra: 'none' })), []);
+    });
+    test('slashed: a failed read now (null) is never an alert', () => {
         assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: 9 }), obs({ lastSlashEra: null })), []);
+        assert.deepEqual(detectValidatorEvents(obs({ lastSlashEra: 'none' }), obs({ lastSlashEra: null })), []);
+    });
+    test('slashed: the first observation ever is a baseline, no alert', () => {
+        assert.deepEqual(detectValidatorEvents(null, obs({ lastSlashEra: 5 })), []);
+    });
+    test('slashed: a failed read keeps the known-none baseline, so a slash seen after it alerts once', () => {
+        const kept = mergeBaseline(obs({ lastSlashEra: 'none' }), obs({ lastSlashEra: null }));
+        assert.equal(kept.lastSlashEra, 'none');
+        assert.deepEqual(kinds(detectValidatorEvents(kept, obs({ lastSlashEra: 4 }))), ['slashed']);
+    });
+    test('slashed: an old-shape stored baseline (null) in the kv table adopts the current value without mail', async () => {
+        fresh();
+        follow(mail(), S1);
+        db.setKv(obsKey, { obs: obs({ lastSlashEra: null }), at: Date.now() });
+        const h = harness([obs({ block: 1010, lastSlashEra: 6 }), obs({ block: 1020, lastSlashEra: 6 }), obs({ block: 1030, lastSlashEra: 8 })]);
+        await h.tick();
+        assert.equal(h.sent.length, 0, 'adopted, not alerted');
+        assert.equal(db.getKv(obsKey).obs.lastSlashEra, 6);
+        await h.tick();
+        assert.equal(h.sent.length, 0);
+        await h.tick();
+        assert.equal(h.sent.length, 1, 'a later slash alerts');
     });
     test('not-elected: an unknown previous election state is no alert', () => {
         assert.deepEqual(detectValidatorEvents(obs({ elected: null, intent: null }), obs({ elected: false })), []);
