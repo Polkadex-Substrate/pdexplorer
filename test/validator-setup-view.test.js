@@ -515,3 +515,95 @@ describe('the done tick is neutral, as the design says (finding 5)', () => {
         assert.match(src, /done tick is neutral/);
     });
 });
+
+// Paste and Clear on the wizard (spec 2026-11-17-input-paste-clear). Every text box is
+// wrapped as each step paints (not a frame later). The bond, extra bond and commission
+// fields are money and a rate, so a paste lands only when it is already a plain number:
+// "1,000" (a thousand, or one?) and "150 PDEX" are refused, never quietly rewritten. The
+// keys step's own Paste text button is replaced by the shared one. The payee account box
+// is hidden until "another account" is chosen, and its buttons hide with it.
+describe('Paste and Clear in the setup wizard', () => {
+    function pasteDom(clip) {
+        const r = dom();
+        Object.defineProperty(r.w, 'isSecureContext', { value: true, configurable: true });
+        const box = { text: clip };
+        Object.defineProperty(r.w.navigator, 'clipboard', { configurable: true, value: { readText: async () => box.text } });
+        return { ...r, clip: box };
+    }
+    const pasteInto = async (el, sel) => { const b = el.querySelector(sel).closest('.ia-wrap').querySelector('.ia-paste'); assert.ok(b, 'no Paste on ' + sel); b.click(); await settle(); };
+    const hintOf = (el, sel) => { const h = el.querySelector(sel).closest('.ia-wrap').querySelector('.ia-hint'); return h ? h.textContent : ''; };
+
+    test('step 1 node name and step 2 keys are wrapped as they paint; no bespoke Paste button', async () => {
+        const { el } = pasteDom(''); await mountValidatorSetup(el, deps()); await settle();
+        const node = el.querySelector('#validate-setup-node');
+        if (node) assert.ok(node.closest('.ia-wrap'), 'node name wrapped');
+        await click(el, '[data-setup-action="next"]');
+        const keys = el.querySelector('#validate-setup-keys');
+        assert.ok(keys.closest('.ia-wrap.ia-wrap-ta'), 'keys textarea wrapped');
+        assert.equal(el.querySelector('[data-setup-action="paste"]'), null);
+    });
+    test('pasting the keys line updates the wizard state through the input event', async () => {
+        const { el } = pasteDom(` ${BLOB}\n`); await mountValidatorSetup(el, deps()); await settle();
+        await click(el, '[data-setup-action="next"]');
+        await pasteInto(el, '#validate-setup-keys');
+        assert.equal(el.querySelector('#validate-setup-keys').value, BLOB);
+        assert.equal(el.querySelector('[data-setup-action="use-keys"]').disabled, false);
+        await click(el, '[data-setup-action="use-keys"]');
+        assert.equal(heading(el), 'Bond from your stash');
+    });
+    test('bond: "1,000" and "150 PDEX" are refused and the field keeps what was typed; "500" lands and is used', async () => {
+        const { el, clip } = pasteDom(''); await mountValidatorSetup(el, deps()); await settle();
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-keys', BLOB);
+        await click(el, '[data-setup-action="use-keys"]');
+        const bond = el.querySelector('#validate-setup-bond');
+        assert.ok(bond.hasAttribute('data-amount-strict'));
+        await type(el, '#validate-setup-bond', '200');
+        clip.text = '1,000'; await pasteInto(el, '#validate-setup-bond');
+        assert.equal(el.querySelector('#validate-setup-bond').value, '200');
+        assert.equal(hintOf(el, '#validate-setup-bond'), 'That number could be read as a decimal or as thousands. Type it in.');
+        clip.text = '150 PDEX'; await pasteInto(el, '#validate-setup-bond');
+        assert.equal(el.querySelector('#validate-setup-bond').value, '200');
+        clip.text = '500'; await pasteInto(el, '#validate-setup-bond');
+        assert.equal(el.querySelector('#validate-setup-bond').value, '500');
+        await click(el, '[data-setup-action="next"]');
+        assert.equal(heading(el), 'Set your commission', 'the pasted 500 passed the bond step');
+    });
+    test('commission: "5 PDEX" and "7,5" are refused; "7.5" lands and reaches the review as 7.5%', async () => {
+        const { el, clip } = pasteDom(''); await mountValidatorSetup(el, deps()); await settle();
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-keys', BLOB);
+        await click(el, '[data-setup-action="use-keys"]');
+        await type(el, '#validate-setup-bond', '500');
+        await click(el, '[data-setup-action="next"]');
+        assert.ok(el.querySelector('#validate-setup-commission').hasAttribute('data-amount-strict'));
+        for (const bad of ['5 PDEX', '7,5', '5%']) {
+            clip.text = bad; await pasteInto(el, '#validate-setup-commission');
+            assert.equal(el.querySelector('#validate-setup-commission').value, '', bad);
+        }
+        clip.text = '7.5'; await pasteInto(el, '#validate-setup-commission');
+        await click(el, '[data-setup-action="next"]');
+        assert.equal(heading(el), 'Review');
+        assert.match(el.textContent, /7\.5% commission/);
+    });
+    test('the payee account box: wrapped, hidden with its buttons until "another account" is chosen', async () => {
+        const { el } = pasteDom(''); await mountValidatorSetup(el, deps()); await settle();
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-keys', BLOB);
+        await click(el, '[data-setup-action="use-keys"]');
+        const f = el.querySelector('#validate-setup-payee-account');
+        assert.equal(f.closest('.ia-wrap').hidden, true);
+        const r = el.querySelector('input[name="validate-setup-payee"][value="account"]'); r.checked = true; r.dispatchEvent(new r.ownerDocument.defaultView.Event('change', { bubbles: true })); await settle();
+        assert.equal(f.closest('.ia-wrap').hidden, false);
+        assert.ok(f.closest('.ia-wrap').querySelector('.ia-paste'));
+    });
+    test('the extra bond field is strict too (source: it shows only for an already bonded stash)', () => {
+        const src = readRepo('lib/validator-setup-view.js', import.meta.url);
+        for (const id of ['validate-setup-bond', 'validate-setup-extra', 'validate-setup-commission']) {
+            const tag = src.match(new RegExp(`<input id="${id}"[^>]*>`));
+            assert.ok(tag, id);
+            assert.match(tag[0], /data-input-kind="amount"/, id);
+            assert.match(tag[0], /data-amount-strict/, id);
+        }
+    });
+});

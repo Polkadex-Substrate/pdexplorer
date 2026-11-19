@@ -901,3 +901,31 @@ describe('wiring: server, docs, shell, script, brand', () => {
         assert.doesNotMatch(view, /style="[^"]*(--success|--brand-secondary|--error)/);
     });
 });
+
+// Paste and Clear (spec 2026-11-17-input-paste-clear, rows 61 and 62): the lookup box is an
+// address, the keys checker a hex textarea; both get the shared buttons as soon as the view
+// renders (not a frame later), including after the checker re-renders with the live layout.
+// The checker's own "Paste" text button is gone: one paste control per field.
+describe('the validate page: Paste and Clear on its text boxes', () => {
+    test('the lookup is kind address, the keys checker kind hex', () => {
+        const { doc } = dom();
+        doc.body.innerHTML = renderKeysChecker({ params: params(), esc: escapeHtml });
+        assert.equal(doc.querySelector('#validate-keys-input').getAttribute('data-input-kind'), 'hex');
+        assert.equal(doc.querySelector('[data-validate-action="paste"]'), null, 'the bespoke Paste button is replaced by the shared one');
+    });
+    test('both fields are wrapped on mount and the checker again after the params arrive', async () => {
+        const { el } = dom();
+        let release; const gate = new Promise(r => { release = r; });
+        const d = deps(); const real = d.fetchJson;
+        d.fetchJson = async (u) => { if (u === '/api/validator/params') await gate; return real(u); };
+        const p = mountValidatePage(el, d);
+        const look = el.querySelector('#validate-lookup-input');
+        assert.equal(look.getAttribute('data-input-kind'), 'address');
+        assert.ok(look.closest('.ia-wrap'), 'lookup wrapped synchronously');
+        assert.ok(el.querySelector('#validate-keys-input').closest('.ia-wrap'), 'checker wrapped synchronously');
+        release(); await p; await flush();
+        const ta = el.querySelector('#validate-keys-input');
+        assert.ok(ta.closest('.ia-wrap.ia-wrap-ta'), 'the re-rendered checker is wrapped too');
+        assert.ok(ta.closest('#validate-keys-form'), 'still inside its form, so Check keys reads it');
+    });
+});
