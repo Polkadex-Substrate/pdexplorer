@@ -62,6 +62,21 @@ Access notes:
 - GET /api/validators — full validator set with stake + commission
 - GET /api/staking/validator-choice - every validator candidate (active and waiting) for the stake picker: realized nominator APR over 7 / 28 / 84 completed eras (past rewards, not a guarantee), reliability, self-stake, backers, exposure pages, blocked flag, identity facts, slash eras, commission track record
 - GET /api/validator/:address — per-validator era history
+- GET /api/validator/params - live validator parameters: spec version, session
+  key layout from metadata (layout.ok false when it changed), minValidatorBond,
+  minCommission, maxValidatorsCount (governance storage values, read live),
+  validator counts, lowest elected backing, median commission, era and session
+- GET /api/validator/:address/status - one stash as a validator: state
+  (not-bonded, bonded-no-keys, keys-not-validating, waiting, elected-next,
+  active, active-leaving, disabled), headline and rows (keys, online, points,
+  offences, stake, nominators, commission, identity, access)
+- GET /api/telemetry/node?name=<node name> - Check my node: Polkadex nodes on
+  the telemetry feed under that --name (version, best and finalized block, peers,
+  blocks behind the explorer's chain head, stale), similar names, the official
+  release state; feed ok, down, connecting or off. Server side only
+- GET /api/session-keys/check?keys=0x...&for=<address> - checks a session keys
+  line (public keys only) per key against Session.KeyOwner and QueuedKeys:
+  free, own or other. 400 with a code for bad input, 409 LAYOUT_MISMATCH, 429
 - GET /api/holders — top-balance accounts
 - GET /api/account/:address — account-level summary
 - GET /api/account/:address/locks - live balance breakdown (total, transferable,
@@ -314,9 +329,10 @@ backoff — it is not a permanent error. `RPC_NOT_READY` is currently the only
 
 - Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events,
   /api/council, /api/technical-committee, /api/governance/latest, /api/state/* at the current head,
-  /api/staking/validator-choice):
+  /api/staking/validator-choice, /api/validator/:address/status,
+  /api/telemetry/node):
   public, max-age=5, s-maxage=10, stale-while-revalidate=30
-- Medium — /api/validators, /api/network-info, /api/holders, /api/price-latest,
+- Medium — /api/validators, /api/validator/params, /api/network-info, /api/holders, /api/price-latest,
   /api/discussions, /api/staking-rewards-status, /api/analytics/*, and
   /api/consts/* + /api/runtime when queried at the current head:
   public, max-age=30, s-maxage=60, stale-while-revalidate=120

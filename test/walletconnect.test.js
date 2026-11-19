@@ -1,6 +1,6 @@
 // WalletConnect v2 ("Connect with your phone"): a phone wallet (Nova, SubWallet)
-// signs for the explorer over the WalletConnect relay. Ships dark behind
-// FEATURE_FLAGS.walletConnect; a browser opts in with ?wc=1 and out with ?wc=0.
+// signs for the explorer over the WalletConnect relay. On for everyone via
+// FEATURE_FLAGS.walletConnect; a browser opts out with ?wc=0 (?wc=1 undoes it).
 // Research: cto-team/plans/2026-11-14-walletconnect-research.md.
 //
 // Layers under test:
@@ -156,27 +156,39 @@ describe('config: one place for the project id, the chain and the app metadata',
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('flag gating: off by default, ?wc=1 opts this browser in, ?wc=0 out', () => {
-    test('the shipped flag is off', () => {
-        assert.equal(FEATURE_FLAGS.walletConnect, false);
+describe('flag gating: on for everyone, ?wc=0 opts this browser out, ?wc=1 is harmless', () => {
+    test('the shipped flag is on', () => {
+        assert.equal(FEATURE_FLAGS.walletConnect, true);
     });
 
-    test('no flag, no param, nothing stored: off', () => {
+    test('shipped flag, no param, nothing stored: on', () => {
+        assert.equal(walletConnectEnabled({ flag: FEATURE_FLAGS.walletConnect, storage: memStorage(), search: '' }), true);
+    });
+
+    test('with the flag off (rollback), no param and nothing stored: off', () => {
         assert.equal(walletConnectEnabled({ flag: false, storage: memStorage(), search: '' }), false);
     });
 
-    test('?wc=1 turns it on and remembers it; a later visit without the param stays on', () => {
+    test('?wc=0 opts this browser out and remembers it; a later visit without the param stays off', () => {
         const s = memStorage();
-        assert.equal(walletConnectEnabled({ flag: false, storage: s, search: '?wc=1' }), true);
-        assert.equal(s.getItem(config.WC_FLAG_KEY), '1');
-        assert.equal(walletConnectEnabled({ flag: false, storage: s, search: '?tab=x' }), true);
+        assert.equal(walletConnectEnabled({ flag: true, storage: s, search: '?wc=0' }), false);
+        assert.equal(s.getItem(config.WC_FLAG_KEY), '0');
+        assert.equal(walletConnectEnabled({ flag: true, storage: s, search: '?tab=x' }), false);
     });
 
-    test('?wc=0 clears the opt-in', () => {
+    test('?wc=1 after an opt-out turns it back on; with the flag on it is harmless', () => {
         const s = memStorage();
-        walletConnectEnabled({ flag: false, storage: s, search: '?wc=1' });
+        walletConnectEnabled({ flag: true, storage: s, search: '?wc=0' });
+        assert.equal(walletConnectEnabled({ flag: true, storage: s, search: '?wc=1' }), true);
+        assert.equal(walletConnectEnabled({ flag: true, storage: s, search: '' }), true);
+        assert.equal(walletConnectEnabled({ flag: true, storage: memStorage(), search: '?wc=1' }), true);
+    });
+
+    test('with the flag off, ?wc=1 still opts this browser in and ?wc=0 out', () => {
+        const s = memStorage();
+        assert.equal(walletConnectEnabled({ flag: false, storage: s, search: '?wc=1' }), true);
+        assert.equal(walletConnectEnabled({ flag: false, storage: s, search: '?tab=x' }), true);
         assert.equal(walletConnectEnabled({ flag: false, storage: s, search: '?wc=0' }), false);
-        assert.equal(s.getItem(config.WC_FLAG_KEY), null);
     });
 
     test('the code flag turns it on for everyone', () => {
@@ -186,6 +198,7 @@ describe('flag gating: off by default, ?wc=1 opts this browser in, ?wc=0 out', (
     test('a storage that throws (Safari private mode) is not fatal', () => {
         const bad = { getItem() { throw new Error('no'); }, setItem() { throw new Error('no'); }, removeItem() { throw new Error('no'); } };
         assert.equal(walletConnectEnabled({ flag: false, storage: bad, search: '?wc=1' }), false);
+        assert.equal(walletConnectEnabled({ flag: true, storage: bad, search: '?wc=0' }), true);
     });
 
     test('gate off: the WalletConnect module is never loaded, there are no providers, connect refuses', async () => {

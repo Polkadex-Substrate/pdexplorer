@@ -14,7 +14,10 @@
 //   hang: [key]                      those extensions never answer enable() (the auto-pick stays 'restoring')
 //   steps: [ { click: selector, nth }, { event: 'visibilitychange' }, { storage: { key: value|null } },
 //            { go: '/path' } (an SPA navigation: pushState, then popstate) ]
+//   api: { 'url substring': json }   answers for fetch, first match wins (else {})
+//   probe: [selector]                per selector: how many, how many not hidden, the first one's text
 // }
+// The result also carries every URL fetched, every WebSocket URL and the data-page on screen.
 // Prints one line: RESULT {"first": header, "steps": [header...], "final": {...}}.
 // Nothing reaches the network: fetch is a stub, WebSocket never opens, and the
 // node handshake budget (WS_HANDSHAKE_BUDGET_MS) is cut to zero so routing runs at once.
@@ -63,12 +66,16 @@ for (const k of ['window', 'document', 'localStorage', 'sessionStorage', 'locati
     'IntersectionObserver', 'ResizeObserver', 'DOMParser', 'matchMedia', 'innerWidth', 'innerHeight', 'scrollTo', 'HTMLCanvasElement', 'Image', 'screen', 'navigator']) {
     try { Object.defineProperty(g, k, { value: win[k], configurable: true, writable: true }); } catch (e) { /* not in this happy-dom */ }
 }
-g.WebSocket = class { constructor() {} close() {} send() {} };
+const sockets = [];   // every WebSocket URL the page tried to open (none really opens)
+g.WebSocket = class { constructor(url) { sockets.push(String(url)); } close() {} send() {} };
 const walletPayload = (address) => ({ address, identity: 'Test identity', balance: { total: '0', free: '0' }, staking: {}, rewards: {}, network: {}, recentTransactions: [] });
+const fetched = [];
 g.fetch = win.fetch = async (url) => {
+    fetched.push(String(url));
     const m = /\/api\/wallet\/([^/?]+)/.exec(String(url));
-    const data = m ? walletPayload(decodeURIComponent(m[1])) : {};
-    return { ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data), headers: new Map() };
+    const canned = Object.entries(scenario.api || {}).find(([k]) => String(url).includes(k));
+    const data = canned ? canned[1] : m ? walletPayload(decodeURIComponent(m[1])) : {};
+    return { ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data), headers: new Map(canned ? [['content-type', 'application/json']] : []) };
 };
 
 const enables = {};
@@ -150,7 +157,14 @@ const result = {
         menuWho: (document.getElementById('wallet-menu-who') || {}).textContent || '',
         dashboard: dashboard()
     },
-    errors
+    errors,
+    fetched,
+    sockets,
+    page: (Array.from(document.querySelectorAll('.page-section')).find(p => p.style.display && p.style.display !== 'none') || { getAttribute: () => null }).getAttribute('data-page'),
+    probe: Object.fromEntries((scenario.probe || []).map(sel => {
+        const list = Array.from(document.querySelectorAll(sel));
+        return [sel, { count: list.length, shown: list.filter(e => !e.hidden).length, text: list[0] ? list[0].textContent.replace(/\s+/g, ' ').trim().slice(0, 400) : '' }];
+    }))
 };
 // The preview generator asks for the rendered shell (test/helpers/preview-chooser.mjs).
 if (scenario.dumpHtml) { const app = document.querySelector('.app-container'); result.appHtml = app ? app.outerHTML : ''; }
