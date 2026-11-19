@@ -206,7 +206,7 @@ describe('the mail text', () => {
             }
             assert.match(m.text, /You asked for alerts about this validator/);
             assert.match(m.html, /<!doctype html>/i);
-            assert.ok(!/[–—]/.test(m.subject + m.text + m.html), `${e.kind}: a dash character`);
+            assert.ok(!/[\u2013\u2014]/.test(m.subject + m.text + m.html), `${e.kind}: a dash character`);
         }
     });
 
@@ -528,7 +528,7 @@ describe('runValidatorAlertsTick: a replay of recorded observations', () => {
     test('the source holds no em or en dash', () => {
         for (const f of ['lib/validator-alerts.js', 'lib/validator-alerts-run.js']) {
             const src = fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
-            assert.ok(!/[–—]/.test(src), f);
+            assert.ok(!/[\u2013\u2014]/.test(src), f);
         }
     });
 });

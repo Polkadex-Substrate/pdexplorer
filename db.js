@@ -427,6 +427,28 @@ CREATE TABLE IF NOT EXISTS email_dispatches (
 CREATE INDEX IF NOT EXISTS idx_email_dispatches_subscriber
     ON email_dispatches(subscriber_id, dispatched_at DESC);
 
+-- Validator alerts (Sprint 6): one row per (subscriber, validator stash) a person
+-- asked to be mailed about. It hangs off an email_subscribers row (the address, and
+-- the global unsubscribe that wins over everything) but has its OWN double opt-in
+-- and unsubscribe tokens, so confirming or leaving one validator never touches the
+-- general alert list or another validator. The sent log is email_dispatches, keyed
+-- (event_kind 'validator.<kind>', event_id '<stash>:<occurrence>', subscriber_id).
+CREATE TABLE IF NOT EXISTS validator_alert_follows (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  subscriber_id        INTEGER NOT NULL,
+  stash                TEXT    NOT NULL,
+  confirmation_token   TEXT    NOT NULL UNIQUE,
+  unsubscribe_token    TEXT    NOT NULL UNIQUE,
+  confirmed_at         INTEGER DEFAULT NULL,
+  unsubscribed_at      INTEGER DEFAULT NULL,
+  created_at           INTEGER NOT NULL,
+  updated_at           INTEGER NOT NULL,
+  UNIQUE (subscriber_id, stash),
+  FOREIGN KEY (subscriber_id) REFERENCES email_subscribers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_validator_alert_follows_stash
+    ON validator_alert_follows(stash, confirmed_at, unsubscribed_at);
+
 -- O(1) row counters for the high-volume, ever-growing tables. A plain
 -- SELECT COUNT(*) on events/transactions is a full-table scan that becomes
 -- untenable as the chain (and, post-orderbook, transaction volume) grows.
@@ -3128,6 +3150,98 @@ export function recordEmailDispatchResult({ eventKind, eventId, subscriberId, pr
         providerId ?? null, result ?? 'sent',
         String(eventKind), String(eventId), subscriberId
     );
+}
+
+// ─── Validator alerts (Sprint 6) ─────────────────────────────────────────────
+// A follow is a person asking to be mailed about one validator stash. It reuses
+// email_subscribers for the address and the global unsubscribe, and
+// email_dispatches as the sent log. Reads return the follow's own tokens (the
+// route builds links from them) but never the subscriber's.
+function mapFollow(row) {
+    if (!row) return null;
+    return {
+        id: row.id, subscriberId: row.subscriber_id, stash: row.stash, email: row.email,
+        confirmationToken: row.confirmation_token, unsubscribeToken: row.unsubscribe_token,
+        confirmedAt: row.confirmed_at, unsubscribedAt: row.unsubscribed_at,
+        subscriberUnsubscribedAt: row.sub_unsubscribed_at ?? null,
+        createdAt: row.created_at, updatedAt: row.updated_at
+    };
+}
+const FOLLOW_SELECT = `SELECT f.*, s.email AS email, s.unsubscribed_at AS sub_unsubscribed_at
+    FROM validator_alert_follows f JOIN email_subscribers s ON s.id = f.subscriber_id`;
+
+function getFollowById(id) {
+    return mapFollow(db.prepare(`${FOLLOW_SELECT} WHERE f.id = ?`).get(id));
+}
+export function getValidatorAlertFollowByConfirmationToken(token) {
+    if (!token) return null;
+    return mapFollow(db.prepare(`${FOLLOW_SELECT} WHERE f.confirmation_token = ?`).get(String(token)));
+}
+export function getValidatorAlertFollowByUnsubscribeToken(token) {
+    if (!token) return null;
+    return mapFollow(db.prepare(`${FOLLOW_SELECT} WHERE f.unsubscribe_token = ?`).get(String(token)));
+}
+
+// Same 24 hours as the general signup, measured from the last token rotation.
+export function isValidatorAlertConfirmationFresh(follow) {
+    if (!follow) return false;
+    const stamp = Number(follow.updatedAt || follow.createdAt || 0);
+    if (!Number.isFinite(stamp) || stamp <= 0) return false;
+    return (Date.now() - stamp) <= CONFIRM_TOKEN_TTL_MS;
+}
+
+// status: 'pending' (a confirmation mail should go out; the token is fresh),
+// 'exists' (already confirmed and live: send nothing), 'cap' (too many live
+// follows for this address), 'blocked' (the address left all explorer mail).
+// A subscriber row made here has no preferences, so it receives no governance mail.
+export function addValidatorAlertFollow({ email, stash, subscriberConfirmationToken, subscriberUnsubscribeToken, confirmationToken, unsubscribeToken, maxPerEmail = 5 }) {
+    const lc = String(email || '').trim().toLowerCase();
+    let sub = getEmailSubscriberByEmail(lc);
+    if (!sub) {
+        sub = createEmailSubscriberIfMissing({ email, confirmationToken: subscriberConfirmationToken, unsubscribeToken: subscriberUnsubscribeToken, eventPrefs: {}, source: 'validator-alert' }).subscriber;
+    }
+    if (sub.unsubscribedAt) return { status: 'blocked', follow: null };
+    const now = Date.now();
+    const existing = db.prepare('SELECT id, confirmed_at, unsubscribed_at FROM validator_alert_follows WHERE subscriber_id = ? AND stash = ?').get(sub.id, stash);
+    if (existing && existing.confirmed_at && !existing.unsubscribed_at) return { status: 'exists', follow: getFollowById(existing.id) };
+    if (existing) {
+        // Pending, or left earlier: a new link, the old one stops working, the 24 hours restart.
+        db.prepare('UPDATE validator_alert_follows SET confirmation_token = ?, updated_at = ? WHERE id = ?').run(confirmationToken, now, existing.id);
+        return { status: 'pending', follow: getFollowById(existing.id) };
+    }
+    const live = db.prepare('SELECT COUNT(*) AS c FROM validator_alert_follows WHERE subscriber_id = ? AND unsubscribed_at IS NULL').get(sub.id).c;
+    if (live >= maxPerEmail) return { status: 'cap', follow: null };
+    const r = db.prepare(`INSERT INTO validator_alert_follows
+        (subscriber_id, stash, confirmation_token, unsubscribe_token, created_at, updated_at) VALUES (?,?,?,?,?,?)`)
+        .run(sub.id, stash, confirmationToken, unsubscribeToken, now, now);
+    return { status: 'pending', follow: getFollowById(Number(r.lastInsertRowid)) };
+}
+
+// Confirm by the follow's token. Reactivates a follow the person left earlier.
+export function confirmValidatorAlertFollow(token) {
+    const row = getValidatorAlertFollowByConfirmationToken(token);
+    if (!row) return null;
+    if (!row.confirmedAt || row.unsubscribedAt) {
+        db.prepare('UPDATE validator_alert_follows SET confirmed_at = ?, unsubscribed_at = NULL, updated_at = ? WHERE id = ?')
+            .run(row.confirmedAt || Date.now(), Date.now(), row.id);
+    }
+    return getFollowById(row.id);
+}
+
+export function unsubscribeValidatorAlertFollow(token) {
+    const row = getValidatorAlertFollowByUnsubscribeToken(token);
+    if (!row) return null;
+    if (!row.unsubscribedAt) {
+        db.prepare('UPDATE validator_alert_follows SET unsubscribed_at = ?, updated_at = ? WHERE id = ?').run(Date.now(), Date.now(), row.id);
+    }
+    return getFollowById(row.id);
+}
+
+// Confirmed, not left, and the address has not left all explorer mail.
+export function getActiveValidatorAlertFollows() {
+    return db.prepare(`${FOLLOW_SELECT}
+        WHERE f.confirmed_at IS NOT NULL AND f.unsubscribed_at IS NULL AND s.unsubscribed_at IS NULL
+        ORDER BY f.id`).all().map(mapFollow);
 }
 
 export function countEmailSubscribers() {

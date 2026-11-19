@@ -42,6 +42,10 @@ import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
 import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
 import { registerValidatorRoutes, createKeyCheckLimiter } from './lib/validator-status-api.js';
+import { readValidatorStatus } from './lib/validator-status-chain.js';
+import { validatorAlertsSendEnabled, observationFromStatus, MAX_FOLLOWS_PER_EMAIL } from './lib/validator-alerts.js';
+import { registerValidatorAlertRoutes, createValidatorAlertLimiters } from './lib/validator-alerts-api.js';
+import { runValidatorAlertsTick } from './lib/validator-alerts-run.js';
 import { registerTelemetryRoute } from './lib/telemetry-api.js';
 import { telemetryConfig, telemetryHostName, startTelemetryRelay, receiveTelemetry, startLocalTelemetry } from './lib/telemetry-relay.js';
 import { registerTreasurySpendsRoute } from './lib/treasury-payout-api.js';
@@ -4097,6 +4101,34 @@ function parseValidatorAddress(raw) {
 }
 registerValidatorRoutes(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), parseAddress: parseValidatorAddress,
     cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk, statusRateOk: validatorStatusRateOk });
+
+// Validator alerts (Sprint 6, lib/validator-alerts*.js): email about a validator a person follows,
+// through the same signup machinery as the general alerts (double opt-in, confirm and unsubscribe
+// pages with a POST button, the per-IP signup limit, email.js, email_dispatches as the sent log).
+// Off unless VALIDATOR_ALERTS_SEND=1: with it off the subscribe route answers 503 and the tick
+// reads, sends and stores nothing. Mail also needs SITE_URL, as every tokenised link does (F-185).
+const validatorAlertsOn = () => validatorAlertsSendEnabled(process.env) && canMintEmailUrls();
+const validatorAlertLimiters = createValidatorAlertLimiters(db, process.env);
+const validatorAlertName = async (address) => { try { const n = await getIdentity(globalApi, address); return typeof n === 'string' && n !== 'Unknown' ? n : null; } catch (e) { return null; } };
+registerValidatorAlertRoutes(app, { db, send: sendEmail, enabled: validatorAlertsOn, canMint: canMintEmailUrls, origin: emailSiteOrigin, parseAddress: parseValidatorAddress,
+    clientIp, ipRateOk: (ip) => emailSignupRateOk(ip) && validatorAlertLimiters.ip(ip), addressRateOk: validatorAlertLimiters.address,
+    maxPerEmail: readPositiveInteger(process.env.VALIDATOR_ALERT_MAX_PER_EMAIL, MAX_FOLLOWS_PER_EMAIL), page: confirmResultPage, actionForm: confirmActionForm, formBody, nameOf: validatorAlertName });
+const VALIDATOR_ALERTS_CHECK_MS = readPositiveInteger(process.env.VALIDATOR_ALERTS_CHECK_MS, 5 * 60 * 1000);
+async function readValidatorObservation(stash) {
+    if (!globalApi) throw new Error('no chain connection');
+    const snap = await readValidatorStatus(globalApi, stash, {});
+    const n = await globalApi.query.system.number();
+    return observationFromStatus(snap, { block: Number(n.toString()) });
+}
+let validatorAlertsRunning = false;
+async function dispatchValidatorAlerts() {
+    if (validatorAlertsRunning || !validatorAlertsOn()) return;
+    validatorAlertsRunning = true;
+    try {
+        await runValidatorAlertsTick({ db, readObservation: readValidatorObservation, send: sendEmail, origin: emailSiteOrigin(), enabled: validatorAlertsOn, nameOf: validatorAlertName });
+    } catch (e) { console.warn('[validator-alerts] tick failed:', e && e.message ? e.message : e); }
+    finally { validatorAlertsRunning = false; }
+}
 
 // "Check my node" (lib/telemetry-api.js): the Polkadex nodes on the telemetry
 // feed, from memory. Off unless TELEMETRY_FEED_URL is set. One connection per
@@ -11268,6 +11300,9 @@ function startIndexerLoops() {
     // chainHeadWatchdog at the moment an episode starts.
     setTimeout(dispatchNetworkEmails, 12_000);
     setInterval(dispatchNetworkEmails, NETWORK_EMAIL_CHECK_MS);
+    // Validator alerts: a no-op unless VALIDATOR_ALERTS_SEND=1 (default off).
+    setTimeout(dispatchValidatorAlerts, 20_000);
+    setInterval(dispatchValidatorAlerts, VALIDATOR_ALERTS_CHECK_MS);
     // syncData refreshes the validator set, per-era commission history and the
     // scorecard inputs. It had NO interval — only a one-shot setTimeout at boot
     // and a re-kick on RPC reconnect — while every sibling sync above and below

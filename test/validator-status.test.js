@@ -680,7 +680,7 @@ describe('the status view: live region, focus, table headers, retry on a row (re
         let calls = 0;
         const d = deps(); const real = d.fetchJson;
         d.fetchJson = async (u) => {
-            if (/\/status$/.test(u)) { calls++; return { ...validatorStatusModel(snap({ address: STASH, exposure: null }), params()), address: STASH }; }
+            if (/^\/api\/validator\/[^/]+\/status$/.test(u)) { calls++; return { ...validatorStatusModel(snap({ address: STASH, exposure: null }), params()), address: STASH }; }
             return real(u);
         };
         await mountValidatePage(el, d); await flush();

@@ -811,6 +811,10 @@ wallet-signed session (`401` without one) — see "Authenticated" below.
 - `POST /api/email/confirm` (`token` form field) — performs the confirmation
 - `GET /api/email/unsubscribe?token=<t>` — renders an unsubscribe page with a button. **Read-only.**
 - `POST /api/email/unsubscribe` (`token` form field) — performs the unsubscribe; also the RFC 8058 `List-Unsubscribe-Post` target
+- `GET /api/validator-alerts/status` - whether validator alerts are switched on (`VALIDATOR_ALERTS_SEND=1`, default off)
+- `POST /api/validator-alerts/subscribe` (JSON `email`, `stash`) - double opt-in signup for alerts about one validator; rate-limited per IP and per address, at most 5 live follows per address
+- `POST /api/validator-alerts/confirm` (`token` form field) - performs the confirmation (the GET renders a button page)
+- `POST /api/validator-alerts/unsubscribe` (`token` form field) - ends one validator follow; also the RFC 8058 target
 
   The writes moved off GET in audit F-001/F-036: mail scanners, link checkers and browser prefetch fetch emailed URLs without a human, which was silently confirming and unsubscribing people.
 - `GET /api/email/preferences?token=<t>` — fetch current event preferences

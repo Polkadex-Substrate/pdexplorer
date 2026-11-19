@@ -29,7 +29,8 @@ import { validatorStatusModel } from '../lib/validator-status.js';
 import { allRoutes } from '../lib/api-reference.js';
 import { auditSource } from './helpers/input-audit.js';
 import { escapeHtml } from '../lib/html-escape.js';
-import { readRepo, stripComments } from './helpers/source.js';
+import { readRepo as readRepoAt, stripComments } from './helpers/source.js';
+const readRepo = (f) => readRepoAt(f, import.meta.url);
 
 const addr = (n) => encodeAddress(new Uint8Array(32).fill(n), 88);
 const S1 = addr(81), S2 = addr(82);
@@ -387,7 +388,7 @@ describe('the control on the validator status page', () => {
         assert.ok(btn && /alerts/i.test(btn.textContent));
         const text = w.document.body.textContent;
         for (const phrase of [/not elected/i, /85%/, /disabled/i, /slashed/i, /commission/i, /keys/i, /confirm/i, /unsubscribe/i, /only this validator|this validator/i, /never sold|not shared|no one else/i]) assert.match(text, phrase);
-        assert.ok(!/[–—]/.test(html));
+        assert.ok(!/[\u2013\u2014]/.test(html));
         assert.equal(ALERTS_HEADING, 'Get alerts for this validator');
         assert.match(text, new RegExp(ALERTS_HEADING));
     });
@@ -516,9 +517,11 @@ describe('wiring and documents', () => {
         const j = html.indexOf('data-page="cookies"', i) > 0 ? html.indexOf('data-page="cookies"', i) : html.length;
         const page = html.slice(i, j).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
         for (const phrase of [/Validator alerts/, /Get alerts for this validator/, /email address/i, /validator stash/i, /not elected/i, /85%/, /disabled/, /slashed/, /commission/i, /session keys/i, /double opt-in|confirm/i, /unsubscribe link/i, /at most five/i, /ask us to delete|delete/i]) assert.match(page, phrase);
-        assert.ok(!/[–—]/.test(page.slice(page.indexOf('Validator alerts'), page.indexOf('Validator alerts') + 2500)));
+        const para = page.slice(page.indexOf('Validator alerts.'), page.indexOf('validator alerts on.', page.indexOf('Validator alerts.')) + 20);
+        assert.ok(para.length > 800, 'the paragraph was not found');
+        assert.ok(!/[\u2013\u2014]/.test(para));
     });
     test('no em or en dash in the new source files', () => {
-        for (const f of ['lib/validator-alerts-api.js', 'lib/validator-alerts-view.js']) assert.ok(!/[–—]/.test(readRepo(f)), f);
+        for (const f of ['lib/validator-alerts-api.js', 'lib/validator-alerts-view.js']) assert.ok(!/[\u2013\u2014]/.test(readRepo(f)), f);
     });
 });
