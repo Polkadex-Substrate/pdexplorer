@@ -126,6 +126,28 @@ describe('"Add a staking proxy" opens the existing proxy form prefilled (design 
         const body = s.slice(s.indexOf('async function renderAddProxyForm'), s.indexOf('async function renderAddProxyForm') + 4000);
         assert.match(body, /proxyPrefill\(window\.location\.search\)/);
     });
+    test('the prefill follows the validate flag (Fable round 1): off, ?proxy=Staking changes nothing', () => {
+        const s = src('script.js');
+        const body = s.slice(s.indexOf('async function renderAddProxyForm'), s.indexOf('async function renderAddProxyForm') + 4000);
+        assert.match(body, /const pre = VALIDATE_ON && proxyPrefill\(window\.location\.search\)/);
+    });
+});
+
+describe('the wallet Validator card: checked on resolve, styled with brand tokens (Fable round 1)', () => {
+    test('a late read for another wallet is dropped: the card is written only when its address is still the wallet shown', () => {
+        const s = src('script.js');
+        const line = s.split('\n').find(l => l.includes('readWalletValidator(globalApi'));
+        assert.ok(line, 'the mount line');
+        assert.match(line, /v && isSameAddress\(v\.address, currentWalletData\?\.address\)/);
+    });
+    test('styles.css styles .wallet-validator-card with brand tokens only', () => {
+        const css = readRepo('styles.css', import.meta.url);
+        const rules = [...css.matchAll(/\.wallet-validator-card[^{]*\{([^}]*)\}/g)].map(m => m[1]);
+        assert.ok(rules.length, 'a rule for the card');
+        const all = rules.join(';');
+        assert.match(all, /var\(--/);
+        assert.doesNotMatch(all, /#[0-9a-f]{3,8}\b|rgba?\(/i, 'no literal colours');
+    });
 });
 
 describe('script.js wiring of the delegated signing', () => {

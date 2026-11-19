@@ -21,6 +21,7 @@ import { buildSetupTx } from '../lib/validator-setup.js';
 import { normalizeMultisig, prepareMultisig } from '../lib/multisig.js';
 import { evaluateEvents, buildTxModel } from '../lib/tx-status.js';
 import { trackSignedTx } from '../lib/tx-submit.js';
+import * as F from '../lib/fee-preflight.js';
 import { EXPECTED_LAYOUT } from '../lib/session-keys.js';
 import { registryFromMetadata, loadFixture } from './helpers/extrinsic-builders.js';
 import { readRepo, stripComments } from './helpers/source.js';
@@ -57,6 +58,8 @@ describe('the proxy filter table is the runtime\'s InstanceFilter, as data', () 
         assert.equal(D.PROXY_SOURCE.branch, 'mainnet');
         assert.equal(D.PROXY_SOURCE.specVersion, 394);
         assert.match(D.PROXY_SOURCE.lines, /^\d+-\d+$/);
+        assert.equal(D.PROXY_SOURCE.lines, '803-862', 'the impl InstanceFilter block (Fable round 1)');
+        assert.match(readRepo('lib/validator-delegate.js', import.meta.url), /runtimes\/mainnet\/src\/lib\.rs lines 803-862/);
         const src = readRepo('lib/validator-delegate.js', import.meta.url);
         assert.match(src, /ProxyType::Staking => matches!\(c, RuntimeCall::Staking\(\.\.\)\)/, 'the Staking arm is quoted next to the data');
         assert.match(src, /ProxyType::NonTransfer => !matches!\(/, 'the NonTransfer arm is quoted next to the data');
@@ -399,9 +402,9 @@ describe('validatorCallGuard: the Sprint 3 and 4 refusals, re-checked when the f
         const p = await DC.validatorCallGuard(chainApi({ owners: { [NEWKEYS.grandpa]: OTHER } }), call, STASH);
         assert.ok(p.some(x => x.includes(OTHER)), p.join(' '));
     });
-    test('pending stop validating on a stash that already stopped: refused', async () => {
+    test('pending stop validating on a stash that already stopped: not a validator now, so passed to the chain untouched (Fable round 1: a nominator multisig chills too)', async () => {
         const call = registry.createType('Call', ex.staking.chill().toHex());
-        assert.match((await DC.validatorCallGuard(chainApi({ validating: false }), call, STASH))[0], /not asking to validate/);
+        assert.deepEqual(await DC.validatorCallGuard(chainApi({ validating: false }), call, STASH), []);
     });
     test('pending setup batch: the minimum bond rose above the batch\'s bond: refused', async () => {
         const base = { bonded: null, validating: false, ledger: null, nextKeys: null };
@@ -446,7 +449,7 @@ describe('pending multisig operations: what each is, who approved, who has not',
         const v = D.pendingValidatorOps(rows, m, { isSame });
         assert.equal(v.ops.length, 1);
         assert.deepEqual(v.ops[0], { hash: '0x' + '01'.repeat(32), label: 'Stop validating', approvals: 1, threshold: 2, approvedBy: [SB],
-            waitingFor: m.signers.filter(a => a !== SB), since: '900', callHex: chill.toHex() });
+            waitingFor: m.signers.filter(a => a !== SB), since: '900', callHex: chill.toHex(), rechecked: true });
         assert.equal(v.others, 2, 'a non-validator call and one whose call data is unknown are counted, not shown as validator changes');
         assert.match(D.pendingOpText(v.ops[0]), /^1 of 2 approvals\. Approved by .*\. Waiting for .*\.$/);
     });
@@ -481,5 +484,174 @@ describe('copy: the limits and the change warning', () => {
     test('the module is pure: no DOM and no network', () => {
         const src = stripComments(readRepo('lib/validator-delegate.js', import.meta.url));
         assert.doesNotMatch(src, /document\.|window\.|fetch\(/);
+    });
+});
+
+// ── Fable round 1: the guard must not refuse the live site's multisig staking ──
+// FEATURE_FLAGS.validate is off on the live site, but the guard is wired into
+// every multisig final approval. A nominator multisig's staking calls must pass
+// exactly as before this branch; validator rules apply only to a stash that is a
+// validator now, or to a validator setup (a setup batch, or staking.validate on
+// a bonded stash that is not validating). The signatory pays the fee of a
+// multisig, so the stash keeps no fee margin and no working reserve.
+const STAKE_MAX_KEEP = 10n ** 10n;   // script.js Stake modal Max keeps 0.01 PDEX
+const call = (tx) => registry.createType('Call', tx.toHex());
+// The refusal paths throw if they are reached: a non-validator must never touch them.
+function strictNominator(o = {}) {
+    const api = chainApi({ validating: false, ...o });
+    const touched = [];
+    const trap = (name) => async () => { touched.push(name); throw new Error('refusal path touched: ' + name); };
+    api.query.safeMode.enteredUntil = trap('safeMode');
+    api.query.txPause.pausedCalls = trap('txPause');
+    api.query.staking.minValidatorBond = trap('minValidatorBond');
+    api.query.staking.minCommission = trap('minCommission');
+    api.query.staking.ledger = trap('ledger');
+    api.query.system.account = trap('account');
+    return { api, touched };
+}
+describe('validatorCallGuard on the live site: nominator multisigs pass untouched (Fable round 1)', () => {
+    test('bondExtra Max from the Stake modal (keeps 0.01 PDEX) on a nominator multisig: passed, no refusal path touched', async () => {
+        const { api, touched } = strictNominator();
+        const value = 1000n * PDEX - 500n * PDEX - STAKE_MAX_KEEP;
+        assert.deepEqual(await DC.validatorCallGuard(api, call(ex.staking.bondExtra(value)), STASH), []);
+        assert.deepEqual(touched, []);
+    });
+    test('a nominator multisig\'s chill, unbond, rebond, setPayee, withdrawUnbonded and bond: passed, no refusal path touched', async () => {
+        const { api, touched } = strictNominator();
+        for (const tx of [ex.staking.chill(), ex.staking.unbond(450n * PDEX), ex.staking.rebond(5n * PDEX), ex.staking.setPayee('Staked'), ex.staking.withdrawUnbonded(0), ex.staking.bond(10n * PDEX, 'Staked')]) {
+            assert.deepEqual(await DC.validatorCallGuard(api, call(tx), STASH), [], `${tx.section}.${tx.method}`);
+        }
+        assert.deepEqual(touched, []);
+    });
+    test('the flag off: a multisig that is not a validator never reaches a refusal, even in safe mode, paused, and with the minimums raised', async () => {
+        const api = chainApi({ validating: false, safeModeUntil: 77, paused: ['Staking.bondExtra', 'Staking.chill'], minBond: 10_000n * PDEX, minComm: 900_000_000 });
+        for (const tx of [ex.staking.bondExtra(499n * PDEX), ex.staking.chill(), ex.staking.unbond(1n * PDEX)]) {
+            assert.deepEqual(await DC.validatorCallGuard(api, call(tx), STASH), [], `${tx.section}.${tx.method}`);
+        }
+    });
+    test('the role read fails: fail open (the chain decides), never a refusal', async () => {
+        const api = chainApi();
+        api.query.staking.validators.size = async () => { throw new Error('socket closed'); };
+        for (const tx of [ex.staking.chill(), ex.staking.bondExtra(5n * PDEX), ex.staking.validate({ commission: 1, blocked: false })]) {
+            assert.deepEqual(await DC.validatorCallGuard(api, call(tx), STASH), [], `${tx.section}.${tx.method}`);
+        }
+    });
+    test('a non-validator setup whose limit or state reads fail: fail open', async () => {
+        const base = { bonded: null, validating: false, ledger: null, nextKeys: null };
+        const steps = [{ kind: 'bond', value: 200n * PDEX, payee: { kind: 'staked' } }, { kind: 'setKeys', keysHex: NEWBLOB }, { kind: 'validate', commission: 50_000_000, blocked: false }];
+        const c = call(buildSetupTx(chainApi(base), steps));
+        const a1 = chainApi(base); a1.query.staking.minValidatorBond = async () => { throw new Error('x'); };
+        assert.deepEqual(await DC.validatorCallGuard(a1, c, STASH), []);
+        const a2 = chainApi(base); a2.query.system.account = async () => { throw new Error('x'); };
+        assert.deepEqual(await DC.validatorCallGuard(a2, c, STASH), []);
+    });
+    test('a validator whose reads fail: refused with a try-again message, not a guess', async () => {
+        const api = chainApi();
+        api.query.system.account = async () => { throw new Error('socket closed'); };
+        const p = await DC.validatorCallGuard(api, call(ex.staking.chill()), STASH);
+        assert.equal(p.length, 1);
+        assert.match(p[0], /could not read .* Try again/);
+    });
+});
+describe('validatorCallGuard: a multisig pays no fee from the stash (the signatory pays)', () => {
+    test('bondExtra Max from the Stake modal on a validator multisig: passed (was refused with "Your balance changed")', async () => {
+        const value = 1000n * PDEX - 500n * PDEX - STAKE_MAX_KEEP;
+        assert.deepEqual(await DC.validatorCallGuard(chainApi(), call(ex.staking.bondExtra(value)), STASH), []);
+    });
+    test('bondExtra above what the stash holds free of its lock: still refused, with no fee or reserve in the text', async () => {
+        const p = await DC.validatorCallGuard(chainApi(), call(ex.staking.bondExtra(501n * PDEX)), STASH);
+        assert.equal(p.length, 1);
+        assert.match(p[0], /Your balance changed .* the most is 500 PDEX/);
+        assert.doesNotMatch(p[0], /network fee|kept free/);
+    });
+    test('a setup batch bonding everything above the existential deposit: passed (no fee margin, no working reserve)', async () => {
+        const base = { bonded: null, validating: false, ledger: null, nextKeys: null, frozen: 0n };
+        const steps = [{ kind: 'bond', value: 999n * PDEX, payee: { kind: 'staked' } }, { kind: 'setKeys', keysHex: NEWBLOB }, { kind: 'validate', commission: 50_000_000, blocked: false }];
+        const c = call(buildSetupTx(chainApi(base), steps));
+        assert.deepEqual(await DC.validatorCallGuard(chainApi(base), c, STASH), []);
+        const over = [{ ...steps[0], value: 999n * PDEX + 1n }, steps[1], steps[2]];
+        assert.match((await DC.validatorCallGuard(chainApi(base), call(buildSetupTx(chainApi(base), over)), STASH)).join(' '), /Your balance changed/);
+    });
+});
+describe('validatorCallGuard: staking.validate on a bonded stash that is not validating is a setup (Sprint 3 rules)', () => {
+    test('enough bond and commission at the minimum: passed (was refused as a commission change)', async () => {
+        const p = await DC.validatorCallGuard(chainApi({ validating: false }), call(ex.staking.validate({ commission: 50_000_000, blocked: false })), STASH);
+        assert.deepEqual(p, []);
+    });
+    test('the setup rules apply: commission below the minimum and bond below MinValidatorBond are refused with the setup wording', async () => {
+        const c = call(ex.staking.validate({ commission: 20_000_000, blocked: false }));
+        const p = await DC.validatorCallGuard(chainApi({ validating: false, minBond: 600n * PDEX }), c, STASH);
+        assert.ok(p.some(x => /minimum commission changed .* Go back to Commission/.test(x)), p.join(' | '));
+        assert.ok(p.some(x => /minimum bond changed .* 600 PDEX/.test(x)), p.join(' | '));
+        assert.ok(!p.some(x => /not asking to validate/.test(x)), p.join(' | '));
+    });
+});
+describe('pending unbond, withdrawUnbonded, bond and utility.batch: re-checked, or labelled honestly (Fable round 1)', () => {
+    test('stepsFromCall maps unbond to the unbond rule; bond, withdrawUnbonded and utility.batch are not re-checked', () => {
+        assert.deepEqual(D.stepsFromCall(call(ex.staking.unbond(5n * PDEX))), { unbond: { value: 5n * PDEX } });
+        for (const tx of [ex.staking.bond(10n * PDEX, 'Staked'), ex.staking.withdrawUnbonded(0), ex.utility.batch([ex.staking.chill()])]) {
+            assert.equal(D.stepsFromCall(call(tx)), null, `${tx.section}.${tx.method}`);
+            assert.equal(D.isRechecked(call(tx)), false, `${tx.section}.${tx.method}`);
+        }
+        for (const tx of [ex.staking.unbond(5n * PDEX), ex.staking.chill(), ex.staking.validate({ commission: 1, blocked: false })]) assert.equal(D.isRechecked(call(tx)), true);
+    });
+    test('a validator\'s pending unbond that would leave less than MinValidatorBond: refused with the unbond rule', async () => {
+        const p = await DC.validatorCallGuard(chainApi(), call(ex.staking.unbond(450n * PDEX)), STASH);
+        assert.equal(p.length, 1);
+        assert.match(p[0], /must keep at least 123 PDEX bonded/);
+        assert.deepEqual(await DC.validatorCallGuard(chainApi(), call(ex.staking.unbond(100n * PDEX)), STASH), []);
+    });
+    test('a validator\'s pending unbond while Staking.unbond is paused: refused', async () => {
+        assert.match((await DC.validatorCallGuard(chainApi({ paused: ['Staking.unbond'] }), call(ex.staking.unbond(1n * PDEX)), STASH)).join(' '), /paused Staking\.unbond/);
+    });
+    test('pendingValidatorOps marks each op: re-checked or not, and the label for those that are not', () => {
+        const m = normalizeMultisig({ signers: [SA, SB, SC], threshold: 2, name: 'Validator stash' });
+        const row = (n, tx) => ({ hash: '0x' + String(n).padStart(2, '0').repeat(32), pending: { when: { height: '900', index: '0' }, approvals: [SB], depositor: SB, deposit: '1' }, call: call(tx) });
+        const v = D.pendingValidatorOps([row(1, ex.staking.unbond(5n * PDEX)), row(2, ex.staking.withdrawUnbonded(0)), row(3, ex.staking.bond(10n * PDEX, 'Staked')), row(4, ex.utility.batch([ex.staking.chill()]))], m, { isSame });
+        assert.deepEqual(v.ops.map(o => o.rechecked), [true, false, false, false]);
+        assert.equal(D.NOT_RECHECKED, 'Not re-checked by the explorer; the chain decides.');
+        assert.doesNotMatch(D.NOT_RECHECKED, /[–—]/);
+    });
+    test('the manage view labels a pending op that is not re-checked', () => {
+        const src = stripComments(readRepo('lib/validator-manage-view.js', import.meta.url));
+        assert.match(src, /op\.rechecked \? '' : [^\n]*NOT_RECHECKED/);
+    });
+});
+describe('the multisig deposit is in the fee preflight of a first approval (Fable round 1)', () => {
+    const W = { refTime: 1_000_000, proofSize: 2000 };
+    test('multisigDepositOf: DepositBase + threshold x DepositFactor for a first approval, read from the live constants; 0 otherwise', () => {
+        const api = chainApi();
+        const inner = ex.staking.chill();
+        const hash = blake2AsHex(call(inner).toU8a());
+        assert.equal(F.multisigDepositOf(api, { method: ex.multisig.asMulti(2, [SA, SC], null, inner, W) }), 22n * PDEX);
+        assert.equal(F.multisigDepositOf(api, { method: ex.multisig.approveAsMulti(3, [SA, SC], null, hash, W) }), 23n * PDEX);
+        assert.equal(F.multisigDepositOf(api, { method: ex.multisig.asMulti(2, [SA, SC], { height: 9, index: 1 }, inner, W) }), 0n);
+        assert.equal(F.multisigDepositOf(api, { method: ex.multisig.approveAsMulti(2, [SA, SC], { height: 9, index: 1 }, hash, W) }), 0n);
+        assert.equal(F.multisigDepositOf(api, { method: ex.multisig.asMultiThreshold1([SA], inner) }), 0n);
+        assert.equal(F.multisigDepositOf(api, { method: inner }), 0n);
+        api.consts.multisig.depositBase = num(40n * PDEX);
+        assert.equal(F.multisigDepositOf(api, { method: ex.multisig.asMulti(2, [SA, SC], null, inner, W) }), 42n * PDEX, 'the constants are read at preflight, not cached');
+    });
+    test('feeShortfall: the deposit counts with the fee; the text names the fee and the deposit separately', () => {
+        const s = F.feeShortfall({ fee: 2n * 10n ** 10n, deposit: 22n * PDEX, free: 510n * PDEX, frozen: 500n * PDEX, ed: PDEX });
+        assert.ok(s, 'short');
+        assert.equal(s.deposit, 22n * PDEX);
+        const t = F.feeShortText(s);
+        assert.match(t, /network fee/);
+        assert.match(t, /multisig deposit of 22 PDEX/);
+        assert.match(t, /returned/);
+        assert.equal(F.feeShortfall({ fee: 2n * 10n ** 10n, deposit: 22n * PDEX, free: 523n * PDEX, frozen: 500n * PDEX, ed: PDEX }), null);
+        assert.doesNotMatch(F.feeShortText(F.feeShortfall({ fee: 2n * 10n ** 10n, free: PDEX, ed: PDEX })), /deposit/, 'no deposit, no deposit wording');
+    });
+    test('feePreflight on a first approval: a signer that can pay the fee but not the deposit is stopped before the wallet is asked', async () => {
+        const api = chainApi({ free: 510n * PDEX, frozen: 500n * PDEX });
+        const m = normalizeMultisig({ signers: [SA, SB, SC], threshold: 2, name: 'Validator stash' });
+        const p = await prepareMultisig({ api, multisig: m, signer: SB, callHex: ex.staking.chill().toHex() });
+        assert.equal(p.deposit, String(22n * PDEX));
+        const r = await F.feePreflight(api, p.tx, SB);
+        assert.equal(r.status, 'short');
+        assert.match(r.text, /multisig deposit of 22 PDEX/);
+        const ok = await F.feePreflight(chainApi({ free: 1000n * PDEX, frozen: 500n * PDEX }), p.tx, SB);
+        assert.equal(ok.status, 'ok');
     });
 });
