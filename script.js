@@ -88,6 +88,8 @@ import { mountValidatePage } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
+import { validatorCallGuard, validatorCallNote, readWalletValidator } from './lib/validator-delegate-chain.js';
+import { walletValidatorCard, proxyPrefill, proxyTypesOf } from './lib/validator-delegate.js';
 // The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
 const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
 const SHOWN_HELP_TOPICS = visibleHelpTopics(HELP_TOPICS, { validate: VALIDATE_ON });
@@ -7409,6 +7411,7 @@ function initValidatePage(address) {
 function validateSetupDeps(watch) {
     if (watch) pageScope.add(walletSession.onActiveAccountChange(() => mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(false))));
     return { account: walletSession.getActiveAccount(), getApi: () => globalApi, isMultisig: (a) => !!multisigStore.find(a), revision: () => walletSession.revision(),
+        findMultisig: (a) => multisigStore.find(a), multisigReview: (o) => multisigUI.review(o),
         submit: (o) => submitSignedTx(o), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, isAddress: isSearchableAddress,
         isSame: isSameAddress, renderCall: (c) => renderCallHtml(callToTree(c), {}, { raw: false }) };
 }
@@ -8081,7 +8084,10 @@ const multisigUI = createMultisigUI({
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
     canAskWallets: canAskWalletsForSigners, askWallets: askWalletsForSigners,
     submit: submitSignedTx, fetchJson: fetchApiJson,
-    refresh: address => refreshWalletDashboardFor(address), revision: () => walletSession.revision()
+    refresh: address => refreshWalletDashboardFor(address), revision: () => walletSession.revision(),
+    // A multisig stash's validator change: the Sprint 3 and 4 rules again at the approval that runs it.
+    callGuard: (api, call, m) => validatorCallGuard(api, call, m.address),
+    callNote: (api, call, m) => validatorCallNote(api, call, m.address)
 });
 const councilCandidacyUI = createCouncilCandidacyUI({
     api: () => globalApi, selected: getStoredWallet,
@@ -8969,6 +8975,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
         </div>` : ''}
 
         <div id="wallet-multisig-slot"></div>
+        <div id="wallet-validator-slot"></div>
 
         <div class="wallet-grid">
             <div class="list-container glass">
@@ -9120,6 +9127,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     mountNominationStatus(document.getElementById('wallet-nominations-slot'), data.address, { fetchJson: fetchApiJson, helpIcon,
         canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), data.address), openPicker: (keep) => openStakeModal(keep) });
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
+    // Design 5.1: a Validator card only for an account that validates or has session keys.
+    if (VALIDATE_ON && isOwnWallet && globalApi) readWalletValidator(globalApi, data.address).then(v => { const s = document.getElementById('wallet-validator-slot'); if (s && v && isSameAddress(v.address, currentWalletData?.address)) s.innerHTML = walletValidatorCard(v, stakingEscapeHtml); });
     refreshWalletMultisigs();
     // Average APR card — runs after the rest of the dashboard so the
     // ranked widget order on slow connections is: balance/staking →
@@ -13329,14 +13338,12 @@ let cachedProxyTypes = null;
 async function renderAddProxyForm(address) {
     const el = document.getElementById('wallet-proxy-add');
     if (!el) return;
-    try {
-        if (!cachedProxyTypes) {
-            const data = await fetchApiJson('/api/proxy-types');
-            cachedProxyTypes = Array.isArray(data.types) && data.types.length ? data.types : ['Any', 'NonTransfer', 'Governance', 'Staking', 'IdentityJudgement', 'CancelProxy'];
-        }
-    } catch (_) {
-        cachedProxyTypes = ['Any', 'NonTransfer', 'Governance', 'Staking', 'IdentityJudgement', 'CancelProxy'];
+    // The runtime's own types (/api/proxy-types, else this connection's metadata); never a guessed list.
+    if (!cachedProxyTypes) {
+        try { const data = await fetchApiJson('/api/proxy-types'); cachedProxyTypes = Array.isArray(data.types) && data.types.length ? data.types : null; } catch (_) { cachedProxyTypes = null; }
+        if (!cachedProxyTypes && globalApi) cachedProxyTypes = proxyTypesOf(globalApi);
     }
+    if (!cachedProxyTypes) { el.textContent = 'The proxy types of this network could not be read. Reload the page to try again.'; return; }
     el.innerHTML = `
         <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Add a proxy</h4>
         <div style="display:grid;grid-template-columns:1fr 180px 100px auto;gap:8px;align-items:center;">
@@ -13349,6 +13356,13 @@ async function renderAddProxyForm(address) {
         </div>
         <div id="proxy-add-error" class="staking-error" style="display:none;margin-top:8px;font-size:0.78rem;"></div>`;
 
+    // "Add a staking proxy" from the validator manage panel: Staking, delay 0, the limits (design 5.4). Only while the validate flag is on.
+    const pre = VALIDATE_ON && proxyPrefill(window.location.search);
+    if (pre && cachedProxyTypes.includes(pre.type)) {
+        document.getElementById('proxy-add-type').value = pre.type; document.getElementById('proxy-add-delay').value = String(pre.delay);
+        el.insertAdjacentHTML('beforeend', `<p class="validate-setup-note" style="margin-top:8px;font-size:0.82rem;">${stakingEscapeHtml(pre.note)}</p>`);
+        if (el.scrollIntoView) el.scrollIntoView({ block: 'center' });
+    }
     const submitBtn = document.getElementById('proxy-add-submit');
     if (submitBtn) submitBtn.addEventListener('click', () => {
         const errEl = document.getElementById('proxy-add-error');

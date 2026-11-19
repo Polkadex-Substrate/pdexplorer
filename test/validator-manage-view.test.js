@@ -45,11 +45,11 @@ const opt = (v) => (v == null ? { isSome: false, isNone: true } : { isSome: true
 const num = (v) => ({ toNumber: () => Number(v), toString: () => String(v), toBigInt: () => BigInt(v) });
 const keysCodec = (k) => ({ toJSON: () => ({ grandpa: k.grandpa, babe: k.babe, imOnline: k.im_online, authorityDiscovery: k.authority_discovery, mixnet: k.mixnet, beefy: k.beefy }) });
 function fakeApi(o = {}) {
-    const st = { minBond: 123n * PDEX, minComm: 30_000_000, bonded: STASH, ledger: { controller: STASH, stash: STASH, active: 500n * PDEX, total: 500n * PDEX, unlocking: [] },
+    const st = { stash: STASH, minBond: 123n * PDEX, minComm: 30_000_000, bonded: STASH, ledger: { controller: STASH, stash: STASH, active: 500n * PDEX, total: 500n * PDEX, unlocking: [] },
         validating: true, commission: 50_000_000, blocked: false, payee: 'Staked', nextKeys: KEYS, owners: {}, proxies: [], free: 1000n * PDEX, frozen: 500n * PDEX, fee: 2n * 10n ** 10n, ...o };
     const validators = async () => ({ commission: num(st.commission), blocked: { isTrue: !!st.blocked } });
-    validators.size = async (a) => num(String(a) === STASH && st.validating ? 5 : 0);
-    const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); c.paymentInfo = async () => ({ partialFee: num(st.fee) }); return c; } }) });
+    validators.size = async (a) => num(String(a) === st.stash && st.validating ? 5 : 0);
+    const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => Object.assign((...args) => { const c = p[m](...args); c.paymentInfo = async (who) => { (st.feeReads ||= []).push(String(who)); return { partialFee: num(st.fee) }; }; return c; }, { meta: p[m] && p[m].meta }) }) });
     return {
         st, registry, tx, runtimeVersion: { specVersion: num(393) },
         consts: { balances: { existentialDeposit: num(PDEX) }, staking: { maxUnlockingChunks: num(32), bondingDuration: num(28), sessionsPerEra: num(6) } },
@@ -58,18 +58,19 @@ function fakeApi(o = {}) {
             staking: {
                 minValidatorBond: async () => num(st.minBond), minCommission: async () => num(st.minComm), minNominatorBond: async () => num(50n * PDEX),
                 maxValidatorsCount: async () => opt(null), counterForValidators: async () => num(217), currentEra: async () => opt(num(500)),
-                bonded: async (a) => opt(String(a) === STASH ? st.bonded : null),
+                bonded: async (a) => opt(String(a) === st.stash ? st.bonded : null),
                 ledger: async (c) => opt(st.ledger && String(c) === st.ledger.controller
                     ? { stash: st.ledger.stash, total: num(st.ledger.total), active: num(st.ledger.active), unlocking: st.ledger.unlocking.map(u => ({ value: num(u.value), era: num(u.era) })) } : null),
                 validators, nominators: async () => opt(null),
                 payee: async () => registry.createType('Option<RewardDestination>', st.payee)
             },
             session: {
-                nextKeys: async (a) => opt(String(a) === STASH && st.nextKeys ? keysCodec(st.nextKeys) : null),
+                nextKeys: async (a) => opt(String(a) === st.stash && st.nextKeys ? keysCodec(st.nextKeys) : null),
                 queuedKeys: async () => [],
                 keyOwner: async ([, key]) => opt(st.owners[String(key)] || null)
             },
-            proxy: { proxies: async () => [st.proxies.map(p => ({ delegate: p.delegate, proxyType: { toString: () => p.type }, delay: num(0) })), num(0)] }
+            proxy: { proxies: async () => [st.proxies.map(p => ({ delegate: p.delegate, proxyType: { toString: () => p.type }, delay: num(p.delay || 0) })), num(0)] },
+            multisig: { multisigs: Object.assign(async () => ({ isNone: true }), { entries: async () => st.pending || [] }) }
         }
     };
 }
@@ -141,18 +142,6 @@ describe('the menu for an active validator: secondary actions, no primary, links
         const { el } = await mount({ account: { status: 'connected', address: OTHER } });
         assert.equal(el.querySelector('[data-manage-action]'), null);
         assert.equal(el.textContent.trim(), '');
-    });
-    test('a multisig wallet: told this comes later; no actions', async () => {
-        const { el } = await mount({ isMultisig: () => true });
-        assert.equal(el.querySelector('[data-manage-action]'), null);
-        assert.match(el.textContent, /from a multisig .* comes in a later release/);
-    });
-    test('a proxy of the stash: detected, told proxy signing comes in a later release; no actions', async () => {
-        const api = fakeApi({ proxies: [{ delegate: PROXY, type: 'Staking' }] });
-        const { el } = await mount({ api, account: { status: 'connected', address: PROXY } });
-        assert.equal(el.querySelector('[data-manage-action]'), null);
-        assert.match(el.textContent, /You are connected as a Staking proxy of this stash\. Acting for a stash through a proxy comes in a later release/);
-        assert.match(el.textContent, /A Staking proxy cannot register session keys on this runtime/);
     });
     test('a legacy controller stash: controller actions shown disabled with the reason, stash actions enabled', async () => {
         const api = fakeApi({ bonded: CTRL, ledger: { controller: CTRL, stash: STASH, active: 500n * PDEX, total: 500n * PDEX, unlocking: [] } });
@@ -497,5 +486,132 @@ describe('review round 5: /unstake route card and the Max warning in the Unstake
     test('the warning is cleared when the amount is typed or the modal reopens', () => {
         assert.match(script, /unstakeAmtInputEl\.addEventListener\('input'[\s\S]{0,400}clearUnstakeWarning\(\)/);
         assert.match(script, /function openUnstakeModal\(\)[\s\S]{0,900}clearUnstakeWarning\(\)/);
+    });
+});
+
+// ── Sprint 5: acting for the stash through a proxy or a multisig ──
+// (intentional change: Sprint 4 showed "comes in a later release" here)
+import { normalizeMultisig } from '../lib/multisig.js';
+import { MULTISIG_CHANGE_WARNING, MULTISIG_FEE_NOTE, PROXY_FEE_NOTE } from '../lib/validator-delegate.js';
+import { blake2AsHex } from '@polkadot/util-crypto';
+const SA = addr(141), SB = addr(142), SC = addr(143);
+const enabled = (el) => Array.from(el.querySelectorAll('[data-manage-action]')).filter(b => !b.disabled).map(b => b.getAttribute('data-manage-action'));
+const describedBy = (el, kind) => { const b = el.querySelector(`[data-manage-action="${kind}"]`); const id = b && b.getAttribute('aria-describedby'); return id ? el.querySelector('#' + id).textContent : ''; };
+
+describe('a Staking proxy of the stash: the allowed actions through proxy.proxy, keys greyed with the reason', () => {
+    const asProxy = (o = {}) => ({ api: fakeApi({ proxies: [{ delegate: PROXY, type: 'Staking', delay: 0 }], ...o }), account: { status: 'connected', address: PROXY } });
+    test('menu: commission, bond more, payee and stop validating enabled; rotate keys disabled, "Key rotation needs the stash on this runtime"', async () => {
+        const { el } = await mount(asProxy());
+        assert.deepEqual(enabled(el), ['commission', 'bondExtra', 'payee', 'chill']);
+        const keys = el.querySelector('[data-manage-action="keys"]');
+        assert.equal(keys.disabled, true);
+        assert.match(describedBy(el, 'keys'), /^Key rotation needs the stash on this runtime\./);
+        assert.match(describedBy(el, 'keys'), /Connect the stash/);
+        assert.match(el.textContent, /You are connected as a Staking proxy of this stash/);
+    });
+    test('commission review: signed by the proxy for the stash, the proxy pays; submit wraps proxy.proxy(stash, Staking, staking.validate) and expects the proxy wallet', async () => {
+        const { el, d } = await mount(asProxy());
+        await click(el, '[data-manage-action="commission"]');
+        await type(el, '#validate-manage-commission', '7');
+        await click(el, '[data-manage-action="review"]');
+        assert.match(el.textContent, new RegExp('Signed by your proxy account ' + PROXY + ' for the stash ' + STASH));
+        assert.ok(el.textContent.includes(PROXY_FEE_NOTE));
+        assert.deepEqual(reviewTexts(el)[0], ['Change commission from 5% to 7%', 'proxy.proxy > staking.validate']);
+        assert.ok(d.api.st.feeReads.includes(PROXY), 'the fee shown is the proxy\'s');
+        await click(el, '[data-manage-action="sign"]');
+        assert.equal(d.submits.length, 1);
+        const o = d.submits[0];
+        assert.equal(o.expectedWallet, PROXY, 'the proxy signs and pays: the fee preflight runs on it');
+        assert.equal(o.expectedRevision, 'r1');
+        const tx = await o.buildTx(d.api);
+        const call = registry.createType('Call', tx.toHex());
+        assert.equal(`${call.section}.${call.method}`, 'proxy.proxy');
+        assert.equal(call.args[1].unwrap().toString(), 'Staking');
+        assert.equal(`${call.args[2].section}.${call.args[2].method}`, 'staking.validate');
+        assert.deepEqual(o.action.params.expectEvents, ['staking.ValidatorPrefsSet']);
+    });
+    test('success needs the chain re-read too: the outer and inner events alone do not say "confirmed"', async () => {
+        const { el, d } = await mount(asProxy());
+        await click(el, '[data-manage-action="chill"]');
+        await click(el, '[data-manage-action="sign"]');
+        d.submits[0].onSuccess();
+        await settle();
+        assert.match(el.textContent, /Waiting for the chain/, 'the stash still validates in the fake chain');
+        d.api.st.validating = false;
+        await click(el, '[data-manage-action="recheck"]');
+        assert.match(el.textContent, /Submitted and confirmed/);
+    });
+    test('an announcement delay: every action disabled with the explanation; nothing can be signed', async () => {
+        const { el, d } = await mount(asProxy({ proxies: [{ delegate: PROXY, type: 'Staking', delay: 100 }] }));
+        assert.deepEqual(enabled(el), []);
+        assert.match(describedBy(el, 'commission'), /announcement delay of 100 blocks/);
+        assert.equal(d.submits.length, 0);
+    });
+});
+
+describe('a multisig stash: the existing multisig review, pending validator changes with their approvals', () => {
+    const m = normalizeMultisig({ signers: [SA, SB, SC], threshold: 2, name: 'Validator stash' });
+    const MS = m.address;
+    // The stash is the multisig: the fake chain's stash is MS here.
+    const msApi = (o = {}) => fakeApi({ stash: MS, bonded: MS, ledger: { controller: MS, stash: MS, active: 500n * PDEX, total: 500n * PDEX, unlocking: [] }, ...o });
+    const msDeps = (api, o = {}) => ({ api, account: { status: 'connected', address: MS }, isMultisig: (a) => a === MS, findMultisig: (a) => (a === MS ? m : null),
+        multisigReview: (opts) => { (o.reviews || []).push(opts); }, ...o.extra });
+    async function mountMs(api, o = {}) {
+        const x = dom();
+        const d = deps(msDeps(api, o));
+        await mountValidatorManage(x.el, d, { stash: MS, model: MODEL('active'), ...o.mount });
+        await settle();
+        return { ...x, d };
+    }
+    test('the actions are offered to the multisig wallet (the multisig is the stash); the review names the signer fee and the change warning', async () => {
+        const { el, d } = await mountMs(msApi());
+        assert.deepEqual(enabled(el), ['commission', 'keys', 'bondExtra', 'payee', 'chill']);
+        await click(el, '[data-manage-action="chill"]');
+        assert.ok(el.textContent.includes(MULTISIG_FEE_NOTE));
+        assert.ok(el.textContent.includes(MULTISIG_CHANGE_WARNING));
+        assert.match(el.textContent, /Signed by the multisig .* 2 of 3 approvals/);
+        await click(el, '[data-manage-action="sign"]');
+        const o = d.submits[0];
+        assert.equal(o.expectedWallet, MS, 'submitSignedTx hands a multisig wallet to the existing multisig review');
+        assert.equal(typeof o.onMultisigEnd, 'function');
+        const tx = await o.buildTx(d.api);
+        assert.equal(`${tx.section}.${tx.method}`, 'staking.chill', 'the inner call; the review wraps it in asMulti');
+    });
+    test('an approval recorded: the panel says so and who still has to approve; closed: nothing was signed', async () => {
+        const { el, d } = await mountMs(msApi());
+        await click(el, '[data-manage-action="chill"]');
+        await click(el, '[data-manage-action="sign"]');
+        d.submits[0].onMultisigEnd('approved', { stage: 'approved', text: 'Approval submitted; waiting for the other signers.' });
+        await settle();
+        assert.match(el.textContent, /Approval recorded/);
+        assert.match(el.textContent, /needs 2 of 3 approvals/);
+        assert.ok(el.textContent.includes(MULTISIG_CHANGE_WARNING));
+        await click(el, '[data-manage-action="done"]');
+        await click(el, '[data-manage-action="chill"]');
+        await click(el, '[data-manage-action="sign"]');
+        d.submits[1].onMultisigEnd('closed', { stage: 'closed', text: '' });
+        await settle();
+        assert.match(el.querySelector('#validate-manage-sign-msg').textContent, /closed without recording an approval/);
+    });
+    test('pending validator changes for the multisig: the change, approvals of threshold, who approved, who has not; Review and approve opens the multisig review', async () => {
+        const chill = ex.staking.chill();
+        const hash = blake2AsHex(registry.createType('Call', chill.toHex()).toU8a());
+        const pending = [[{ args: [{ toString: () => MS }, { toHex: () => hash }] }, { isSome: true, isNone: false, unwrap: () => ({ when: { height: num(900), index: num(2) }, approvals: [SB], depositor: SB, deposit: num(1) }) }]];
+        const reviews = [];
+        const api = msApi({ pending });
+        const x = dom();
+        const d = deps({ ...msDeps(api, { reviews }), recoverCall: async () => chill.toHex() });
+        await mountValidatorManage(x.el, d, { stash: MS, model: MODEL('active') });
+        await settle();
+        const el = x.el;
+        const list = el.querySelector('.validate-manage-pending');
+        assert.ok(list, 'the pending list');
+        assert.match(list.textContent, /Stop validating/);
+        assert.match(list.textContent, /1 of 2 approvals/);
+        assert.match(list.textContent, /Started at block #900/);
+        assert.ok(list.textContent.includes(MULTISIG_CHANGE_WARNING));
+        await click(el, '[data-manage-action="ms-approve"]');
+        assert.equal(reviews.length, 1);
+        assert.deepEqual([reviews[0].mode, reviews[0].callHash, reviews[0].callHex, reviews[0].multisig.address], ['approve', hash, chill.toHex(), MS]);
     });
 });

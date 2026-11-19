@@ -11,6 +11,10 @@ import { liveRuntimeStatus, describeLiveRuntime } from './lib/live-runtime.js';
 import { canonicalRpc, RUNTIME_API_CONSOLE } from './lib/rpc-methods.js';
 import { decodeExtrinsicsTolerant, timestampFromExtrinsics, recoverBlockDecode } from './lib/extrinsic-decode.js';
 import { isOpenGovStatus } from './lib/gov-status.js';
+import { FEATURE_FLAGS } from './lib/wallet-links.js';
+import { HELP_TOPICS } from './lib/help-topics.js';
+import { validateSitemapRoutes } from './lib/validate-gate.js';
+import { proxyTypesOf } from './lib/validator-delegate.js';
 import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
 import { deriveIndexStatus, describeIndexStatus, coverageOf } from './lib/index-status.js';
@@ -3060,7 +3064,8 @@ function buildSitemapXml() {
     const now = new Date().toISOString();
     const urls = [];
 
-    for (const r of SITEMAP_STATIC_ROUTES) {
+    // The Validate area joins only when FEATURE_FLAGS.validate is on for everyone.
+    for (const r of SITEMAP_STATIC_ROUTES.concat(validateSitemapRoutes(FEATURE_FLAGS.validate, HELP_TOPICS))) {
         urls.push({ loc: SITE_URL + r.path, lastmod: now, changefreq: r.changefreq, priority: r.priority });
     }
 
@@ -5791,21 +5796,13 @@ app.get('/api/proxies/:address', async (req, res) => {
 app.get('/api/proxy-types', async (req, res) => {
     if (!requireRpc(res)) return;
     try {
-        let types = [];
-        try {
-            // The ProxyType enum's variants live in the chain metadata.
-            // Look up the type used by the proxy.addProxy extrinsic's
-            // second argument — that's authoritative for this runtime.
-            const meta = globalApi.tx.proxy && globalApi.tx.proxy.addProxy;
-            if (meta && meta.meta && meta.meta.args && meta.meta.args[1]) {
-                const argTypeId = meta.meta.args[1].type.toString();
-                const def = globalApi.registry.lookup.getTypeDef(argTypeId);
-                if (def && def.sub && Array.isArray(def.sub)) {
-                    types = def.sub.map(s => s.name).filter(Boolean);
-                }
-            }
-        } catch (_) { /* fall through to defaults */ }
-        if (!types.length) types = ['Any', 'NonTransfer', 'Governance', 'Staking', 'IdentityJudgement', 'CancelProxy'];
+        // The ProxyType enum's variants, from the type of proxy.add_proxy's
+        // proxy_type argument (lib/validator-delegate.js proxyTypesOf). The
+        // old lookup by type name threw on this runtime and fell back to a
+        // list with IdentityJudgement and CancelProxy, which this chain does
+        // not have. No guessed list: unreadable is an error.
+        const types = proxyTypesOf(globalApi);
+        if (!types) return res.status(501).json({ error: 'The proxy types of this runtime could not be read.' });
         cacheLong(res); // changes only on runtime upgrade
         res.json({ types });
     } catch (err) {

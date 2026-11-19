@@ -31,7 +31,7 @@ function el(id) {
 }
 
 let saved;
-function world({ threshold = 2, accounts = [{ address: A, name: 'Alice', source: 'talisman' }], revision } = {}) {
+function world({ threshold = 2, accounts = [{ address: A, name: 'Alice', source: 'talisman' }], revision, callGuard } = {}) {
     const observers = [];
     const modal = el('multisig-review-modal');
     let display = 'none';
@@ -75,7 +75,7 @@ function world({ threshold = 2, accounts = [{ address: A, name: 'Alice', source:
     const ui = createMultisigUI({
         store: { find: () => multisig }, storage: { getItem: () => null, setItem() {} }, api: () => api,
         accounts: async () => accounts, selected: () => multisig.address, select() {},
-        submit: async (o) => { submits.push(o); }, refresh() {}, fetchJson: async () => ({}), ...(revision ? { revision } : {})
+        submit: async (o) => { submits.push(o); }, refresh() {}, fetchJson: async () => ({}), ...(revision ? { revision } : {}), ...(callGuard ? { callGuard } : {})
     });
     const open = (extra = {}) => ui.review({ multisig, callHex: CALL, onSuccess: () => successes.push(1), onEnd: (outcome, model) => ends.push({ outcome, model }), ...extra });
     const sign = () => parts['#multisig-review-sign'].fire('click');
@@ -180,5 +180,39 @@ describe('#70: the review captures the wallet-session revision when it opens', (
         rev = 'r2';   // the wallet session changed while the review was open
         await w.sign();
         assert.equal(w.last().expectedRevision, 'r1');
+    });
+});
+
+// Validator onboarding Sprint 5: a multisig stash's validator change is checked
+// again when the approval that runs it is built (callGuard), because the chain
+// limits can change between approvals. An approval that only records itself is
+// not blocked: nothing runs yet.
+describe('callGuard: the final approval re-checks the call against the chain as it is now', () => {
+    beforeEach(() => { saved = { document: globalThis.document, MutationObserver: globalThis.MutationObserver }; });
+    afterEach(() => { globalThis.document = saved.document; globalThis.MutationObserver = saved.MutationObserver; });
+
+    test('execute: a guard problem refuses at signing with the reason; nothing is returned to sign', async () => {
+        const seen = [];
+        const w = world({ threshold: 1, callGuard: async (api, call, m) => { seen.push([call.section, call.method, m.address]); return ['The minimum commission changed since you reviewed this: it is now 6%.']; } });
+        await w.open();
+        await w.sign();
+        await assert.rejects(w.last().buildTx(), /checked this call again before this approval runs it: The minimum commission changed/);
+        assert.equal(seen.length, 1);
+        assert.equal(seen[0][0], 'balances');
+    });
+    test('execute with no problem: the transaction is built', async () => {
+        const w = world({ threshold: 1, callGuard: async () => [] });
+        await w.open();
+        await w.sign();
+        const tx = await w.last().buildTx();
+        assert.equal(tx.method.toHex(), '0xabcd');
+    });
+    test('an approval that only records itself is not checked (the call does not run yet)', async () => {
+        let called = 0;
+        const w = world({ threshold: 2, callGuard: async () => { called++; return ['no']; } });
+        await w.open();
+        await w.sign();
+        await w.last().buildTx();
+        assert.equal(called, 0);
     });
 });

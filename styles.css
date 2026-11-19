@@ -1729,6 +1729,10 @@ h1, h2, h3 { font-weight: 600; }
 .wallet-validator-row:last-child { border-bottom: none; }
 .wallet-validator-row:hover { color: var(--brand-secondary); }
 .wallet-validator-row i { color: var(--text-muted); }
+/* The wallet Validator card (validator design 5.1): only for an account that validates or has session keys. */
+.wallet-validator-card { margin-top: 20px; padding: 18px 24px; border-left: 3px solid var(--brand-primary); }
+.wallet-validator-card h3 { margin: 0 0 8px; font-size: 0.95rem; color: var(--text-primary); }
+.wallet-validator-card p { margin: 0; font-size: 0.86rem; line-height: 1.6; color: var(--text-secondary); }
 .wallet-account-btn {
     display: flex;
     justify-content: space-between;

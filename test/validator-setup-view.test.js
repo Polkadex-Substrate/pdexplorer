@@ -149,12 +149,26 @@ describe('the wizard opens at the first unsatisfied step; one primary per view',
         const { el } = dom(); await mountValidatorSetup(el, deps({ account: { status: 'none', address: '' } })); await settle();
         assert.deepEqual(primaries(el).map(b => [b.textContent.trim(), b.getAttribute('href')]), [['Connect wallet', '/wallet?returnTo=%2Fvalidate%2Fsetup']]);
     });
-    test('a multisig wallet is detected and told this comes later (Sprint 5); nothing to sign', async () => {
-        const d = deps({ isMultisig: () => true });
+    // Sprint 5 (intentional change): a multisig stash sets up here; the one
+    // batch goes to the existing multisig review (the multisig IS the stash).
+    test('a multisig stash: the wizard runs; the review names the approvals, the signer fee and the change warning; the batch goes to the multisig review', async () => {
+        const ms = { address: STASH, name: 'Validator stash', threshold: 2, signers: [CTRL, STASH, addr(99)] };
+        const d = deps({ isMultisig: () => true, findMultisig: () => ms });
         const { el } = dom(); await mountValidatorSetup(el, d); await settle();
-        assert.match(el.textContent, /multisig or through a proxy is not available yet/);
-        assert.equal(el.querySelector('#validate-setup-keys'), null);
-        assert.equal(primaries(el).length, 0);
+        assert.equal(heading(el), 'Start with a running node');
+        await toReview(el);
+        assert.match(el.textContent, /Signed by the multisig Validator stash .* which becomes the validator\. It needs 2 of 3 approvals/);
+        assert.match(el.textContent, /The signer who approves pays the network fee/);
+        assert.match(el.textContent, /Conditions can change between approvals/);
+        { const box = el.querySelector('#validate-setup-ack'); box.checked = true; box.dispatchEvent(new box.ownerDocument.defaultView.Event('change', { bubbles: true })); await settle(); }
+        await click(el, '[data-setup-action="sign"]');
+        const o = d.submits[0];
+        assert.equal(o.expectedWallet, STASH);
+        assert.equal(typeof o.onMultisigEnd, 'function');
+        o.onMultisigEnd('approved', { stage: 'approved' });
+        await settle();
+        assert.match(el.textContent, /Approval recorded/);
+        assert.match(el.textContent, /needs 2 of 3 approvals/);
     });
     test('a legacy controller is refused with the controller address', async () => {
         const { el } = dom(); await mountValidatorSetup(el, deps({ api: fakeApi({ bonded: CTRL }) })); await settle();
@@ -242,7 +256,7 @@ describe('step 3: bond, against the live MinValidatorBond and what can be bonded
         const radios = Array.from(el.querySelectorAll('input[type="radio"][name="validate-setup-payee"]'));
         assert.deepEqual(radios.map(r => r.value), ['staked', 'stash', 'account']);
         assert.equal(el.querySelector('#validate-setup-payee-account').getAttribute('data-input-kind'), 'address');
-        assert.match(el.textContent, /Setting up through a proxy or a multisig is not available yet/);
+        assert.match(el.textContent, /A proxy cannot set up a validator: setup needs the stash itself, or its multisig\./);
     });
     test('Max fills what can be bonded after the fee and the kept PDEX', async () => {
         const { el } = await atBond();
