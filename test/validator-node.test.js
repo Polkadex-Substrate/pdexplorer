@@ -483,7 +483,7 @@ describe('D3: the browser never contacts telemetry; the CSP is unchanged', () =>
 describe('the explorer never calls the unsafe author_* methods (design 3.1)', () => {
     const files = ['server.js', 'script.js', ...readdirSync(new URL('../lib/', import.meta.url)).filter(f => f.endsWith('.js')).map(f => 'lib/' + f)];
     // Copy only: these modules name the methods in text an operator reads.
-    const COPY = new Set(['lib/validator-node-guide.js', 'lib/help-topics.js', 'lib/session-keys.js', 'lib/validator-status-view.js', 'lib/validator-status-api.js', 'lib/api-reference.js', 'lib/validator-setup-view.js']);
+    const COPY = new Set(['lib/validator-node-guide.js', 'lib/help-topics.js', 'lib/session-keys.js', 'lib/validator-status-view.js', 'lib/validator-status-api.js', 'lib/api-reference.js', 'lib/validator-setup-view.js', 'lib/validator-manage-view.js']);
     test('no RPC call to author_rotateKeys, author_insertKey or author_hasSessionKeys anywhere', () => {
         for (const f of files) {
             const src = stripComments(readRepo(f, import.meta.url));

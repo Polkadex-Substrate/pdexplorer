@@ -87,6 +87,7 @@ import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
+import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
 // The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
 const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
 const SHOWN_HELP_TOPICS = visibleHelpTopics(HELP_TOPICS, { validate: VALIDATE_ON });
@@ -4628,6 +4629,11 @@ function routeTo(target) {
         mainTarget = 'wallet';
         walletEntryIntent = 'stake';
         canonicalOverride = '/wallet';
+    } else if (target === 'unstake') {
+        // /unstake: the manage panel's "Unbond or withdraw" (Sprint 4) opens the existing Unstake modal.
+        mainTarget = 'wallet';
+        walletEntryIntent = 'unstake';
+        canonicalOverride = '/wallet';
     } else if (isGovDetailRoute(target)) {
         mainTarget = 'governance-details';   // lib/gov-detail.js: /democracy/referendum/<n>, /council/motion/<hash>, ...
         detailId = target;
@@ -7388,7 +7394,7 @@ function initValidatePage(address) {
     const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(history.state, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
     if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
     if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
-    const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
+    const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
         fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName });
     pageScope.add(walletSession.onActiveAccountChange((change) => {
         const viewed = readRouteFromLocation().slice('validate/'.length);
@@ -8385,6 +8391,11 @@ function maybeRunWalletEntryIntent() {
     const intent = walletEntryIntent;
     if (!intent) return;
     walletEntryIntent = null;
+    if (intent === 'unstake') {
+        const u = document.getElementById('wallet-act-unstake');
+        if (u && !u.disabled) openUnstakeModal();
+        return;
+    }
     if (intent !== 'stake') return;
     const btn = document.getElementById('wallet-act-stake');
     if (!btn || btn.disabled) return;
@@ -8496,7 +8507,7 @@ async function tryAutoSelectFirstWallet() {
         // they get the same auto-pick. Without them listed the shortcut used
         // to dead-end on the connect panel for a user whose extension was
         // already unlocked, which /wallet would have walked straight past.
-        if (here !== 'wallet' && here !== 'stake' && here !== 'staking') return;
+        if (here !== 'wallet' && here !== 'stake' && here !== 'staking' && here !== 'unstake') return;
 
         // Prefer the address the user previously picked from this same
         // extension. The `lastUsed` value may belong to a different wallet
@@ -9655,7 +9666,15 @@ async function submitPayoutTx() {
 let unstakeFullUnbondIntent = false;
 let unstakeMaxPlanck = null;
 
+// A validator stash that unbonds everything is chilled by the chain: the
+// warning says so before signing (set by Max, cleared by typing or reopening).
+function clearUnstakeWarning() {
+    const el = document.getElementById('unstake-modal-warning');
+    if (el) { el.hidden = true; el.textContent = ''; }
+}
+
 function openUnstakeModal() {
+    clearUnstakeWarning();
     const data = currentWalletData;
     if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const errEl = document.getElementById('unstake-modal-error');
@@ -9919,7 +9938,8 @@ async function submitUnstakeTx() {
     }
 
     await submitSignedTx({
-        buildTx: (api) => api.tx.staking.unbond(pdexToPlanck(amtStr)),
+        // The do_unbond rule read at signing: a validator below MinValidatorBond is told to stop validating first.
+        buildTx: (api) => buildCheckedUnbondTx(api, { signer: data.address, value: pdexToPlanck(amtStr) }),
         label: 'Unstake',
         action: { key: 'staking.unbond', params: { amount: amtStr, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
         button: document.getElementById('submit-unstake-tx-btn'),
@@ -10643,12 +10663,18 @@ async function submitSendTx() {
         // cleanly into 4-decimal PDEX.
         unstakeFullUnbondIntent = true;
         unstakeMaxPlanck = (data.staking && data.staking.activeStakedPlanck) || null;
+        clearUnstakeWarning();
+        if (globalApi) readMaxUnbondWarning(globalApi, data.address).then((text) => {
+            const el = document.getElementById('unstake-modal-warning');
+            if (el && text && unstakeFullUnbondIntent) { el.textContent = text; el.hidden = false; }
+        }, () => {});
     });
     // Any keystroke in the amount field means the user has picked a custom
     // amount — clear the full-unbond intent so submitUnstakeTx falls back to
     // the partial-unbond code path (with its residue check).
     const unstakeAmtInputEl = document.getElementById('unstake-amount-input');
     if (unstakeAmtInputEl) unstakeAmtInputEl.addEventListener('input', () => {
+        clearUnstakeWarning();
         unstakeFullUnbondIntent = false;
         unstakeMaxPlanck = null;
     });
@@ -14354,7 +14380,7 @@ const TOUR_STORAGE_KEY = 'pdex_tour_seen_v1';
 // tour used to open on top of it. So the tour waits for a later visit. It is
 // not marked as seen, so landing on any other page still shows it, and
 // ?tour=1 still forces it.
-const TOUR_SKIP_ROUTES = ['stake', 'staking'];
+const TOUR_SKIP_ROUTES = ['stake', 'staking', 'unstake'];
 
 function shouldAutoShowTour({ forceShow, seen, landingRoute }) {
     if (forceShow) return true;
