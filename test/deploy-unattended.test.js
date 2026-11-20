@@ -167,6 +167,49 @@ describe('init-letsencrypt.sh as deploy.sh now calls it', () => {
     });
 });
 
+describe('certificate replacement needs the flag on this deploy command line', () => {
+    // Run init-letsencrypt.sh the way deploy.sh calls it: stdin closed, NONINTERACTIVE=1.
+    // docker, sudo and curl are stubs that fail, so nothing can touch the network or docker.
+    function run(envFile, extraEnv) {
+        const d = sandbox(); mkcert(d, 'explorer.test');
+        for (const t of ['sudo', 'docker', 'docker-compose', 'curl']) stub(d, t, 'exit 97');
+        fs.mkdirSync(path.join(d, 'certbot/conf'), { recursive: true });
+        fs.writeFileSync(path.join(d, 'certbot/conf/options-ssl-nginx.conf'), 'ssl_protocols\n');
+        fs.writeFileSync(path.join(d, 'certbot/conf/ssl-dhparams.pem'), 'BEGIN DH PARAMETERS\n');
+        const pem = path.join(d, 'certbot/conf/live/explorer.test/fullchain.pem');
+        const before = fs.statSync(pem);
+        fs.writeFileSync(path.join(d, '.env'), `DOMAIN=explorer.test\nLETSENCRYPT_EMAIL=a@example.test\nCERTBOT_PATH=${d}/certbot\n${envFile}`);
+        const r = spawnSync('/bin/bash', [path.join(ROOT, 'init-letsencrypt.sh')], {
+            cwd: d, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'],
+            env: { PATH: `${path.join(d, 'bin')}:/usr/bin:/bin`, NONINTERACTIVE: '1', ...extraEnv },
+        });
+        assert.equal(r.error, undefined, 'it hung or failed to start: ' + r.error);
+        return { r, pem, before };
+    }
+    function assertKept({ r, pem, before }) {
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.match(r.stdout, /keeping it/);
+        assert.equal(fs.readFileSync(pem, 'utf8'), 'CERT\n');
+        assert.equal(fs.statSync(pem).mtimeMs, before.mtimeMs);
+    }
+    test('FORCE=1 in .env does not replace the certificate', () => {
+        assertKept(run('FORCE=1\n', { DEPLOY_FORCE_REPLACE_CERT: '0' }));
+    });
+    test('FORCE=1 in .env with no decision from deploy.sh does not replace it either', () => {
+        assertKept(run('FORCE=1\n', {}));
+    });
+    test('FORCE=1 exported in the shell (or kept by sudo -E) does not replace it', () => {
+        assertKept(run('', { FORCE: '1', DEPLOY_FORCE_REPLACE_CERT: '0' }));
+    });
+    test('.env cannot set the deploy decision itself', () => {
+        assertKept(run('FORCE=1\nDEPLOY_FORCE_REPLACE_CERT=1\n', { DEPLOY_FORCE_REPLACE_CERT: '0' }));
+    });
+    test('the decision from deploy.sh (DEPLOY_FORCE_REPLACE_CERT=1) does go past the keep branch', () => {
+        const { r } = run('', { DEPLOY_FORCE_REPLACE_CERT: '1' });
+        assert.ok(!/keeping it/.test(r.stdout), r.stdout);
+    });
+});
+
 describe('deploy.sh wiring', () => {
     const deploy = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
     const code = stripComments(deploy, { line: '#', block: false });
@@ -191,6 +234,29 @@ describe('deploy.sh wiring', () => {
         assert.match(code, /INTERACTIVE:-0.*!= *"?1"?[\s\S]{0,40}exec <\/dev\/null/);
         assert.match(code, /GIT_TERMINAL_PROMPT=0/);
         assert.match(code, /git pull --no-edit origin main/);
+    });
+    test('replacement is the --force-replace-cert argument only; FORCE from the environment is never read', () => {
+        assert.match(code, /--force-replace-cert\)/);
+        assert.ok(!/\$\{?FORCE\b/.test(code), 'deploy.sh must not read FORCE');
+        const calls = code.split('\n').filter(l => /init-letsencrypt\.sh/.test(l) && /\bbash\b/.test(l) && !/echo/.test(l));
+        for (const l of calls) assert.match(l, /DEPLOY_FORCE_REPLACE_CERT=/, l);
+        assert.ok(!calls.some(l => /\bFORCE=/.test(l.replace(/DEPLOY_FORCE_REPLACE_CERT=/g, ''))), 'no FORCE= on the call');
+    });
+    test('an unknown argument stops the deploy before any work', () => {
+        const d = sandbox();
+        const r = spawnSync('/bin/bash', [path.join(ROOT, 'deploy.sh'), '--bogus'], {
+            encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
+            env: { PATH: `${path.join(d, 'bin')}:/usr/bin:/bin`, DEPLOY_DIR: path.join(d, 'nowhere') },
+        });
+        assert.equal(r.status, 2, r.stdout + r.stderr);
+        assert.match(r.stdout + r.stderr, /--force-replace-cert/);
+    });
+    test('RUN_LETSENCRYPT wording does not claim it fetches TLS files when a certificate exists', () => {
+        const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+        assert.ok(!/only fetches missing TLS parameter files/.test(readme));
+        assert.ok(!/only fetches missing TLS parameter files/.test(deploy));
+        assert.ok(!/FORCE=1/.test(readme.split('| Switch | Effect |')[1].split('###')[0]), 'README switch table still documents FORCE=1');
+        assert.match(readme, /--force-replace-cert/);
     });
     test('a docker install is conditional on the detection function, not on command -v alone', () => {
         assert.match(code, /if ! deploy_detect_docker/);
@@ -219,13 +285,16 @@ export function findOffences(src, name = 'script') {
             !(/DEBIAN_FRONTEND=noninteractive/.test(l) && /NEEDRESTART/.test(l) && /force-confold/.test(l))) {
             out.push(`${at}  <- apt-get without DEBIAN_FRONTEND, NEEDRESTART and force-confold`);
         }
-        // 4. a yes | pipe answering a prompt we cannot see
+        // 4. compose run/exec allocate a TTY unless -T is given; stdin is /dev/null here
+        if (!/^\s*(warn|echo|printf)\b/.test(l) && /(\$DC\b|\$\{DC\}|docker[ -]compose)\b[^|;&]*\s(run|exec)\s/.test(l) && !/\s-T\b/.test(l)) {
+            out.push(`${at}  <- compose run/exec without -T`);
+        }
     });
     return out;
 }
 
 describe('guard: nothing in the deploy path can wait for a keyboard', () => {
-    for (const f of ['deploy.sh', 'provision-ubuntu.sh', 'tools/deploy-detect.sh']) {
+    for (const f of ['deploy.sh', 'provision-ubuntu.sh', 'tools/deploy-detect.sh', 'init-letsencrypt.sh', 'tools/align-cert-name.sh', 'tools/fix-cert-perms.sh']) {
         test(f, () => {
             const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
             assert.deepEqual(findOffences(src, f), []);
@@ -248,6 +317,12 @@ describe('guard: nothing in the deploy path can wait for a keyboard', () => {
         assert.equal(findOffences('curl x | sudo gpg --dearmor -o /k\n').length, 1);
         assert.equal(findOffences('sudo apt-get install -y foo\n').length, 1);
         assert.equal(findOffences('sudo apt-get upgrade -y\n').length, 1);
+        assert.equal(findOffences('sudo $DC run --rm certbot certonly\n').length, 1);
+        assert.equal(findOffences('docker compose exec frontend nginx -s reload\n').length, 1);
+        assert.deepEqual(findOffences('sudo $DC run --rm -T certbot certonly\n'), []);
+        assert.deepEqual(findOffences('docker compose exec -T frontend nginx\n'), []);
+        assert.deepEqual(findOffences('sudo $DC -p x up -d --build\n'), []);
+        assert.deepEqual(findOffences('warn "  docker compose exec frontend nginx -s reload"\n'), []);
         // and what it must allow
         assert.deepEqual(findOffences('while IFS= read -r c; do :; done < f\n'), []);
         assert.deepEqual(findOffences('cmd | while read -r n; do :; done\n'), []);
