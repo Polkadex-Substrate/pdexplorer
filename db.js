@@ -1305,16 +1305,24 @@ export function updateHolderName(address, name) {
     return Number(db.prepare('UPDATE holders SET name = ? WHERE address = ? AND (name IS NOT ?)').run(name, address, name).changes);
 }
 // Healing of names stored as NULL after a failed identity read (lib/identity-heal.js). All of them
-// touch only rows whose name is still NULL, and are bounded: blocks by primary-key range, events by
-// the signer index and a row limit, so a pass never holds a long write lock on the large tables.
+// touch only rows whose name is still NULL, and are bounded by a block window the caller keeps small
+// (HEAL_WINDOW_BLOCKS): blocks by primary-key range, events by idx_events_block, which is always
+// present. The events statement must not depend on idx_events_signer_block (optional, may be missing
+// in production) and must not fall back to idx_events_signer (an unbounded read of a busy signer), so
+// the block index is named; test/identity-heal-s8.test.js pins the plan on a database without it.
+export const HEAL_EVENT_SIGNER_SQL = `UPDATE events INDEXED BY idx_events_block SET signer_name = ?
+    WHERE block >= ? AND block <= ? AND signer_address = ? AND signer_name IS NULL`;
 export function healBlockAuthorNames(address, name, fromBlock, toBlock) {
     return Number(db.prepare('UPDATE blocks SET author_name = ? WHERE number >= ? AND number <= ? AND author_address = ? AND author_name IS NULL')
         .run(name, fromBlock, toBlock, address).changes);
 }
-export function healEventSignerNames(address, name, fromBlock, toBlock, limit = 1000) {
-    return Number(db.prepare(`UPDATE events SET signer_name = ? WHERE rowid IN (
-        SELECT rowid FROM events WHERE signer_address = ? AND block >= ? AND block <= ? AND signer_name IS NULL LIMIT ?)`)
-        .run(name, address, fromBlock, toBlock, limit).changes);
+export function healEventSignerNames(address, name, fromBlock, toBlock) {
+    return Number(db.prepare(HEAL_EVENT_SIGNER_SQL).run(name, fromBlock, toBlock, address).changes);
+}
+// The highest stored block number (primary key, one seek), or null when there are none.
+export function getMaxBlockNumber() {
+    const r = db.prepare('SELECT MAX(number) AS n FROM blocks').get();
+    return r && r.n != null ? Number(r.n) : null;
 }
 export function getUnnamedDiscussionAuthors(limit = 50) {
     return db.prepare('SELECT DISTINCT author FROM discussion_posts WHERE author_name IS NULL AND author IS NOT NULL LIMIT ?').all(limit).map(r => r.author);
@@ -1523,9 +1531,10 @@ export function insertBlocks(list) {
     runTx(() => {
         // A block scanned while the identity read failed carries no author name (null, not 'Unknown'):
         // a REPLACE then keeps the name already stored, and the healing pass (lib/identity-heal.js)
-        // fills the rest. The old row is read inside the same statement, before it is replaced.
-        const stmt = db.prepare('INSERT OR REPLACE INTO blocks(number,hash,author_address,author_name,extrinsics_count,events_count,timestamp) VALUES(?,?,?,COALESCE(?, (SELECT author_name FROM blocks WHERE number = ?)),?,?,?)');
-        for (const b of list) stmt.run(b.number, b.hash ?? null, b.authorAddress ?? null, b.authorName ?? null, b.number, b.extrinsicsCount ?? 0, b.eventsCount ?? 0, b.timestamp ?? null);
+        // fills the rest. The old row is read inside the same statement, before it is replaced. The stored
+        // name is kept only for the SAME author: a re-scan (reorg repair) with another author stores NULL.
+        const stmt = db.prepare('INSERT OR REPLACE INTO blocks(number,hash,author_address,author_name,extrinsics_count,events_count,timestamp) VALUES(?,?,?,COALESCE(?, (SELECT author_name FROM blocks WHERE number = ? AND author_address = ?)),?,?,?)');
+        for (const b of list) stmt.run(b.number, b.hash ?? null, b.authorAddress ?? null, b.authorName ?? null, b.number, b.authorAddress ?? null, b.extrinsicsCount ?? 0, b.eventsCount ?? 0, b.timestamp ?? null);
     });
 }
 export function getRecentBlocks(limit) {
@@ -3374,19 +3383,36 @@ export function getDueValidatorAlerts({ now = Date.now(), limit = 500 } = {}) {
         JOIN email_subscribers s ON s.id = p.subscriber_id
         LEFT JOIN validator_alert_follows f ON f.subscriber_id = p.subscriber_id AND f.stash = p.stash
         WHERE p.next_attempt_at <= ?
-        ORDER BY p.created_at, p.event_id LIMIT ?`).all(now, limit);
+        ORDER BY CASE p.event_kind WHEN 'validator.slashed' THEN 0 WHEN 'validator.disabled' THEN 1 WHEN 'validator.not-elected' THEN 2 ELSE 3 END,
+            p.created_at, p.event_id LIMIT ?`).all(now, limit);
     return rows.map(r => {
         let detail = {};
         try { detail = JSON.parse(r.detail); } catch (_) { detail = {}; }
         return {
             eventKind: r.event_kind, eventId: r.event_id, subscriberId: r.subscriber_id, stash: r.stash, detail,
-            createdAt: r.created_at, attempts: r.attempts, lastResult: r.last_result, email: r.email,
+            createdAt: r.created_at, attempts: r.attempts, nextAttemptAt: r.next_attempt_at, lastResult: r.last_result, email: r.email,
             unsubscribeToken: r.unsubscribe_token, active: !!r.active
         };
     });
 }
 
-// The provider did not take it (rate-limited, or the send threw): count the attempt, schedule the next.
+// Claim a due alert before sending it: compare-and-set of next_attempt_at against the value the
+// caller read. True only for the one caller whose update changed the row, so two drains (a lease
+// takeover mid-drain) never both send it. A claim that is never settled expires at `until`.
+export function claimValidatorAlert({ eventKind, eventId, subscriberId, expectNextAttemptAt, until }) {
+    return Number(db.prepare(`UPDATE validator_alert_pending SET next_attempt_at = ?
+        WHERE event_kind = ? AND event_id = ? AND subscriber_id = ? AND next_attempt_at = ?`)
+        .run(until, String(eventKind), String(eventId), subscriberId, expectNextAttemptAt).changes) === 1;
+}
+
+// Is the follow behind a pending alert still confirmed and subscribed (checked just before a send)?
+export function isValidatorAlertFollowActive({ subscriberId, stash }) {
+    return !!db.prepare(`SELECT 1 FROM validator_alert_follows f JOIN email_subscribers s ON s.id = f.subscriber_id
+        WHERE f.subscriber_id = ? AND f.stash = ? AND f.confirmed_at IS NOT NULL AND f.unsubscribed_at IS NULL AND s.unsubscribed_at IS NULL`)
+        .get(subscriberId, String(stash));
+}
+
+// The provider did not take it (rate-limited, or the send threw): record the attempt count, schedule the next.
 export function deferValidatorAlert({ eventKind, eventId, subscriberId, attempts, nextAttemptAt, lastResult }) {
     db.prepare(`UPDATE validator_alert_pending SET attempts = ?, next_attempt_at = ?, last_result = ?
         WHERE event_kind = ? AND event_id = ? AND subscriber_id = ?`).run(attempts, nextAttemptAt, lastResult ?? null, String(eventKind), String(eventId), subscriberId);

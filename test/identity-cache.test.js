@@ -717,7 +717,7 @@ describe('identity events invalidate exactly the right accounts, end to end', ()
 // ---------------------------------------------------------------------------
 
 import { IDENTITY_READ_TIMEOUT_MS } from '../lib/identity-cache.js';
-import { noteUnnamed, healUnnamedNames, HEAL_KEY } from '../lib/identity-heal.js';
+import { noteUnnamed, healUnnamedNames, HEAL_KEY, HEAL_GRACE_MS } from '../lib/identity-heal.js';
 
 describe('A1: resolveForStore tells a stored name from a failed read', () => {
     test('failed is not known; found, none and stale are', async () => {
@@ -837,7 +837,9 @@ describe('A1: stored rows written without a name are healed later', () => {
         db.insertEvents([ev(1, 100, A, null), ev(2, 102, B, null), ev(3, 101, A, 'Kept2')]);
         noteUnnamed(db, A, 100); noteUnnamed(db, A, 101); noteUnnamed(db, B, 102);
         const answers = { [A]: { name: 'Alice', status: 'found' }, [B]: { status: 'failed', name: 'Unknown' } };
-        const out = await healUnnamedNames({ db, resolve: async (a) => answers[a] });
+        // Past the grace period in which a just-noted entry is kept (the rows may not be inserted yet).
+        const later = () => Date.now() + HEAL_GRACE_MS + 1;
+        const out = await healUnnamedNames({ db, resolve: async (a) => answers[a], now: later });
         assert.equal(nameOfBlock(100), 'Alice'); assert.equal(nameOfBlock(101), 'Alice');
         assert.equal(nameOfBlock(103), 'Kept', 'a named block is not touched');
         assert.equal(nameOfEvent(1), 'Alice');
@@ -846,7 +848,7 @@ describe('A1: stored rows written without a name are healed later', () => {
         assert.deepEqual(Object.keys(db.getKv(HEAL_KEY)), [B], 'only the failed account stays pending');
         assert.equal(out.pending, 1);
         answers[B] = { name: 'Unknown', status: 'none' };
-        await healUnnamedNames({ db, resolve: async (a) => answers[a] });
+        await healUnnamedNames({ db, resolve: async (a) => answers[a], now: later });
         assert.deepEqual(Object.keys(db.getKv(HEAL_KEY) || {}), []);
     });
 
