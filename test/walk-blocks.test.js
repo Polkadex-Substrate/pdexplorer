@@ -34,7 +34,7 @@ function fake({ extrinsicsOf = () => [BARE_V5], specOf = () => 392, prunedBelow 
     return { call, calls, blocksFetched: () => calls.filter(c => c[0] === 'chain_getBlock').length };
 }
 const walk = (f, o = {}) => walkBackSamples({ call: f.call, blockHash: hashOf(100), blockNumber: 100, specVersion: 392, maxWalk: 400, samples: 12, ...o });
-const total = (tally) => Object.values(tally).reduce((a, v) => a + Object.values(v).reduce((x, y) => x + y, 0), 0);
+const total = (tally) => Object.values(tally).reduce((a, v) => a + v.total, 0);
 
 describe('walkBackSamples', () => {
     test('state pruned on the very first block: the error is thrown', async () => {

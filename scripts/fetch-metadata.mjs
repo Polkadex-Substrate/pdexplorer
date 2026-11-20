@@ -53,11 +53,12 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newFormatTally, tallyExtrinsic, sampleLabel, v5MissingMessage } from '../lib/extrinsic-formats.js';
+import { v5MissingMessage } from '../lib/extrinsic-formats.js';
+import { walkBackSamples } from '../lib/walk-blocks.js';
 import { rpcClient } from '../lib/json-rpc-client.js';
 import { MIN_LIVE_SPEC } from '../lib/live-runtime.js';
 import { resolveFixtureName } from '../lib/fixture-name.js';
-import { isStateUnavailableError, shouldFetchTarget } from '../lib/fetch-guards.js';
+import { shouldFetchTarget } from '../lib/fetch-guards.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -202,37 +203,9 @@ async function fetchTarget(t) {
         // every extrinsic; the 373 one stops as soon as enough signed samples
         // are in.
         const wantV5 = rv.specVersion >= 392;
-        const extrinsics = [];
-        const have = { 'v4-signed': 0, 'v5-general': 0, 'v5-bare': 0 };
-        const seenFormats = newFormatTally();
-        let hash = blockHash, n = blockNumber, walked = 0;
-        while (walked < MAX_WALK && n > 0) {
-            if (!wantV5 && have['v4-signed'] >= SAMPLES) break;
-            const blk = await call('chain_getBlock', [hash]);
-            let v;
-            try {
-                v = (await call('state_getRuntimeVersion', [hash])).specVersion;
-            } catch (e) {
-                // A pruned node keeps only recent state: end the scan here, keep what is in hand.
-                if (walked > 0 && isStateUnavailableError(e)) {
-                    console.log(`  state is pruned beyond ${walked} blocks on this node; scan stopped there`);
-                    break;
-                }
-                throw e;
-            }
-            if (v !== rv.specVersion) break;
-            blk.block.extrinsics.forEach((hex, index) => {
-                const { version, kind } = tallyExtrinsic(seenFormats, hex);
-                const label = sampleLabel({ version, kind });
-                if (label && have[label] < SAMPLES) {
-                    have[label] += 1;
-                    extrinsics.push({ block: n, blockHash: hash, index, specVersion: v, format: label, hex });
-                }
-            });
-            hash = blk.block.header.parentHash;
-            n -= 1;
-            walked += 1;
-        }
+        const { extrinsics, have, seenFormats, walked } = await walkBackSamples({
+            call, blockHash, blockNumber, specVersion: rv.specVersion, maxWalk: MAX_WALK, samples: SAMPLES, log: console.log
+        });
         console.log(`  extrinsic samples: ${extrinsics.length} from ${walked} blocks (v4-signed ${have['v4-signed']}, v5-bare ${have['v5-bare']}, v5-general ${have['v5-general']})`);
         console.log(`  seenFormats=${JSON.stringify(seenFormats)}`);
         if (wantV5) {
