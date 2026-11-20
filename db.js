@@ -1866,7 +1866,8 @@ export function getProxyEventsChecked(address, limit = 200) {
                 JOIN events e ON e.rowid = l.event_rowid AND e.hash = l.event_hash WHERE e.${kinds}`;
     if (!hasSignerIndex()) {
         const rows = db.prepare(`SELECT * FROM (${linked}) ORDER BY block DESC, rowId DESC LIMIT ?`).all(address, limit).map(mapEventRow);
-        return { rows, partial: true, reason: 'SIGNER_INDEX_MISSING' };
+        // A standing limit of this server (the index is only added by an operator), not a failed read: limited, not partial.
+        return { rows, partial: false, limited: true, reason: 'SIGNER_INDEX_MISSING' };
     }
     const rows = db.prepare(`SELECT * FROM (
             ${linked}
