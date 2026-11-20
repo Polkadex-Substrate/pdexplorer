@@ -1792,14 +1792,35 @@ export function getValidatorIncidents(address, sinceBlock = 0, limit = 20) {
 // block)), created idempotently by the migrator process's index check in initDb for a fresh or small table and by migrate-add-indexes.mjs
 // for a large one (test/validator-rollout-s7.test.js pins the plan).
 const PROXY_SCAN_ROWS = 5000;
-export function getProxyEventsFor(address, limit = 200) {
+// The signer branch needs idx_events_signer_block. The production table is large and the index is built out-of-band
+// (migrate-add-indexes.mjs), so it is checked once per database handle (cached for the process) and, when missing, the
+// branch is skipped and the answer is partial. The request path never builds the index.
+let signerIndexCheck = null; // { handle, present }
+function hasSignerIndex() {
+    if (signerIndexCheck && signerIndexCheck.handle === db) return signerIndexCheck.present;
+    const present = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_signer_block'").get();
+    signerIndexCheck = { handle: db, present };
+    if (!present) console.warn('[db] idx_events_signer_block is MISSING: /api/proxied-stashes skips its signer branch and answers partial. ' +
+        'Run `node --experimental-sqlite migrate-add-indexes.mjs` (a person, off-peak: building it on a large table takes time).');
+    return present;
+}
+export function getProxyEventsChecked(address, limit = 200) {
     const kinds = "section = 'proxy' AND method IN ('ProxyAdded', 'PureCreated')";
-    return db.prepare(`SELECT * FROM (
-            SELECT ${EVENT_COLS_E}, e.rowid AS rowId FROM (SELECT block, event_rowid, event_hash FROM event_accounts WHERE address = ? ORDER BY block DESC, event_rowid DESC LIMIT ${PROXY_SCAN_ROWS}) l
-                JOIN events e ON e.rowid = l.event_rowid AND e.hash = l.event_hash WHERE e.${kinds}
+    const linked = `SELECT ${EVENT_COLS_E}, e.rowid AS rowId FROM (SELECT block, event_rowid, event_hash FROM event_accounts WHERE address = ? ORDER BY block DESC, event_rowid DESC LIMIT ${PROXY_SCAN_ROWS}) l
+                JOIN events e ON e.rowid = l.event_rowid AND e.hash = l.event_hash WHERE e.${kinds}`;
+    if (!hasSignerIndex()) {
+        const rows = db.prepare(`SELECT * FROM (${linked}) ORDER BY block DESC, rowId DESC LIMIT ?`).all(address, limit).map(mapEventRow);
+        return { rows, partial: true, reason: 'SIGNER_INDEX_MISSING' };
+    }
+    const rows = db.prepare(`SELECT * FROM (
+            ${linked}
             UNION
             SELECT ${EVENT_COLS}, rowid AS rowId FROM (SELECT rowid, * FROM events WHERE signer_address = ? ORDER BY block DESC, rowid DESC LIMIT ${PROXY_SCAN_ROWS}) WHERE ${kinds}
         ) ORDER BY block DESC, rowId DESC LIMIT ?`).all(address, address, limit).map(mapEventRow);
+    return { rows, partial: false };
+}
+export function getProxyEventsFor(address, limit = 200) {
+    return getProxyEventsChecked(address, limit).rows;
 }
 // Two index counts: this sum assumes the two sets are disjoint, i.e. that the signer is never linked.
 export function countEventsByAddress(address) {

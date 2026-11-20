@@ -206,7 +206,7 @@ describe('A1 db.getProxyEventsFor: ProxyAdded and PureCreated naming or signed b
     test('linked and signed proxy events, newest first, at most limit; other events left out', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-proxied-'));
         dirs.push(dir);
-        db.initDb(dir, false, { awaitMigrator: false });
+        db.initDb(dir, true, { awaitMigrator: false });
         const ev = (hash, block, section, method, data, accounts, signerAddress = null) => ({ hash, block, eventIndex: 0, section, method, data, accounts, signerAddress });
         db.insertEvents([
             ev('0x01', 100, 'proxy', 'ProxyAdded', { delegator: S1, delegatee: ME, proxyType: 'Staking', delay: '0' }, [ME], S1),
@@ -291,7 +291,7 @@ describe('A1 getProxyEventsChecked: a missing idx_events_signer_block skips the 
             assert.equal(got.reason, 'SIGNER_INDEX_MISSING');
             assert.deepEqual(got.rows.map(r => r.block), [100], 'the linked branch still answers; the signer-only event is not seen');
             assert.equal(got2.partial, true);
-            assert.ok(plans.every(p => !/signer_address/.test(p.sql) || /sqlite_master|index_list/.test(p.sql)), 'no executed statement filters by signer_address');
+            assert.ok(plans.every(p => !/signer_address\s*=\s*\?/.test(p.sql) || /sqlite_master|index_list/.test(p.sql)), 'no executed statement filters by signer_address');
             assert.ok(plans.every(p => !/CREATE INDEX/i.test(p.sql)));
             assert.ok(plans.every(p => !unindexedEventsScan(p.plan)), plans.map(p => p.plan).join('\n'));
             assert.ok(plans.some(p => /event_accounts/.test(p.plan) && /USING (COVERING )?INDEX|PRIMARY KEY/.test(p.plan)), plans.map(p => p.plan).join('\n'));

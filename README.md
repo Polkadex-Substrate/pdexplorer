@@ -227,6 +227,8 @@ sudo DOMAIN=explorer.polkadex.ee \
      bash provision-ubuntu.sh
 ```
 
+**Operator note: the events signer index.** `/api/proxied-stashes/:address` seeks `idx_events_signer_block` (events(signer_address, block)). On a large production database the explorer does not build it at boot. If it is missing, the route skips that branch, answers `partial: true` with `reason: "SIGNER_INDEX_MISSING"` and logs one warning at first use. To check (read-only, on the host): `sqlite3 <data dir>/explorer.db "SELECT name FROM sqlite_master WHERE name = 'idx_events_signer_block'"` (one row means present). To build it, a person runs `node --experimental-sqlite migrate-add-indexes.mjs` out-of-band; on a table of about 20 GB this takes a long time and holds a write lock, so choose a quiet window. The request path never builds it.
+
 You can run just one phase at a time:
 
 ```bash

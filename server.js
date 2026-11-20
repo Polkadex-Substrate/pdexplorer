@@ -4118,7 +4118,7 @@ function parseValidatorAddress(raw) {
 registerValidatorRoutes(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), parseAddress: parseValidatorAddress,
     cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk, statusRateOk: validatorStatusRateOk });
 // Sprint 7: the stashes an account is a proxy for (lib/proxied-stashes.js): the event index, then Proxy.Proxies live.
-registerProxiedStashesRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), events: (address, limit) => db.getProxyEventsFor(address, limit), cacheShort, serverError, rateOk: validatorStatusRateOk });
+registerProxiedStashesRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), events: (address, limit) => db.getProxyEventsChecked(address, limit), cacheShort, serverError, rateOk: validatorStatusRateOk });
 
 // Validator alerts (Sprint 6, lib/validator-alerts*.js): email about a validator a person follows,
 // through the same signup machinery as the general alerts (double opt-in, confirm and unsubscribe
