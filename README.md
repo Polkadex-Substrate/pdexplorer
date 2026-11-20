@@ -371,6 +371,27 @@ docker compose up -d --build backend frontend
 
 Note: the backend image bakes in `server.js` and `db.js`, and the frontend image bakes in the built static files. `docker compose restart` alone won't pick up code changes — always include `--build`.
 
+### Deploying an update with `deploy.sh` (unattended)
+
+On an already-provisioned server, one command pulls, builds, swaps and verifies:
+
+```bash
+sudo bash /opt/pdexplorer/deploy.sh
+```
+
+**The script asks no questions.** It never waits for a keystroke: stdin is closed, `apt` runs non-interactively (no dialogs, no config-file prompts, `needrestart` does not restart services behind the site), `git` cannot ask for credentials or open an editor, and the Docker apt key is rewritten without a prompt. If sudo would need a password, it stops in the first lines with one message instead of hanging.
+
+Near the top it prints one `deploy-check:` line (user, whether sudo is passwordless, whether Docker was found and by which test, whether the certificate was found and how). Paste that line when reporting a problem.
+
+- Docker is treated as installed if `docker` is on `PATH`, a binary exists in `/usr/bin`, `/usr/local/bin` or `/snap/bin`, or the `docker.service` unit exists. The Docker packages are only installed when none of these is true.
+- An existing certificate is never replaced by a deploy. If the certificate tree cannot be read by the user running the script, the script says so and keeps what is there (run it with `sudo`).
+
+| Switch | Effect |
+|---|---|
+| `RUN_LETSENCRYPT=1` | Also run `init-letsencrypt.sh` when a certificate for `$DOMAIN` exists. With a certificate present this is effectively a no-op: the script finds the certificate, **keeps** it and exits before fetching anything. |
+| `--force-replace-cert` (argument: `bash deploy.sh --force-replace-cert`) | Implies the above and **replaces** the certificate (a Cloudflare Origin certificate is not recoverable this way; expect a 526 until it is reinstalled). The only way to replace one: never a keystroke. `FORCE=1` in the environment, in `.env` or kept by `sudo -E` is ignored. |
+| `INTERACTIVE=1` | Keep the terminal on stdin and let sudo ask for its password. Brings back no certificate prompt. |
+
 ### Restoring data on a new server
 
 The SQLite index lives at `./data/explorer.db` (plus `-shm` / `-wal` sidecars in WAL mode). To seed a new server from a clean backup of the old one:

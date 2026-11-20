@@ -65,6 +65,9 @@
 
 set -euo pipefail
 
+# Never let git ask for a username or password in a script.
+export GIT_TERMINAL_PROMPT=0
+
 # ---- Configuration ---------------------------------------------------------
 # DOMAIN/CERTBOT_PATH defaults are applied further down, AFTER the deployment's
 # own .env has been consulted (audit F-189). Capture what the caller passed
@@ -206,7 +209,10 @@ require_ubuntu() {
 }
 
 apt_quiet() {
-    DEBIAN_FRONTEND=noninteractive apt-get -qq -o=Dpkg::Use-Pty=0 "$@"
+    # needrestart (Ubuntu 22.04/24.04) would open a dialog and restart services:
+    # list-only mode and suspend keep it quiet and leave the site running.
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
+        apt-get -qq -o=Dpkg::Use-Pty=0 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
 }
 
 # ---- Phase 1: OS hardening -------------------------------------------------
@@ -422,7 +428,7 @@ install_docker() {
     else
         log "Installing Docker CE + Compose plugin from the official apt repo"
         install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
         chmod a+r /etc/apt/keyrings/docker.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
             > /etc/apt/sources.list.d/docker.list
@@ -1187,7 +1193,7 @@ setup_cf_origin_cert() {
 
     # ---- Validate cert + key with openssl ----
     log "Validating cert format"
-    command -v openssl >/dev/null 2>&1 || apt-get install -y -qq openssl >/dev/null
+    command -v openssl >/dev/null 2>&1 || apt_quiet -y install openssl >/dev/null
     openssl x509 -in "$src_cert" -noout >/dev/null 2>&1 \
         || die "$src_cert is not a valid PEM-encoded X.509 certificate."
     openssl rsa  -in "$src_key" -check -noout >/dev/null 2>&1 \
@@ -1338,8 +1344,8 @@ setup_backups() {
     log "Phase 5: SQLite nightly backup"
 
     log "Installing sqlite3 CLI (needed for online .backup)"
-    apt-get update -qq >/dev/null
-    apt-get install -y -qq sqlite3 >/dev/null
+    apt_quiet update >/dev/null
+    apt_quiet -y install sqlite3 >/dev/null
     ok "sqlite3 $(sqlite3 --version | awk '{print $1}') installed"
 
     local script_src="$DEPLOY_DIR/backup.sh"

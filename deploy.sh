@@ -3,9 +3,80 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+# ---- Arguments ---------------------------------------------------------------
+# The only way to replace an existing certificate is --force-replace-cert on
+# THIS command line. It is deliberately not an environment variable: a FORCE=1
+# left in .env, exported in a shell or kept by `sudo -E` must never replace a
+# certificate (a Cloudflare Origin cert is not recoverable from this script).
+DEPLOY_FORCE_REPLACE_CERT=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --force-replace-cert) DEPLOY_FORCE_REPLACE_CERT=1 ;;
+        *) echo "ERROR: unknown argument '$_arg'. The only argument is --force-replace-cert." >&2; exit 2 ;;
+    esac
+done
+
+# ---- Unattended by default --------------------------------------------------
+# This script never asks a question. Stdin is closed, so anything that still
+# tries to read gets EOF and fails visibly instead of waiting. INTERACTIVE=1 is
+# the one explicit opt-in: it keeps the terminal on stdin and lets sudo ask for
+# its password. It does NOT bring back any prompt about certificates: replacing
+# an existing certificate needs the --force-replace-cert argument, never a keystroke.
+if [ "${INTERACTIVE:-0}" != "1" ]; then
+    exec </dev/null
+fi
+# git: no username/password prompt, no merge-message editor.
+export GIT_TERMINAL_PROMPT=0 GIT_EDITOR=true GIT_MERGE_AUTOEDIT=no
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
+
+# apt, through sudo (which drops the environment, hence `env`):
+#   DEBIAN_FRONTEND=noninteractive  no debconf dialogs
+#   NEEDRESTART_MODE=l, NEEDRESTART_SUSPEND=1  Ubuntu 22.04/24.04 needrestart
+#       neither opens its dialog nor restarts services behind the running site
+#   --force-confdef/--force-confold  a changed config file never prompts
+apt_noninteractive() {
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+}
+
 echo "========================================"
 echo " Starting Polkadex Explorer Deployment"
 echo "========================================"
+
+# ---- Preflight: sudo, then the two facts the old script got wrong ----------
+DEPLOY_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -f "$DEPLOY_SCRIPT_DIR/tools/deploy-detect.sh" ]; then
+    echo "ERROR: $DEPLOY_SCRIPT_DIR/tools/deploy-detect.sh is missing; cannot run the preflight checks."
+    exit 1
+fi
+. "$DEPLOY_SCRIPT_DIR/tools/deploy-detect.sh"
+
+REPO_URL="${REPO_URL:-https://github.com/Polkadex-Substrate/pdexplorer.git}"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
+
+# Fail at the START, in one line, rather than stop half way at a password prompt.
+SUDO_STATE="$(deploy_sudo_state)"
+case "$SUDO_STATE" in
+    root|passwordless) ;;
+    *)
+        if [ "${INTERACTIVE:-0}" != "1" ]; then
+            echo "ERROR: sudo needs a password or is not available ($SUDO_STATE) and this deploy never prompts: run it as root (sudo bash $0), give this user passwordless sudo, or set INTERACTIVE=1."
+            exit 1
+        fi
+        ;;
+esac
+
+# What is installed already, decided generously (see tools/deploy-detect.sh).
+deploy_detect_docker || true
+case "$DOCKER_DETECT" in
+    binary:*) PATH="${DOCKER_DETECT#binary:}"; PATH="${PATH%/*}:$PATH"; export PATH ;;
+esac
+PRE_CERTBOT="${CERTBOT_PATH:-$(deploy_env_value "$DEPLOY_DIR/.env" CERTBOT_PATH)}"
+PRE_CERTBOT="${PRE_CERTBOT:-./certbot}"
+case "$PRE_CERTBOT" in /*) ;; *) PRE_CERTBOT="$DEPLOY_DIR/${PRE_CERTBOT#./}" ;; esac
+PRE_DOMAIN="${DOMAIN:-$(deploy_env_value "$DEPLOY_DIR/.env" DOMAIN)}"
+deploy_detect_cert "$PRE_CERTBOT" "$PRE_DOMAIN" || true
+# One line to paste back if a deploy ever does something unexpected.
+deploy_summary_line "$PRE_CERTBOT" "$PRE_DOMAIN"
 
 # Detect OS
 if [ -f /etc/os-release ]; then
@@ -21,8 +92,8 @@ echo "--> Detected OS: $OS"
 # 1. Update system packages and install prerequisites
 echo "--> Updating system packages..."
 if [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
-    sudo apt-get update -y
-    sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common git
+    apt_noninteractive update -y
+    apt_noninteractive install -y apt-transport-https ca-certificates curl software-properties-common git
 elif [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || [ "$OS" = "almalinux" ] || [ "$OS" = "rocky" ]; then
     sudo yum update -y
     sudo yum install -y yum-utils git
@@ -31,20 +102,23 @@ else
     exit 1
 fi
 
-# 2. Install Docker if not installed
-if ! command -v docker &> /dev/null
+# 2. Install Docker only if NOTHING says it is installed. On a box that already
+#    runs Docker, this block used to run on every deploy: it re-downloaded the
+#    apt signing key (a prompt) and ran the package install (which can upgrade
+#    Docker and restart the running containers).
+if ! deploy_detect_docker
 then
-    echo "--> Docker not found. Installing Docker..."
+    echo "--> Docker not found (no binary on PATH or in the usual places, no docker.service). Installing Docker..."
     if [ "$OS" = "ubuntu" ] || [ "$OS" = "debian" ]; then
         # Modern keyring method. `apt-key` was removed in Ubuntu 24.04 /
         # Debian 12+, so the old `apt-key add` path fails on any current box.
         sudo install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL "https://download.docker.com/linux/$OS/gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        curl -fsSL "https://download.docker.com/linux/$OS/gpg" | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
         sudo chmod a+r /etc/apt/keyrings/docker.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS $(lsb_release -cs) stable" \
             | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-        sudo apt-get update -y
-        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        apt_noninteractive update -y
+        apt_noninteractive install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     elif [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || [ "$OS" = "almalinux" ] || [ "$OS" = "rocky" ]; then
         sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
         sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -56,7 +130,7 @@ then
     sudo usermod -aG docker $USER
     echo "--> Docker installed successfully."
 else
-    echo "--> Docker is already installed."
+    echo "--> Docker is already installed (found by: $DOCKER_DETECT). Not touching the Docker packages."
 fi
 
 # 3. Ensure Docker Compose is available. Prefer the v2 plugin (`docker compose`,
@@ -68,7 +142,7 @@ elif command -v docker-compose &> /dev/null; then
     echo "--> Legacy docker-compose binary present."
 else
     echo "--> Installing Docker Compose plugin..."
-    sudo apt-get install -y docker-compose-plugin 2>/dev/null || {
+    apt_noninteractive install -y docker-compose-plugin 2>/dev/null || {
         echo "--> Plugin unavailable; installing standalone docker-compose binary."
         sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         sudo chmod +x /usr/local/bin/docker-compose
@@ -90,13 +164,12 @@ fi
 # Audit F-030: default to the CANONICAL remote. The old default pointed at
 # the personal pdexscan fork — a fresh VPS would clone (and `reset --hard` to)
 # whatever that repo contains, a supply-chain hijack waiting to happen.
-REPO_URL="${REPO_URL:-https://github.com/Polkadex-Substrate/pdexplorer.git}"
-DEPLOY_DIR="${DEPLOY_DIR:-/opt/pdexplorer}"
+# REPO_URL and DEPLOY_DIR are set in the preflight at the top of this script.
 
 if [ -d "$DEPLOY_DIR/.git" ]; then
     echo "--> Repository exists at $DEPLOY_DIR. Pulling latest changes..."
     cd "$DEPLOY_DIR"
-    git pull origin main
+    git pull --no-edit origin main
 elif [ -e "$DEPLOY_DIR" ] && [ -n "$(ls -A "$DEPLOY_DIR" 2>/dev/null)" ]; then
     # Non-empty but not a git checkout — refuse rather than clone into it or
     # clone a nested copy beside it. Both are how the duplicate arose.
@@ -191,21 +264,47 @@ echo "--> Initializing Let's Encrypt certificates..."
 #   2. answering "y" at its prompt replaces the origin cert with a SELF-SIGNED
 #      placeholder, which Cloudflare Full (Strict) rejects with 526.
 # Neither is recoverable by re-running the deploy, so skip the whole step when
-# a certificate is already in place. Set RUN_LETSENCRYPT=1 to force it.
+# a certificate is already in place (RUN_LETSENCRYPT=1 and --force-replace-cert: see below).
 #
 # Invoked via `bash` rather than `chmod +x && ./script`: the file is committed
 # mode 100644, so chmod flipped it to 100755, which git counts as a local
 # modification and which aborted the NEXT `git pull` — running the deploy made
 # the next deploy impossible.
-CERT_GLOB="$CERTBOT_PATH/conf/live/*/fullchain.pem"
-if [ "${RUN_LETSENCRYPT:-0}" != "1" ] && compgen -G "$CERT_GLOB" >/dev/null 2>&1; then
-    echo "--> Existing certificate found — skipping init-letsencrypt.sh."
-    echo "    (Cloudflare Origin cert setup. Use RUN_LETSENCRYPT=1 to force Let's Encrypt bootstrap.)"
+#
+# Unattended: init-letsencrypt.sh is always called with NONINTERACTIVE=1, in
+# which mode it keeps an existing certificate and exits 0 instead of asking
+# whether to replace it. The switches, in one place:
+#   (none)            certificate present: skip. Absent: bootstrap.
+#   RUN_LETSENCRYPT=1 also run init-letsencrypt.sh when a certificate is present
+#                     for $DOMAIN. In practice that is a no-op: init-letsencrypt.sh
+#                     finds the certificate, says it is keeping it and exits 0
+#                     BEFORE it fetches TLS parameter files or touches docker.
+#   --force-replace-cert (argument to this script) REPLACES the certificate.
+#                     The only way to replace one; never a keystroke, and never
+#                     FORCE=1 from the environment or .env (those are ignored).
+#                     The decision reaches init-letsencrypt.sh as
+#                     DEPLOY_FORCE_REPLACE_CERT, which .env cannot override.
+# "Present" is decided by deploy_detect_cert (tools/deploy-detect.sh): the same
+# exact-path test init-letsencrypt.sh uses, then the glob, then `sudo -n test`.
+# A certificate tree this user cannot read is NOT "absent": we say so and keep
+# what is there rather than bootstrap over it.
+deploy_detect_cert "$CERTBOT_PATH" "$DOMAIN" && CERT_RC=0 || CERT_RC=$?
+echo "--> Certificate check: $CERT_DETECT ($CERT_DETECT_PATH)"
+if [ "$DEPLOY_FORCE_REPLACE_CERT" = "1" ]; then
+    echo "--> --force-replace-cert: REPLACING the certificate for ${DOMAIN:-?}. A real Cloudflare Origin cert is not recoverable from this script."
+    NONINTERACTIVE=1 DEPLOY_FORCE_REPLACE_CERT=1 bash ./init-letsencrypt.sh
+elif [ "$CERT_RC" = "0" ]; then
+    echo "--> Existing certificate found, skipping bootstrap."
+    echo "    (Cloudflare Origin cert setup. RUN_LETSENCRYPT=1 runs init-letsencrypt.sh, which keeps it; --force-replace-cert replaces it.)"
     # Audit F-024: "a cert exists" is not "a cert Cloudflare will accept".
     # init-letsencrypt.sh writes a SELF-SIGNED placeholder, and this skip used
     # to treat that placeholder as done — under Full (Strict) that is a 526.
     # Warn loudly (don't abort: Flexible-mode setups do run on placeholders).
     for pem in "$CERTBOT_PATH"/conf/live/*/fullchain.pem; do
+        if [ ! -r "$pem" ]; then
+            echo "    (issuer not checked: the certificate file is not readable by $(id -un))"
+            break
+        fi
         issuer="$(openssl x509 -in "$pem" -noout -issuer 2>/dev/null || true)"
         case "$issuer" in
             *"Let's Encrypt"*|*"CloudFlare Origin"*|*"Cloudflare Origin"*) ;;
@@ -214,9 +313,18 @@ if [ "${RUN_LETSENCRYPT:-0}" != "1" ] && compgen -G "$CERT_GLOB" >/dev/null 2>&1
                echo "             Run provision-ubuntu.sh cf-origin-cert (or a real certonly) to replace it." ;;
         esac
     done
-fi
-if [ "${RUN_LETSENCRYPT:-0}" = "1" ] || ! compgen -G "$CERT_GLOB" >/dev/null 2>&1; then
-    echo "--> No certificate found (or bootstrap forced); bootstrapping..."
+    if [ "${RUN_LETSENCRYPT:-0}" = "1" ]; then
+        if [ "$CERT_DETECT" = "exact" ]; then
+            NONINTERACTIVE=1 DEPLOY_FORCE_REPLACE_CERT=0 bash ./init-letsencrypt.sh
+        else
+            echo "--> RUN_LETSENCRYPT=1 ignored: the certificate was found as '$CERT_DETECT', which init-letsencrypt.sh cannot see as this user, and it would bootstrap over it. Run as root, or use --force-replace-cert to replace it deliberately."
+        fi
+    fi
+elif [ "$CERT_RC" = "2" ]; then
+    echo "--> Cannot read the certificate tree at $CERT_DETECT_PATH as $(id -un), so I cannot tell whether a certificate is there."
+    echo "    Keeping whatever is there and continuing (NOT bootstrapping). Fix: run with sudo (sudo bash $0) or give this user's group access to that directory."
+else
+    echo "--> No certificate found; bootstrapping..."
     # Audit F-024 (round 2): init-letsencrypt.sh now defaults to issuing a REAL
     # certificate and exits non-zero if the result is still self-signed. With
     # `set -e` above that aborts the deploy — which is the intended behaviour
@@ -230,7 +338,7 @@ if [ "${RUN_LETSENCRYPT:-0}" = "1" ] || ! compgen -G "$CERT_GLOB" >/dev/null 2>&
     #
     # For a grey-clouded / non-Cloudflare origin where a placeholder is
     # genuinely wanted, set ORIGIN_CERT_MODE=self-signed-bootstrap.
-    bash ./init-letsencrypt.sh
+    NONINTERACTIVE=1 DEPLOY_FORCE_REPLACE_CERT=0 bash ./init-letsencrypt.sh
 fi
 
 # ---- Cert directory name vs nginx.conf (audit F-189) ------------------------

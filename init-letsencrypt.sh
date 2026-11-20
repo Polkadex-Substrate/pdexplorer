@@ -37,10 +37,26 @@
 # quietly overwrite it, and why the "existing data" guard below defaults to
 # KEEPING what is there.
 
+# Who may ask for replacement. Captured BEFORE .env is sourced, because .env is
+# operator data and may hold a stale FORCE=1 (or anything else).
+#   NONINTERACTIVE=1 (deploy.sh, automation): only DEPLOY_FORCE_REPLACE_CERT,
+#     which deploy.sh sets from its own --force-replace-cert argument on every
+#     call. FORCE from .env, from the shell or kept by `sudo -E` is ignored.
+#   otherwise (an operator at a terminal): FORCE as given in the shell.
+if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+  _force_decision="${DEPLOY_FORCE_REPLACE_CERT:-0}"
+else
+  _force_decision="${FORCE:-0}"
+fi
+
 # Source variables from .env
 if [ -f .env ]; then
   # shellcheck disable=SC1091
   source .env
+  # Whatever .env said about FORCE or the deploy decision, only the decision
+  # captured above counts.
+  FORCE="$_force_decision"
+  DEPLOY_FORCE_REPLACE_CERT="$_force_decision"
 else
   echo "Error: .env file missing. Cannot proceed."
   exit 1
@@ -79,11 +95,11 @@ if [ -s "$cert_live" ]; then
   # Non-interactive safety: when run from automation (deploy.sh, provision, cron,
   # CI) there's no TTY to answer the prompt — default to KEEPING the existing
   # certs and exiting cleanly rather than blocking forever. Set NONINTERACTIVE=1
-  # or FORCE=1 to override without a prompt.
+  # or FORCE=1 (terminal use; deploy.sh uses --force-replace-cert) to override without a prompt.
   if [ "${FORCE:-0}" = "1" ]; then
     :
   elif [ "${NONINTERACTIVE:-0}" = "1" ] || [ ! -t 0 ]; then
-    echo "Existing certificate found at $cert_live and no TTY — keeping it (set FORCE=1 to replace)."
+    echo "Existing certificate found at $cert_live and no TTY, keeping it (deploy.sh --force-replace-cert replaces it)."
     exit 0
   else
     read -p "Existing certificate found for ${domains[0]}. Continue and replace it? (y/N) " decision
@@ -160,7 +176,7 @@ is_self_signed() {
 write_self_signed_placeholder() {
   echo "### Writing a SELF-SIGNED BOOTSTRAP certificate for $domains ..."
   mkdir -p "$host_live"
-  sudo $DC run --rm --entrypoint "\
+  sudo $DC run --rm -T --entrypoint "\
     openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 365\
       -keyout '$path/privkey.pem' \
       -out '$path/fullchain.pem' \
@@ -234,7 +250,7 @@ domain_args=""
 for d in "${domains[@]}"; do domain_args="$domain_args -d $d"; done
 
 # shellcheck disable=SC2086
-if ! sudo $DC run --rm certbot certonly --webroot -w /var/www/certbot \
+if ! sudo $DC run --rm -T certbot certonly --webroot -w /var/www/certbot \
       $staging_arg $domain_args \
       --email "$email" --agree-tos --no-eff-email --non-interactive; then
   # Put the placeholder back before bailing out. We deleted the lineage above
