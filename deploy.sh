@@ -34,8 +34,10 @@ export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 #   NEEDRESTART_MODE=l, NEEDRESTART_SUSPEND=1  Ubuntu 22.04/24.04 needrestart
 #       neither opens its dialog nor restarts services behind the running site
 #   --force-confdef/--force-confold  a changed config file never prompts
+#   DPkg::Lock::Timeout=120  wait up to two minutes for a dpkg lock (unattended-upgrades
+#       holds it for a while) instead of failing at once
 apt_noninteractive() {
-    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get -o DPkg::Lock::Timeout=120 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
 }
 
 echo "========================================"
@@ -46,6 +48,9 @@ echo "========================================"
 DEPLOY_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ ! -f "$DEPLOY_SCRIPT_DIR/tools/deploy-detect.sh" ]; then
     echo "ERROR: $DEPLOY_SCRIPT_DIR/tools/deploy-detect.sh is missing; cannot run the preflight checks."
+    echo "       This copy of deploy.sh is not next to the rest of the checkout. Run it from the checkout"
+    echo "       (for example: sudo bash /opt/pdexplorer/deploy.sh), or update the checkout first with"
+    echo "       'git pull' (cd /opt/pdexplorer && git pull) if it is older than this script."
     exit 1
 fi
 . "$DEPLOY_SCRIPT_DIR/tools/deploy-detect.sh"
@@ -369,7 +374,7 @@ fi
 CERT_CONF_DIR="$CERTBOT_PATH/conf"
 if [ -d "$CERT_CONF_DIR" ]; then
     echo "--> Ensuring cert tree is readable by the unprivileged nginx uid (101)..."
-    bash "$(dirname "$0")/tools/fix-cert-perms.sh" "$CERT_CONF_DIR"
+    bash "$DEPLOY_SCRIPT_DIR/tools/fix-cert-perms.sh" "$CERT_CONF_DIR"
 fi
 
 if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
