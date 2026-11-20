@@ -253,12 +253,13 @@ describe('the stepper states S0 to S10', () => {
         d.submits[0].onStage('waiting', { stage: 'waiting' }); await settle();
         assert.equal(words(el)[0], 'Not confirmed');
         assert.equal(status(el), 'The explorer could not confirm step 1. It may still go through. Do not sign it again yet. Press Check again to read the chain.');
-        assert.deepEqual(primaries(el), []);
+        assert.equal(primaries(el).length, 0);
         assert.ok(el.querySelector('[data-setup-action="step-check"]'));
         assert.equal(el.querySelector('[data-setup-action="step-back"]'), null);
         d.api.st.nextKeys = KEYS;
         await click(el, '[data-setup-action="step-check"]');
         assert.deepEqual(words(el), ['Done on chain', 'Ready to sign', 'Waiting']);
+        assert.equal(status(el), 'Step 1 is confirmed on chain. Step 2 is next: Bond 500 PDEX, rewards: added to the bond.', 'no block number known');
     });
     test('S8 blocked: SW-47 when the step is not shown yet; the block in role=alert; Check again', async () => {
         const d = deps(); const { el } = dom(); await openStepper(d, el);
@@ -269,7 +270,7 @@ describe('the stepper states S0 to S10', () => {
         const alert = el.querySelector('.validate-alert[role="alert"]');
         assert.equal(alert.textContent.trim(), 'Step 1 went through, but the chain does not show these keys for this stash yet. It can take a block.');
         assert.equal(words(el)[0], 'Blocked');
-        assert.deepEqual(primaries(el), []);
+        assert.equal(primaries(el).length, 0);
         assert.ok(el.querySelector('[data-setup-action="step-check"]'));
         assert.ok(el.querySelector('[data-setup-action="step-back"]'));
     });
@@ -281,6 +282,36 @@ describe('the stepper states S0 to S10', () => {
         await assert.rejects(d.submits[0].buildTx(d.api), /Key 5 \(mixnet\) is already registered to/);
         d.submits[0].onError('Key 5 (mixnet) is already registered to someone.', { stage: 'failed', key: 'preflight' }); await settle();
         assert.equal(words(el)[0], 'Blocked');
+        assert.match(el.querySelector('.validate-alert[role="alert"]').textContent, /Key 5 \(mixnet\) is already registered/);
+        assert.ok(el.querySelector('[data-setup-action="step-check"]'), 'Check again re-reads after a sign-time refusal');
+    });
+    test('S10 after a short bond: SW-58 (SW-57 first sentence, then the short-bond text)', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        d.api.st.nextKeys = KEYS;
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onSuccess(); await settle();
+        await click(el, '[data-setup-action="step-sign"]');
+        Object.assign(d.api.st, { bonded: true, active: 400n * PDEX });
+        d.submits[1].onStage('broadcast', {}); d.submits[1].onSuccess(); await settle();
+        await click(el, '[data-setup-action="step-sign"]');
+        d.api.st.validating = true;
+        d.submits[2].onStage('broadcast', {}); d.submits[2].onSuccess(); await settle();
+        assert.equal(status(el), 'All 3 steps are confirmed. Bonded 400 PDEX of the 500 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash.');
+    });
+    test('S6: Sign is offered again only when the gate allows that same step', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {});
+        d.submits[0].onError('Refused.', { stage: 'failed', key: 'session.InvalidProof' }); await settle();
+        assert.deepEqual(primaries(el).map(b => b.textContent.trim()), ['Sign step 1 of 3']);
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[1].onStage('broadcast', {});
+        d.api.st.owners[KEYS.mixnet] = OTHER;
+        d.submits[1].onError('Refused.', { stage: 'failed', key: 'session.InvalidProof' }); await settle();
+        assert.equal(words(el)[0], 'Failed on chain');
+        assert.equal(primaries(el).length, 0, 'the gate blocks, so no Sign');
         assert.match(el.querySelector('.validate-alert[role="alert"]').textContent, /Key 5 \(mixnet\) is already registered/);
     });
     test('S8 with SW-49 offers Add to the bond; S9 with SW-48 offers Add the rest first', async () => {
@@ -461,6 +492,12 @@ describe('focus, live region, mobile list, brand lint', () => {
         const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m => /validate-stepwise/.test(m[1]));
         assert.ok(rules.length > 0);
         for (const r of rules) assert.doesNotMatch(r[2], /#[0-9a-f]{3,8}\b|rgba?\(|--success/i, r[1]);
+    });
+    test('help: the validator-setup topic has the SW-80 paragraph', async () => {
+        const { HELP_TOPICS } = await import('../lib/help-topics.js');
+        const { SW } = await import('../lib/validator-setup-steps.js');
+        const topic = HELP_TOPICS.find(x => x.slug === 'validator-setup');
+        assert.ok(topic.body.includes(SW.help));
     });
     test('script.js stays under 15,000 lines and gains no stepper logic', () => {
         const s = readRepo('script.js', import.meta.url);

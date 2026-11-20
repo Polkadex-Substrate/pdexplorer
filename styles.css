@@ -5160,10 +5160,21 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-ack { display: flex; gap: 8px; align-items: center; margin: 0; font-weight: 600; color: var(--text-primary); }
 .validate-ack input { width: 18px; height: 18px; accent-color: var(--brand-primary); }
 .validate-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Setup in separate steps (lib/validator-setup-steps-view.js): unlike .validate-steps the
+   stepper list stays visible on mobile; no colour of its own. */
+.validate-stepwise { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; }
+.validate-stepwise-step { line-height: 1.6; overflow-wrap: anywhere; }
+.validate-stepwise-step .validate-word { margin-left: 8px; }
+.validate-stepwise-stash { overflow-wrap: anywhere; }
+.validate-stepwise-status { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
+.validate-stepwise-panel-title { margin: 0 0 8px; font-weight: 600; color: var(--text-primary); }
 @media (max-width: 768px) {
     .validate-setup-body { grid-template-columns: minmax(0, 1fr); padding: 16px; }
     .validate-setup-progress { display: block; }
     .validate-steps { display: none; }
+    .validate-stepwise-actions .validate-primary { width: 100%; min-height: 44px; justify-content: center; box-sizing: border-box; }
+    .validate-stepwise-step { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+    .validate-stepwise-step .validate-word { margin-left: 0; }
 }
 @media (max-width: 640px) {
     .validate-rows { grid-template-columns: 1fr; }
