@@ -248,10 +248,26 @@ describe('buildSetupTx: one utility.batchAll, signed by the stash (CEO D4), real
         assert.deepEqual(c.args[0].map(x => `${x.section}.${x.method}`), ['staking.bondExtra', 'session.setKeys', 'staking.validate']);
         assert.equal(c.args[0][0].args[0].toBigInt(), 7n * PDEX);
     });
-    test('resume: keys identical to the registered ones: validate only, still one batchAll', () => {
+    test('resume: keys identical to the registered ones: validate only, as the bare call (spec section 9, finding 2)', () => {
         const s = { ...fresh, bonded: true, controller: STASH, active: String(500n * PDEX), nextKeys: KEYS };
-        const c = decode(S.buildSetupTx(api(), S.planSetup(s, { ...input, bond: 0n }).steps));
-        assert.deepEqual(c.args[0].map(x => `${x.section}.${x.method}`), ['staking.validate']);
+        const steps = S.planSetup(s, { ...input, bond: 0n }).steps;
+        const c = decode(S.buildSetupTx(api(), steps));
+        assert.equal(`${c.section}.${c.method}`, 'staking.validate', 'a batch of one adds nothing and is what a device is most likely to refuse');
+        assert.equal(c.args[0].commission.toNumber(), 50_000_000);
+        assert.deepEqual(S.expectedSetupEvents(steps), ['staking.ValidatorPrefsSet'], 'no BatchCompleted from a bare call');
+        assert.deepEqual(S.setupPausableCalls(steps), [['Staking', 'validate']], 'a pause on Utility.batch_all does not block a lone validate');
+        assert.equal(S.atomicText(steps.length), 'One signature.');
+    });
+    test('one step left of each kind: the bare call, its own events, its own pause', () => {
+        const bonded = { ...fresh, bonded: true, controller: STASH, active: String(500n * PDEX) };
+        const keysOnly = S.planSetup({ ...bonded, validating: true }, { ...input, bond: 0n }).steps;
+        assert.deepEqual(keysOnly.map(x => x.kind), ['setKeys']);
+        assert.equal(`${decode(S.buildSetupTx(api(), keysOnly)).section}.${decode(S.buildSetupTx(api(), keysOnly)).method}`, 'session.setKeys');
+        assert.deepEqual(S.expectedSetupEvents(keysOnly), []);
+        assert.deepEqual(S.setupPausableCalls(keysOnly), [['Session', 'set_keys']]);
+        const two = S.planSetup(fresh, input).steps;
+        assert.deepEqual(S.setupPausableCalls(two), S.pausableCalls(two), 'a real batch keeps Utility.batch_all');
+        assert.equal(S.setupPausableCalls(two)[0].join('.'), 'Utility.batch_all');
     });
     test('another account as payee', () => {
         const c = decode(S.buildSetupTx(api(), S.planSetup(fresh, { ...input, payee: { kind: 'account', account: PAYEE } }).steps));
@@ -263,7 +279,7 @@ describe('buildSetupTx: one utility.batchAll, signed by the stash (CEO D4), real
     test('expected events per plan', () => {
         assert.deepEqual(S.expectedSetupEvents(S.planSetup(fresh, input).steps), ['utility.BatchCompleted', 'staking.Bonded', 'staking.ValidatorPrefsSet']);
         const s = { ...fresh, bonded: true, controller: STASH, active: String(500n * PDEX), validating: true };
-        assert.deepEqual(S.expectedSetupEvents(S.planSetup(s, { ...input, bond: 0n }).steps), ['utility.BatchCompleted']);
+        assert.deepEqual(S.expectedSetupEvents(S.planSetup(s, { ...input, bond: 0n }).steps), [], 'one setKeys left: a bare call, which reports no event');
     });
 });
 
@@ -293,6 +309,15 @@ describe('the review lists each call in plain words with the call name (design 5
             'Slashes also hit the people who nominate you.'
         ]);
         assert.equal(S.SLASH_ACK, 'I understand that my bond can be slashed.');
+    });
+    test('finding 8: the warnings take the unbonding time and the validator count from the chain', () => {
+        assert.deepEqual(S.setupWarnings({ unbond: '28 days', validatorCount: 200 }), S.SETUP_WARNINGS);
+        const w = S.setupWarnings({ unbond: '7 days', validatorCount: 50 });
+        assert.equal(w[0], 'Bonded PDEX takes 7 days to unbond.');
+        assert.equal(w[1], 'If your node is offline for a whole session you earn nothing for it. If 7 or more of 50 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%.');
+        assert.deepEqual(w.slice(2), S.SETUP_WARNINGS.slice(2));
+        assert.deepEqual(S.setupWarnings({}), S.SETUP_WARNINGS, 'unknown: the figures of today');
+        assert.deepEqual(S.setupWarnings({ validatorCount: 0 }), S.SETUP_WARNINGS);
     });
     test('timing from the live parameters: the session after next, and the first era', () => {
         const p = { sessionProgress: 0.5, epochDuration: 1200, blockTimeMs: 12000, currentEra: 500, activeEra: 500, electionPhase: 'Off' };

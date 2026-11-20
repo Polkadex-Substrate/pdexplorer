@@ -7,7 +7,7 @@
 //
 // Synthetic accounts: 32 bytes of one repeated value. They belong to no one.
 
-import { test, describe, before } from 'node:test';
+import { test, describe, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 import { encodeAddress } from '@polkadot/util-crypto';
@@ -40,7 +40,7 @@ const keysCodec = (k) => ({ toJSON: () => ({ grandpa: k.grandpa, babe: k.babe, i
 function fakeApi(o = {}) {
     // nonce and nextIndex: System.Account nonce and rpc.system.accountNextIndex (pool-aware).
     // holdLimits, holdAccount: promises the reads wait on, to hold the view mid-step.
-    const st = { minBond: 100n * PDEX, minComm: 30_000_000, bonded: false, active: 0n, validating: false, nextKeys: null, owners: {}, free: 1000n * PDEX, spec: 394, nonce: 0, nextIndex: 0, holdLimits: null, holdAccount: null, ...o };
+    const st = { minBond: 100n * PDEX, minComm: 30_000_000, bonded: false, active: 0n, validating: false, nextKeys: null, owners: {}, free: 1000n * PDEX, spec: 394, nonce: 0, nextIndex: 0, holdLimits: null, holdAccount: null, noms: null, ...o };
     const validators = async () => ({});
     validators.size = async (a) => num(String(a) === STASH && st.validating ? 5 : 0);
     const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); c.paymentInfo = async () => ({ partialFee: num(FEES[m] != null ? FEES[m] : 10n ** 10n) }); return c; } }) });
@@ -55,7 +55,7 @@ function fakeApi(o = {}) {
                 maxValidatorsCount: async () => opt(num(250)), counterForValidators: async () => num(217),
                 bonded: async (a) => opt(String(a) === STASH && st.bonded ? STASH : null),
                 ledger: async (c) => opt(st.bonded && String(c) === STASH ? { stash: STASH, total: num(st.active), active: num(st.active) } : null),
-                validators, nominators: async () => opt(null)
+                validators, nominators: async () => opt(st.noms ? { targets: st.noms } : null)
             },
             session: {
                 nextKeys: async (a) => opt(String(a) === STASH && st.nextKeys ? keysCodec(st.nextKeys) : null),
@@ -180,7 +180,7 @@ describe('the stepper states S0 to S10', () => {
         assert.deepEqual(words(el), ['Ready to sign', 'Waiting', 'Waiting']);
         assert.equal(rows[0].getAttribute('aria-current'), 'step');
         assert.equal(el.querySelectorAll('[aria-current="step"]').length, 2, 'the wizard progress step and the stepper row');
-        assert.equal(status(el), 'Nothing has been signed yet. Step 1 is next: Register 6 session keys. Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the table below before you approve.');
+        assert.equal(status(el), 'Nothing has been signed yet. Step 1 is next: Register 6 session keys. Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve.');
         assert.ok(el.querySelector('.validate-keys-table'), 'the keys table while setKeys is next');
         assert.match(el.textContent, /If you stop here: nothing has changed\./);
         assert.equal(el.querySelector('label[for="validate-setup-ack"]').textContent.trim(), SLASH_ACK);
@@ -610,7 +610,7 @@ describe('finding 3: a transaction that may be in flight is never offered again'
         Object.assign(d.api.st, { nonce: 4, nextIndex: 5 });
         await click(el, '[data-setup-action="step-check"]');
         await click(el, '[data-setup-action="step-sign"]');
-        await assert.rejects(d.submits[1].buildTx(d.api), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed.' });
+        await assert.rejects(d.submits[1].buildTx(d.api), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed. Wait for it to be included, then try again.' });
         d.api.st.nextIndex = 4;
         const tx = await d.submits[1].buildTx(d.api);
         assert.equal(`${tx.section}.${tx.method}`, 'session.setKeys');
@@ -752,5 +752,258 @@ describe('finding 13: Back and Check again are 44 px tap targets on mobile', () 
         const block = mobile.slice(0, mobile.indexOf('\n}'));
         assert.match(block, /\.validate-stepwise-actions \.validate-secondary[^{]*\{[^}]*min-height:\s*44px/);
         assert.match(block, /\.validate-stepwise-actions \.validate-text-btn[^{]*\{[^}]*min-height:\s*44px/);
+    });
+});
+
+// ── Revision 2026-11-21 of the spec: Fable's follow-ups (items a to i) ──
+const SW03 = 'If your wallet or device cannot sign this as one transaction, use Sign in separate steps below.';
+const SW06 = (e) => `Your top-up of ${e} PDEX was sent but the explorer could not confirm it. It may still be included in a block, so this review leaves it out rather than send it twice. To check, reload this page in about 15 minutes: the Stash and bond step shows the bonded amount. If it has not gone up, the top-up was not included and you can add it again there.`;
+const SW07 = 'The explorer could not start the signature, so nothing was signed and no fee was charged. Check that your wallet is unlocked and this account is selected, then press Sign and submit again.';
+const SW41 = 'Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve.';
+const SW46b = (k) => `Step ${k} was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee.`;
+const SW59 = 'Another transaction from this account is still waiting for a block. Nothing was signed. Wait for it to be included, then try again.';
+const signMsg = (el) => el.querySelector('#validate-setup-sign-msg').textContent.trim();
+
+describe('item a: Back drops a top-up that was sent but not confirmed, and the review says so (SW-06)', () => {
+    test('the note is the first under the step list, above the fee line; gone once a top-up is entered again', async () => {
+        const d = deps({ api: topUpApi() }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toTopUpReview(el, '200');
+        assert.doesNotMatch(el.textContent, /Your top-up of/);
+        await click(el, '[data-setup-action="stepwise"]');
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onStage('waiting', { stage: 'waiting' }); await settle();
+        assert.equal(words(el)[0], 'Not confirmed');
+        d.api.st.spec = 395;
+        await click(el, '[data-setup-action="step-check"]');
+        assert.match(el.querySelector('.validate-alert[role="alert"]').textContent, /The network was upgraded while you were between steps/);
+        await click(el, '[data-setup-action="step-back"]');
+        assert.equal(heading(el), 'Review');
+        assert.deepEqual(reviewTexts(el), ['Ask to validate at 5% commission'], 'the top-up is left out');
+        const note = el.querySelector('ol.validate-review').nextElementSibling;
+        assert.ok(note.classList.contains('validate-setup-note'));
+        assert.equal(note.textContent.trim(), SW06(200));
+        let p = note; while (p && !/^Estimated network fee/.test(p.textContent.trim())) p = p.nextElementSibling;
+        assert.ok(p, 'the fee line comes after the note');
+        await click(el, '[data-setup-action="back"]');
+        await click(el, '[data-setup-action="back"]');
+        assert.equal(heading(el), 'Bond from your stash');
+        await type(el, '#validate-setup-extra', '50');
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-commission', '5');
+        await click(el, '[data-setup-action="next"]');
+        assert.deepEqual(reviewTexts(el), ['Add 50 PDEX to the bond', 'Ask to validate at 5% commission']);
+        assert.doesNotMatch(el.textContent, /Your top-up of/);
+    });
+    test('not shown when the top-up was confirmed (its Bonded event is in hand)', async () => {
+        const d = deps({ api: topUpApi() }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toTopUpReview(el, '200');
+        await click(el, '[data-setup-action="stepwise"]');
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        const o = d.submits[0];
+        o.onStage('broadcast', {});
+        d.api.st.active = 350n * PDEX;
+        o.onStage('inBlock', { stageText: 'In block #50', outcome: { bonded: String(200n * PDEX) } });
+        d.api.st.spec = 395;
+        o.onSuccess(); await settle();
+        await click(el, '[data-setup-action="step-back"]');
+        assert.equal(heading(el), 'Review');
+        assert.doesNotMatch(el.textContent, /Your top-up of/);
+    });
+});
+
+describe('item b: one signature, the lock holds through "confirmed" or "unconfirmed" until the result is painted', () => {
+    for (const stage of ['confirmed', 'unconfirmed']) {
+        test(`stage ${stage}, then onSuccess (lib/tx-submit.js order)`, async () => {
+            const d = deps(); const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+            await tick(el, '#validate-setup-ack');
+            await click(el, '[data-setup-action="sign"]');
+            const hold = deferred();
+            d.api.st.holdAccount = hold.p;
+            const o = d.submits[0];
+            o.onStage('broadcast', {});
+            o.onStage(stage, { stage }); o.onSuccess(); await settle();
+            const s = el.querySelector('[data-setup-action="sign"]');
+            assert.ok(s, 'the review is still showing while the chain is read');
+            assert.equal(s.disabled, true, 'Sign and submit stays locked');
+            assert.equal(el.querySelector('[data-setup-action="back"]').disabled, true, 'Back stays locked');
+            s.click(); await settle();
+            assert.equal(d.submits.length, 1, 'no second request');
+            d.api.st.holdAccount = null; hold.release(); await settle();
+            assert.ok(el.querySelector('[role="status"]'), 'the result is painted');
+        });
+    }
+    test('"unconfirmed" with no onSuccess still clears the lock', async () => {
+        const d = deps(); const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onStage('unconfirmed', { stage: 'unconfirmed' }); await settle();
+        assert.equal(el.querySelector('[data-setup-action="sign"]').disabled, false);
+        assert.equal(el.querySelector('[data-setup-action="back"]').disabled, false);
+    });
+});
+
+describe('item c: "If you stop here" for a nominating stash (SW-64, SW-65 with SW-63)', () => {
+    test('keys confirmed this visit: SW-64; before that, SW-60', async () => {
+        const d = deps({ api: fakeApi({ bonded: true, active: 150n * PDEX, noms: [OTHER] }) }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toReview(el);
+        assert.deepEqual(reviewTexts(el), ['Register 6 session keys', 'Ask to validate at 5% commission']);
+        await click(el, '[data-setup-action="stepwise"]');
+        assert.match(el.textContent, /If you stop here: nothing has changed\./);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {});
+        d.api.st.nextKeys = KEYS;
+        d.submits[0].onSuccess(); await settle();
+        assert.deepEqual(words(el), ['Done on chain', 'Ready to sign']);
+        assert.match(el.textContent, /If you stop here: your keys stay registered to this stash\. Your bond of 150 PDEX is untouched and keeps nominating, and nothing new is locked\. Keys on an account that does not validate do nothing\. If you later use this node with a different stash, generate new keys on the node first\./);
+        assert.doesNotMatch(el.textContent, /nothing has changed/);
+        assert.equal(el.querySelector('a[href="/wallet"]'), null, 'no wallet link');
+    });
+    test('a top-up confirmed this visit: SW-65, then the wallet link', async () => {
+        const d = deps({ api: fakeApi({ nextKeys: KEYS, bonded: true, active: 150n * PDEX, noms: [OTHER] }) }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toTopUpReview(el, '200');
+        await click(el, '[data-setup-action="stepwise"]');
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        const o = d.submits[0];
+        o.onStage('broadcast', {});
+        d.api.st.active = 350n * PDEX;
+        o.onStage('inBlock', { stageText: 'In block #50', outcome: { bonded: String(200n * PDEX) } });
+        o.onSuccess(); await settle();
+        assert.match(el.textContent, /If you stop here: your keys stay registered to this stash and your bond, now 350 PDEX with the 200 PDEX you added, keeps nominating\. To get the added PDEX back, use Unstake on your wallet page: unbonding takes 28 days, then you withdraw it\./);
+        assert.equal(el.querySelector('a[href="/wallet"]').textContent.trim(), 'Open your wallet page');
+    });
+});
+
+describe('item e: a throw while the stepper opens cannot leave the lock on', () => {
+    test('the review comes back usable', async () => {
+        let boom = false;
+        const d = deps({ esc: (x) => { if (boom && String(x) === 'This is not all-or-nothing') throw new Error('boom'); return escapeHtml(x); } });
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+            const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+            boom = true;
+            await click(el, '[data-setup-action="stepwise"]');
+            boom = false;
+            assert.equal(heading(el), 'Review');
+            assert.equal(el.querySelector('[data-setup-action="back"]').disabled, false);
+            await tick(el, '#validate-setup-ack');
+            await click(el, '[data-setup-action="sign"]');
+            assert.equal(d.submits.length, 1, 'the lock was cleared');
+        } finally { warn.mock.restore(); }
+    });
+});
+
+describe('item g: a step sent this visit and still not on chain after Check again (SW-46b)', () => {
+    test('step 1 (setKeys): SW-46b then SW-41, never "Nothing has been signed yet"; a second sign while the first is in the pool is refused before the wallet opens', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onStage('waiting', { stage: 'waiting' }); await settle();
+        Object.assign(d.api.st, { nonce: 4, nextIndex: 5 });
+        await click(el, '[data-setup-action="step-check"]');
+        assert.equal(status(el), SW46b(1) + ' ' + SW41);
+        assert.doesNotMatch(el.textContent, /Nothing has been signed yet/);
+        assert.deepEqual(primaries(el).map(b => b.textContent.trim()), ['Sign step 1 of 3']);
+        await click(el, '[data-setup-action="step-sign"]');
+        // buildTx runs before submitSignedTx asks the wallet: the refusal comes first.
+        await assert.rejects(d.submits[1].buildTx(d.api), { message: SW59 });
+        d.submits[1].onError(SW59, { stage: 'failed', key: 'preflight' }); await settle();
+        assert.equal(words(el)[0], 'Blocked');
+        assert.equal(el.querySelector('.validate-alert[role="alert"]').textContent.trim(), SW59);
+        assert.equal(primaries(el).length, 0, 'no Sign while the pool holds the first');
+    });
+    test('step 2 (bond): SW-46b in place of SW-42, no keys line; the next paint is the usual one', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        d.api.st.nextKeys = KEYS;
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onSuccess(); await settle();
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[1].onStage('broadcast', {}); d.submits[1].onStage('waiting', { stage: 'waiting' }); await settle();
+        assert.equal(words(el)[1], 'Not confirmed');
+        await click(el, '[data-setup-action="step-check"]');
+        assert.equal(status(el), SW46b(2));
+        assert.deepEqual(primaries(el).map(b => b.textContent.trim()), ['Sign step 2 of 3']);
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[2].onError('Cancelled.', { stage: 'cancelled', key: 'wallet.Cancelled' }); await settle();
+        assert.match(status(el), /^Step 2 was not signed/);
+    });
+});
+
+describe('item h: one signature, a submit that throws or rejects before anything is sent (SW-07)', () => {
+    for (const [name, fail] of [['throws', () => { throw new Error('No signer for this account.'); }], ['rejects', () => Promise.reject(new Error('No signer for this account.'))]]) {
+        test(`d.submit ${name}: SW-07 then SW-03, the thrown text only in the log, the lock cleared`, async () => {
+            let calls = 0;
+            const d = deps({ submit: () => { calls += 1; return fail(); } });
+            const warn = mock.method(console, 'warn', () => {});
+            try {
+                const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+                await tick(el, '#validate-setup-ack');
+                await click(el, '[data-setup-action="sign"]');
+                assert.equal(signMsg(el), SW07 + ' ' + SW03);
+                assert.doesNotMatch(el.textContent, /No signer for this account/);
+                assert.ok(warn.mock.calls.some(c => c.arguments.map(String).join(' ').includes('No signer for this account.')), 'logged');
+                assert.equal(el.querySelector('[data-setup-action="back"]').disabled, false);
+                await click(el, '[data-setup-action="sign"]');
+                assert.equal(calls, 2, 'w.signing was cleared');
+            } finally { warn.mock.restore(); }
+        });
+    }
+    test('a multisig stash: SW-07 without SW-03', async () => {
+        const ms = { address: STASH, name: 'Validator stash', threshold: 2, signers: [OTHER, STASH, addr(99)] };
+        const d = deps({ isMultisig: () => true, findMultisig: () => ms, submit: () => Promise.reject(new Error('x')) });
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+            const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+            await tick(el, '#validate-setup-ack');
+            await click(el, '[data-setup-action="sign"]');
+            assert.equal(signMsg(el), SW07);
+        } finally { warn.mock.restore(); }
+    });
+    test('a rejection after broadcast is "not confirmed": no SW-07, no SW-03', async () => {
+        const d = deps({ submit: (o) => { d.submits.push(o); o.onStage('broadcast', {}); return Promise.reject(new Error('late')); } });
+        const warn = mock.method(console, 'warn', () => {});
+        try {
+            const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+            await tick(el, '#validate-setup-ack');
+            await click(el, '[data-setup-action="sign"]');
+            assert.doesNotMatch(el.textContent, /could not start the signature/);
+            assert.doesNotMatch(el.textContent, /use Sign in separate steps below/);
+            assert.equal(el.querySelector('[data-setup-action="back"]').disabled, false, 'the attempt is over');
+        } finally { warn.mock.restore(); }
+    });
+});
+
+describe('item i: one step left on the one-signature path is the bare call (finding 2)', () => {
+    test('validate only: staking.validate, its own event, and a pause on Utility.batch_all does not block it', async () => {
+        const d = deps({ api: fakeApi({ nextKeys: KEYS, bonded: true, active: 500n * PDEX }) }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toReview(el);
+        assert.deepEqual(reviewTexts(el), ['Ask to validate at 5% commission']);
+        assert.match(el.textContent, /One signature\./);
+        assert.doesNotMatch(el.textContent, /If any step fails, none of them apply/);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="sign"]');
+        const o = d.submits[0];
+        assert.deepEqual(o.action.params.expectEvents, ['staking.ValidatorPrefsSet']);
+        d.api.query.txPause = { pausedCalls: async ([p]) => opt(p === 'Utility' ? {} : null) };
+        const tx = await o.buildTx(d.api);
+        assert.equal(`${tx.section}.${tx.method}`, 'staking.validate');
+        d.api.query.txPause = { pausedCalls: async ([p, c]) => opt(p === 'Staking' && c === 'validate' ? {} : null) };
+        await assert.rejects(o.buildTx(d.api), /paused Staking\.validate/);
+    });
+});
+
+describe('finding 8: the review warnings come from the chain', () => {
+    test('unbonding time from BondingDuration, the offline line from the validator count', async () => {
+        const api = fakeApi();
+        api.consts.staking.bondingDuration = num(7);
+        const d = deps({ api, fetchJson: async (u) => { if (u === '/api/validator/params') return { ...PARAMS, validatorCount: 50 }; throw new Error('unexpected ' + u); } });
+        const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+        const items = Array.from(el.querySelectorAll('.validate-warnings li')).map(li => li.textContent.trim());
+        assert.equal(items[0], 'Bonded PDEX takes 7 days to unbond.');
+        assert.equal(items[1], 'If your node is offline for a whole session you earn nothing for it. If 7 or more of 50 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%.');
     });
 });
