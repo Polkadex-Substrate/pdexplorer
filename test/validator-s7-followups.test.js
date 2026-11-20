@@ -116,7 +116,7 @@ describe('B7: while the chooser is open, the header Connect Wallet button is an 
         const btn = tab.header['connect-wallet-btn'];
         assert.equal(btn.classList.contains('is-outline'), false, 'precondition');
         await tab.visit('/wallet');
-        assert.equal(tab.header['connect-wallet-label'].textContent, 'Connect Wallet');
+        assert.equal(btn.classList.contains('is-connected'), false, 'nothing is connected');
         assert.equal(btn.classList.contains('is-outline'), true, 'the header is a second solid primary next to the chooser');
         tab.ctx.pageScope.leave();   // the router leaves the page
         assert.equal(btn.classList.contains('is-outline'), false);

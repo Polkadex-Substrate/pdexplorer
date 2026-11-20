@@ -659,6 +659,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .item-link:hover { color: var(--brand-primary); }
 .item-link.is-inline { text-decoration: underline; }
+.wallet-history-link { font-size: 0.78rem; }
 
 .item-meta {
     text-align: right;
@@ -1569,6 +1570,14 @@ h1, h2, h3 { font-weight: 600; }
 }
 .connect-wallet-btn.is-connected i { color: var(--brand-secondary, #00E676); }
 .connect-wallet-btn.is-connected:hover { background: rgba(124, 58, 237, 0.20); }
+/* Sprint 7: while the Connect wallet chooser is open its lead row is the one primary; the header button steps
+   back to an outline in the same colour. */
+.connect-wallet-btn.is-outline {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--brand-primary);
+    padding: 8px 15px;
+}
 
 /* --- Mobile wallet connect cards --- */
 .wallet-empty-msg {

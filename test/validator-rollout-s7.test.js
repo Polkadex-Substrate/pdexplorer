@@ -122,7 +122,7 @@ function routeWorld(over = {}) {
     let t = 1000;
     const calls = { events: [] };
     const { api, reads } = proxyApi({ defs: { [S1]: [[ME, 'Staking', 0]] }, validators: [S1] });
-    const gate = (req, res) => { const a = req.params.address; if (!/^[1-9A-HJ-NP-Za-km-z]{46,48}$/.test(a)) { res.status(400).json({ error: 'Invalid Polkadex address.' }); return null; } return { address: a }; };
+    const gate = (req, res) => { const a = req.params.address; if (!/^[1-9A-HJ-NP-Za-km-z]{46,50}$/.test(a)) { res.status(400).json({ error: 'Invalid Polkadex address.' }); return null; } return { address: a }; };
     registerProxiedStashesRoute(app, {
         api: () => api, ready: () => true, gate, cacheShort: (res) => res.set('Cache-Control', 'short'), serverError: (res, e) => res.status(500).json({ error: String(e && e.message) }),
         events: (a, limit) => { calls.events.push([a, limit]); return [added(S1, ME), added(S2, OTHER)]; },

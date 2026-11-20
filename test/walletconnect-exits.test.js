@@ -23,7 +23,10 @@ const LIMIT_MS = 45_000;
 
 test('test/walletconnect.test.js exits on its own, all tests passing, well before the 90 s cap', async () => {
     const started = Date.now();
-    const child = spawn(process.execPath, ['--experimental-sqlite', '--test', FILE], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Its own run, not a subtest of this one: without NODE_TEST_CONTEXT, with the TAP reporter.
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawn(process.execPath, ['--experimental-sqlite', '--test', '--test-reporter=tap', FILE], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (b) => { out += b; if (out.length > 200_000) out = out.slice(-100_000); });
     child.stderr.on('data', () => {});

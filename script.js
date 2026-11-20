@@ -56,7 +56,7 @@ import { startCollectiveLive, liveWhileConnected, freshPlan, overlayLiveMembers 
 import { createDemocracyView } from './lib/democracy-view.js';
 import { createWalletSession, isSessionStorageKey } from './lib/wallet-session.js';
 import { createSourceRegistry, detectSources, signingKeys, findSigner } from './lib/wallet-sources.js';
-import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, notConnectedNoteHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals } from './lib/wallet-aware.js';
+import { createRouteScope, createLatest, selfManagedRoute, stakingRewardsPlan, viewFollowsWallet, walletRouteAfterChange, pickerTarget, viewingBannerHtml, notConnectedNoteHtml, connectNoteHtml, restoringNoteHtml, closeSigningModals, rewardHistoryLinkHtml, walletDashboardSeo } from './lib/wallet-aware.js';
 import { buildCreateWalletLineHtml, sourceLabel } from './lib/wallet-picker.js';
 import { mountWalletPicker } from './lib/wallet-picker-view.js';
 import { mobileWalletCardsHtml } from './lib/mobile-wallet-cards.js';
@@ -8092,7 +8092,9 @@ function walletConnectController() {
         disconnect: () => (walletSession.source() === WC_SOURCE ? disconnectWallet() : wcGate.disconnect()) };
 }
 const multisigStore = createMultisigStore(localStorage);
-const multisigUI = createMultisigUI({
+const multisigUI = createMultisigUI(multisigUIDeps());
+// The review's wiring; revision() is the live wallet-session revision the review takes when it opens (#70).
+function multisigUIDeps() { return {
     store: multisigStore, storage: localStorage, api: () => globalApi,
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
     canAskWallets: canAskWalletsForSigners, askWallets: askWalletsForSigners,
@@ -8101,7 +8103,7 @@ const multisigUI = createMultisigUI({
     // A multisig stash's validator change: the Sprint 3 and 4 rules again at the approval that runs it.
     callGuard: (api, call, m) => validatorCallGuard(api, call, m.address),
     callNote: (api, call, m) => validatorCallNote(api, call, m.address)
-});
+}; }
 const councilCandidacyUI = createCouncilCandidacyUI({
     api: () => globalApi, selected: getStoredWallet,
     isMultisig: address => !!multisigStore.find(address), submit: submitSignedTx,
@@ -8154,9 +8156,22 @@ function onWalletChanged() {
     democracyView.restart();                // "You voted" follows the wallet
     govDetailPage.accountChanged();         // and so does an item page's Actions panel
     closeSigningModals(document);           // a modal opened for the old account must not sign for the new one
+    refreshWalletPageTitle();               // /wallet/<address> becomes, or stops being, "My Account" in place
     const here = readRouteFromLocation();
     // discussions, council, treasury... re-render for the new identity; /staking-rewards follows on its own
     if (!isWalletRoute(here) && !selfManagedRoute(here)) routeTo(here);
+}
+
+// The /wallet/<address> title follows the session (lib/wallet-aware.js walletDashboardSeo); other pages are left alone.
+function refreshWalletPageTitle() {
+    const here = readRouteFromLocation();
+    if (here.startsWith('wallet/')) updateSeoMeta('wallet', walletDashboardSeo(here.slice('wallet/'.length), getStoredWallet(), { isSame: isSameAddress, shortAddr: stakingShortAddress }));
+}
+
+// While the Connect wallet chooser is open its own lead row is the one primary (BRAND.md): the header button is an outline.
+function markWalletChooserOpen(open) {
+    const btn = document.getElementById('connect-wallet-btn');
+    if (btn) btn.classList.toggle('is-outline', !!open && !walletSession.getActiveAccount().address);
 }
 
 // The header button, the My Account menu and the sidebar item. Drawn from the
@@ -8175,6 +8190,7 @@ function refreshConnectWalletButton() {
         if (sub) { sub.textContent = stakingShortAddress(stored); sub.style.display = 'block'; }
         if (btn) {
             btn.classList.add('is-connected');
+            btn.classList.remove('is-outline');
             btn.setAttribute('title', 'My Account: ' + stored + ' (view, switch wallet or disconnect)');
             btn.setAttribute('aria-label', 'My Account menu (' + stakingShortAddress(stored) + ')');
         }
@@ -8437,12 +8453,7 @@ function initWalletPage(address) {
             }
         }
         // Personal dashboard: noindex and no route JSON-LD (PII / dynamic).
-        updateSeoMeta('wallet', {
-            title: isSameAddress(getStoredWallet(), address) ? 'My Account - Polkadex Explorer' : 'Account ' + stakingShortAddress(address) + ' - Polkadex Explorer',
-            description: 'Your Polkadex account dashboard: balances, staking, nominations, rewards, and recent transactions.',
-            canonicalPath: '/wallet/' + address,
-            noindex: true
-        });
+        updateSeoMeta('wallet', walletDashboardSeo(address, getStoredWallet(), { isSame: isSameAddress, shortAddr: stakingShortAddress }));
         if (isValidPolkadexAddress(address)) fetchWalletDashboard(address);
         else root.innerHTML = '<div class="list-container glass" style="padding:32px;color:var(--error);">Invalid Polkadex address.</div>';
         return;
@@ -8556,6 +8567,8 @@ function renderMobileWalletCards() {
 // The Switch wallet / Connect wallet page. The markup and its behaviour live in
 // lib/wallet-picker-view.js; this passes in what only the app has.
 function renderWalletConnectPanel(root) {
+    markWalletChooserOpen(true);
+    pageScope.add(() => markWalletChooserOpen(false));   // the router leaves the page
     const currentUrl = (typeof location !== 'undefined') ? location.href : 'https://explorer.polkadex.ee/wallet';
     return mountWalletPicker(root, {
         current: getStoredWallet(), currentSource: walletSession.source(), onMobile: isMobileDevice(), hash: window.location.hash || '',
@@ -8931,7 +8944,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
             <div class="list-header">
                 <h2><i class='bx bx-wallet'></i> ${identity ? stakingEscapeHtml(identity) : 'Wallet Dashboard'} ${helpIcon('switching-wallets', 'About the wallet dashboard')}</h2>
                 <div style="display:flex; gap:14px; align-items:center;">
-                    <a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">Full reward history</a>
+                    ${rewardHistoryLinkHtml(data.address)}
                     <button id="wallet-switch-btn" class="staking-download-btn"${getStoredWallet() ? '' : ' hidden'}>Switch wallet</button>
                     ${isOwnWallet ? '<button id="wallet-disconnect-btn" class="staking-download-btn">Disconnect</button>' : ''}
                 </div>
@@ -13293,6 +13306,7 @@ async function renderWalletAdvancedSection(address, isOwnWallet) {
 async function renderProxyList(address, isOwnWallet) {
     const el = document.getElementById('wallet-proxy-list');
     if (!el) return;
+    const expectedRevision = walletSession.revision();   // the session this list is drawn for, with address (#70)
     try {
         const data = await fetchApiJson('/api/proxies/' + encodeURIComponent(address));
         const list = Array.isArray(data.proxies) ? data.proxies : [];
@@ -13331,6 +13345,7 @@ async function renderProxyList(address, isOwnWallet) {
                     busyText: 'Signing…',
                     idleText: 'Remove',
                     expectedWallet: address,
+                    expectedRevision,
                     onSuccess: () => setTimeout(() => renderProxyList(address, isOwnWallet), 2500)
                 });
             }));
@@ -13351,6 +13366,7 @@ let cachedProxyTypes = null;
 async function renderAddProxyForm(address) {
     const el = document.getElementById('wallet-proxy-add');
     if (!el) return;
+    const expectedRevision = walletSession.revision();   // taken before any wait, with address (#70)
     // The runtime's own types (/api/proxy-types, else this connection's metadata); never a guessed list.
     if (!cachedProxyTypes) {
         try { const data = await fetchApiJson('/api/proxy-types'); cachedProxyTypes = Array.isArray(data.types) && data.types.length ? data.types : null; } catch (_) { cachedProxyTypes = null; }
@@ -13398,6 +13414,7 @@ async function renderAddProxyForm(address) {
             busyText: 'Signing…',
             idleText: 'Add proxy',
             expectedWallet: address,
+            expectedRevision,
             onError: showErr,
             onSuccess: () => {
                 if (delegateInput) delegateInput.value = '';
