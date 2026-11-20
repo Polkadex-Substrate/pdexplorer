@@ -1356,6 +1356,8 @@ The frontend has no build step in dev — Vite serves `script.js` directly with 
 Before submitting:
 
 - `npm test` — full unit, integration, and contract suite
+- Never add `--test-force-exit` to the test command or to a CI workflow: it can end the run before every test file has reported and still exit 0 (one file ran 49 of its 69 tests in some runs). `npm test` runs without it.
+- If the suite hangs, a handle is staying open: find it rather than forcing the exit. `test/no-force-exit.test.js` fails if the flag appears in `package.json` scripts or `.github/workflows/*.yml`.
 - `node --check server.js && node --check db.js` — no syntax errors
 - `npm run build` — frontend builds cleanly
 - If you touch the indexer, prefer extending the existing forward / backfill / gap-fill pattern in `syncChainIndex` rather than adding a separate crawler
