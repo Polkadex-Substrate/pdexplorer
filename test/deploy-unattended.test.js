@@ -193,7 +193,7 @@ describe('deploy.sh wiring', () => {
         assert.match(code, /git pull --no-edit origin main/);
     });
     test('a docker install is conditional on the detection function, not on command -v alone', () => {
-        assert.match(code, /if deploy_detect_docker/);
+        assert.match(code, /if ! deploy_detect_docker/);
         assert.ok(!/if ! command -v docker/.test(code));
     });
 });
@@ -206,10 +206,10 @@ export function findOffences(src, name = 'script') {
     lines.forEach((l, i) => {
         const at = `${name}: ${l.trim()}`;
         // 1. a read from the terminal. `while read` over a pipe or a file is fine.
-        if (/(^|[;&|]\s*|\{\s*|\bthen\s+|\bdo\s+)read\s/.test(l) && !/^\s*while\b/.test(l) && !/(<|\|\s*while)/.test(l)) {
+        if (/(^\s*|[;&|]\s*|\{\s*|\bthen\s+|\bdo\s+)read\s/.test(l) && !/^\s*while\b/.test(l) && !/(<|\|\s*while)/.test(l)) {
             out.push(`${at}  <- reads from the terminal; an unattended deploy would hang`);
         }
-        if (/(^|[;&|]\s*|\bdo\s+)read\s+(-\w*\s+)*-p\b/.test(l)) out.push(`${at}  <- read -p prompt`);
+        if (/(^\s*|[;&|]\s*|\bdo\s+)read\s+(-\w*\s+)*-p\b/.test(l)) out.push(`${at}  <- read -p prompt`);
         // 2. gpg --dearmor asks "File exists. Overwrite?" without --batch --yes
         if (/\bgpg\b/.test(l) && /--dearmor/.test(l) && !(/--batch/.test(l) && /--yes/.test(l))) {
             out.push(`${at}  <- gpg --dearmor needs --batch --yes`);
@@ -234,7 +234,7 @@ describe('guard: nothing in the deploy path can wait for a keyboard', () => {
     test('the apt wrappers carry all three settings', () => {
         const dep = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
         const prov = fs.readFileSync(path.join(ROOT, 'provision-ubuntu.sh'), 'utf8');
-        for (const [name, src, re] of [['deploy.sh', dep, /^apt_noninteractive\(\)[^\n]*/m], ['provision', prov, /^apt_quiet\(\)[\s\S]*?\n\}/m]]) {
+        for (const [name, src, re] of [['deploy.sh', dep, /^apt_noninteractive\(\)[\s\S]*?\n\}/m], ['provision', prov, /^apt_quiet\(\)[\s\S]*?\n\}/m]]) {
             const m = src.match(re);
             assert.ok(m, `${name}: wrapper missing`);
             for (const t of ['DEBIAN_FRONTEND=noninteractive', 'NEEDRESTART_MODE=', 'NEEDRESTART_SUSPEND=1', 'force-confold']) {
