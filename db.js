@@ -1304,6 +1304,24 @@ export function updateValidatorName(address, name) {
 export function updateHolderName(address, name) {
     return Number(db.prepare('UPDATE holders SET name = ? WHERE address = ? AND (name IS NOT ?)').run(name, address, name).changes);
 }
+// Healing of names stored as NULL after a failed identity read (lib/identity-heal.js). All of them
+// touch only rows whose name is still NULL, and are bounded: blocks by primary-key range, events by
+// the signer index and a row limit, so a pass never holds a long write lock on the large tables.
+export function healBlockAuthorNames(address, name, fromBlock, toBlock) {
+    return Number(db.prepare('UPDATE blocks SET author_name = ? WHERE number >= ? AND number <= ? AND author_address = ? AND author_name IS NULL')
+        .run(name, fromBlock, toBlock, address).changes);
+}
+export function healEventSignerNames(address, name, fromBlock, toBlock, limit = 1000) {
+    return Number(db.prepare(`UPDATE events SET signer_name = ? WHERE rowid IN (
+        SELECT rowid FROM events WHERE signer_address = ? AND block >= ? AND block <= ? AND signer_name IS NULL LIMIT ?)`)
+        .run(name, address, fromBlock, toBlock, limit).changes);
+}
+export function getUnnamedDiscussionAuthors(limit = 50) {
+    return db.prepare('SELECT DISTINCT author FROM discussion_posts WHERE author_name IS NULL AND author IS NOT NULL LIMIT ?').all(limit).map(r => r.author);
+}
+export function healDiscussionAuthorNames(address, name) {
+    return Number(db.prepare('UPDATE discussion_posts SET author_name = ? WHERE author = ? AND author_name IS NULL').run(name, address).changes);
+}
 export function getValidators() {
     // Audit F-044, found by checking the LIVE endpoint rather than the tests.
     //
@@ -1320,7 +1338,7 @@ export function getValidators() {
     // guess. The alias list stays in lib/apy.js so dropping a name is still one
     // edit. NOT a schema change: adding a column would mean a migration on a
     // multi-million-row table to store a third copy of a number we already have.
-    const rows = db.prepare('SELECT address, name, total_stake AS totalStake, commission, real_apy AS storedApy FROM validators ORDER BY position ASC').all();
+    const rows = db.prepare("SELECT address, COALESCE(name, 'Unknown') AS name, total_stake AS totalStake, commission, real_apy AS storedApy FROM validators ORDER BY position ASC").all();
     const validators = rows.map(({ storedApy, ...rest }) => {
         const value = storedApy == null ? null : Number(storedApy);
         const out = { ...rest, [APY_FIELD]: value };
@@ -1428,7 +1446,7 @@ export function replaceHolders(list, meta) {
     setSyncState('holders', { totalCount: meta.totalCount, lastSync: meta.lastSync, status: meta.status });
 }
 export function getHolders() {
-    const holders = db.prepare('SELECT address, rank, name, balance, share FROM holders ORDER BY rank ASC').all();
+    const holders = db.prepare("SELECT address, rank, COALESCE(name, 'Unknown') AS name, balance, share FROM holders ORDER BY rank ASC").all();
     const s = getSyncState('holders');
     return { holders, totalCount: s.totalCount ?? holders.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing' };
 }
@@ -1503,12 +1521,15 @@ export function countTransactions() {
 export function insertBlocks(list) {
     if (!list || !list.length) return;
     runTx(() => {
-        const stmt = db.prepare('INSERT OR REPLACE INTO blocks(number,hash,author_address,author_name,extrinsics_count,events_count,timestamp) VALUES(?,?,?,?,?,?,?)');
-        for (const b of list) stmt.run(b.number, b.hash ?? null, b.authorAddress ?? null, b.authorName ?? null, b.extrinsicsCount ?? 0, b.eventsCount ?? 0, b.timestamp ?? null);
+        // A block scanned while the identity read failed carries no author name (null, not 'Unknown'):
+        // a REPLACE then keeps the name already stored, and the healing pass (lib/identity-heal.js)
+        // fills the rest. The old row is read inside the same statement, before it is replaced.
+        const stmt = db.prepare('INSERT OR REPLACE INTO blocks(number,hash,author_address,author_name,extrinsics_count,events_count,timestamp) VALUES(?,?,?,COALESCE(?, (SELECT author_name FROM blocks WHERE number = ?)),?,?,?)');
+        for (const b of list) stmt.run(b.number, b.hash ?? null, b.authorAddress ?? null, b.authorName ?? null, b.number, b.extrinsicsCount ?? 0, b.eventsCount ?? 0, b.timestamp ?? null);
     });
 }
 export function getRecentBlocks(limit) {
-    return db.prepare('SELECT number, hash, author_address AS authorAddress, author_name AS authorName, extrinsics_count AS extrinsicsCount, events_count AS eventsCount, timestamp FROM blocks ORDER BY number DESC LIMIT ?').all(limit);
+    return db.prepare("SELECT number, hash, author_address AS authorAddress, COALESCE(author_name, 'Unknown') AS authorName, extrinsics_count AS extrinsicsCount, events_count AS eventsCount, timestamp FROM blocks ORDER BY number DESC LIMIT ?").all(limit);
 }
 export function hasBlock(number) {
     return !!db.prepare('SELECT 1 FROM blocks WHERE number = ?').get(number);
@@ -1735,8 +1756,11 @@ function mapEventRow(r) {
     try { data = JSON.parse(r.data); } catch (e) { }
     return { ...r, data };
 }
-const EVENT_COLS = 'hash, tx_hash AS txHash, block_hash AS blockHash, block, event_index AS eventIndex, extrinsic_index AS extrinsicIndex, section, method, data, signer_address AS signerAddress, signer_name AS signerName, timestamp, status';
-const EVENT_COLS_E = EVENT_COLS.split(', ').map(c => `e.${c}`).join(', ');   // the same columns from events joined as e
+// A signer name stored as NULL means "the identity read failed when this was indexed"; it reads as
+// Unknown until the healing pass (lib/identity-heal.js) names it.
+const eventCols = (p = '') => `${p}hash, ${p}tx_hash AS txHash, ${p}block_hash AS blockHash, ${p}block, ${p}event_index AS eventIndex, ${p}extrinsic_index AS extrinsicIndex, ${p}section, ${p}method, ${p}data, ${p}signer_address AS signerAddress, COALESCE(${p}signer_name, 'Unknown') AS signerName, ${p}timestamp, ${p}status`;
+const EVENT_COLS = eventCols();
+const EVENT_COLS_E = eventCols('e.');   // the same columns from events joined as e
 // Link rows for the accounts an event names (e.accounts, set by lib/account-links.js); returns how many were new.
 function linkEvent(stmt, e, rowid) {
     let added = 0;
@@ -2143,10 +2167,10 @@ export function createPost(p) {
     return Number(r.lastInsertRowid);
 }
 export function getPosts(threadId) {
-    return db.prepare('SELECT id, thread_id AS threadId, author, author_name AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE thread_id = ? ORDER BY created_at ASC').all(threadId);
+    return db.prepare("SELECT id, thread_id AS threadId, author, COALESCE(author_name, 'Unknown') AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE thread_id = ? ORDER BY created_at ASC").all(threadId);
 }
 export function getPost(id) {
-    return db.prepare('SELECT id, thread_id AS threadId, author, author_name AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE id = ?').get(id) || null;
+    return db.prepare("SELECT id, thread_id AS threadId, author, COALESCE(author_name, 'Unknown') AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE id = ?").get(id) || null;
 }
 export function updatePostContent(id, content, editedAt) {
     db.prepare('UPDATE discussion_posts SET content = ?, edited_at = ? WHERE id = ?').run(content, editedAt, id);

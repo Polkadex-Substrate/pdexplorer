@@ -47,6 +47,7 @@ import { readValidatorStatus } from './lib/validator-status-chain.js';
 import { validatorAlertsSendEnabled, observationFromStatus, MAX_FOLLOWS_PER_EMAIL } from './lib/validator-alerts.js';
 import { registerValidatorAlertRoutes, createValidatorAlertLimiters } from './lib/validator-alerts-api.js';
 import { runValidatorAlertsTick } from './lib/validator-alerts-run.js';
+import { noteUnnamed, healUnnamedNames } from './lib/identity-heal.js';
 import { registerTelemetryRoute } from './lib/telemetry-api.js';
 import { telemetryConfig, telemetryHostName, startTelemetryRelay, receiveTelemetry, startLocalTelemetry } from './lib/telemetry-relay.js';
 import { registerTreasurySpendsRoute } from './lib/treasury-payout-api.js';
@@ -1226,6 +1227,15 @@ const identityResolver = createIdentityResolver({
 async function getIdentity(api, address) {
     return identityResolver.getIdentity(api, address);
 }
+// For callers that PERSIST a name: { name, known }. known is false after a failed read, and then
+// the name must not be written (a failed read answers "Unknown", which would overwrite a good
+// stored name or pin a gap as an answer). Display-only callers keep using getIdentity.
+async function getIdentityForStore(api, address) {
+    return identityResolver.resolveForStore(api, address);
+}
+// The name to store for a read: the read's name when it is known, else the previously stored name
+// when there is one, else null (reads as Unknown; lib/identity-heal.js fills it in later).
+const nameToStore = (id, previous) => (id.known ? id.name : (previous != null ? previous : null));
 // After an identity event the stored copies of the name (validators and holders
 // tables) are rewritten for the affected accounts, a couple of seconds later so
 // a burst is one refresh. Only the indexer process scans blocks, so only it runs
@@ -1783,13 +1793,20 @@ async function syncValidatorChoice(activeEra) {
                 console.warn(`[validator-choice] era ${era} summary skipped:`, err && err.message);
             }
         }
+        const previousChoiceNames = new Map();
+        try { for (const v of ((db.getKv('validator_choice') || {}).validators || [])) if (v && v.address && v.name && v.name !== 'Unknown') previousChoiceNames.set(v.address, v.name); } catch (e) { /* none */ }
         const snapshot = await buildChoiceSnapshot({
             api: globalApi,
             activeEra,
             summaries: db.getEraRewardSummaries(firstEra),
             formatPDEX,
             commissionPercent: getCommissionPercent,
-            getName: (address) => getIdentity(globalApi, address)
+            // The snapshot is stored, so a failed read keeps the name the previous snapshot had; it is rebuilt
+            // wholesale on every sync, which replaces any placeholder at the next one.
+            getName: async (address) => {
+                const id = await getIdentityForStore(globalApi, address);
+                return id.known ? id.name : (previousChoiceNames.get(address) || 'Unknown');
+            }
         });
         db.setKv('validator_choice', snapshot);
     } catch (err) {
@@ -6536,8 +6553,9 @@ app.post('/api/discussions/:id/posts', async (req, res) => {
             return res.status(429).json({ error: 'You are posting too quickly — please wait a moment.' });
         }
 
-        let authorName = 'Unknown';
-        try { authorName = await getIdentity(globalApi, address); } catch (e) { }
+        // Stored, so a failed read stores nothing (null reads as Unknown; the healing pass names it later).
+        let authorName = null;
+        try { const id = await getIdentityForStore(globalApi, address); authorName = nameToStore(id, null); } catch (e) { }
         db.createPost({ threadId: thread.id, author: address, authorName, content });
         res.json({ thread: withLifecycleLinks(db.getThread(thread.id)), posts: db.getPosts(thread.id) });
     } catch (err) { serverError(res, err, req.path); }
@@ -8684,10 +8702,12 @@ async function syncData() {
         const validators = await globalApi.query.session.validators();
         const validatorData = [];
         const exposureMemo = new Map();
+        // Stored names: a failed identity read keeps the name this row already has, never "Unknown".
+        const storedValidatorNames = new Map(db.getValidators().validators.map(v => [v.address, v.name]));
 
         for (const address of validators) {
             const addrStr = address.toString();
-            const name = await getIdentity(globalApi, address);
+            const name = nameToStore(await getIdentityForStore(globalApi, address), storedValidatorNames.get(addrStr));
             const [totalStake, prefs] = await Promise.all([
                 getEraValidatorStake(globalApi, activeEra, address, exposureMemo),
                 globalApi.query.staking.validators(address)
@@ -8754,9 +8774,10 @@ async function syncHolders() {
 
         const topHolders = balances.slice(0, 500);
         const holderData = [];
+        const storedHolderNames = new Map(db.getHolders().holders.map(r => [r.address, r.name]));
         for (let i = 0; i < topHolders.length; i++) {
             const h = topHolders[i];
-            const name = await getIdentity(globalApi, h.address);
+            const name = nameToStore(await getIdentityForStore(globalApi, h.address), storedHolderNames.get(h.address));
             const total = h.free + h.reserved;
             holderData.push({ rank: i + 1, address: h.address, name: name, balance: total, share: (total / totalIssuance) * 100 });
         }
@@ -8889,11 +8910,15 @@ async function scanSingleBlock(blockNumber) {
         const h = await globalApi.derive.chain.getHeader(hash);
         if (h && h.author) authorAddr = h.author.toString();
     } catch (_e) { /* leave as System */ }
+    // Stored names: a failed read stores null, never "Unknown" (a re-scan then keeps the stored name,
+    // and the healing pass names the rest; lib/identity-heal.js).
+    const authorId = await getIdentityForStore(globalApi, authorAddr);
+    if (!authorId.known) noteUnnamed(db, authorAddr, blockNumber);
     const block = {
         number: blockNumber,
         hash: blockHash,
         authorAddress: authorAddr,
-        authorName: await getIdentity(globalApi, authorAddr),
+        authorName: authorId.known ? authorId.name : null,
         extrinsicsCount: extrinsics.length,
         eventsCount: allEvents.length,
         timestamp
@@ -8907,7 +8932,12 @@ async function scanSingleBlock(blockNumber) {
         const signerAddress = extrinsic && extrinsic.isSigned ? extrinsic.signer.toString() : 'System';
         const txHash = extrinsic ? extrinsic.hash.toHex() : '';
         const status = record.event.section === 'system' && record.event.method === 'ExtrinsicFailed' ? 'failed' : 'success';
-        const signerName = signerAddress !== 'System' ? await getIdentity(globalApi, signerAddress) : 'System';
+        let signerName = 'System';
+        if (signerAddress !== 'System') {
+            const signerId = await getIdentityForStore(globalApi, signerAddress);
+            if (!signerId.known) noteUnnamed(db, signerAddress, blockNumber);
+            signerName = signerId.known ? signerId.name : null;
+        }
         events.push({
             hash: eventId, txHash, blockHash, block: blockNumber, eventIndex, extrinsicIndex,
             section: record.event.section, method: record.event.method,
@@ -11324,6 +11354,17 @@ function startIndexerLoops() {
     // Validator alerts: a no-op unless VALIDATOR_ALERTS_SEND=1 (default off).
     setTimeout(dispatchValidatorAlerts, 20_000);
     setInterval(dispatchValidatorAlerts, VALIDATOR_ALERTS_CHECK_MS);
+    // Names left empty by a failed identity read (block authors, event signers, forum authors) are
+    // filled in once a read works. Costs one kv read when nothing is pending.
+    let healingNames = false;
+    const healNames = async () => {
+        if (healingNames || !isRpcReady()) return;
+        healingNames = true;
+        try { await healUnnamedNames({ db, resolve: (a) => identityResolver.resolve(globalApi, a) }); }
+        catch (e) { console.warn('[identity-heal] pass failed:', e && e.message ? e.message : e); }
+        finally { healingNames = false; }
+    };
+    setInterval(healNames, 2 * 60 * 1000).unref();
     // syncData refreshes the validator set, per-era commission history and the
     // scorecard inputs. It had NO interval — only a one-shot setTimeout at boot
     // and a re-kick on RPC reconnect — while every sibling sync above and below

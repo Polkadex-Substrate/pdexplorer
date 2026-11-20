@@ -853,7 +853,7 @@ describe('A1: every caller that persists a name uses the read outcome (server.js
     const between = (a, b) => { const i = src.indexOf(a); assert.ok(i >= 0, a); const j = src.indexOf(b, i); assert.ok(j > i, b); return src.slice(i, j); };
 
     test('the block scanner stores author and signer names from resolveForStore, not getIdentity', () => {
-        const scan = between('async function scanSingleBlock', '// Fallback for scanSingleBlock');
+        const scan = between('async function scanSingleBlock', 'async function getBlockTolerant');
         assert.ok(!/getIdentity\(/.test(scan));
         assert.ok(/getIdentityForStore\(globalApi, authorAddr\)/.test(scan) && /getIdentityForStore\(globalApi, signerAddress\)/.test(scan));
         assert.ok(/noteUnnamed\(/.test(scan));
