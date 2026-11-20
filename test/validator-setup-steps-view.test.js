@@ -38,7 +38,9 @@ const opt = (v) => (v == null ? { isSome: false, isNone: true } : { isSome: true
 const num = (v) => ({ toNumber: () => Number(v), toString: () => String(v), toBigInt: () => BigInt(v) });
 const keysCodec = (k) => ({ toJSON: () => ({ grandpa: k.grandpa, babe: k.babe, imOnline: k.im_online, authorityDiscovery: k.authority_discovery, mixnet: k.mixnet, beefy: k.beefy }) });
 function fakeApi(o = {}) {
-    const st = { minBond: 100n * PDEX, minComm: 30_000_000, bonded: false, active: 0n, validating: false, nextKeys: null, owners: {}, free: 1000n * PDEX, spec: 394, ...o };
+    // nonce and nextIndex: System.Account nonce and rpc.system.accountNextIndex (pool-aware).
+    // holdLimits, holdAccount: promises the reads wait on, to hold the view mid-step.
+    const st = { minBond: 100n * PDEX, minComm: 30_000_000, bonded: false, active: 0n, validating: false, nextKeys: null, owners: {}, free: 1000n * PDEX, spec: 394, nonce: 0, nextIndex: 0, holdLimits: null, holdAccount: null, ...o };
     const validators = async () => ({});
     validators.size = async (a) => num(String(a) === STASH && st.validating ? 5 : 0);
     const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); c.paymentInfo = async () => ({ partialFee: num(FEES[m] != null ? FEES[m] : 10n ** 10n) }); return c; } }) });
@@ -47,9 +49,9 @@ function fakeApi(o = {}) {
         get runtimeVersion() { return { specVersion: num(st.spec), transactionVersion: num(2) }; },
         consts: { balances: { existentialDeposit: num(PDEX) }, session: { keyDeposit: num(0) }, staking: { bondingDuration: num(28), sessionsPerEra: num(6) } },
         query: {
-            system: { account: async () => ({ nonce: num(0), data: { free: num(st.free), reserved: num(0), frozen: num(st.active) } }) },
+            system: { account: async () => { if (st.holdAccount) await st.holdAccount; return { nonce: num(st.nonce), data: { free: num(st.free), reserved: num(0), frozen: num(st.active) } }; } },
             staking: {
-                minValidatorBond: async () => num(st.minBond), minCommission: async () => num(st.minComm),
+                minValidatorBond: async () => { if (st.holdLimits) await st.holdLimits; return num(st.minBond); }, minCommission: async () => num(st.minComm),
                 maxValidatorsCount: async () => opt(num(250)), counterForValidators: async () => num(217),
                 bonded: async (a) => opt(String(a) === STASH && st.bonded ? STASH : null),
                 ledger: async (c) => opt(st.bonded && String(c) === STASH ? { stash: STASH, total: num(st.active), active: num(st.active) } : null),
@@ -60,9 +62,11 @@ function fakeApi(o = {}) {
                 queuedKeys: async () => [],
                 keyOwner: async ([, key]) => opt(st.owners[String(key)] || null)
             }
-        }
+        },
+        rpc: { system: { accountNextIndex: async () => num(st.nextIndex) } }
     };
 }
+const deferred = () => { let release; const p = new Promise(r => { release = r; }); return { p, release }; };
 const PARAMS = { specVersion: 394, sessionProgress: 0.5, epochDuration: 1200, blockTimeMs: 12000, activeEra: 500, currentEra: 500, electionPhase: 'Off', medianCommission: 50_000_000 };
 
 function dom() {
@@ -469,7 +473,7 @@ describe('focus, live region, mobile list, brand lint', () => {
         await tick(el, '#validate-setup-ack');
         await click(el, '[data-setup-action="step-sign"]');
         d.submits[0].onError('Cancelled.', { stage: 'cancelled', key: 'wallet.Cancelled' }); await settle();
-        assert.equal(doc.activeElement && doc.activeElement.getAttribute('data-setup-action'), 'step-sign');
+        assert.equal(doc.activeElement && doc.activeElement.id, 'validate-stepwise-status', 'S5: the status line first, so SW-44 is read (finding 10)');
         await click(el, '[data-setup-action="step-sign"]');
         d.submits[1].onStage('broadcast', {}); d.submits[1].onStage('waiting', { stage: 'waiting' }); await settle();
         assert.equal(doc.activeElement && doc.activeElement.id, 'validate-stepwise-status');
@@ -503,5 +507,250 @@ describe('focus, live region, mobile list, brand lint', () => {
         const s = readRepo('script.js', import.meta.url);
         assert.ok(s.split('\n').length < 15000);
         assert.doesNotMatch(s, /stepwise/);
+    });
+});
+
+// ── Fable review of the fallback (2026-11-20): findings 1 to 11 and 13 ──
+const reviewTexts = (el) => Array.from(el.querySelectorAll('ol.validate-review > li .validate-review-text')).map(t => t.textContent.trim());
+// A bonded stash with keys resumes at Commission; Back to Bond for a top-up.
+async function toTopUpReview(el, extra) {
+    assert.equal(heading(el), 'Set your commission');
+    await click(el, '[data-setup-action="back"]');
+    assert.equal(heading(el), 'Bond from your stash');
+    await type(el, '#validate-setup-extra', extra);
+    await click(el, '[data-setup-action="next"]');
+    await type(el, '#validate-setup-commission', '5');
+    await click(el, '[data-setup-action="next"]');
+    assert.equal(heading(el), 'Review');
+}
+const topUpApi = () => fakeApi({ nextKeys: KEYS, bonded: true, active: 150n * PDEX });
+
+describe('finding 1: a confirmed top-up or bond is never planned again after Back', () => {
+    test('top-up confirmed with its Bonded event, validate blocked (SW-52): Back gives a review without the top-up', async () => {
+        const d = deps({ api: topUpApi() }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toTopUpReview(el, '200');
+        assert.deepEqual(reviewTexts(el), ['Add 200 PDEX to the bond', 'Ask to validate at 5% commission']);
+        await click(el, '[data-setup-action="stepwise"]');
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        const o = d.submits[0];
+        o.onStage('broadcast', {});
+        d.api.st.active = 350n * PDEX;
+        o.onStage('inBlock', { stageText: 'In block #50', outcome: { bonded: String(200n * PDEX) } });
+        d.api.st.spec = 395;
+        o.onSuccess(); await settle();
+        assert.match(el.querySelector('.validate-alert[role="alert"]').textContent, /The network was upgraded while you were between steps/);
+        await click(el, '[data-setup-action="step-back"]');
+        assert.equal(heading(el), 'Review');
+        assert.deepEqual(reviewTexts(el), ['Ask to validate at 5% commission'], 'no second "Add 200 PDEX"');
+    });
+    test('top-up confirmed by the ledger only, validate blocked (SW-50): Back gives a review without the top-up', async () => {
+        const d = deps({ api: topUpApi() }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toTopUpReview(el, '200');
+        await click(el, '[data-setup-action="stepwise"]');
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        const o = d.submits[0];
+        o.onStage('broadcast', {});
+        Object.assign(d.api.st, { active: 350n * PDEX, free: 350n * PDEX });
+        o.onSuccess(); await settle();
+        assert.match(el.querySelector('.validate-alert[role="alert"]').textContent, /^Step 2 cannot be paid for yet\./);
+        await click(el, '[data-setup-action="step-back"]');
+        assert.equal(heading(el), 'Review');
+        assert.deepEqual(reviewTexts(el), ['Ask to validate at 5% commission'], 'no second "Add 200 PDEX"');
+        assert.equal(el.querySelector('[data-setup-action="sign"]') != null, true);
+    });
+    test('a first bond confirmed, then Back: the chain state alone keeps the bond out of the new review', async () => {
+        const d = deps({ api: fakeApi({ nextKeys: KEYS }) }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toReview(el);
+        assert.deepEqual(reviewTexts(el), ['Bond 500 PDEX, rewards: added to the bond', 'Ask to validate at 5% commission']);
+        await click(el, '[data-setup-action="stepwise"]');
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {});
+        Object.assign(d.api.st, { bonded: true, active: 500n * PDEX });
+        d.submits[0].onSuccess(); await settle();
+        assert.deepEqual(primaries(el).map(b => b.textContent.trim()), ['Sign step 2 of 2']);
+        await click(el, '[data-setup-action="step-back"]');
+        assert.equal(heading(el), 'Review');
+        assert.deepEqual(reviewTexts(el), ['Ask to validate at 5% commission']);
+    });
+});
+
+describe('finding 2: Check again that lands on step 1 with nothing confirmed is S0', () => {
+    test('a refusal at signing, then Check again: SW-40 and the checkbox, never "Step 0"', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onError('Key 5 (mixnet) is already registered to someone.', { stage: 'failed', key: 'preflight' }); await settle();
+        await click(el, '[data-setup-action="step-check"]');
+        assert.doesNotMatch(status(el), /Step 0/);
+        assert.match(status(el), /^Nothing has been signed yet\. Step 1 is next: Register 6 session keys\./);
+        assert.ok(el.querySelector('#validate-setup-ack'), 'the slash checkbox is back');
+        assert.deepEqual(words(el), ['Ready to sign', 'Waiting', 'Waiting']);
+    });
+});
+
+describe('finding 3: a transaction that may be in flight is never offered again', () => {
+    test('(A) a lost link before the first status is "Not confirmed" (S7), not "not signed, no fee"', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onError('The connection to the network was lost.', { stage: 'failed', key: 'net.ConnectionLost' }); await settle();
+        assert.equal(words(el)[0], 'Not confirmed');
+        assert.equal(status(el), 'The explorer could not confirm step 1. It may still go through. Do not sign it again yet. Press Check again to read the chain.');
+        assert.equal(primaries(el).length, 0);
+        assert.doesNotMatch(el.textContent, /no fee was charged/);
+    });
+    test('(B) S7 after the cap, then Check again: the step is offered, but signing refuses while the pool holds a transaction', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onStage('waiting', { stage: 'waiting' }); await settle();
+        Object.assign(d.api.st, { nonce: 4, nextIndex: 5 });
+        await click(el, '[data-setup-action="step-check"]');
+        await click(el, '[data-setup-action="step-sign"]');
+        await assert.rejects(d.submits[1].buildTx(d.api), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed.' });
+        d.api.st.nextIndex = 4;
+        const tx = await d.submits[1].buildTx(d.api);
+        assert.equal(`${tx.section}.${tx.method}`, 'session.setKeys');
+    });
+});
+
+describe('finding 4: a top-up still not on chain says how to get out', () => {
+    test('the first S7 has SW-46 only; a repeat S7 adds the reload line; no Back', async () => {
+        const STILL = 'Still not on chain. If it does not appear in about 15 minutes it was not included. Reload this page; the setup continues from the chain.';
+        const d = deps({ api: topUpApi() }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toTopUpReview(el, '200');
+        await click(el, '[data-setup-action="stepwise"]');
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onStage('waiting', { stage: 'waiting' }); await settle();
+        assert.equal(status(el), 'The explorer could not confirm step 1. It may still go through. Do not sign it again yet. Press Check again to read the chain.');
+        await click(el, '[data-setup-action="step-check"]');
+        assert.equal(words(el)[0], 'Not confirmed');
+        assert.equal(status(el), 'The explorer could not confirm step 1. It may still go through. Do not sign it again yet. Press Check again to read the chain. ' + STILL);
+        assert.equal(el.querySelector('[data-setup-action="step-back"]'), null);
+        assert.equal(primaries(el).length, 0);
+    });
+});
+
+describe('findings 5 and 6: the lock is held until the next view is painted', () => {
+    test('(5) opening the stepper: Back stays locked until the stepper paints; an edit cannot bring back the old plan', async () => {
+        const d = deps(); const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+        const hold = deferred();
+        d.api.st.holdLimits = hold.p;
+        el.querySelector('[data-setup-action="stepwise"]').click(); await settle();
+        assert.equal(heading(el), 'Review');
+        assert.equal(el.querySelector('[data-setup-action="back"]').disabled, true, 'Back is locked while the gate reads');
+        el.querySelector('[data-setup-action="back"]').click(); await settle();
+        assert.equal(heading(el), 'Review', 'the click does nothing');
+        d.api.st.holdLimits = null; hold.release(); await settle();
+        assert.equal(heading(el), 'Sign in separate steps');
+    });
+    test('(5) go() leaves the stepper: a wizard step never paints the stepper', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await click(el, '[data-setup-action="step-back"]');
+        assert.equal(heading(el), 'Review');
+        await click(el, '[data-setup-action="back"]');
+        assert.equal(heading(el), 'Set your commission');
+        await type(el, '#validate-setup-commission', '7');
+        await click(el, '[data-setup-action="next"]');
+        assert.equal(heading(el), 'Review');
+        assert.deepEqual(reviewTexts(el).slice(-1), ['Ask to validate at 7% commission']);
+    });
+    test('(6) one signature: after success, Sign and submit stays locked until the result is shown', async () => {
+        const d = deps(); const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="sign"]');
+        const hold = deferred();
+        d.api.st.holdAccount = hold.p;
+        d.submits[0].onSuccess(); await settle();
+        const s = el.querySelector('[data-setup-action="sign"]');
+        if (s) { assert.equal(s.disabled, true); s.click(); await settle(); }
+        assert.equal(d.submits.length, 1, 'no second request while the result is read');
+        d.api.st.holdAccount = null; hold.release(); await settle();
+        assert.ok(el.querySelector('[role="status"]'));
+    });
+});
+
+describe('finding 9: a submit that rejects ends in S5 and clears the lock', () => {
+    test('d.submit rejects before anything is sent', async () => {
+        let calls = 0;
+        const d = deps({ submit: () => { calls += 1; return Promise.reject(new Error('The wallet could not be opened.')); } });
+        const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        assert.equal(words(el)[0], 'Not signed');
+        assert.match(status(el), /^Step 1 was not signed, so nothing changed and no fee was charged\./);
+        await click(el, '[data-setup-action="step-sign"]');
+        assert.equal(calls, 2, 'the lock was cleared');
+    });
+    test('d.submit throws synchronously', async () => {
+        const d = deps({ submit: () => { throw new Error('No signer.'); } });
+        const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        assert.equal(words(el)[0], 'Not signed');
+        assert.equal(primaries(el)[0].disabled, false);
+    });
+});
+
+describe('finding 10: S5, S6 and S9 move focus to the status line first', () => {
+    test('S6 and S9', async () => {
+        const d = deps(); const { el, doc } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {});
+        d.submits[0].onError('Refused.', { stage: 'failed', key: 'session.InvalidProof' }); await settle();
+        assert.equal(words(el)[0], 'Failed on chain');
+        assert.equal(doc.activeElement && doc.activeElement.id, 'validate-stepwise-status');
+        d.api.st.nextKeys = KEYS;
+        await click(el, '[data-setup-action="step-check"]');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[1].onStage('broadcast', {});
+        Object.assign(d.api.st, { bonded: true, active: 400n * PDEX });
+        d.submits[1].onSuccess(); await settle();
+        assert.match(status(el), /^Bonded 400 PDEX of the 500 PDEX you reviewed\./);
+        assert.equal(doc.activeElement && doc.activeElement.id, 'validate-stepwise-status');
+    });
+});
+
+describe('finding 7: the stop line reads the chain first', () => {
+    test('a resume with the bond on chain: SW-62 from the first view, not "nothing has changed"', async () => {
+        const d = deps({ api: fakeApi({ bonded: true, active: 500n * PDEX }) }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toReview(el);
+        await click(el, '[data-setup-action="stepwise"]');
+        assert.doesNotMatch(el.textContent, /If you stop here: nothing has changed\./);
+        assert.match(el.textContent, /If you stop here: 500 PDEX stays bonded and earns nothing\./);
+    });
+});
+
+describe('finding 11: the review shows the rewards account in full', () => {
+    test('payee "another account": the full address on the review', async () => {
+        const d = deps(); const { el, w } = dom(); await mountValidatorSetup(el, d); await settle();
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-keys', BLOB); await click(el, '[data-setup-action="use-keys"]');
+        await type(el, '#validate-setup-bond', '500');
+        const r = el.querySelector('input[name="validate-setup-payee"][value="account"]');
+        r.checked = true; r.dispatchEvent(new w.Event('change', { bubbles: true })); await settle();
+        await type(el, '#validate-setup-payee-account', OTHER);
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-commission', '5');
+        await click(el, '[data-setup-action="next"]');
+        assert.equal(heading(el), 'Review');
+        const full = Array.from(el.querySelectorAll('.validate-setup-step .mono')).map(m => m.textContent);
+        assert.ok(full.includes(OTHER), 'the rewards account in full');
+        assert.match(el.textContent, new RegExp(`Rewards go to ${OTHER}\\.`));
+    });
+});
+
+describe('finding 13: Back and Check again are 44 px tap targets on mobile', () => {
+    test('the stepper action row under the breakpoint', () => {
+        const css = readRepo('styles.css', import.meta.url);
+        const mobile = css.slice(css.indexOf('@media (max-width: 768px) {\n    .validate-setup-body'));
+        const block = mobile.slice(0, mobile.indexOf('\n}'));
+        assert.match(block, /\.validate-stepwise-actions \.validate-secondary[^{]*\{[^}]*min-height:\s*44px/);
+        assert.match(block, /\.validate-stepwise-actions \.validate-text-btn[^{]*\{[^}]*min-height:\s*44px/);
     });
 });

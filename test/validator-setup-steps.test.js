@@ -345,7 +345,7 @@ const opt = (v) => (v == null ? { isSome: false, isNone: true } : { isSome: true
 const num = (v) => ({ toNumber: () => Number(v), toString: () => String(v), toBigInt: () => BigInt(v) });
 const keysCodec = (k) => ({ toJSON: () => ({ grandpa: k.grandpa, babe: k.babe, imOnline: k.im_online, authorityDiscovery: k.authority_discovery, mixnet: k.mixnet, beefy: k.beefy }) });
 function fakeApi(o = {}) {
-    const st = { minBond: MIN, minComm: 30_000_000, bonded: false, active: 0n, validating: false, nextKeys: null, owners: {}, free: 1000n * PDEX, frozen: 0n, spec: 394, txv: 2, paused: [], keyDeposit: 0n, ...o };
+    const st = { minBond: MIN, minComm: 30_000_000, bonded: false, active: 0n, validating: false, nextKeys: null, owners: {}, free: 1000n * PDEX, frozen: 0n, spec: 394, txv: 2, paused: [], keyDeposit: 0n, nonce: 0, nextIndex: 0, ...o };
     const validators = async () => ({});
     validators.size = async (a) => num(String(a) === STASH && st.validating ? 5 : 0);
     const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); c.paymentInfo = async () => ({ partialFee: num(F[m] != null ? F[m] : F.validate) }); return c; } }) });
@@ -354,7 +354,7 @@ function fakeApi(o = {}) {
         get runtimeVersion() { return { specVersion: num(st.spec), transactionVersion: num(st.txv) }; },
         consts: { balances: { existentialDeposit: num(PDEX) }, session: { keyDeposit: num(st.keyDeposit) }, staking: { bondingDuration: num(28) } },
         query: {
-            system: { account: async () => ({ nonce: num(0), data: { free: num(st.free), reserved: num(0), frozen: num(st.frozen) } }) },
+            system: { account: async () => ({ nonce: num(st.nonce), data: { free: num(st.free), reserved: num(0), frozen: num(st.frozen) } }) },
             staking: {
                 minValidatorBond: async () => num(st.minBond), minCommission: async () => num(st.minComm),
                 maxValidatorsCount: async () => opt(num(250)), counterForValidators: async () => num(217),
@@ -368,7 +368,9 @@ function fakeApi(o = {}) {
                 keyOwner: async ([, key]) => opt(st.owners[String(key)] || null)
             },
             txPause: { pausedCalls: async (c) => (st.paused.includes(c.join('.')) ? opt(num(1)) : opt(null)) }
-        }
+        },
+        // The pool-aware next nonce; st.nextIndex above st.nonce is a transaction waiting for a block.
+        rpc: { system: { accountNextIndex: async () => { if (st.nextIndexFails) throw new Error('rpc down'); return num(st.nextIndex); } } }
     };
 }
 describe('buildCheckedSetupStepTx: fresh reads, the gate, the kind, the hex', () => {
@@ -473,5 +475,69 @@ describe('style', () => {
             const t = typeof v === 'function' ? v(1, 2, 3, 4) : String(v);
             assert.ok(!/[–—!]/.test(t), t);
         }
+    });
+});
+
+// ── Fable review of the fallback (2026-11-20) ──
+describe('finding 3: a transaction that may be in flight', () => {
+    test('(A) a lost link before the first status is no verdict, never "not signed"', () => {
+        for (const key of ['net.ConnectionLost', 'net.Timeout']) assert.equal(W.stepOutcome('error', { key }, { sent: false }), 'noVerdict', key);
+        assert.equal(W.stepOutcome('error', { key: 'wallet.Cancelled' }, { sent: false }), 'notSigned');
+    });
+    test('the tracker\'s unconfirmed and stalled stages after broadcast are no verdict (S7)', () => {
+        for (const stage of ['unconfirmed', 'stalled']) assert.equal(W.stepOutcome('stage', { stage }, { sent: true }), 'noVerdict', stage);
+    });
+    test('(B) buildCheckedSetupStepTx refuses while the pool holds a transaction from the stash', async () => {
+        const api = fakeApi();
+        const plan = await C.buildStepwisePlan(api, reviewFor(await C.readSetupState(api, STASH)), { revision: 'r1', keyNames: NAMES });
+        Object.assign(api.st, { nonce: 7, nextIndex: 8 });
+        await assert.rejects(C.buildCheckedSetupStepTx(api, plan, 'setKeys'), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed.' });
+        api.st.nextIndex = 7;
+        await C.buildCheckedSetupStepTx(api, plan, 'setKeys');
+    });
+    test('(B) the pending check that cannot run is a failed chain read, never a pass', async () => {
+        const api = fakeApi();
+        const plan = await C.buildStepwisePlan(api, reviewFor(await C.readSetupState(api, STASH)), { revision: 'r1', keyNames: NAMES });
+        const DOWN = 'The explorer cannot reach the chain right now. Your validator is not affected.';
+        api.st.nextIndexFails = true;
+        await assert.rejects(C.buildCheckedSetupStepTx(api, plan, 'setKeys'), { message: DOWN });
+        delete api.rpc;
+        await assert.rejects(C.buildCheckedSetupStepTx(api, plan, 'setKeys'), { message: DOWN });
+    });
+});
+
+describe('finding 8: the bondExtra baseline is the ledger when the plan is built', () => {
+    test('a rebond or Staked payout between the wizard load and the plan does not mark an unsigned top-up done', async () => {
+        const api = fakeApi({ bonded: true, active: 100n * PDEX, frozen: 100n * PDEX, nextKeys: KEYS });
+        const review = reviewFor(await C.readSetupState(api, STASH), { extra: 60n * PDEX, keep: true });
+        assert.deepEqual(review.steps.map(s => s.kind), ['bondExtra', 'validate']);
+        // the ledger grows by 50 (a payout to the bond) before the stepper opens
+        Object.assign(api.st, { active: 150n * PDEX, frozen: 150n * PDEX });
+        const plan = await C.buildStepwisePlan(api, review, { revision: 'r1', keyNames: NAMES });
+        // and by 10 more before the gate: 160 >= 100 + 60 but not >= 150 + 60
+        Object.assign(api.st, { active: 160n * PDEX, frozen: 160n * PDEX });
+        const g = W.stepwiseGate(await C.readStepwiseFresh(api, plan), plan, {});
+        assert.equal(g.next && g.next.kind, 'bondExtra', 'the top-up is still to sign');
+        assert.equal(await C.verifySetupStep(api, plan, 'bondExtra'), 'pending');
+        Object.assign(api.st, { active: 210n * PDEX, frozen: 210n * PDEX });
+        assert.equal(W.stepwiseGate(await C.readStepwiseFresh(api, plan), plan, {}).next.kind, 'validate');
+    });
+});
+
+describe('finding 7: "If you stop here" reads the chain first (section 6)', () => {
+    const D = '28 days';
+    test('a resume with the bond on chain and nothing signed this visit: SW-62', () => {
+        const st = bondedState(500n * PDEX);
+        const plan = planOf(st, { keep: false });
+        assert.deepEqual(plan.steps.map(s => s.kind), ['setKeys', 'validate']);
+        assert.deepEqual(W.stopLine(plan, st, plan.steps, D), { text: W.SW.stopBonded(String(500n * PDEX), D), link: true });
+    });
+    test('keys only: SW-61; nothing: SW-60', () => {
+        const keys = unbonded({ nextKeys: KEYS });
+        const plan = planOf(keys, { keep: true });
+        assert.equal(W.stopLine(plan, keys, plan.steps, D).text, W.SW.stopKeys);
+        const none = unbonded();
+        const p2 = planOf(none);
+        assert.equal(W.stopLine(p2, none, p2.steps, D).text, W.SW.stopNothing);
     });
 });
