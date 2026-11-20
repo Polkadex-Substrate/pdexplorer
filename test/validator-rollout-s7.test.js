@@ -277,7 +277,7 @@ describe('A1 getProxyEventsChecked: a missing idx_events_signer_block skips the 
         } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } }
     });
 
-    test('index missing: only the event_accounts branch runs, partial with a reason code, one warning, no CREATE INDEX, no events scan', () => {
+    test('index missing: only the event_accounts branch runs, limited (not partial) with a reason code, one warning, no CREATE INDEX, no events scan', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-proxied-noidx-'));
         const warns = [];
         const origWarn = console.warn;
@@ -287,10 +287,12 @@ describe('A1 getProxyEventsChecked: a missing idx_events_signer_block skips the 
             console.warn = (...a) => { warns.push(a.join(' ')); };
             let got, got2;
             const plans = plansOf(h, () => { got = db.getProxyEventsChecked(ME, 10); got2 = db.getProxyEventsChecked(ME, 10); });
-            assert.equal(got.partial, true);
+            assert.equal(got.partial, false, 'a missing index is a standing limit, not a failed read');
+            assert.equal(got.limited, true);
             assert.equal(got.reason, 'SIGNER_INDEX_MISSING');
             assert.deepEqual(got.rows.map(r => r.block), [100], 'the linked branch still answers; the signer-only event is not seen');
-            assert.equal(got2.partial, true);
+            assert.equal(got2.partial, false);
+            assert.equal(got2.limited, true);
             assert.ok(plans.every(p => !/signer_address\s*=\s*\?/.test(p.sql) || /sqlite_master|index_list/.test(p.sql)), 'no executed statement filters by signer_address');
             assert.ok(plans.every(p => !/CREATE INDEX/i.test(p.sql)));
             assert.ok(plans.every(p => !unindexedEventsScan(p.plan)), plans.map(p => p.plan).join('\n'));
@@ -313,25 +315,75 @@ describe('A1 getProxyEventsChecked: a missing idx_events_signer_block skips the 
     });
 });
 
-describe('A1 route: an index-missing answer is partial with the reason, not kept, no-store', () => {
-    test('events() returning { rows, partial, reason } makes the body partial with reason', async () => {
+describe('A1 route: an index-missing answer is limited, memoised and cached; a failed chain read stays partial', () => {
+    function world(events, api) {
         let calls = 0;
         const handlers = {};
         const app = { get: (_p, h) => { handlers.get = h; } };
         const sent = {};
         registerProxiedStashesRoute(app, {
-            api: () => ({ query: { proxy: { proxies: async () => [[{ delegate: ME, proxyType: 'Staking', delay: 0 }]] } } }),
+            api: () => api || ({ query: { proxy: { proxies: async () => [[{ delegate: ME, proxyType: 'Staking', delay: 0 }]] } } }),
             ready: () => true, gate: () => ({ address: ME }),
-            events: async () => { calls++; return { rows: [added(S1, ME)], partial: true, reason: 'SIGNER_INDEX_MISSING' }; },
-            cacheShort: () => {}, serverError: (_r, e) => { throw e; }
+            events: async () => { calls++; return events; },
+            cacheShort: (r) => r.set('Cache-Control', 'short'), serverError: (_r, e) => { throw e; }
         });
         const res = { set: (k, v) => { sent[k] = v; return res; }, json: (b) => { sent.body = b; return res; }, status: () => res };
-        await handlers.get({ path: '/x', ip: '1' }, res);
-        await handlers.get({ path: '/x', ip: '1' }, res);
-        assert.equal(sent.body.partial, true);
-        assert.equal(sent.body.reason, 'SIGNER_INDEX_MISSING');
-        assert.equal(sent['Cache-Control'], 'no-store');
-        assert.equal(calls, 2, 'not kept');
+        const get = () => handlers.get({ path: '/x', ip: '1' }, res);
+        return { get, sent, calls: () => calls };
+    }
+    const failingApi = { query: { proxy: { proxies: async () => { throw new Error('rpc down'); } } } };
+    const limitedRows = { rows: [added(S1, ME)], partial: false, limited: true, reason: 'SIGNER_INDEX_MISSING' };
+
+    test('index missing: partial false, limited true with the reason, cached not no-store, memoised', async () => {
+        const w = world(limitedRows);
+        await w.get();
+        await w.get();
+        assert.equal(w.sent.body.partial, false);
+        assert.equal(w.sent.body.limited, true);
+        assert.equal(w.sent.body.reason, 'SIGNER_INDEX_MISSING');
+        assert.equal(w.sent['Cache-Control'], 'short');
+        assert.equal(w.calls(), 1, 'second call does not read again');
+    });
+    test('a complete answer carries no limited flag', async () => {
+        const w = world({ rows: [added(S1, ME)], partial: false });
+        await w.get();
+        assert.equal(w.sent.body.partial, false);
+        assert.notEqual(w.sent.body.limited, true);
+    });
+    test('index missing and a failed chain read: partial true, still limited, no-store, not kept', async () => {
+        const w = world(limitedRows, failingApi);
+        await w.get();
+        await w.get();
+        assert.equal(w.sent.body.partial, true);
+        assert.equal(w.sent.body.limited, true);
+        assert.equal(w.sent['Cache-Control'], 'no-store');
+        assert.equal(w.calls(), 2);
+    });
+    test('failed chain read alone: partial true, no limited, no-store, not kept', async () => {
+        const w = world({ rows: [added(S1, ME)], partial: false }, failingApi);
+        await w.get();
+        await w.get();
+        assert.equal(w.sent.body.partial, true);
+        assert.notEqual(w.sent.body.limited, true);
+        assert.equal(w.sent['Cache-Control'], 'no-store');
+        assert.equal(w.calls(), 2);
+    });
+});
+
+describe('A1 html: the retry line follows partial only', () => {
+    const esc = (x) => String(x);
+    test('limited alone: no partial line, no retry button, the always-line stays', () => {
+        const h = proxiedStashesHtml({ stashes: [], capped: false, partial: false, limited: true, reason: 'SIGNER_INDEX_MISSING' }, { esc });
+        assert.ok(!h.includes('data-proxied-partial'));
+        assert.ok(!h.includes('data-proxied-retry'));
+        assert.ok(h.includes('Found from indexed proxy events'));
+    });
+    test('partial (with or without limited): the line and the retry button', () => {
+        for (const r of [{ stashes: [], partial: true }, { stashes: [], partial: true, limited: true }]) {
+            const h = proxiedStashesHtml(r, { esc });
+            assert.ok(h.includes('data-proxied-partial="true"'));
+            assert.ok(h.includes('data-proxied-retry="true"'));
+        }
     });
 });
 
