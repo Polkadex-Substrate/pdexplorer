@@ -22,7 +22,7 @@ import path from 'node:path';
 import { Window } from 'happy-dom';
 import { encodeAddress } from '@polkadot/util-crypto';
 import * as db from '../db.js';
-import { proxyCandidates, readProxiedStashes, registerProxiedStashesRoute, PROXIED_STASHES_ROUTE, MAX_CANDIDATES, PROXY_EVENT_LIMIT, PROXIED_TTL_MS, proxiedStashesHtml } from '../lib/proxied-stashes.js';
+import { proxyCandidates, readProxiedStashes, registerProxiedStashesRoute, PROXIED_STASHES_ROUTE, MAX_CANDIDATES, PROXY_EVENT_LIMIT, PROXIED_TTL_MS, proxiedStashesHtml, readProxiedStashesChecked } from '../lib/proxied-stashes.js';
 import { manageRole, mountManageLink, MANAGE_LINK_TEXT } from '../lib/validator-manage-link.js';
 import { mountValidatePage } from '../lib/validator-status-view.js';
 import { validatorStatusModel } from '../lib/validator-status.js';
@@ -172,6 +172,27 @@ describe('A1 GET /api/proxied-stashes/:address: bounded, cached', () => {
         assert.equal(res.body.capped, true);
         assert.equal(w.reads.length, MAX_CANDIDATES);
     });
+    test('a failed live read is partial: not cached, no-store, and the next request reads again', async () => {
+        const { api } = proxyApi({ defs: { [S1]: [[ME, 'Staking', 0]] }, validators: [S1], fail: [S1] });
+        const w = routeWorld({ api: () => api });
+        const res = await w.get(ME);
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.partial, true);
+        assert.equal(res.headers['Cache-Control'], 'no-store');
+        await w.get(ME);
+        assert.equal(w.calls.events.length, 2, 'not kept as "not a proxy"');
+    });
+    test('readProxiedStashesChecked: partial only when a read failed, not when the account is simply not a proxy', async () => {
+        const ok = proxyApi({ defs: { [S1]: [[OTHER, 'Any', 0]] } }).api;
+        assert.deepEqual(await readProxiedStashesChecked(ok, ME, [S1]), { stashes: [], partial: false });
+        const bad = proxyApi({ defs: {}, fail: [S1] }).api;
+        assert.deepEqual(await readProxiedStashesChecked(bad, ME, [S1, S2]), { stashes: [], partial: true });
+    });
+    test('a clean answer says partial false and is still cached', async () => {
+        const w = routeWorld();
+        const res = await w.get(ME);
+        assert.equal(res.body.partial, false);
+    });
     test('server.js registers the route with the event index lookup and the status rate limit', () => {
         const src = readRepo('server.js', import.meta.url);
         assert.match(src, /registerProxiedStashesRoute\(app, \{[^}]*events: \(address, limit\) => db\.getProxyEventsFor\(address, limit\)/);
@@ -199,6 +220,21 @@ describe('A1 db.getProxyEventsFor: ProxyAdded and PureCreated naming or signed b
         assert.equal(rows[0].data.delegator, S2);
         assert.equal(db.getProxyEventsFor(ME, 2).length, 2);
         assert.deepEqual(proxyCandidates(rows, ME), [S2, S3, S1]);
+    });
+});
+
+describe('A1 getProxyEventsFor: the signer branch is seeked by idx_events_signer_block and bounded', () => {
+    test('plan uses the index, the 5,000-row window is stated in db.js and the API reference', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-proxied-plan-'));
+        try {
+            const h = db.initDb(dir, false, { awaitMigrator: false });
+            const src = readRepo('db.js', import.meta.url);
+            const plan = h.prepare("EXPLAIN QUERY PLAN SELECT rowid, * FROM events WHERE signer_address = ? ORDER BY block DESC, rowid DESC LIMIT 5000").all(ME).map(r => r.detail).join(' | ');
+            assert.match(plan, /USING INDEX idx_events_signer_block \(signer_address=\?\)/);
+            assert.doesNotMatch(plan, /USE TEMP B-TREE/);
+            assert.match(src, /5,000-row window/);
+            assert.match(readRepo('lib/api-reference.js', import.meta.url), /newest 5,000/);
+        } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } }
     });
 });
 
@@ -238,7 +274,8 @@ describe('A1 /validate: stashes you are a proxy for, pick one to manage', () => 
         assert.ok(d.urls.includes('/api/proxied-stashes/' + encodeURIComponent(ME)));
         const sec = el.querySelector('#validate-proxied-slot section');
         assert.ok(sec, 'the list is shown');
-        assert.equal(sec.querySelector('h3').textContent, 'Stashes you are a proxy for');
+        assert.equal(sec.querySelector('h3').textContent, 'Accounts you are a proxy for');
+        assert.ok(sec.textContent.includes('This account is a proxy for the accounts below. Open one to see its validator status and what this proxy can do there.'));
         const rows = Array.from(sec.querySelectorAll('li'));
         assert.equal(rows.length, 2);
         assert.match(rows[0].textContent, /Staking proxy/);
@@ -252,15 +289,55 @@ describe('A1 /validate: stashes you are a proxy for, pick one to manage', () => 
         assert.match(links[0].getAttribute('aria-label'), new RegExp('Manage ' + S1));
         assert.ok(el.querySelectorAll('.validate-primary').length <= 1, 'at most one primary in the view');
     });
-    test('nothing found, a failed read or a capped list: nothing extra, or the cap said in words', async () => {
-        for (const proxied of [{ address: ME, stashes: [], capped: false }, new Error('503')]) {
-            const { el } = pageDom();
-            await mountValidatePage(el, pageDeps(proxied)); await settle();
-            assert.equal(el.querySelector('#validate-proxied-slot').innerHTML, '');
-        }
+    const ALWAYS = 'Found from indexed proxy events, so an older proxy may be missing. To open an account not listed, enter its address under Any validator stash above.';
+    test('nothing found: the always-line alone, no empty heading; a failed fetch: nothing', async () => {
+        const a = pageDom();
+        await mountValidatePage(a.el, pageDeps({ address: ME, stashes: [], capped: false })); await settle();
+        const slot = a.el.querySelector('#validate-proxied-slot');
+        assert.equal(slot.textContent.trim(), ALWAYS);
+        assert.equal(slot.querySelector('h3'), null);
+        const b = pageDom();
+        await mountValidatePage(b.el, pageDeps(new Error('503'))); await settle();
+        assert.equal(b.el.querySelector('#validate-proxied-slot').innerHTML, '');
+    });
+    test('a list always carries the always-line; the cap line only when the cap was hit, in the approved words', async () => {
+        const stashes = [{ stash: S1, proxies: [{ type: 'Staking', delay: 0 }], validating: true }];
+        const a = pageDom();
+        await mountValidatePage(a.el, pageDeps({ address: ME, capped: false, stashes })); await settle();
+        const ta = a.el.querySelector('#validate-proxied-slot').textContent;
+        assert.ok(ta.includes(ALWAYS));
+        assert.ok(!ta.includes('Only the 16 most recent proxy grants were checked.'));
+        const b = pageDom();
+        await mountValidatePage(b.el, pageDeps({ address: ME, capped: true, stashes })); await settle();
+        const tb = b.el.querySelector('#validate-proxied-slot').textContent;
+        assert.ok(tb.includes(ALWAYS) && tb.includes('Only the 16 most recent proxy grants were checked.'));
+    });
+    test('Manage only for a proxy with no delay whose type can make a change; otherwise View status', () => {
+        const link = (proxies) => /<a [^>]*>([^<]*)<\/a>/.exec(proxiedStashesHtml({ stashes: [{ stash: S1, proxies, validating: null }] }, { esc: escapeHtml, shortAddr: short }))[1];
+        assert.equal(link([{ type: 'Staking', delay: 0 }]), 'Manage');
+        assert.equal(link([{ type: 'Governance', delay: 0 }]), 'View status');
+        assert.equal(link([{ type: 'Staking', delay: 5 }]), 'View status');
+        assert.equal(link([{ type: 'Governance', delay: 0 }, { type: 'Any', delay: 0 }]), 'Manage');
+        assert.equal(link([{ type: 'Any', delay: 10 }, { type: 'Governance', delay: 0 }]), 'View status');
+    });
+    test('a partial answer says so with a retry; the retry asks again', async () => {
         const { el } = pageDom();
-        await mountValidatePage(el, pageDeps({ address: ME, capped: true, stashes: [{ stash: S1, proxies: [{ type: 'Staking', delay: 0 }], validating: true }] })); await settle();
-        assert.match(el.querySelector('#validate-proxied-slot').textContent, /first 16/);
+        let calls = 0;
+        const d = pageDeps(null, { fetchJson: async (u) => {
+            if (u === '/api/validator/params') return params();
+            if (u.startsWith('/api/proxied-stashes/')) { calls++; return calls === 1 ? { address: ME, stashes: [], capped: false, partial: true } : { address: ME, capped: false, partial: false, stashes: [{ stash: S1, proxies: [{ type: 'Staking', delay: 0 }], validating: true }] }; }
+            const m = /^\/api\/validator\/([^/]+)\/status$/.exec(u);
+            return { ...validatorStatusModel({ address: decodeURIComponent(m[1]) }, params()), address: decodeURIComponent(m[1]) };
+        } });
+        await mountValidatePage(el, d); await settle();
+        const slot = el.querySelector('#validate-proxied-slot');
+        assert.ok(slot.textContent.includes('Could not check every account. Try again.'));
+        const btn = slot.querySelector('button');
+        assert.ok(btn, 'a retry control');
+        btn.click(); await settle();
+        assert.equal(calls, 2);
+        assert.ok(el.querySelector('#validate-proxied-slot').querySelectorAll('li').length === 1);
+        assert.ok(!el.querySelector('#validate-proxied-slot').textContent.includes('Could not check'));
     });
     test('viewing another stash (/validate/<address>) or nothing connected: not asked', async () => {
         const a = pageDeps({ address: ME, stashes: [] }, { urlAddress: S1 });
@@ -360,6 +437,15 @@ describe('A2 mountManageLink: the secondary button on the validator page', () =>
         const off = linkDeps({ enabled: false });
         await mountManageLink(pageDom().el, off);
         assert.equal(off.log.proxyReads, 0, 'with the flag off the chain is not asked');
+    });
+    test('a proxy read that fails still gives the multisig member the button, and the stash its link', async () => {
+        const boom = async () => { throw new Error('rpc'); };
+        const { el } = pageDom();
+        await mountManageLink(el, linkDeps({ readProxies: boom, findMultisig: (a) => (a === S1 ? { address: S1, signers: [ME, M2], threshold: 2 } : null) }));
+        assert.ok(el.querySelector('button'), 'the multisig button survives a failed proxy read');
+        const c = pageDom();
+        await mountManageLink(c.el, linkDeps({ readProxies: boom, account: { status: 'connected', address: CTRL } }));
+        assert.equal(c.el.querySelector('a').getAttribute('href'), '/validate/' + S1);
     });
     test('a newer mount wins over a slower earlier one (wallet changed while reading)', async () => {
         const { el } = pageDom();

@@ -106,7 +106,7 @@ describe('2. pallets whose Balance is not PDEX', () => {
     });
 
     test('assetRewards and the other asset-side pallets are listed explicitly', () => {
-        for (const s of ['assetConversion', 'assetRewards', 'poolAssets', 'assets', 'ocex', 'thea', 'theaExecutor', 'hyperFungibleToken', 'crowdSourceLMP']) {
+        for (const s of ['assetConversion', 'assetRewards', 'poolAssets', 'assets', 'ocex', 'thea', 'theaExecutor', 'hyperFungibleToken', 'ismp', 'ismpParams', 'crowdSourceLMP']) {
             assert.ok(ASSET_PALLETS.has(s), s);
             assert.equal(isNativeBalanceField(s, 'any', 'amount', 'T::Balance', []), false, s);
         }

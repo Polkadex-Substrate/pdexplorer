@@ -507,6 +507,16 @@ describe('chain reads: live limits, the stash state, resume', () => {
         assert.equal(await C.verifySetup(fakeApi({ ...done, nextKeys: NEWKEYS }), review), 'pending');
         assert.equal(await C.verifySetup({ query: {} }, review), 'pending', 'an unreadable chain is never applied');
     });
+    test('verifySetup: a bondExtra review is pending until the Bonded event or the ledger gain confirms it', async () => {
+        const was = { ...fresh, bonded: true, controller: STASH, active: String(500n * PDEX), validating: true, nextKeys: {} };
+        const review = { stash: STASH, steps: [{ kind: 'bondExtra', value: 50n * PDEX }], state: was, extra: 50n * PDEX };
+        const base = { bonded: STASH, nextKeys: KEYS, validating: true };
+        const unchanged = fakeApi({ ...base, ledger: { controller: STASH, stash: STASH, active: 500n * PDEX } });
+        assert.equal(await C.verifySetup(unchanged, review), 'pending', 'bonded already, nothing shows the extra');
+        assert.equal(await C.verifySetup(unchanged, review, { bondedEvent: String(50n * PDEX) }), 'applied', 'the Bonded event confirms');
+        const grown = fakeApi({ ...base, ledger: { controller: STASH, stash: STASH, active: 550n * PDEX } });
+        assert.equal(await C.verifySetup(grown, review), 'applied', 'the re-read ledger confirms');
+    });
     test('estimateSetupFee: the batch\'s own paymentInfo, or null', async () => {
         assert.equal(await C.estimateSetupFee(fakeApi({ fee: 3n * 10n ** 10n }), STASH, S.planSetup(fresh, input).steps), 3n * 10n ** 10n);
         assert.equal(await C.estimateSetupFee({ tx: {} }, STASH, S.planSetup(fresh, input).steps), null);
