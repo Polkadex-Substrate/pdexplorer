@@ -388,8 +388,8 @@ Near the top it prints one `deploy-check:` line (user, whether sudo is passwordl
 
 | Switch | Effect |
 |---|---|
-| `RUN_LETSENCRYPT=1` | Also run `init-letsencrypt.sh` when a certificate for `$DOMAIN` exists. It only fetches missing TLS parameter files and **keeps** the certificate. |
-| `FORCE=1` | Implies the above and **replaces** the certificate (a Cloudflare Origin certificate is not recoverable this way; expect a 526 until it is reinstalled). The only way to replace one: never a keystroke. |
+| `RUN_LETSENCRYPT=1` | Also run `init-letsencrypt.sh` when a certificate for `$DOMAIN` exists. With a certificate present this is effectively a no-op: the script finds the certificate, **keeps** it and exits before fetching anything. |
+| `--force-replace-cert` (argument: `bash deploy.sh --force-replace-cert`) | Implies the above and **replaces** the certificate (a Cloudflare Origin certificate is not recoverable this way; expect a 526 until it is reinstalled). The only way to replace one: never a keystroke. `FORCE=1` in the environment, in `.env` or kept by `sudo -E` is ignored. |
 | `INTERACTIVE=1` | Keep the terminal on stdin and let sudo ask for its password. Brings back no certificate prompt. |
 
 ### Restoring data on a new server

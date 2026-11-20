@@ -3,12 +3,25 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+# ---- Arguments ---------------------------------------------------------------
+# The only way to replace an existing certificate is --force-replace-cert on
+# THIS command line. It is deliberately not an environment variable: a FORCE=1
+# left in .env, exported in a shell or kept by `sudo -E` must never replace a
+# certificate (a Cloudflare Origin cert is not recoverable from this script).
+DEPLOY_FORCE_REPLACE_CERT=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --force-replace-cert) DEPLOY_FORCE_REPLACE_CERT=1 ;;
+        *) echo "ERROR: unknown argument '$_arg'. The only argument is --force-replace-cert." >&2; exit 2 ;;
+    esac
+done
+
 # ---- Unattended by default --------------------------------------------------
 # This script never asks a question. Stdin is closed, so anything that still
 # tries to read gets EOF and fails visibly instead of waiting. INTERACTIVE=1 is
 # the one explicit opt-in: it keeps the terminal on stdin and lets sudo ask for
 # its password. It does NOT bring back any prompt about certificates: replacing
-# an existing certificate needs FORCE=1, never a keystroke.
+# an existing certificate needs the --force-replace-cert argument, never a keystroke.
 if [ "${INTERACTIVE:-0}" != "1" ]; then
     exec </dev/null
 fi
@@ -251,7 +264,7 @@ echo "--> Initializing Let's Encrypt certificates..."
 #   2. answering "y" at its prompt replaces the origin cert with a SELF-SIGNED
 #      placeholder, which Cloudflare Full (Strict) rejects with 526.
 # Neither is recoverable by re-running the deploy, so skip the whole step when
-# a certificate is already in place (RUN_LETSENCRYPT=1 and FORCE=1: see below).
+# a certificate is already in place (RUN_LETSENCRYPT=1 and --force-replace-cert: see below).
 #
 # Invoked via `bash` rather than `chmod +x && ./script`: the file is committed
 # mode 100644, so chmod flipped it to 100755, which git counts as a local
@@ -263,22 +276,26 @@ echo "--> Initializing Let's Encrypt certificates..."
 # whether to replace it. The switches, in one place:
 #   (none)            certificate present: skip. Absent: bootstrap.
 #   RUN_LETSENCRYPT=1 also run init-letsencrypt.sh when a certificate is present
-#                     for $DOMAIN; it then only fetches missing TLS parameter
-#                     files and KEEPS the certificate.
-#   FORCE=1           implies RUN_LETSENCRYPT=1 and REPLACES the certificate.
-#                     The only way to replace one; never a keystroke.
+#                     for $DOMAIN. In practice that is a no-op: init-letsencrypt.sh
+#                     finds the certificate, says it is keeping it and exits 0
+#                     BEFORE it fetches TLS parameter files or touches docker.
+#   --force-replace-cert (argument to this script) REPLACES the certificate.
+#                     The only way to replace one; never a keystroke, and never
+#                     FORCE=1 from the environment or .env (those are ignored).
+#                     The decision reaches init-letsencrypt.sh as
+#                     DEPLOY_FORCE_REPLACE_CERT, which .env cannot override.
 # "Present" is decided by deploy_detect_cert (tools/deploy-detect.sh): the same
 # exact-path test init-letsencrypt.sh uses, then the glob, then `sudo -n test`.
 # A certificate tree this user cannot read is NOT "absent": we say so and keep
 # what is there rather than bootstrap over it.
 deploy_detect_cert "$CERTBOT_PATH" "$DOMAIN" && CERT_RC=0 || CERT_RC=$?
 echo "--> Certificate check: $CERT_DETECT ($CERT_DETECT_PATH)"
-if [ "${FORCE:-0}" = "1" ]; then
-    echo "--> FORCE=1: REPLACING the certificate for ${DOMAIN:-?}. A real Cloudflare Origin cert is not recoverable from this script."
-    NONINTERACTIVE=1 FORCE=1 bash ./init-letsencrypt.sh
+if [ "$DEPLOY_FORCE_REPLACE_CERT" = "1" ]; then
+    echo "--> --force-replace-cert: REPLACING the certificate for ${DOMAIN:-?}. A real Cloudflare Origin cert is not recoverable from this script."
+    NONINTERACTIVE=1 DEPLOY_FORCE_REPLACE_CERT=1 bash ./init-letsencrypt.sh
 elif [ "$CERT_RC" = "0" ]; then
     echo "--> Existing certificate found, skipping bootstrap."
-    echo "    (Cloudflare Origin cert setup. RUN_LETSENCRYPT=1 runs init-letsencrypt.sh without replacing it; FORCE=1 replaces it.)"
+    echo "    (Cloudflare Origin cert setup. RUN_LETSENCRYPT=1 runs init-letsencrypt.sh, which keeps it; --force-replace-cert replaces it.)"
     # Audit F-024: "a cert exists" is not "a cert Cloudflare will accept".
     # init-letsencrypt.sh writes a SELF-SIGNED placeholder, and this skip used
     # to treat that placeholder as done — under Full (Strict) that is a 526.
@@ -298,9 +315,9 @@ elif [ "$CERT_RC" = "0" ]; then
     done
     if [ "${RUN_LETSENCRYPT:-0}" = "1" ]; then
         if [ "$CERT_DETECT" = "exact" ]; then
-            NONINTERACTIVE=1 FORCE=0 bash ./init-letsencrypt.sh
+            NONINTERACTIVE=1 DEPLOY_FORCE_REPLACE_CERT=0 bash ./init-letsencrypt.sh
         else
-            echo "--> RUN_LETSENCRYPT=1 ignored: the certificate was found as '$CERT_DETECT', which init-letsencrypt.sh cannot see as this user, and it would bootstrap over it. Run as root, or use FORCE=1 to replace it deliberately."
+            echo "--> RUN_LETSENCRYPT=1 ignored: the certificate was found as '$CERT_DETECT', which init-letsencrypt.sh cannot see as this user, and it would bootstrap over it. Run as root, or use --force-replace-cert to replace it deliberately."
         fi
     fi
 elif [ "$CERT_RC" = "2" ]; then
@@ -321,7 +338,7 @@ else
     #
     # For a grey-clouded / non-Cloudflare origin where a placeholder is
     # genuinely wanted, set ORIGIN_CERT_MODE=self-signed-bootstrap.
-    NONINTERACTIVE=1 FORCE=0 bash ./init-letsencrypt.sh
+    NONINTERACTIVE=1 DEPLOY_FORCE_REPLACE_CERT=0 bash ./init-letsencrypt.sh
 fi
 
 # ---- Cert directory name vs nginx.conf (audit F-189) ------------------------

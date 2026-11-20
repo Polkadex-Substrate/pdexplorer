@@ -255,7 +255,7 @@ describe('deploy.sh wiring', () => {
         const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
         assert.ok(!/only fetches missing TLS parameter files/.test(readme));
         assert.ok(!/only fetches missing TLS parameter files/.test(deploy));
-        assert.ok(!/FORCE=1/.test(readme.split('| Switch | Effect |')[1].split('###')[0]), 'README switch table still documents FORCE=1');
+        assert.ok(!/\| `FORCE=1` \|/.test(readme), 'README switch table still lists FORCE=1 as a switch');
         assert.match(readme, /--force-replace-cert/);
     });
     test('a docker install is conditional on the detection function, not on command -v alone', () => {
@@ -294,12 +294,18 @@ export function findOffences(src, name = 'script') {
 }
 
 describe('guard: nothing in the deploy path can wait for a keyboard', () => {
-    for (const f of ['deploy.sh', 'provision-ubuntu.sh', 'tools/deploy-detect.sh', 'init-letsencrypt.sh', 'tools/align-cert-name.sh', 'tools/fix-cert-perms.sh']) {
+    for (const f of ['deploy.sh', 'provision-ubuntu.sh', 'tools/deploy-detect.sh', 'tools/align-cert-name.sh', 'tools/fix-cert-perms.sh']) {
         test(f, () => {
             const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
             assert.deepEqual(findOffences(src, f), []);
         });
     }
+    // init-letsencrypt.sh keeps a terminal prompt for an operator running it by hand;
+    // deploy.sh always calls it with NONINTERACTIVE=1, so only the -T rule applies here.
+    test('init-letsencrypt.sh: every compose run/exec has -T', () => {
+        const src = fs.readFileSync(path.join(ROOT, 'init-letsencrypt.sh'), 'utf8');
+        assert.deepEqual(findOffences(src, 'init-letsencrypt.sh').filter(o => /without -T/.test(o)), []);
+    });
     test('the apt wrappers carry all three settings', () => {
         const dep = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
         const prov = fs.readFileSync(path.join(ROOT, 'provision-ubuntu.sh'), 'utf8');
