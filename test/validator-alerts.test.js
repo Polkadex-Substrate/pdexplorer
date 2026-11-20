@@ -499,7 +499,7 @@ describe('runValidatorAlertsTick: a replay of recorded observations', () => {
         assert.equal(h.sent.length, 1);
     });
 
-    test('a failed send is recorded once and not retried; another follower still gets the mail', async () => {
+    test('a failed send does not stop another follower getting the mail, and is not retried within the same tick or before its back-off (retry rules: validator-alerts-retry.test.js)', async () => {
         fresh();
         const a = mail(), b = mail();
         follow(a, S1); follow(b, S1);
@@ -512,7 +512,7 @@ describe('runValidatorAlertsTick: a replay of recorded observations', () => {
         assert.deepEqual(sent.map(m => m.to), [b]);
         queue.push(obs({ disabled: true }));
         await run();
-        assert.deepEqual(sent.map(m => m.to), [b], 'the same occurrence is not retried');
+        assert.deepEqual(sent.map(m => m.to), [b], 'the same occurrence is not reserved again');
     });
 
     test('a stash is read once per tick however many people follow it', async () => {

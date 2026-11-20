@@ -70,10 +70,16 @@ function isRfc5322Email(s) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim());
 }
 
+// The limiter's clock. Tests set it (and reset it with null) so the 10 s window is moved by hand
+// instead of waited for; nothing else changes it.
+let limiterNow = Date.now;
+export function _setEmailClockForTests(fn) { limiterNow = typeof fn === 'function' ? fn : Date.now; }
+
 function isRateLimited(toEmailLower) {
-    const last = lastSendByRecipient.get(toEmailLower) || 0;
-    if (Date.now() - last < EMAIL_MIN_INTERVAL_MS) return true;
-    lastSendByRecipient.set(toEmailLower, Date.now());
+    const t = limiterNow();
+    const last = lastSendByRecipient.get(toEmailLower);
+    if (last !== undefined && t - last < EMAIL_MIN_INTERVAL_MS) return true;
+    lastSendByRecipient.set(toEmailLower, t);
     return false;
 }
 
