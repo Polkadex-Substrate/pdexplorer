@@ -1007,3 +1007,68 @@ describe('finding 8: the review warnings come from the chain', () => {
         assert.equal(items[1], 'If your node is offline for a whole session you earn nothing for it. If 7 or more of 50 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%.');
     });
 });
+
+// ── final review (2026-11-21) ──
+const SW08 = 'Your setup was sent but the explorer could not confirm it. It may still be included in a block. Do not sign it again yet. Reload this page in a minute; the setup continues from the chain.';
+const notConfirmedText = (k) => `The explorer could not confirm step ${k}. It may still go through. Do not sign it again yet. Press Check again to read the chain.`;
+
+describe('final review: the offline line uses the elected count', () => {
+    const offlineLine = (n) => `If your node is offline for a whole session you earn nothing for it. If ${Math.floor(n / 10) + 2} or more of ${n} validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%.`;
+    test('electedCount first, then validatorCount, then the figures of today', async () => {
+        for (const [params, want] of [[{ validatorCount: 50, electedCount: 40 }, offlineLine(40)], [{ validatorCount: 50, electedCount: 0 }, offlineLine(50)],
+            [{ validatorCount: 50 }, offlineLine(50)], [{}, 'If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%.']]) {
+            const d = deps({ fetchJson: async (u) => { if (u === '/api/validator/params') return { ...PARAMS, ...params }; throw new Error('unexpected ' + u); } });
+            const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+            const items = Array.from(el.querySelectorAll('.validate-warnings li')).map(li => li.textContent.trim());
+            assert.equal(items[1], want, JSON.stringify(params));
+        }
+    });
+});
+
+describe('final review: a step whose link dropped before broadcast is not called sent (SW-46b)', () => {
+    test('not confirmed with nothing broadcast: Check again shows the Not confirmed text, never SW-46b', async () => {
+        const d = deps(); const { el } = dom(); await openStepper(d, el);
+        await tick(el, '#validate-setup-ack');
+        d.api.st.nextKeys = KEYS;
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onSuccess(); await settle();
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[1].onError('The connection dropped.', { stage: 'failed', key: 'net.disconnected' }); await settle();
+        assert.equal(words(el)[1], 'Not confirmed');
+        await click(el, '[data-setup-action="step-check"]');
+        assert.equal(status(el), notConfirmedText(2));
+        assert.doesNotMatch(el.textContent, /was sent but is still not on chain/);
+        assert.deepEqual(primaries(el).map(b => b.textContent.trim()), ['Sign step 2 of 3']);
+    });
+});
+
+describe('final review: no stop line while a top-up is sent and unconfirmed', () => {
+    test('a nominating stash at Not confirmed for its top-up shows no "If you stop here"', async () => {
+        const d = deps({ api: fakeApi({ nextKeys: KEYS, bonded: true, active: 150n * PDEX, noms: [OTHER] }) }); const { el } = dom(); await mountValidatorSetup(el, d); await settle();
+        await toTopUpReview(el, '200');
+        await click(el, '[data-setup-action="stepwise"]');
+        assert.match(el.textContent, /If you stop here/);
+        await tick(el, '#validate-setup-ack');
+        await click(el, '[data-setup-action="step-sign"]');
+        d.submits[0].onStage('broadcast', {}); d.submits[0].onStage('waiting', { stage: 'waiting' }); await settle();
+        assert.equal(words(el)[0], 'Not confirmed');
+        assert.doesNotMatch(el.textContent, /If you stop here/);
+    });
+});
+
+describe('final review: one signature, a submit that throws after broadcast (SW-08)', () => {
+    for (const [name, fail] of [['throws', () => { throw new Error('socket closed'); }], ['rejects', () => Promise.reject(new Error('socket closed'))]]) {
+        test(`d.submit ${name} after broadcast: SW-08, no SW-03, the lock cleared`, async () => {
+            const d = deps({ submit: (o) => { o.onStage('broadcast', {}); return fail(); } });
+            const warn = mock.method(console, 'warn', () => {});
+            try {
+                const { el } = dom(); await mountValidatorSetup(el, d); await settle(); await toReview(el);
+                await tick(el, '#validate-setup-ack');
+                await click(el, '[data-setup-action="sign"]');
+                assert.equal(signMsg(el), SW08);
+                assert.doesNotMatch(el.textContent, /socket closed/);
+                assert.equal(el.querySelector('[data-setup-action="back"]').disabled, false);
+            } finally { warn.mock.restore(); }
+        });
+    }
+});

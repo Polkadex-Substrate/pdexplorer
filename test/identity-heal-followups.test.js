@@ -14,6 +14,7 @@ import path from 'node:path';
 import * as realDb from '../db.js';
 import assert from 'node:assert/strict';
 import { encodeAddress } from '@polkadot/util-crypto';
+import * as H from '../lib/identity-heal.js';
 import {
     noteUnnamed, healUnnamedNames, HEAL_KEY, HEAL_MAX_AGE_MS, HEAL_WINDOW_BLOCKS, HEAL_ERROR_WARN_INTERVAL_MS, _resetHealStateForTests
 } from '../lib/identity-heal.js';
@@ -21,6 +22,8 @@ import {
 const addr = (n) => encodeAddress(new Uint8Array(32).fill(n), 88);
 const A = addr(41), B = addr(42);
 const T0 = 2_000_000_000;
+// The settle time an entry needs before a data drop (lib/identity-heal.js HEAL_SETTLE_MS, final review).
+const SETTLE = 10 * 60_000;
 const found = { name: 'Named', status: 'found' };
 const failed = { name: null, status: 'failed' };
 
@@ -79,8 +82,8 @@ describe('F2: a failing head cannot starve the rest', () => {
             noteUnnamed(f, a, 5, { now: () => T0 });
         }
         const resolve = async (a) => (bad.includes(a) ? failed : found);
-        await healUnnamedNames({ db: f, resolve, now: () => T0 });
-        await healUnnamedNames({ db: f, resolve, now: () => T0 });
+        await healUnnamedNames({ db: f, resolve, now: () => T0 + SETTLE });
+        await healUnnamedNames({ db: f, resolve, now: () => T0 + SETTLE });
         const healedAddrs = new Set(f.calls.blocks.map(c => c.a));
         for (const g of good) assert.ok(healedAddrs.has(g), 'an address behind 50 failing ones was reached by the second pass');
         const left = Object.keys(f.getKv(HEAL_KEY));
@@ -109,10 +112,12 @@ describe('F3: the drop depends on the data, not the clock', () => {
         assert.ok(!(f.getKv(HEAL_KEY) || {})[A], 'block 100 stored and healed: done');
     });
 
-    test('block stored: dropped at once, even moments after the note', async () => {
+    test('block stored: kept moments after the note (it may still be lowered), dropped once it has settled', async () => {
         const f = fakeDb({ maxBlock: 1_000 });
         noteUnnamed(f, A, 100, { now: () => T0 });
         await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + 1000 });
+        assert.ok(f.getKv(HEAL_KEY)[A], 'noted a second ago: kept');
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + SETTLE });
         assert.ok(!(f.getKv(HEAL_KEY) || {})[A]);
     });
 
@@ -219,10 +224,106 @@ describe('F5 on a real database: the error SQLite raises for the dropped index i
         realDb.insertBlocks([{ number: 5, hash: '0xr5', authorAddress: A, authorName: null, extrinsicsCount: 1, eventsCount: 1, timestamp: 1000 }]);
         noteUnnamed(realDb, A, 5, { now: () => T0 });
         const warns = [];
-        const r = await healUnnamedNames({ db: realDb, resolve: async () => found, now: () => T0, warn: (...a) => warns.push(a.join(' ')) });
+        const r = await healUnnamedNames({ db: realDb, resolve: async () => found, now: () => T0 + SETTLE, warn: (...a) => warns.push(a.join(' ')) });
         assert.equal(r.healed, 1, 'the block author was still named');
         assert.equal(warns.length, 1);
         assert.match(warns[0], /idx_events_block/);
         assert.ok(!(realDb.getKv(HEAL_KEY) || {})[A], 'block 5 is stored and healed: done');
+    });
+});
+
+// Final review (2026-11-21): the scanner scans a backfill, gap-fill or rescan range DESCENDING and inserts it
+// after the whole range, so a note that lowers `from` arrives while `to` is already stored.
+describe('final review: an entry is dropped only after it has settled; the backstop warns', () => {
+    // Blocks as rows: number -> author name (null = unnamed). The heal names only stored rows in the window.
+    function rowsDb(stored) {
+        const rows = new Map(stored.map(n => [n, null]));
+        const f = fakeDb({ maxBlock: Math.max(...stored), existing: (n) => rows.has(n) });
+        f.getMaxBlockNumber = () => Math.max(...rows.keys());
+        f.healBlockAuthorNames = (a, name, lo, hi) => {
+            let c = 0;
+            for (const [n, v] of rows) if (n >= lo && n <= hi && v === null) { rows.set(n, name); c++; }
+            f.calls.blocks.push({ a, lo, hi });
+            return c;
+        };
+        return { f, rows };
+    }
+
+    test('the settle time is a named 10 minute constant', () => {
+        assert.equal(H.HEAL_SETTLE_MS, 10 * 60_000);
+    });
+
+    test('a descending backfill lowers `from` while `to` is stored: the lower block is healed once it is inserted', async () => {
+        const { f, rows } = rowsDb([500]);
+        noteUnnamed(f, A, 500, { now: () => T0 });
+        const T1 = T0 + 2 * 3600_000;
+        // The backfill scans 100..499 descending and notes A at block 100; nothing of it is inserted yet.
+        noteUnnamed(f, A, 100, { now: () => T1 });
+        assert.equal(f.getKv(HEAL_KEY)[A].from, 100);
+        assert.equal(f.getKv(HEAL_KEY)[A].at, T1, 'a note that changes the range refreshes `at`');
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T1 + 1000 });
+        assert.equal(rows.get(500), 'Named');
+        assert.ok(f.getKv(HEAL_KEY)[A], 'block 500 is stored, but the entry was noted a second ago: kept');
+        rows.set(100, null);   // the backfill batch goes in
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T1 + SETTLE });
+        assert.equal(rows.get(100), 'Named', 'the lower block\'s name is healed');
+        assert.ok(!(f.getKv(HEAL_KEY) || {})[A], 'settled, stored and healed: dropped');
+    });
+
+    test('a complete entry is kept just before the settle time and dropped at it', async () => {
+        const { f } = rowsDb([100]);
+        noteUnnamed(f, A, 100, { now: () => T0 });
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + SETTLE - 1 });
+        assert.ok(f.getKv(HEAL_KEY)[A]);
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + SETTLE });
+        assert.ok(!(f.getKv(HEAL_KEY) || {})[A]);
+    });
+
+    test('a drop by the 24 h backstop warns once per interval, with a count and no address', async () => {
+        const f = fakeDb({ maxBlock: 50 });
+        noteUnnamed(f, A, 100, { now: () => T0 });
+        noteUnnamed(f, B, 200, { now: () => T0 });
+        const warns = [];
+        const warn = (...a) => warns.push(a.join(' '));
+        const t1 = T0 + HEAL_MAX_AGE_MS + 1;
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => t1, warn });
+        assert.deepEqual(Object.keys(f.getKv(HEAL_KEY) || {}), []);
+        assert.equal(warns.length, 1);
+        assert.match(warns[0], /\b2 address\(es\) dropped by the 24 h backstop/);
+        assert.ok(!warns[0].includes(A) && !warns[0].includes(B), 'no address in the log');
+        const C = addr(43);
+        noteUnnamed(f, C, 300, { now: () => T0 });
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => t1 + 1000, warn });
+        assert.equal(warns.length, 1, 'rate-limited');
+        noteUnnamed(f, addr(44), 300, { now: () => T0 });
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => t1 + 1000 + H.HEAL_BACKSTOP_WARN_INTERVAL_MS, warn });
+        assert.equal(warns.length, 2);
+        assert.match(warns[1], /\b2 address\(es\) dropped/, 'the count carries the drops held back by the rate limit');
+    });
+
+    test('a data drop after the settle time does not warn', async () => {
+        const f = fakeDb({ maxBlock: 1_000 });
+        noteUnnamed(f, A, 100, { now: () => T0 });
+        const warns = [];
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + HEAL_MAX_AGE_MS + 1, warn: (...a) => warns.push(a.join(' ')) });
+        assert.ok(!(f.getKv(HEAL_KEY) || {})[A]);
+        assert.equal(warns.length, 0);
+    });
+
+    test('the error line scrubs 0x public keys as well as SS58 addresses', async () => {
+        const f = fakeDb({ blockThrows: new Error('bad key 0x' + 'ab'.repeat(32) + ' for ' + A) });
+        noteUnnamed(f, A, 5, { now: () => T0 });
+        const warns = [];
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0, warn: (...a) => warns.push(a.join(' ')) });
+        assert.equal(warns.length, 1);
+        assert.ok(!/0x[0-9a-f]{40,}/i.test(warns[0]), warns[0]);
+        assert.ok(!warns[0].includes(A));
+        assert.match(warns[0], /\[key\]/);
+        const g = fakeDb({ blockThrows: new Error('short 0x' + 'ab'.repeat(19) + ' stays') });
+        _resetHealStateForTests();
+        noteUnnamed(g, A, 5, { now: () => T0 });
+        const w2 = [];
+        await healUnnamedNames({ db: g, resolve: async () => found, now: () => T0, warn: (...a) => w2.push(a.join(' ')) });
+        assert.match(w2[0], /0x(ab){19} stays/, 'fewer than 40 hex characters is not a key');
     });
 });

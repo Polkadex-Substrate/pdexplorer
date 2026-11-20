@@ -23,6 +23,8 @@ import {
     HEAL_MAX_WINDOWS_PER_PASS, HEAL_MAX_AGE_MS, HEAL_DROP_WARN_INTERVAL_MS
 } from '../lib/identity-heal.js';
 
+// The settle time an entry needs before a data drop (lib/identity-heal.js HEAL_SETTLE_MS, final review).
+const SETTLE = 10 * 60_000;
 const addr = (n) => encodeAddress(new Uint8Array(32).fill(n), 88);
 const A = addr(31), B = addr(32), C = addr(33);
 const T0 = 1_000_000_000;
@@ -197,7 +199,7 @@ describe('an entry noted moments ago survives a pass that found no rows yet', ()
         await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + HEAL_MAX_AGE_MS - 1 });
         assert.ok(f.getKv(HEAL_KEY)[A], 'the block may not be inserted yet: still pending, however old the note');
         f.getMaxBlockNumber = () => 100;
-        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + 1000 });
-        assert.ok(!(f.getKv(HEAL_KEY) || {})[A], 'done as soon as the block is stored and healed');
+        await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + SETTLE + 1000 });
+        assert.ok(!(f.getKv(HEAL_KEY) || {})[A], 'done once the block is stored and healed and the entry has settled');
     });
 });

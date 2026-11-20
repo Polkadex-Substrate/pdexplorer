@@ -153,3 +153,14 @@ describe('F-069 — the extraction is real', () => {
             `script.js is ${lines} lines — it has grown back past the F-069 extraction`);
     });
 });
+
+// Final review (2026-11-21): the setup is not always one utility.batchAll.
+describe('validator setup help: how the setup is sent', () => {
+    const body = HELP_TOPICS.find(t => t.slug === 'validator-setup').body.replace(/\s+/g, ' ');
+    test('one transaction where possible, a single remaining step on its own, and Sign in separate steps', () => {
+        assert.doesNotMatch(body, /sent together as one <code>utility\.batchAll<\/code> batch/);
+        assert.match(body, /sent as one transaction where possible/);
+        assert.match(body, /A single remaining step is sent on its own/);
+        assert.match(body, /the review also offers <b>Sign in separate steps<\/b>/);
+    });
+});

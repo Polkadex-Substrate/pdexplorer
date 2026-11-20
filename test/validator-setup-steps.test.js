@@ -580,3 +580,21 @@ describe('item c: "If you stop here" for a nominating stash once a step is confi
         assert.equal(W.stopLine(plan, now, [plan.steps[1]], D, { toppedUp: true }).text, W.SW.stopNominatingToppedUp(String(350n * PDEX), String(200n * PDEX), D), 'no event: the plan amount');
     });
 });
+
+// Final review (2026-11-21): while this visit's top-up is sent and unconfirmed, the stop line makes no claim about the bond.
+describe('final review: no stop line while a top-up is sent and unconfirmed', () => {
+    const D = '28 days';
+    const nominating = (active, o = {}) => bondedState(active, { nominations: 3, ...o });
+    test('a nominating stash: no "untouched" and no "nothing has changed" while the top-up is unconfirmed', () => {
+        const plan = planOf(nominating(150n * PDEX), { keep: true, extra: 200n * PDEX });
+        const now = nominating(150n * PDEX, { nextKeys: KEYS });
+        assert.equal(W.stopLine(plan, now, plan.steps.slice(1), D, { confirmedAny: true, extraUnconfirmed: true }), null);
+        assert.equal(W.stopLine(plan, now, plan.steps.slice(1), D, { extraUnconfirmed: true }), null);
+        assert.deepEqual(W.stopLine(plan, now, plan.steps.slice(1), D, { confirmedAny: true }), { text: W.SW.stopNominating(String(150n * PDEX)) }, 'otherwise as before');
+    });
+});
+
+// Final review (2026-11-21): SW-08, one signature, sent but not confirmed because the submit threw after broadcast.
+test('SW-08 sentUnconfirmed, verbatim', () => {
+    assert.equal(W.SW.sentUnconfirmed, 'Your setup was sent but the explorer could not confirm it. It may still be included in a block. Do not sign it again yet. Reload this page in a minute; the setup continues from the chain.');
+});
