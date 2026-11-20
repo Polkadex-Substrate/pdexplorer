@@ -449,6 +449,29 @@ CREATE TABLE IF NOT EXISTS validator_alert_follows (
 CREATE INDEX IF NOT EXISTS idx_validator_alert_follows_stash
     ON validator_alert_follows(stash, confirmed_at, unsubscribed_at);
 
+-- Validator alerts that were reserved in email_dispatches (result 'pending') but not yet
+-- handed to the mail provider. One row per (kind, stash:occurrence, subscriber), the same
+-- key as the sent log, so a retry reuses the reserved row and never creates a second one.
+-- The row carries what the mail needs (detail) and the retry state, so a pending alert
+-- does not depend on the stored baseline and survives a restart or a lease handover.
+-- The row is deleted when the alert is settled (sent, or a final failure). Small and
+-- short-lived; new table only, nothing existing is altered.
+CREATE TABLE IF NOT EXISTS validator_alert_pending (
+  event_kind       TEXT    NOT NULL,
+  event_id         TEXT    NOT NULL,
+  subscriber_id    INTEGER NOT NULL,
+  stash            TEXT    NOT NULL,
+  detail           TEXT    NOT NULL,
+  created_at       INTEGER NOT NULL,
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at  INTEGER NOT NULL,
+  last_result      TEXT,
+  PRIMARY KEY (event_kind, event_id, subscriber_id),
+  FOREIGN KEY (subscriber_id) REFERENCES email_subscribers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_validator_alert_pending_due
+    ON validator_alert_pending(next_attempt_at);
+
 -- O(1) row counters for the high-volume, ever-growing tables. A plain
 -- SELECT COUNT(*) on events/transactions is a full-table scan that becomes
 -- untenable as the chain (and, post-orderbook, transaction volume) grows.
@@ -3304,6 +3327,56 @@ export function unsubscribeValidatorAlertFollow(token) {
 }
 
 // Confirmed, not left, and the address has not left all explorer mail.
+// Reserve a validator alert and queue it for sending, in one transaction: the dedupe row in
+// email_dispatches and the pending row appear together or not at all, so a crash between the
+// two can neither lose the alert nor leave a reserved row nobody will send. Returns false when
+// the (kind, stash:occurrence, subscriber) was already reserved (sent, pending or given up).
+export function reserveValidatorAlert({ eventKind, eventId, subscriberId, stash, detail, now = Date.now() }) {
+    return runTx(() => {
+        if (!reserveEmailDispatch({ eventKind, eventId, subscriberId })) return false;
+        db.prepare(`INSERT OR IGNORE INTO validator_alert_pending
+            (event_kind, event_id, subscriber_id, stash, detail, created_at, attempts, next_attempt_at)
+            VALUES (?,?,?,?,?,?,0,?)`).run(String(eventKind), String(eventId), subscriberId, String(stash), JSON.stringify(detail || {}), now, now);
+        return true;
+    });
+}
+
+// Pending alerts whose next attempt is due, with the follow they belong to. `active` is false when
+// the follow was unsubscribed (or the address left all explorer mail) since the alert was queued.
+export function getDueValidatorAlerts({ now = Date.now(), limit = 500 } = {}) {
+    const rows = db.prepare(`SELECT p.*, f.unsubscribe_token AS unsubscribe_token, s.email AS email,
+            (f.confirmed_at IS NOT NULL AND f.unsubscribed_at IS NULL AND s.unsubscribed_at IS NULL) AS active
+        FROM validator_alert_pending p
+        JOIN email_subscribers s ON s.id = p.subscriber_id
+        LEFT JOIN validator_alert_follows f ON f.subscriber_id = p.subscriber_id AND f.stash = p.stash
+        WHERE p.next_attempt_at <= ?
+        ORDER BY p.created_at, p.event_id LIMIT ?`).all(now, limit);
+    return rows.map(r => {
+        let detail = {};
+        try { detail = JSON.parse(r.detail); } catch (_) { detail = {}; }
+        return {
+            eventKind: r.event_kind, eventId: r.event_id, subscriberId: r.subscriber_id, stash: r.stash, detail,
+            createdAt: r.created_at, attempts: r.attempts, lastResult: r.last_result, email: r.email,
+            unsubscribeToken: r.unsubscribe_token, active: !!r.active
+        };
+    });
+}
+
+// The provider did not take it (rate-limited, or the send threw): count the attempt, schedule the next.
+export function deferValidatorAlert({ eventKind, eventId, subscriberId, attempts, nextAttemptAt, lastResult }) {
+    db.prepare(`UPDATE validator_alert_pending SET attempts = ?, next_attempt_at = ?, last_result = ?
+        WHERE event_kind = ? AND event_id = ? AND subscriber_id = ?`).run(attempts, nextAttemptAt, lastResult ?? null, String(eventKind), String(eventId), subscriberId);
+}
+
+// Settle a pending alert: the dispatch row gets its final result and the pending row goes, together.
+export function settleValidatorAlert({ eventKind, eventId, subscriberId, providerId, result }) {
+    runTx(() => {
+        recordEmailDispatchResult({ eventKind, eventId, subscriberId, providerId, result });
+        db.prepare('DELETE FROM validator_alert_pending WHERE event_kind = ? AND event_id = ? AND subscriber_id = ?')
+            .run(String(eventKind), String(eventId), subscriberId);
+    });
+}
+
 export function getActiveValidatorAlertFollows() {
     return db.prepare(`${FOLLOW_SELECT}
         WHERE f.confirmed_at IS NOT NULL AND f.unsubscribed_at IS NULL AND s.unsubscribed_at IS NULL
