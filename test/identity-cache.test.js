@@ -837,8 +837,8 @@ describe('A1: stored rows written without a name are healed later', () => {
         db.insertEvents([ev(1, 100, A, null), ev(2, 102, B, null), ev(3, 101, A, 'Kept2')]);
         noteUnnamed(db, A, 100); noteUnnamed(db, A, 101); noteUnnamed(db, B, 102);
         const answers = { [A]: { name: 'Alice', status: 'found' }, [B]: { status: 'failed', name: 'Unknown' } };
-        // The blocks are stored, so the entry is dropped by the data (no clock involved).
-        const later = () => Date.now();
+        // The blocks are stored, so the entry is dropped by the data once it has settled (HEAL_SETTLE_MS, 10 minutes).
+        const later = () => Date.now() + 10 * 60_000;
         const out = await healUnnamedNames({ db, resolve: async (a) => answers[a], now: later });
         assert.equal(nameOfBlock(100), 'Alice'); assert.equal(nameOfBlock(101), 'Alice');
         assert.equal(nameOfBlock(103), 'Kept', 'a named block is not touched');
