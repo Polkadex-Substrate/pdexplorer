@@ -24,7 +24,9 @@ import { trackSignedTx } from '../lib/tx-submit.js';
 import { buildTxModel } from '../lib/tx-status.js';
 import { signInForDiscussion, createDiscussAuth } from '../lib/discussion-auth.js';
 import { bodyOf } from './helpers/source.js';
-import { makeProfile, openTab, fakeExtension, addr, memStorage } from './helpers/wallet-world.js';
+import { makeProfile, openTab, fakeExtension, addr, memStorage, C } from './helpers/wallet-world.js';
+import { createMultisigUI } from '../lib/multisig-view.js';
+import { normalizeMultisig } from '../lib/multisig.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const A = addr(1), B = addr(2), M = addr(9);
@@ -268,18 +270,138 @@ describe('#70 follow-up 2: the revision is captured with expectedWallet, before 
     });
 });
 
+// Sprint 7 B5: these were source-text assertions; now the behaviour itself.
 describe('#70 follow-up 2: the multisig review captures the revision when it opens', () => {
-    test('lib/multisig-view.js passes the revision taken at review open as expectedRevision', () => {
-        const src = readFileSync(new URL('../lib/multisig-view.js', import.meta.url), 'utf8');
-        assert.match(src, /expectedRevision:\s*startRevision/, 'the signer transaction does not carry the revision taken at open');
-        assert.match(src, /const startRevision = revision\(\)/, 'the revision is not taken where startAddress is');
-        assert.ok(src.indexOf('const startRevision') < src.indexOf('const assertContext'), 'the revision must be read before any wait');
+    // The review's modal, a stand-in as in test/multisig-review-note.test.js.
+    let saved;
+    beforeEach(() => { saved = { document: globalThis.document, MutationObserver: globalThis.MutationObserver }; });
+    afterEach(() => { globalThis.document = saved.document; globalThis.MutationObserver = saved.MutationObserver; });
+    function reviewWorld() {
+        const mk = (id) => ({ id, disabled: false, textContent: '', value: '0', style: {}, listeners: {}, innerHTML: '',
+            addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }, focus() {}, select() {}, querySelector() { return null; },
+            fire(type) { return Promise.all((this.listeners[type] || []).map(fn => fn())); } });
+        const modal = mk('multisig-review-modal');
+        const content = mk('multisig-review-content');
+        let parts = {};
+        Object.defineProperty(content, 'innerHTML', { get() { return ''; }, set(html) {
+            const call = html.includes('<textarea') ? mk('call') : null;
+            if (call) call.value = (/<textarea[^>]*>([^<]*)<\/textarea>/.exec(html) || [])[1] || '';
+            parts = { select: mk('signer'), textarea: call, '#multisig-review-details': mk('details'), '[role="alert"]': mk('error'), '#multisig-review-sign': mk('sign'), '#multisig-review-load': mk('load') };
+        } });
+        content.querySelector = (sel) => parts[sel] || null;
+        globalThis.document = { getElementById: (id) => (id === modal.id ? modal : id === content.id ? content : null), querySelectorAll: () => [modal] };
+        globalThis.MutationObserver = class { constructor(cb) { this.cb = cb; } observe() {} disconnect() {} };
+        const multisig = normalizeMultisig({ signers: [A, B, C], threshold: 2, name: 'Team wallet' });
+        const tx = { method: { toHex: () => '0xabcd' }, paymentInfo: async () => ({ partialFee: { toString: () => '15000000000' } }) };
+        const api = {
+            genesisHash: { toHex: () => '0x' + '00'.repeat(32) }, runtimeVersion: { specVersion: { toString: () => '392' } },
+            registry: { createType: (_t, hex) => ({ toHex: () => hex, toU8a: () => new Uint8Array([4, 0]), section: 'balances', method: 'transferKeepAlive', toHuman: () => ({}) }) },
+            query: { multisig: { multisigs: async () => ({ isNone: true }) } },
+            consts: { multisig: { maxSignatories: 100, depositBase: '1', depositFactor: '1' } }
+        };
+        api.tx = Object.assign(() => ({ paymentInfo: async () => ({ weight: { refTime: 1000, proofSize: 100 } }) }), { multisig: { asMulti: () => tx, asMultiThreshold1: () => tx, approveAsMulti: () => tx } });
+        const submits = [];
+        let rev = 'r1';
+        const ui = createMultisigUI({ store: { find: () => multisig }, storage: { getItem: () => null, setItem() {} }, api: () => api,
+            accounts: async () => [{ address: A, name: 'Alice', source: 'talisman' }], selected: () => multisig.address, select() {},
+            submit: async (o) => { submits.push(o); }, refresh() {}, fetchJson: async () => ({}), revision: () => rev });
+        return { ui, multisig, submits, setRevision: (r) => { rev = r; }, sign: () => parts['#multisig-review-sign'].fire('click') };
+    }
+    test('the revision is read when the review opens, before any wait: a later session change does not move it', async () => {
+        const r = reviewWorld();
+        const opened = r.ui.review({ multisig: r.multisig, callHex: '0x0400' });
+        r.setRevision('r2');   // the session changes while the review loads (before its first await settles)
+        await opened;
+        await r.sign();
+        assert.equal(r.submits.length, 1);
+        assert.equal(r.submits[0].expectedRevision, 'r1', 'the signer transaction does not carry the revision taken at open');
+        assert.equal(r.submits[0].expectedWallet, r.multisig.address);
     });
-    test('script.js hands the review the live wallet-session revision, and submitSignedTx and Clear identity use it', () => {
-        assert.match(bodyOf(SCRIPT, 'submitSignedTx').split('\n')[0], /expectedRevision/);
-        assert.match(bodyOf(SCRIPT, 'submitSignedTx'), /signingCheck\(expectedWallet, expectedRevision\)/);
-        assert.match(bodyOf(SCRIPT, 'submitClearIdentity'), /expectedRevision/);
-        assert.match(SCRIPT, /revision:\s*\(\)\s*=>\s*walletSession\.revision\(\)/);
+    test('script.js hands the review the live wallet-session revision (multisigUIDeps)', () => {
+        const w = world();
+        vm.runInContext(bodyOf(SCRIPT, 'multisigUIDeps'), w.tab.ctx);
+        Object.assign(w.tab.ctx, { fetchApiJson: async () => ({}), validatorCallGuard: async () => [], validatorCallNote: async () => '' });
+        const deps = w.tab.fn('multisigUIDeps')();
+        const session = w.tab.fn('walletSession');
+        assert.equal(deps.revision(), session.revision());
+        const before = deps.revision();
+        w.tab.fn('selectWallet')(B, 'polkadot-js');
+        assert.notEqual(deps.revision(), before, 'the review would read a revision that never changes');
+        assert.equal(deps.revision(), session.revision());
+    });
+    test('submitSignedTx refuses a revision from an earlier session even when the address is the same again', async () => {
+        mock.timers.enable({ apis: ['setTimeout'] });
+        try {
+            const w = world();
+            const old = w.tab.fn('walletSession').revision();
+            w.tab.fn('selectWallet')(B, 'polkadot-js');
+            w.tab.fn('selectWallet')(A, 'polkadot-js');
+            await w.submit({ expectedWallet: A, expectedRevision: old });
+            await flush();
+            assert.equal(w.calls.sign, 0, 'the wallet was asked to sign for a request from the previous session');
+            assert.equal(w.broadcasts(), 0);
+        } finally { mock.timers.reset(); closeTabs(); }
+    });
+});
+
+// Sprint 7 B4: proxy add and remove take the revision of the session the view was drawn in, like Clear identity.
+describe('Sprint 7 B4: proxy add and remove carry the wallet-session revision', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+    afterEach(() => { mock.timers.reset(); closeTabs(); });
+    const root = (w) => w.tab.ctx.document.getElementById('wallet-dashboard');
+    function proxyCtx(w, extra = {}) {
+        Object.assign(w.tab.ctx, {
+            fetchApiJson: async () => ({ proxies: [{ delegate: B, proxyType: 'Staking', delay: 0 }], deposit: '1' }),
+            stakingFormatNumber: String, stakingFormatPDEX: String, chainDelegate: (d) => d, ss58PrefixOf: () => 88, renderApiError() {},
+            cachedProxyTypes: ['Staking', 'Any'], VALIDATE_ON: false, proxyPrefill: () => null, proxyDelegateProblem: () => null, renderRecipientRefusal() {},
+            ...extra
+        });
+        w.api.tx = { proxy: { removeProxy: () => w.tx, addProxy: () => w.tx } };
+        for (const f of ['renderProxyList', 'renderAddProxyForm']) vm.runInContext('async ' + bodyOf(SCRIPT, f), w.tab.ctx);
+    }
+    const switchAndBack = (w) => { w.tab.fn('selectWallet')(B, 'polkadot-js'); w.tab.fn('selectWallet')(A, 'polkadot-js'); };
+
+    test('Remove: the wallet goes A -> B -> A while confirm() is open, so nothing is signed', async () => {
+        const w = world();
+        root(w).innerHTML = '<div id="wallet-proxy-list"></div>';
+        proxyCtx(w, { confirm: () => { switchAndBack(w); return true; } });
+        await w.tab.fn('renderProxyList')(A, true);
+        root(w).querySelector('.proxy-remove-btn').click();
+        await flush();
+        assert.equal(w.calls.sign, 0, 'the wallet was asked to sign a removal begun in the previous session');
+        assert.equal(w.broadcasts(), 0);
+    });
+    test('Remove: nothing changes, so the wallet is asked', async () => {
+        const w = world();
+        root(w).innerHTML = '<div id="wallet-proxy-list"></div>';
+        proxyCtx(w, { confirm: () => true });
+        await w.tab.fn('renderProxyList')(A, true);
+        root(w).querySelector('.proxy-remove-btn').click();
+        await flush();
+        assert.equal(w.calls.sign, 1);
+    });
+    test('Add: the wallet goes A -> B -> A after the form was drawn, so nothing is signed', async () => {
+        const w = world();
+        root(w).innerHTML = '<div id="wallet-proxy-add"></div>';
+        proxyCtx(w);
+        await w.tab.fn('renderAddProxyForm')(A);
+        const input = root(w).querySelector('#proxy-add-delegate'), submit = root(w).querySelector('#proxy-add-submit');
+        switchAndBack(w);   // the dashboard repaints; the form drawn for the old session is still on screen until then
+        input.value = B;
+        submit.click();
+        await flush();
+        assert.equal(w.calls.sign, 0, 'the wallet was asked to sign an add begun in the previous session');
+        assert.equal(w.broadcasts(), 0);
+    });
+    test('Add: nothing changes, so the wallet is asked', async () => {
+        const w = world();
+        root(w).innerHTML = '<div id="wallet-proxy-add"></div>';
+        proxyCtx(w);
+        await w.tab.fn('renderAddProxyForm')(A);
+        root(w).querySelector('#proxy-add-delegate').value = B;
+        root(w).querySelector('#proxy-add-submit').click();
+        await flush();
+        assert.equal(w.calls.sign, 1);
     });
 });
 
