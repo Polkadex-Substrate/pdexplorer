@@ -23,7 +23,7 @@ import { encodeAddress } from '@polkadot/util-crypto';
 process.env.EMAIL_PROVIDER = 'postmark';
 process.env.EMAIL_FROM = 'alerts@example.com';
 process.env.POSTMARK_TOKEN = 'test-token-not-real';
-const { sendEmail } = await import('../email.js');
+const { sendEmail, _setEmailClockForTests } = await import('../email.js');
 const db = await import('../db.js');
 const run = await import('../lib/validator-alerts-run.js');
 const { runValidatorAlertsTick, MAX_OBSERVATION_AGE_MS } = run;
@@ -76,7 +76,7 @@ async function quiet(fn) {
 }
 
 describe('B1: the real per-recipient limiter in email.js, with a fake transport', () => {
-    test('a slash and a disable in one tick both reach the recipient, the slash first', async () => {
+    test('a slash and a disable in one tick both reach the recipient, the slash first; a real limiter refusal is retried', async () => {
         fresh();
         const a = mail();
         follow(a, S1);
@@ -87,23 +87,26 @@ describe('B1: the real per-recipient limiter in email.js, with a fake transport'
             posted.push({ to: body.To, tag: body.Tag });
             return { ok: true, status: 200, text: async () => JSON.stringify({ MessageID: `m${posted.length}` }) };
         };
-        const realNow = Date.now;
+        const h = rig([obs(), obs({ disabled: true, lastSlashEra: 10 })], sendEmail);
+        // The limiter runs on the test's clock, so its 10 s window is moved by hand, not waited for.
+        _setEmailClockForTests(() => h.clock.t);
         try {
-            const h = rig([obs(), obs({ disabled: true, lastSlashEra: 10 })], sendEmail);
             await quiet(async () => {
                 await h.tick();                       // baseline
                 h.clock.t += 5 * MIN;
-                await h.tick();                       // disabled + slashed in the same tick
-                assert.equal(posted.length, 1, 'the limiter lets one mail through in this tick');
-                assert.equal(posted[0].tag, 'validator.slashed', 'the more important mail is the one that goes first');
-                // The limiter's own window (10 s, real clock) passes; the explorer's tick clock moves 5 minutes.
-                Date.now = () => realNow() + 20_000;
+                // Another mail to the same recipient just went out: the REAL limiter refuses the next one.
+                assert.ok(!(await sendEmail({ to: a, subject: 's', text: 't', tag: 'other' })).rateLimited);
+                await h.tick();                       // disabled + slashed detected; the slash is refused by the limiter
+                assert.deepEqual(posted.map(p => p.tag), ['other'], 'the real limiter dropped the alert mail');
+                assert.equal(db.getDueValidatorAlerts({ now: h.clock.t + 1 }).find(r => r.eventKind === 'validator.slashed').attempts, 0, 'a limiter refusal is not an attempt');
+                h.clock.t += 5 * MIN;
+                await h.tick();
                 h.clock.t += 5 * MIN;
                 await h.tick();
             });
-            assert.deepEqual(posted.map(p => p.tag), ['validator.slashed', 'validator.disabled'], 'nothing is dropped');
+            assert.deepEqual(posted.map(p => p.tag), ['other', 'validator.slashed', 'validator.disabled'], 'nothing is dropped, the slash first');
             assert.ok(posted.every(p => p.to === a));
-        } finally { Date.now = realNow; globalThis.fetch = realFetch; }
+        } finally { _setEmailClockForTests(null); globalThis.fetch = realFetch; }
     });
 
     test('two validators followed by one address: neither alert is lost', async () => {

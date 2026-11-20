@@ -19,7 +19,7 @@ import { readRepo, stripComments } from './helpers/source.js';
 import { getOnChainIdentity } from '../lib/identity.js';
 import * as db from '../db.js';
 import {
-    IDENTITY_TTL_FOUND_MS, IDENTITY_TTL_UNKNOWN_MS, IDENTITY_CACHE_MAX, IDENTITY_MESSAGE, IDENTITY_EVENT_METHODS,
+    IDENTITY_TTL_FOUND_MS, IDENTITY_TTL_UNKNOWN_MS, IDENTITY_CACHE_MAX, IDENTITY_STALE_BACKOFF_MS, IDENTITY_MESSAGE, IDENTITY_EVENT_METHODS,
     createIdentityCache, createIdentityResolver, identityEventAccounts, decodeInvalidation,
     createIdentityInvalidator, startIdentityRelay, receiveIdentityInvalidations,
     refreshDerivedNames, createDebouncedRefresher
@@ -750,11 +750,12 @@ describe('A4: an in-flight read times out and is settled as failed', () => {
         const gate = new Promise(r => { release = r; });
         let reads = 0;
         const readChain = async () => { reads++; await gate; return 'Late Name'; };
-        const resolver = createIdentityResolver({ cache: createIdentityCache(), readChain, setTimer, clearTimer });
-        return { timers, release, resolver, reads: () => reads };
+        const c = clock();
+        const resolver = createIdentityResolver({ cache: createIdentityCache({ now: c.now }), readChain, setTimer, clearTimer });
+        return { timers, release, resolver, reads: () => reads, c };
     }
 
-    test('a read that never answers settles as failed, frees the in-flight slot, and a later call reads afresh', async () => {
+    test('a read that never answers settles as failed, frees the in-flight slot, and a later call reads afresh after the backoff', async () => {
         const h = hung();
         const p = h.resolver.resolve(API, A);
         assert.equal(h.resolver.inflightCount(), 1);
@@ -764,10 +765,27 @@ describe('A4: an in-flight read times out and is settled as failed', () => {
         const r = await p;
         assert.equal(r.status, 'failed');
         assert.equal(h.resolver.inflightCount(), 0);
+        h.c.advance(IDENTITY_STALE_BACKOFF_MS + 1);
         const again = h.resolver.resolve(API, A);
-        assert.equal(h.reads(), 2, 'the next call starts a new read');
+        assert.equal(h.reads(), 2, 'after the backoff the next call starts a new read');
         h.release();
         await again;
+    });
+
+    test('M6: during the failed backoff after a timeout with no last-known name, a lookup settles as failed at once, with no new read', async () => {
+        const h = hung();
+        const p = h.resolver.resolve(API, A);
+        h.timers[0].fn();
+        await p;
+        h.c.advance(IDENTITY_STALE_BACKOFF_MS - 1);
+        const second = h.resolver.resolve(API, A);
+        const reads = h.reads(), timers = h.timers.length;
+        h.release();
+        const r = await second;
+        assert.equal(reads, 1, 'no second read while the backoff runs');
+        assert.equal(timers, 1, 'no second 15 s wait');
+        assert.equal(r.status, 'failed');
+        assert.equal((await h.resolver.resolveForStore(API, A)).known, false, 'still never stored');
     });
 
     test('the late answer of the abandoned read is not cached', async () => {
@@ -777,6 +795,7 @@ describe('A4: an in-flight read times out and is settled as failed', () => {
         await p;
         h.release();
         await new Promise(r => setImmediate(r));
+        h.c.advance(IDENTITY_STALE_BACKOFF_MS + 1);
         const fresh = h.resolver.resolve(API, A);
         assert.equal(h.reads(), 2, 'nothing was cached from the abandoned read');
         await fresh;
