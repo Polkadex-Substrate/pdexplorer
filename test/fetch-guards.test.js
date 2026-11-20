@@ -44,10 +44,13 @@ describe('shouldFetchTarget', () => {
 
 describe('scripts/fetch-metadata.mjs wiring', () => {
     const src = stripComments(readFileSync(new URL('../scripts/fetch-metadata.mjs', import.meta.url), 'utf8'));
-    test('uses the guards: the walk stops on pruned state, the history fixture is kept', () => {
+    test('uses the guards: the walk (lib/walk-blocks.js) stops on pruned state, the history fixture is kept', () => {
         assert.match(src, /from '\.\.\/lib\/fetch-guards\.js'/);
-        assert.match(src, /isStateUnavailableError\(/);
-        assert.match(src, /scan stopped there/);
+        assert.match(src, /from '\.\.\/lib\/walk-blocks\.js'/);
+        assert.match(src, /walkBackSamples\(/);
+        const walk = stripComments(readFileSync(new URL('../lib/walk-blocks.js', import.meta.url), 'utf8'));
+        assert.match(walk, /isStateUnavailableError\(/);
+        assert.match(walk, /scan stopped there/);
         assert.match(src, /shouldFetchTarget\(/);
         assert.match(src, /kept existing/);
         assert.match(src, /pass --only 373 to refetch/);
@@ -56,6 +59,6 @@ describe('scripts/fetch-metadata.mjs wiring', () => {
         assert.ok(src.indexOf('shouldFetchTarget(') < src.indexOf("'state_getMetadata'"));
     });
     test('the v5-missing check still runs after the walk', () => {
-        assert.ok(src.indexOf('scan stopped there') < src.indexOf('v5MissingMessage('));
+        assert.ok(src.indexOf('walkBackSamples(') < src.indexOf('v5MissingMessage('));
     });
 });

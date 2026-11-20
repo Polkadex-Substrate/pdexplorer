@@ -384,6 +384,8 @@ sudo bash /opt/pdexplorer/deploy.sh
 Near the top it prints one `deploy-check:` line (user, whether sudo is passwordless, whether Docker was found and by which test, whether the certificate was found and how). Paste that line when reporting a problem.
 
 - Docker is treated as installed if `docker` is on `PATH`, a binary exists in `/usr/bin`, `/usr/local/bin` or `/snap/bin`, or the `docker.service` unit exists. The Docker packages are only installed when none of these is true.
+- `apt` waits up to two minutes for the dpkg lock (`DPkg::Lock::Timeout=120`), so a deploy that starts while `unattended-upgrades` runs waits instead of failing. `provision-ubuntu.sh` uses the same Docker detection as `deploy.sh` when `tools/deploy-detect.sh` is present, and the plain `command -v docker` check when the script runs without the checkout.
+- `deploy.sh` needs `tools/deploy-detect.sh` next to it. If it is missing the script stops at once and says what to do: run it from the checkout (`sudo bash /opt/pdexplorer/deploy.sh`), or `git pull` the checkout first.
 - An existing certificate is never replaced by a deploy. If the certificate tree cannot be read by the user running the script, the script says so and keeps what is there (run it with `sudo`).
 
 | Switch | Effect |
@@ -1354,6 +1356,8 @@ The frontend has no build step in dev — Vite serves `script.js` directly with 
 Before submitting:
 
 - `npm test` — full unit, integration, and contract suite
+- Never add `--test-force-exit` to the test command or to a CI workflow: it can end the run before every test file has reported and still exit 0 (one file ran 49 of its 69 tests in some runs). `npm test` runs without it.
+- If the suite hangs, a handle is staying open: find it rather than forcing the exit. `test/no-force-exit.test.js` fails if the flag appears in `package.json` scripts or `.github/workflows/*.yml`.
 - `node --check server.js && node --check db.js` — no syntax errors
 - `npm run build` — frontend builds cleanly
 - If you touch the indexer, prefer extending the existing forward / backfill / gap-fill pattern in `syncChainIndex` rather than adding a separate crawler
