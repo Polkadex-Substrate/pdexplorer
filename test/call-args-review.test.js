@@ -41,6 +41,7 @@ function chain(file, version) {
     return { registry, ex: decorateExtrinsics(registry, registry.metadata, version), decode: (c) => registry.createType('Call', c.toHex()) };
 }
 const p392 = chain('metadata-testnet-393.json', 15);
+const p394 = chain('metadata-mainnet-394.json', 15);
 const p373 = chain('metadata-mainnet-373.json', 14);
 const sub = (() => {
     const registry = registryFromMetadata(substrateMetadata);
@@ -112,9 +113,9 @@ describe('2. pallets whose Balance is not PDEX', () => {
         }
     });
 
-    test('every pallet in the 392 and 373 metadata whose calls name an asset (other than treasury) is an asset pallet', () => {
+    test('every pallet in the 393, 394 and 373 metadata whose calls name an asset (other than treasury) is an asset pallet', () => {
         const missing = [];
-        for (const { registry } of [p392, p373]) {
+        for (const { registry } of [p392, p394, p373]) {
             for (const p of registry.metadata.pallets) {
                 if (p.calls.isNone) continue;
                 const name = stringCamelCase(p.name.toString());
