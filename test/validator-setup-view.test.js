@@ -66,7 +66,8 @@ function fakeApi(o = {}) {
                 queuedKeys: async () => [],
                 keyOwner: async ([, key]) => opt(st.owners[String(key)] || null)
             }
-        }
+        },
+        rpc: { system: { accountNextIndex: async () => num(0) } }
     };
 }
 const PARAMS = { specVersion: 393, layout: { ok: true, bytes: 193, hexLength: 388 }, minValidatorBond: String(123n * PDEX), minCommission: 30_000_000, lowestElectedTotal: String(5000n * PDEX), medianCommission: 50_000_000,

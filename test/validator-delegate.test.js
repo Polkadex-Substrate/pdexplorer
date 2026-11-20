@@ -476,7 +476,7 @@ describe('pending multisig operations: what each is, who approved, who has not',
 // ── copy ──
 describe('copy: the limits and the change warning', () => {
     test('the 4.1 limits copy and the between-approvals warning', () => {
-        assert.equal(D.STAKING_PROXY_LIMITS, 'A Staking proxy cannot move your bond out. It can change where rewards are paid and can stop you validating. It cannot register session keys on this runtime: key rotation needs the stash.');
+        assert.equal(D.STAKING_PROXY_LIMITS, 'A Staking proxy cannot send your funds to another account. It can change where rewards are paid, stop you validating, and start unbonding your bond; unbonded PDEX stays in the stash. It cannot register session keys on this runtime: key rotation needs the stash.');
         assert.match(D.MULTISIG_CHANGE_WARNING, /can change between approvals/);
         assert.match(D.MULTISIG_CHANGE_WARNING, /checks .* again .* last approval/);
         for (const t of [D.STAKING_PROXY_LIMITS, D.MULTISIG_CHANGE_WARNING, D.MULTISIG_FEE_NOTE, D.PROXY_FEE_NOTE]) assert.doesNotMatch(t, /[\u2013\u2014]/);

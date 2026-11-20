@@ -29,7 +29,8 @@ import { ASSET_PALLETS, NATIVE_DECIMALS, isNativeBalanceField } from '../lib/cal
 import { PDEX_METADATA_HASH_INPUTS, metadataHashFromV15, metadataV15FromCallResult } from '../lib/metadata-hash.js';
 import { buildManageCall } from '../lib/validator-manage.js';
 import { FALLBACK_BONDING_DURATION, FALLBACK_SESSIONS_PER_ERA, FALLBACK_SESSION_SECONDS } from '../lib/validator-status.js';
-import { setupCalls, buildSetupTx } from '../lib/validator-setup.js';
+import { setupCalls, buildSetupTx, buildSetupStepCall } from '../lib/validator-setup.js';
+import { stepwiseOrder } from '../lib/validator-setup-steps.js';
 import { buildSpendMotion } from '../lib/treasury-spend.js';
 import { buildSpendTx } from '../lib/treasury-payout.js';
 import { buildSecondTx } from '../lib/democracy-patch.js';
@@ -324,6 +325,23 @@ for (const fixture of FIXTURES) {
                 const px = decode(buildProxyCall(api, A, 'Staking', ex.staking.chill().method));
                 assert.equal(`${px.section}.${px.method}`, 'proxy.proxy');
                 assert.equal(px.args[1].toString(), 'Staking');
+            });
+            test('setup in separate steps: session.setKeys, staking.bond, staking.bondExtra, staking.validate as single bare extrinsics, in the stepper order', () => {
+                const steps = [{ kind: 'bond', value: '1000000000000', payee: { kind: 'staked' } }, { kind: 'setKeys', keysHex: BLOB },
+                    { kind: 'validate', commission: 50_000_000 }, { kind: 'bondExtra', value: '5' }];
+                const out = steps.map((s) => {
+                    const tx = buildSetupStepCall(api, s);
+                    const c = decode(tx);
+                    assert.equal(tx.method.toHex(), c.toHex(), `${s.kind} re-encodes identically`);
+                    return [`${c.section}.${c.method}`, c.args.length];
+                });
+                assert.deepEqual(out, [['staking.bond', 2], ['session.setKeys', 2], ['staking.validate', 1], ['staking.bondExtra', 1]]);
+                assert.ok(out.every(([n]) => !n.startsWith('utility.')), 'no utility wrapper');
+                assert.deepEqual(stepwiseOrder(steps.slice(0, 3)).map(s => s.kind), ['setKeys', 'bond', 'validate']);
+                const keys = decode(buildSetupStepCall(api, steps[1]));
+                assert.equal(keys.args[0].toU8a().length, 193, 'the 193-byte keys blob a device has to show');
+                assert.equal(keys.args[1].toHex(), '0x', 'empty proof');
+                assert.equal(constant(registry, 'Session', 'KeyDeposit').toString(), '0', 'Session.KeyDeposit on this runtime');
             });
             test('removed calls stay removed: treasury approveProposal / rejectProposal, balances.transfer', () => {
                 assert.equal(ex.treasury.approveProposal, undefined);

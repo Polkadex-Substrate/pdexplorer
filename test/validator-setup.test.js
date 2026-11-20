@@ -360,6 +360,16 @@ describe('sign time: the limits, the balance and the keys are read again (design
     const balance = { free: String(1000n * PDEX), reserved: '0', frozen: '0' };
     const review = { stash: STASH, steps: S.planSetup(fresh, input).steps, keys: parsed(BLOB), keysHex: BLOB, bond: 500n * PDEX, extra: 0n, commission: 50_000_000, state: fresh, limits };
     const freshRead = (over = {}) => ({ limits, state: fresh, balance, ed: String(PDEX), fee: String(2n * 10n ** 10n), owners: { owners: [null, null, null, null, null, null], queued: [], nextKeys: null }, ...over });
+    // Finding 3 (separate-steps spec, section 9): "Keep them" has no setKeys
+    // step, so at signing the registered keys must still be the reviewed ones.
+    test('keys kept at review: purged or replaced before signing is refused (finding 3)', () => {
+        const kept = { ...fresh, bonded: true, controller: STASH, active: String(500n * PDEX), nextKeys: KEYS };
+        const rv = { stash: STASH, steps: [{ kind: 'validate', commission: 50_000_000, blocked: false }], keys: null, keysHex: '', bond: 0n, extra: 0n, commission: 50_000_000, state: kept, limits };
+        const text = 'The session keys registered to this stash are not the ones you reviewed. Nothing was signed. Go back to Session keys and choose which keys to use.';
+        assert.deepEqual(S.signTimeProblems(freshRead({ state: kept }), rv), []);
+        assert.deepEqual(S.signTimeProblems(freshRead({ state: { ...kept, nextKeys: null } }), rv), [text]);
+        assert.deepEqual(S.signTimeProblems(freshRead({ state: { ...kept, nextKeys: NEWKEYS } }), rv), [text]);
+    });
     test('nothing changed: no problem', () => {
         assert.deepEqual(S.signTimeProblems(freshRead(), review), []);
     });
@@ -401,7 +411,7 @@ const num = (v) => ({ toNumber: () => Number(v), toString: () => String(v), toBi
 const keysCodec = (k) => ({ toJSON: () => ({ grandpa: k.grandpa, babe: k.babe, imOnline: k.im_online, authorityDiscovery: k.authority_discovery, mixnet: k.mixnet, beefy: k.beefy }) });
 const fakeLayoutRegistry = () => registry;
 function fakeApi(o = {}) {
-    const st = { minBond: 123n * PDEX, minComm: 30_000_000, bonded: null, ledger: null, validating: false, nextKeys: null, nominators: null, owners: {}, free: 1000n * PDEX, maxCount: 250, counter: 217, fee: 2n * 10n ** 10n, ...o };
+    const st = { minBond: 123n * PDEX, minComm: 30_000_000, bonded: null, ledger: null, validating: false, nextKeys: null, nominators: null, owners: {}, free: 1000n * PDEX, maxCount: 250, counter: 217, fee: 2n * 10n ** 10n, nonce: 0, nextIndex: 0, ...o };
     const reads = [];
     const validators = async () => ({ commission: num(0), blocked: { isTrue: false } });
     validators.size = async (a) => { reads.push('validators'); return num(String(a) === STASH && st.validating ? 5 : 0); };
@@ -416,7 +426,7 @@ function fakeApi(o = {}) {
         consts: { balances: { existentialDeposit: num(PDEX) } },
         tx,
         query: {
-            system: { account: async () => ({ nonce: num(0), data: { free: num(st.free), reserved: num(0), frozen: num(0) } }) },
+            system: { account: async () => ({ nonce: num(st.nonce), data: { free: num(st.free), reserved: num(0), frozen: num(0) } }) },
             staking: {
                 minValidatorBond: async () => { reads.push('minValidatorBond'); return num(st.minBond); },
                 minCommission: async () => { reads.push('minCommission'); return num(st.minComm); },
@@ -432,7 +442,8 @@ function fakeApi(o = {}) {
                 queuedKeys: async () => [],
                 keyOwner: async ([typeId, key]) => { reads.push('keyOwner'); return opt(st.owners[String(key)] || null); }
             }
-        }
+        },
+        rpc: { system: { accountNextIndex: async () => num(st.nextIndex) } }
     };
     return api;
 }
@@ -497,6 +508,32 @@ describe('chain reads: live limits, the stash state, resume', () => {
         const api = fakeApi({ fee: 600n * PDEX });
         const limits = await C.readSetupLimits(api);
         const review = { stash: STASH, steps: S.planSetup(fresh, input).steps, keys: parsed(BLOB), keysHex: BLOB, bond: 500n * PDEX, extra: 0n, commission: 50_000_000, state: fresh, limits };
+        await assert.rejects(C.buildCheckedSetupTx(api, review), /more than this account can bond/);
+    });
+    // Separate-steps review finding 3 (2026-11-20): the one-signature path also
+    // refuses while a transaction from the stash waits in the pool, and a pending
+    // check that cannot run is a failed chain read.
+    test('buildCheckedSetupTx: refuses while a transaction from the stash is still waiting for a block', async () => {
+        const api = fakeApi({ nonce: 3, nextIndex: 4 });
+        const limits = await C.readSetupLimits(api);
+        const review = { stash: STASH, steps: S.planSetup(fresh, input).steps, keys: parsed(BLOB), keysHex: BLOB, bond: 500n * PDEX, extra: 0n, commission: 50_000_000, state: fresh, limits };
+        await assert.rejects(C.buildCheckedSetupTx(api, review), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed.' });
+        api.st.nextIndex = 3;
+        assert.equal((await C.buildCheckedSetupTx(api, review)).method, 'batchAll');
+        api.rpc.system.accountNextIndex = async () => { throw new Error('rpc down'); };
+        await assert.rejects(C.buildCheckedSetupTx(api, review), { message: 'The explorer cannot reach the chain right now. Your validator is not affected.' });
+        delete api.rpc;
+        await assert.rejects(C.buildCheckedSetupTx(api, review), { message: 'The explorer cannot reach the chain right now. Your validator is not affected.' });
+    });
+    // Finding 5 (separate-steps spec, section 9): Session.KeyDeposit is read and
+    // leaves free like the fee whenever setKeys is in the batch.
+    test('buildCheckedSetupTx: a Session.KeyDeposit above zero is added to the fee side of the clamp check (finding 5)', async () => {
+        const api = fakeApi();
+        const limits = await C.readSetupLimits(api);
+        const max = S.maxBondable({ free: 1000n * PDEX, ed: PDEX, fee: 2n * 10n ** 10n });
+        const review = { stash: STASH, steps: S.planSetup(fresh, { ...input, bond: max }).steps, keys: parsed(BLOB), keysHex: BLOB, bond: max, extra: 0n, commission: 50_000_000, state: fresh, limits };
+        await C.buildCheckedSetupTx(api, review);
+        api.consts.session = { keyDeposit: num(5n * PDEX) };
         await assert.rejects(C.buildCheckedSetupTx(api, review), /more than this account can bond/);
     });
     test('verifySetup: applied only when the ledger, NextKeys equal to the pasted keys and the Validators entry are all there', async () => {
