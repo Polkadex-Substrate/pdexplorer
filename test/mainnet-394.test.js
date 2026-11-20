@@ -16,7 +16,7 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import { encodeAddress, blake2AsHex } from '@polkadot/util-crypto';
 import { hexToU8a, stringCamelCase } from '@polkadot/util';
 import { ApiPromise } from '@polkadot/api';
@@ -28,6 +28,7 @@ import { PROXY_FILTER, PROXY_TYPES, proxyTypesOf, proxyTypesProblem, filterPalle
 import { ASSET_PALLETS, NATIVE_DECIMALS, isNativeBalanceField } from '../lib/call-args-format.js';
 import { PDEX_METADATA_HASH_INPUTS, metadataHashFromV15, metadataV15FromCallResult } from '../lib/metadata-hash.js';
 import { buildManageCall } from '../lib/validator-manage.js';
+import { FALLBACK_BONDING_DURATION, FALLBACK_SESSIONS_PER_ERA, FALLBACK_SESSION_SECONDS } from '../lib/validator-status.js';
 import { setupCalls, buildSetupTx } from '../lib/validator-setup.js';
 import { buildSpendMotion } from '../lib/treasury-spend.js';
 import { buildSpendTx } from '../lib/treasury-payout.js';
@@ -56,6 +57,7 @@ const snake = (s) => s.replace(/([A-Z]|\d+)/g, '_$1').toLowerCase();
 // Every call the explorer builds: pallet, method, the metadata's argument names
 // in order, a representative argument set in the shapes the explorer passes
 // (its count is the count the explorer passes), and where it is built.
+const BOUNDED = { Legacy: { hash: HASH } };
 const CALLS = (call) => [
     ['staking', 'bond', ['value', 'payee'], [10n ** 12n, 'Staked'], 'script.js:9395, lib/validator-setup.js:186'],
     ['staking', 'bondExtra', ['maxAdditional'], [5n], 'script.js:9392, lib/validator-manage.js:321'],
@@ -88,7 +90,10 @@ const CALLS = (call) => [
     ['democracy', 'delegate', ['to', 'conviction', 'balance'], [A, 'Locked1x', 5n], 'not built today; listed because the task names it'],
     ['democracy', 'undelegate', [], [], 'lib/lock-actions.js:310'],
     ['democracy', 'second', ['proposal'], [0], 'lib/democracy-patch.js:222'],
-    ['democracy', 'propose', ['proposal', 'value'], [{ Legacy: { hash: HASH } }, 5n], 'not built today; listed because the task names it'],
+    ['democracy', 'externalPropose', ['proposal'], [BOUNDED], 'lib/discussion-threads.js:260, server.js:6612, tools/link-motion-threads.mjs:202 (api.tx.democracy[method])'],
+    ['democracy', 'externalProposeMajority', ['proposal'], [BOUNDED], 'lib/discussion-threads.js:260, server.js:6612, tools/link-motion-threads.mjs:202 (api.tx.democracy[method])'],
+    ['democracy', 'externalProposeDefault', ['proposal'], [BOUNDED], 'lib/discussion-threads.js:260, server.js:6612, tools/link-motion-threads.mjs:202 (api.tx.democracy[method])'],
+    ['democracy', 'propose', ['proposal', 'value'], [BOUNDED, 5n], 'not built today; listed because the task names it'],
     ['council', 'propose', ['threshold', 'proposal', 'lengthBound'], [3, call, 10], 'lib/treasury-spend.js:87 (api.tx[pallet])'],
     ['council', 'vote', ['proposal', 'index', 'approve'], [HASH, 0, true], 'script.js:12094'],
     ['council', 'close', ['proposalHash', 'index', 'proposalWeightBound', 'lengthBound'], [HASH, 0, WEIGHT, 10], 'script.js:12156'],
@@ -166,16 +171,48 @@ function constant(registry, pallet, name) {
     return undefined;
 }
 
+// Every JS/MJS source that could build a call: script.js, server.js, other top-level
+// *.js/*.mjs, lib/, tools/ (and tools/lib), scripts/. Tests are not scanned.
+function sourceFiles() {
+    const root = new URL('../', import.meta.url);
+    const out = [];
+    for (const dir of ['', 'lib/', 'tools/', 'tools/lib/', 'scripts/']) {
+        if (!existsSync(new URL(dir || '.', root))) continue;
+        for (const f of readdirSync(new URL(dir || '.', root))) {
+            if (/\.(js|mjs)$/.test(f) && !/\.min\./.test(f)) out.push(`${dir}${f}`);
+        }
+    }
+    return out;
+}
+
 // Static api.tx.<pallet>.<method> names written in the shipped sources.
-// api.tx[<variable>] sites (council, technicalCommittee, elections) are in the table by hand.
-function staticTxNames() {
-    const files = ['script.js', ...readdirSync(new URL('../lib/', import.meta.url)).filter(f => f.endsWith('.js')).map(f => `lib/${f}`)];
+function staticTxNames(sources = sourceFiles().map(f => [f, readRepo(f, import.meta.url)])) {
     const names = new Set();
-    for (const f of files) {
-        const src = stripComments(readRepo(f, import.meta.url));
-        for (const m of src.matchAll(/api\.tx\.([a-zA-Z]+)\.([a-zA-Z0-9]+)/g)) names.add(`${m[1]}.${m[2]}`);
+    for (const [, raw] of sources) {
+        const src = stripComments(raw);
+        for (const m of src.matchAll(/[aA]pi\.tx\.([a-zA-Z]+)\.([a-zA-Z0-9]+)/g)) names.add(`${m[1]}.${m[2]}`);
     }
     return names;
+}
+
+// Dynamic call construction the static scan cannot see, so the table above is
+// maintained by hand for these. Known sites (file: what it builds):
+//   script.js                     api.tx[pallet].vote / .close (council, technicalCommittee), api.tx[councilPalletName].submitCandidacy / .vote (elections)
+//   lib/council-candidacy.js      api.tx[pallet].renounceCandidacy (elections)
+//   lib/lock-actions.js           api.tx[section][method] (utility batch variants), api.tx[sec].removeVoter (elections)
+//   lib/treasury-spend.js         api.tx[pallet].propose (council, technicalCommittee)
+//   lib/treasury-payout.js        api.tx.treasury[action] (payout, checkStatus)
+//   lib/validator-manage.js       const st = api.tx.staking (bondExtra, rebond, chill, setPayee, ...)
+//   lib/wallet-safety.js          const t = api.tx.balances (transferKeepAlive, transferAllowDeath)
+//   server.js                     globalApi.tx.democracy[method] (externalPropose, externalProposeMajority, externalProposeDefault)
+//   tools/link-motion-threads.mjs const d = api.tx.democracy; d[method] (same three external calls)
+// If you add a call by one of these forms, add the calls to CALLS. If a NEW file
+// uses one of these forms, add the calls to CALLS and then the file to this list.
+const KNOWN_DYNAMIC_FILES = new Set(['script.js', 'lib/council-candidacy.js', 'lib/lock-actions.js', 'lib/treasury-spend.js',
+    'lib/treasury-payout.js', 'lib/validator-manage.js', 'lib/wallet-safety.js', 'server.js', 'tools/link-motion-threads.mjs']);
+const DYNAMIC_ACCESS = /[aA]pi\.tx\[|[aA]pi\.tx\.[a-zA-Z]+\[|=[^=;\n]*[aA]pi\.tx\.[a-zA-Z]+\s*;/;
+function unknownDynamicFiles(sources, known = KNOWN_DYNAMIC_FILES) {
+    return sources.filter(([f, raw]) => !known.has(f) && DYNAMIC_ACCESS.test(stripComments(raw))).map(([f]) => f);
 }
 
 for (const fixture of FIXTURES) {
@@ -211,6 +248,19 @@ for (const fixture of FIXTURES) {
                 const inTable = new Set(CALLS(null).map(([p, m]) => `${p}.${m}`));
                 const missing = [...staticTxNames()].filter(n => !inTable.has(n));
                 assert.deepEqual(missing, [], 'add these to CALLS so they are checked against the metadata');
+            });
+            test('no new dynamic api.tx access (api.tx[x], api.tx.<pallet>[m], alias = api.tx.<pallet>;) appears outside the known list', () => {
+                const sources = sourceFiles().map(f => [f, readRepo(f, import.meta.url)]);
+                const unknown = unknownDynamicFiles(sources);
+                assert.deepEqual(unknown, [], 'these files build calls the static scan cannot see: add the calls to CALLS, then add each file to KNOWN_DYNAMIC_FILES');
+                for (const f of KNOWN_DYNAMIC_FILES) assert.ok(sources.some(([n, raw]) => n === f && DYNAMIC_ACCESS.test(stripComments(raw))), `${f} is on the known list but no longer has a dynamic access: remove it`);
+            });
+            test('the dynamic-access scan flags a scratch file that is not on the list', () => {
+                assert.deepEqual(unknownDynamicFiles([['x.js', 'const st = api.tx.balances;']]), ['x.js']);
+                assert.deepEqual(unknownDynamicFiles([['x.js', 'api.tx[p].vote(1)']]), ['x.js']);
+                assert.deepEqual(unknownDynamicFiles([['x.js', 'api.tx.democracy[m](b)']]), ['x.js']);
+                assert.deepEqual(unknownDynamicFiles([['x.js', '// api.tx[p]\napi.tx.balances.transferAll(1)']]), []);
+                assert.deepEqual([...staticTxNames([['x.js', 'globalApi.tx.foo.bar(1)']])], ['foo.bar']);
             });
             test('each call exists with the same argument names and count the explorer passes', () => {
                 const problems = [];
@@ -387,10 +437,10 @@ for (const fixture of FIXTURES) {
             const num = (p, n) => Number(constant(registry, p, n).toString());
             test('hardcoded values equal the runtime constants', () => {
                 assert.equal(num('System', 'SS58Prefix'), 88, 'SS58 prefix (lib/metadata-hash.js:28, 88 in every address path)');
-                assert.equal(num('Staking', 'SessionsPerEra'), 6, 'fallback 6 at lib/validator-manage.js:128, lib/validator-status.js:198');
-                assert.equal(num('Babe', 'EpochDuration') * num('Babe', 'ExpectedBlockTime') / 1000, 14400, 'session length 14400 s at lib/validator-manage.js:198, 221');
+                assert.equal(num('Staking', 'SessionsPerEra'), FALLBACK_SESSIONS_PER_ERA, 'FALLBACK_SESSIONS_PER_ERA (lib/validator-status.js, used by lib/validator-manage.js)');
+                assert.equal(num('Babe', 'EpochDuration') * num('Babe', 'ExpectedBlockTime') / 1000, FALLBACK_SESSION_SECONDS, 'FALLBACK_SESSION_SECONDS (lib/validator-status.js, used by lib/validator-manage.js)');
                 assert.equal(num('Babe', 'ExpectedBlockTime'), DEFAULT_BLOCK_MS, 'DEFAULT_BLOCK_MS (lib/gov-detail.js:19, lib/call-args-format.js:27, server.js:738, 5061)');
-                assert.equal(num('Staking', 'BondingDuration'), 28, 'fallback 28 at lib/validator-status.js:138');
+                assert.equal(num('Staking', 'BondingDuration'), FALLBACK_BONDING_DURATION, 'FALLBACK_BONDING_DURATION (lib/validator-status.js)');
                 assert.equal(DEFAULT_APR_WINDOW, 28, 'lib/stake-apr.js:55 (one window of eras = BondingDuration)');
                 assert.equal(7 * 7200 * num('Babe', 'ExpectedBlockTime') / 1000, 7 * 86400, 'INCIDENT_WINDOW_BLOCKS is a week (lib/nomination-status-chain.js:37)');
                 assert.ok(MIN_LIVE_SPEC <= fixture.spec, 'MIN_LIVE_SPEC must not exceed the live spec or every signer is refused');
