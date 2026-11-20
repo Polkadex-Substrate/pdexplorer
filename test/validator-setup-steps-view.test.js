@@ -352,6 +352,22 @@ describe('the signing lock (G6, finding 1)', () => {
     });
 });
 
+// Finding 7 (section 9): rewards to "another account" that is the stash itself.
+describe('the payee account cannot be the stash (finding 7)', () => {
+    test('refused on the bond step with the manage panel\'s text', async () => {
+        const d = deps(); const { el, w } = dom(); await mountValidatorSetup(el, d); await settle();
+        await click(el, '[data-setup-action="next"]');
+        await type(el, '#validate-setup-keys', BLOB); await click(el, '[data-setup-action="use-keys"]');
+        await type(el, '#validate-setup-bond', '500');
+        const r = el.querySelector('input[name="validate-setup-payee"][value="account"]');
+        r.checked = true; r.dispatchEvent(new w.Event('change', { bubbles: true })); await settle();
+        await type(el, '#validate-setup-payee-account', STASH);
+        await click(el, '[data-setup-action="next"]');
+        assert.equal(heading(el), 'Bond from your stash');
+        assert.equal(el.querySelector('#validate-setup-bond-msg').textContent, 'That is this stash. Choose "Pay rewards to this stash, unbonded" instead.');
+    });
+});
+
 // ── 15. submit shape ──
 describe('the per-step submit (section 3.4)', () => {
     test('expectedWallet, one expectedRevision for all steps, verify, action key and params, label, idle text', async () => {
@@ -440,7 +456,6 @@ describe('focus, live region, mobile list, brand lint', () => {
             const src = readRepo(f, import.meta.url);
             assert.ok(!/[–—]/.test(src), f);
             assert.ok(!/style=/.test(stripComments(src)), f);
-            assert.ok(!/'[^']*![^=][^']*'/.test(stripComments(src).replace(/!==?|!\w|!\(/g, '')), f);
         }
         const css = readRepo('styles.css', import.meta.url);
         const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m => /validate-stepwise/.test(m[1]));

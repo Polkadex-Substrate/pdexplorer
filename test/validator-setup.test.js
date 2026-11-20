@@ -360,6 +360,16 @@ describe('sign time: the limits, the balance and the keys are read again (design
     const balance = { free: String(1000n * PDEX), reserved: '0', frozen: '0' };
     const review = { stash: STASH, steps: S.planSetup(fresh, input).steps, keys: parsed(BLOB), keysHex: BLOB, bond: 500n * PDEX, extra: 0n, commission: 50_000_000, state: fresh, limits };
     const freshRead = (over = {}) => ({ limits, state: fresh, balance, ed: String(PDEX), fee: String(2n * 10n ** 10n), owners: { owners: [null, null, null, null, null, null], queued: [], nextKeys: null }, ...over });
+    // Finding 3 (separate-steps spec, section 9): "Keep them" has no setKeys
+    // step, so at signing the registered keys must still be the reviewed ones.
+    test('keys kept at review: purged or replaced before signing is refused (finding 3)', () => {
+        const kept = { ...fresh, bonded: true, controller: STASH, active: String(500n * PDEX), nextKeys: KEYS };
+        const rv = { stash: STASH, steps: [{ kind: 'validate', commission: 50_000_000, blocked: false }], keys: null, keysHex: '', bond: 0n, extra: 0n, commission: 50_000_000, state: kept, limits };
+        const text = 'The session keys registered to this stash are not the ones you reviewed. Nothing was signed. Go back to Session keys and choose which keys to use.';
+        assert.deepEqual(S.signTimeProblems(freshRead({ state: kept }), rv), []);
+        assert.deepEqual(S.signTimeProblems(freshRead({ state: { ...kept, nextKeys: null } }), rv), [text]);
+        assert.deepEqual(S.signTimeProblems(freshRead({ state: { ...kept, nextKeys: NEWKEYS } }), rv), [text]);
+    });
     test('nothing changed: no problem', () => {
         assert.deepEqual(S.signTimeProblems(freshRead(), review), []);
     });
@@ -497,6 +507,17 @@ describe('chain reads: live limits, the stash state, resume', () => {
         const api = fakeApi({ fee: 600n * PDEX });
         const limits = await C.readSetupLimits(api);
         const review = { stash: STASH, steps: S.planSetup(fresh, input).steps, keys: parsed(BLOB), keysHex: BLOB, bond: 500n * PDEX, extra: 0n, commission: 50_000_000, state: fresh, limits };
+        await assert.rejects(C.buildCheckedSetupTx(api, review), /more than this account can bond/);
+    });
+    // Finding 5 (separate-steps spec, section 9): Session.KeyDeposit is read and
+    // leaves free like the fee whenever setKeys is in the batch.
+    test('buildCheckedSetupTx: a Session.KeyDeposit above zero is added to the fee side of the clamp check (finding 5)', async () => {
+        const api = fakeApi();
+        const limits = await C.readSetupLimits(api);
+        const max = S.maxBondable({ free: 1000n * PDEX, ed: PDEX, fee: 2n * 10n ** 10n });
+        const review = { stash: STASH, steps: S.planSetup(fresh, { ...input, bond: max }).steps, keys: parsed(BLOB), keysHex: BLOB, bond: max, extra: 0n, commission: 50_000_000, state: fresh, limits };
+        await C.buildCheckedSetupTx(api, review);
+        api.consts.session = { keyDeposit: num(5n * PDEX) };
         await assert.rejects(C.buildCheckedSetupTx(api, review), /more than this account can bond/);
     });
     test('verifySetup: applied only when the ledger, NextKeys equal to the pasted keys and the Validators entry are all there', async () => {
