@@ -419,7 +419,7 @@ describe('wiring in server.js', () => {
     test('the block scanner invalidates identity accounts BEFORE it looks up the author and signer names', () => {
         const scan = src.slice(src.indexOf('async function scanSingleBlock'));
         const inval = scan.indexOf('noteIdentityEvents(');
-        const author = scan.indexOf('getIdentity(globalApi, authorAddr)');
+        const author = scan.indexOf('getIdentityForStore(globalApi, authorAddr)');
         assert.ok(inval > 0 && author > 0 && inval < author, 'invalidate first so the stored author/signer name is fresh');
     });
 
@@ -706,5 +706,166 @@ describe('identity events invalidate exactly the right accounts, end to end', ()
         assert.deepEqual([...fire(rec('SubIdentityRevoked', S1, P, '5'))].sort(), [P, S1].sort());
         await warm(resolver, [P, S1]);
         assert.deepEqual([...fire(rec('SubIdentitiesSet', P, '2', '9'))].sort(), [P, S1].sort());
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Review of the live fix: names that are PERSISTED must never come from a failed
+// read. Display callers may keep showing "Unknown"; callers that write a name to
+// the database get the read outcome and keep the previous stored name (or store
+// nothing, NULL, that a healing pass fills in later).
+// ---------------------------------------------------------------------------
+
+import { IDENTITY_READ_TIMEOUT_MS } from '../lib/identity-cache.js';
+import { noteUnnamed, healUnnamedNames, HEAL_KEY } from '../lib/identity-heal.js';
+
+describe('A1: resolveForStore tells a stored name from a failed read', () => {
+    test('failed is not known; found, none and stale are', async () => {
+        const { c, chain, resolver } = setup({}, { [A]: 'Alice' });
+        assert.deepEqual(await resolver.resolveForStore(API, A), { name: 'Alice', known: true });
+        assert.deepEqual(await resolver.resolveForStore(API, B), { name: 'Unknown', known: true }, 'a confirmed no identity is a fact');
+        chain.fail = true;
+        const r = await resolver.resolveForStore(API, 'stash-cccc');
+        assert.equal(r.known, false);
+        // an expired found name served stale after a failed refresh is still the real last-known name
+        c.advance(IDENTITY_TTL_FOUND_MS + 1);
+        const st = await resolver.resolveForStore(API, A);
+        assert.deepEqual(st, { name: 'Alice', known: true });
+    });
+
+    test('an unusable api is a failed read', async () => {
+        const { resolver } = setup({}, { [A]: 'Alice' });
+        assert.equal((await resolver.resolveForStore(null, A)).known, false);
+    });
+});
+
+describe('A4: an in-flight read times out and is settled as failed', () => {
+    test('the timeout is 15 seconds', () => { assert.equal(IDENTITY_READ_TIMEOUT_MS, 15_000); });
+
+    function hung() {
+        const timers = [];
+        const setTimer = (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; };
+        const clearTimer = (t) => { if (t) t.cleared = true; };
+        let release;
+        const gate = new Promise(r => { release = r; });
+        let reads = 0;
+        const readChain = async () => { reads++; await gate; return 'Late Name'; };
+        const resolver = createIdentityResolver({ cache: createIdentityCache(), readChain, setTimer, clearTimer });
+        return { timers, release, resolver, reads: () => reads };
+    }
+
+    test('a read that never answers settles as failed, frees the in-flight slot, and a later call reads afresh', async () => {
+        const h = hung();
+        const p = h.resolver.resolve(API, A);
+        assert.equal(h.resolver.inflightCount(), 1);
+        assert.equal(h.timers.length, 1);
+        assert.equal(h.timers[0].ms, IDENTITY_READ_TIMEOUT_MS);
+        h.timers[0].fn();
+        const r = await p;
+        assert.equal(r.status, 'failed');
+        assert.equal(h.resolver.inflightCount(), 0);
+        const again = h.resolver.resolve(API, A);
+        assert.equal(h.reads(), 2, 'the next call starts a new read');
+        h.release();
+        await again;
+    });
+
+    test('the late answer of the abandoned read is not cached', async () => {
+        const h = hung();
+        const p = h.resolver.resolve(API, A);
+        h.timers[0].fn();
+        await p;
+        h.release();
+        await new Promise(r => setImmediate(r));
+        const fresh = h.resolver.resolve(API, A);
+        assert.equal(h.reads(), 2, 'nothing was cached from the abandoned read');
+        await fresh;
+    });
+
+    test('a read that answers in time clears its timer', async () => {
+        const timers = [];
+        const resolver = createIdentityResolver({ cache: createIdentityCache(), readChain: async () => 'Quick', setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; }, clearTimer: (t) => { t.cleared = true; } });
+        const r = await resolver.resolve(API, A);
+        assert.equal(r.name, 'Quick');
+        assert.ok(timers.length === 1 && timers[0].cleared);
+    });
+});
+
+describe('A1: stored rows written without a name are healed later', () => {
+    const dirs = [];
+    after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} } });
+    function freshDb() {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-ident-heal-'));
+        dirs.push(dir);
+        db.initDb(dir, true);
+    }
+    const blk = (number, authorAddress, authorName) => ({ number, hash: `0xb${number}`, authorAddress, authorName, extrinsicsCount: 1, eventsCount: 1, timestamp: 1000 + number });
+    const ev = (n, block, signerAddress, signerName) => ({ hash: `e${n}`, txHash: null, blockHash: `0xb${block}`, block, eventIndex: 0, extrinsicIndex: null, section: 's', method: 'm', data: {}, signerAddress, signerName, timestamp: 1, status: 'success' });
+    const nameOfBlock = (n) => db.getRecentBlocks(50).find(b => b.number === n).authorName;
+    const nameOfEvent = (n) => db.getRecentEvents(50).find(e => e.hash === `e${n}`).signerName;
+
+    test('a block re-scanned during an RPC blip keeps the stored author name; an absent name reads as Unknown', () => {
+        freshDb();
+        db.insertBlocks([blk(100, A, 'Alice'), blk(101, A, null)]);
+        assert.equal(nameOfBlock(101), 'Unknown');
+        db.insertBlocks([blk(100, A, null)]);
+        assert.equal(nameOfBlock(100), 'Alice', 'a REPLACE with no name does not erase the stored one');
+    });
+
+    test('the healing pass names blocks and events of an account once the read works, and keeps the rest pending', async () => {
+        freshDb();
+        db.insertBlocks([blk(100, A, null), blk(101, A, null), blk(102, B, null), blk(103, A, 'Kept')]);
+        db.insertEvents([ev(1, 100, A, null), ev(2, 102, B, null), ev(3, 101, A, 'Kept2')]);
+        noteUnnamed(db, A, 100); noteUnnamed(db, A, 101); noteUnnamed(db, B, 102);
+        const answers = { [A]: { name: 'Alice', status: 'found' }, [B]: { status: 'failed', name: 'Unknown' } };
+        const out = await healUnnamedNames({ db, resolve: async (a) => answers[a] });
+        assert.equal(nameOfBlock(100), 'Alice'); assert.equal(nameOfBlock(101), 'Alice');
+        assert.equal(nameOfBlock(103), 'Kept', 'a named block is not touched');
+        assert.equal(nameOfEvent(1), 'Alice');
+        assert.equal(nameOfEvent(3), 'Kept2');
+        assert.equal(nameOfBlock(102), 'Unknown'); assert.equal(nameOfEvent(2), 'Unknown');
+        assert.deepEqual(Object.keys(db.getKv(HEAL_KEY)), [B], 'only the failed account stays pending');
+        assert.equal(out.pending, 1);
+        answers[B] = { name: 'Unknown', status: 'none' };
+        await healUnnamedNames({ db, resolve: async (a) => answers[a] });
+        assert.deepEqual(Object.keys(db.getKv(HEAL_KEY) || {}), []);
+    });
+
+    test('forum posts stored without an author name are healed by address, and read as Unknown meanwhile', async () => {
+        freshDb();
+        const id = db.createPost({ threadId: 't', author: A, authorName: null, content: 'x' });
+        assert.equal(db.getPost(id).authorName, 'Unknown');
+        await healUnnamedNames({ db, resolve: async () => ({ name: 'Alice', status: 'found' }) });
+        assert.equal(db.getPost(id).authorName, 'Alice');
+    });
+
+    test('a validator or holder stored without a name reads as Unknown', () => {
+        freshDb();
+        db.replaceValidators([{ address: A, name: null, totalStake: 1, commission: 1, realApy: 1 }], { totalCount: 1, lastSync: 1, status: 'Synced' });
+        db.replaceHolders([{ address: A, rank: 1, name: null, balance: 1, share: 1 }], { totalCount: 1, lastSync: 1, status: 'Synced' });
+        assert.equal(db.getValidators().validators[0].name, 'Unknown');
+        assert.equal(db.getHolders().holders[0].name, 'Unknown');
+    });
+});
+
+describe('A1: every caller that persists a name uses the read outcome (server.js)', () => {
+    const src = stripComments(readRepo('server.js', import.meta.url));
+    const between = (a, b) => { const i = src.indexOf(a); assert.ok(i >= 0, a); const j = src.indexOf(b, i); assert.ok(j > i, b); return src.slice(i, j); };
+
+    test('the block scanner stores author and signer names from resolveForStore, not getIdentity', () => {
+        const scan = between('async function scanSingleBlock', '// Fallback for scanSingleBlock');
+        assert.ok(!/getIdentity\(/.test(scan));
+        assert.ok(/getIdentityForStore\(globalApi, authorAddr\)/.test(scan) && /getIdentityForStore\(globalApi, signerAddress\)/.test(scan));
+        assert.ok(/noteUnnamed\(/.test(scan));
+    });
+    test('the validator and holder syncs, the forum post and the choice snapshot do not persist a failed read', () => {
+        assert.ok(!/getIdentity\(/.test(between('async function syncData()', 'async function syncHolders()')), 'validator sync');
+        assert.ok(!/getIdentity\(/.test(between('async function syncHolders()', 'isSyncingHolders = false;')), 'holder sync');
+        assert.ok(!/getIdentity\(/.test(between('async function syncValidatorChoice', "db.setKv('validator_choice'")), 'choice snapshot');
+        const post = between('let authorName', 'db.createPost(');
+        assert.ok(/getIdentityForStore\(/.test(post) && !/getIdentity\(/.test(post), 'forum post');
+    });
+    test('the healing pass runs in the indexer', () => {
+        assert.ok(/healUnnamedNames\(/.test(src));
     });
 });
