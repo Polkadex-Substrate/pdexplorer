@@ -227,7 +227,7 @@ describe('A1 getProxyEventsFor: the signer branch is seeked by idx_events_signer
     test('plan uses the index, the 5,000-row window is stated in db.js and the API reference', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-proxied-plan-'));
         try {
-            const h = db.initDb(dir, false, { awaitMigrator: false });
+            const h = db.initDb(dir, true, { awaitMigrator: false });
             const src = readRepo('db.js', import.meta.url);
             const plan = h.prepare("EXPLAIN QUERY PLAN SELECT rowid, * FROM events WHERE signer_address = ? ORDER BY block DESC, rowid DESC LIMIT 5000").all(ME).map(r => r.detail).join(' | ');
             assert.match(plan, /USING INDEX idx_events_signer_block \(signer_address=\?\)/);

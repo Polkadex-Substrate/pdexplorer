@@ -48,3 +48,10 @@ whose genesis hash is not in `lib/fixture-name.js` is refused unless you pass
 Check `git status` for the new file name. If the spec or chain changed, delete
 the superseded file, update `EXPECTED` in `test/fixtures.test.js` and every
 `loadFixture(...)` call, and update the table above. Run `npm test`.
+
+Spec 394 (mainnet, live 2026-11-19): not fetched yet. The build sandbox refused the
+WebSocket to wss://rpc.polkadex.ee. From a machine with network access run
+`node scripts/fetch-metadata.mjs --only 392`, commit the resulting
+metadata-mainnet-394.json, add it to EXPECTED in test/fixtures.test.js, then run the
+static-call test (every api.tx builder exists) and the session-keys and proxy-filter
+tests against it.

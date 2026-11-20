@@ -1787,7 +1787,10 @@ export function getValidatorIncidents(address, sinceBlock = 0, limit = 20) {
 // Proxy events that may make an account a proxy of another (lib/proxied-stashes.js): proxy.ProxyAdded naming it as
 // the delegatee and proxy.PureCreated naming it as the spawner, linked (event_accounts) or signed by it (an Any proxy
 // adding itself another type through proxy.proxy). Each branch looks at the account's newest PROXY_SCAN_ROWS rows
-// only, so a busy account costs a bounded read; newest first, at most limit.
+// only (the 5,000-row window: an older proxy event of a very busy account is not seen), so a busy account costs a
+// bounded read; newest first, at most limit. The signer branch is seeked by idx_events_signer_block (events(signer_address,
+// block)), created idempotently by the migrator process's index check in initDb for a fresh or small table and by migrate-add-indexes.mjs
+// for a large one (test/validator-rollout-s7.test.js pins the plan).
 const PROXY_SCAN_ROWS = 5000;
 export function getProxyEventsFor(address, limit = 200) {
     const kinds = "section = 'proxy' AND method IN ('ProxyAdded', 'PureCreated')";
