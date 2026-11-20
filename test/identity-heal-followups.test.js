@@ -7,7 +7,11 @@
 //   F5  a missing idx_events_block disables the events heal for the process with one warning, never throws per pass
 // Every account is 32 bytes of one repeated value and belongs to no one.
 
-import { test, describe, beforeEach } from 'node:test';
+import { test, describe, beforeEach, after } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import * as realDb from '../db.js';
 import assert from 'node:assert/strict';
 import { encodeAddress } from '@polkadot/util-crypto';
 import {
@@ -201,5 +205,24 @@ describe('F5: a missing idx_events_block disables the events heal for the proces
         await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0, warn: (...a) => warns.push(a.join(' ')) });
         await healUnnamedNames({ db: f, resolve: async () => found, now: () => T0 + HEAL_ERROR_WARN_INTERVAL_MS * 3, warn: (...a) => warns.push(a.join(' ')) });
         assert.equal(eventCalls, 2, 'a transient error is retried next pass');
+    });
+});
+
+describe('F5 on a real database: the error SQLite raises for the dropped index is the one detected', () => {
+    const dirs = [];
+    after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } } });
+    test('with idx_events_block dropped the pass does not throw and warns once', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-heal-noidx-'));
+        dirs.push(dir);
+        const h = realDb.initDb(dir, true, { awaitMigrator: false });
+        h.exec('DROP INDEX IF EXISTS idx_events_block');
+        realDb.insertBlocks([{ number: 5, hash: '0xr5', authorAddress: A, authorName: null, extrinsicsCount: 1, eventsCount: 1, timestamp: 1000 }]);
+        noteUnnamed(realDb, A, 5, { now: () => T0 });
+        const warns = [];
+        const r = await healUnnamedNames({ db: realDb, resolve: async () => found, now: () => T0, warn: (...a) => warns.push(a.join(' ')) });
+        assert.equal(r.healed, 1, 'the block author was still named');
+        assert.equal(warns.length, 1);
+        assert.match(warns[0], /idx_events_block/);
+        assert.ok(!(realDb.getKv(HEAL_KEY) || {})[A], 'block 5 is stored and healed: done');
     });
 });
