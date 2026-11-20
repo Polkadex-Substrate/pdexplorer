@@ -195,7 +195,7 @@ describe('A1 GET /api/proxied-stashes/:address: bounded, cached', () => {
     });
     test('server.js registers the route with the event index lookup and the status rate limit', () => {
         const src = readRepo('server.js', import.meta.url);
-        assert.match(src, /registerProxiedStashesRoute\(app, \{[^}]*events: \(address, limit\) => db\.getProxyEventsFor\(address, limit\)/);
+        assert.match(src, /registerProxiedStashesRoute\(app, \{[^}]*events: \(address, limit\) => db\.getProxyEventsChecked\(address, limit\)/);
         assert.match(src, /registerProxiedStashesRoute\(app, \{[^}]*rateOk: validatorStatusRateOk/);
     });
 });
@@ -235,6 +235,103 @@ describe('A1 getProxyEventsFor: the signer branch is seeked by idx_events_signer
             assert.match(src, /5,000-row window/);
             assert.match(readRepo('lib/api-reference.js', import.meta.url), /newest 5,000/);
         } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } }
+    });
+});
+
+describe('A1 getProxyEventsChecked: a missing idx_events_signer_block skips the signer branch, never scans events, never builds the index', () => {
+    const seed = (dir) => {
+        const h = db.initDb(dir, true, { awaitMigrator: false });
+        db.insertEvents([
+            { hash: '0x11', block: 100, eventIndex: 0, section: 'proxy', method: 'ProxyAdded', data: { delegator: S1, delegatee: ME, proxyType: 'Staking', delay: '0' }, accounts: [ME], signerAddress: S1 },
+            { hash: '0x12', block: 200, eventIndex: 0, section: 'proxy', method: 'ProxyAdded', data: { delegator: S2, delegatee: ME, proxyType: 'Any', delay: '0' }, accounts: [S2], signerAddress: ME }
+        ]);
+        return h;
+    };
+    // Runs fn with every executed statement (sql + args) recorded; returns the EXPLAIN QUERY PLAN details of each.
+    const plansOf = (h, fn) => {
+        const seen = [];
+        const orig = h.prepare.bind(h);
+        h.prepare = (sql) => {
+            const st = orig(sql);
+            const all = st.all.bind(st), get = st.get.bind(st);
+            st.all = (...a) => { seen.push([sql, a]); return all(...a); };
+            st.get = (...a) => { seen.push([sql, a]); return get(...a); };
+            return st;
+        };
+        try { fn(); } finally { delete h.prepare; }
+        return seen.map(([sql, a]) => ({ sql, plan: orig('EXPLAIN QUERY PLAN ' + sql).all(...a).map(r => r.detail).join(' | ') }));
+    };
+    const unindexedEventsScan = (plan) => /\bSCAN (events|e)\b(?! USING)/.test(plan);
+
+    test('index present: both branches run, the signer branch uses the index, no unindexed scan of events', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-proxied-idx-'));
+        try {
+            const h = seed(dir);
+            let got;
+            const plans = plansOf(h, () => { got = db.getProxyEventsChecked(ME, 10); });
+            assert.equal(got.partial, false);
+            assert.equal(got.reason, undefined);
+            assert.deepEqual(got.rows.map(r => r.block), [200, 100]);
+            assert.ok(plans.some(p => /USING INDEX idx_events_signer_block/.test(p.plan)), plans.map(p => p.plan).join('\n'));
+            assert.ok(plans.every(p => !unindexedEventsScan(p.plan)), plans.map(p => p.plan).join('\n'));
+        } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } }
+    });
+
+    test('index missing: only the event_accounts branch runs, partial with a reason code, one warning, no CREATE INDEX, no events scan', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdex-proxied-noidx-'));
+        const warns = [];
+        const origWarn = console.warn;
+        try {
+            const h = seed(dir);
+            h.exec('DROP INDEX idx_events_signer_block');
+            console.warn = (...a) => { warns.push(a.join(' ')); };
+            let got, got2;
+            const plans = plansOf(h, () => { got = db.getProxyEventsChecked(ME, 10); got2 = db.getProxyEventsChecked(ME, 10); });
+            assert.equal(got.partial, true);
+            assert.equal(got.reason, 'SIGNER_INDEX_MISSING');
+            assert.deepEqual(got.rows.map(r => r.block), [100], 'the linked branch still answers; the signer-only event is not seen');
+            assert.equal(got2.partial, true);
+            assert.ok(plans.every(p => !/signer_address/.test(p.sql) || /sqlite_master|index_list/.test(p.sql)), 'no executed statement filters by signer_address');
+            assert.ok(plans.every(p => !/CREATE INDEX/i.test(p.sql)));
+            assert.ok(plans.every(p => !unindexedEventsScan(p.plan)), plans.map(p => p.plan).join('\n'));
+            assert.ok(plans.some(p => /event_accounts/.test(p.plan) && /USING (COVERING )?INDEX|PRIMARY KEY/.test(p.plan)), plans.map(p => p.plan).join('\n'));
+            assert.equal(warns.length, 1, 'one warning per process, not one per request');
+            assert.match(warns[0], /idx_events_signer_block/);
+            assert.match(warns[0], /migrate-add-indexes\.mjs/);
+            assert.equal(h.prepare("SELECT 1 FROM sqlite_master WHERE name = 'idx_events_signer_block'").get(), undefined, 'never built from the request path');
+        } finally { console.warn = origWarn; try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } }
+    });
+
+    test('every query of getProxyEventsFor has a LIMIT', () => {
+        const src = readRepo('db.js', import.meta.url);
+        const body = bodyOf(src, 'getProxyEventsChecked');
+        assert.ok(body, 'getProxyEventsChecked exists');
+        const sqls = body.match(/SELECT[\s\S]*?\.all\(/g) || [];
+        assert.ok(sqls.length >= 1);
+        for (const q of sqls) assert.match(q, /LIMIT/);
+        assert.match(body, /LIMIT \$\{PROXY_SCAN_ROWS\}/);
+    });
+});
+
+describe('A1 route: an index-missing answer is partial with the reason, not kept, no-store', () => {
+    test('events() returning { rows, partial, reason } makes the body partial with reason', async () => {
+        let calls = 0;
+        const handlers = {};
+        const app = { get: (_p, h) => { handlers.get = h; } };
+        const sent = {};
+        registerProxiedStashesRoute(app, {
+            api: () => ({ query: { proxy: { proxies: async () => [[{ delegate: ME, proxyType: 'Staking', delay: 0 }]] } } }),
+            ready: () => true, gate: () => ({ address: ME }),
+            events: async () => { calls++; return { rows: [added(S1, ME)], partial: true, reason: 'SIGNER_INDEX_MISSING' }; },
+            cacheShort: () => {}, serverError: (_r, e) => { throw e; }
+        });
+        const res = { set: (k, v) => { sent[k] = v; return res; }, json: (b) => { sent.body = b; return res; }, status: () => res };
+        await handlers.get({ path: '/x', ip: '1' }, res);
+        await handlers.get({ path: '/x', ip: '1' }, res);
+        assert.equal(sent.body.partial, true);
+        assert.equal(sent.body.reason, 'SIGNER_INDEX_MISSING');
+        assert.equal(sent['Cache-Control'], 'no-store');
+        assert.equal(calls, 2, 'not kept');
     });
 });
 
