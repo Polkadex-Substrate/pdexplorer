@@ -45,13 +45,22 @@ labels only choose which fetch runs; the first command above yields
 whose genesis hash is not in `lib/fixture-name.js` is refused unless you pass
 `--network <name>`.
 
+Pruned endpoints are fine: the public `wss://rpc.polkadex.ee` keeps only the last
+few hundred blocks of state, and the scan stops where state ends and keeps the
+samples it has (it still refuses to write without a v5 extrinsic). If a longer
+window is needed, use the archive: `--mainnet wss://rpc2.polkadex.ee`. A plain
+run (no `--only`) no longer rewrites an existing history fixture; it prints
+`kept existing <file>` and moves on. Pass `--only 373` to refetch it.
+
 Check `git status` for the new file name. If the spec or chain changed, delete
 the superseded file, update `EXPECTED` in `test/fixtures.test.js` and every
 `loadFixture(...)` call, and update the table above. Run `npm test`.
 
 Spec 394 (mainnet, live 2026-11-19): not fetched yet. The build sandbox refused the
 WebSocket to wss://rpc.polkadex.ee. From a machine with network access run
-`node scripts/fetch-metadata.mjs --only 392`, commit the resulting
+`node scripts/fetch-metadata.mjs --only 392` (the public endpoint is pruned; that is
+fine, the scan stops where its state ends, and `--mainnet wss://rpc2.polkadex.ee` is the
+archive if you want a longer window; a plain run leaves the 373 history file alone), commit the resulting
 metadata-mainnet-394.json, add it to EXPECTED in test/fixtures.test.js, then run the
 static-call test (every api.tx builder exists) and the session-keys and proxy-filter
 tests against it.
