@@ -9,6 +9,7 @@ missing file and pins each file's chain and spec version.
 |---|---|---|---|---|---|
 | `metadata-mainnet-373.json` | Polkadex mainnet (`wss://rpc.polkadex.ee`) | 373 (transactionVersion 2) | 13,272,831 | 2026-10-19 | 846 KB |
 | `metadata-testnet-393.json` | Polkadex TESTNET (`wss://polkadex-testnet.polkadex.ee`) | 393 (transactionVersion 3) | 57,924 | 2026-10-27 | 2.2 MB |
+| `metadata-mainnet-394.json` | Polkadex mainnet (`wss://rpc2.polkadex.ee`, archive) | 394 (transactionVersion 3) | 13,494,792 | 2026-11-20 | 2.3 MB |
 
 Both are well under 5 MB, so they are stored as plain JSON (no gzip).
 
@@ -45,6 +46,15 @@ labels only choose which fetch runs; the first command above yields
 whose genesis hash is not in `lib/fixture-name.js` is refused unless you pass
 `--network <name>`.
 
+Pruned endpoints are fine: the public `wss://rpc.polkadex.ee` keeps only the last
+few hundred blocks of state, and the scan stops where state ends and keeps the
+samples it has (it still refuses to write without a v5 extrinsic). If a longer
+window is needed, use the archive: `--mainnet wss://rpc2.polkadex.ee`. A plain
+run (no `--only`) no longer rewrites an existing history fixture; it prints
+`kept existing <file>` and moves on. Pass `--only 373` to refetch it.
+
 Check `git status` for the new file name. If the spec or chain changed, delete
 the superseded file, update `EXPECTED` in `test/fixtures.test.js` and every
 `loadFixture(...)` call, and update the table above. Run `npm test`.
+
+Spec 394 (mainnet) was fetched 2026-11-20 from the archive (`wss://rpc2.polkadex.ee`) and holds inherent samples only: the 400-block window had no signed extrinsic.

@@ -234,7 +234,8 @@ for (const v of ['v14', 'v15']) {
 
 const FIXTURES = [
     { file: 'metadata-mainnet-373.json', label: 'historical spec 373', expectV5: false },
-    { file: 'metadata-testnet-393.json', label: 'current runtime, testnet spec 393', expectV5: true }
+    { file: 'metadata-testnet-393.json', label: 'testnet spec 393', expectV5: true },
+    { file: 'metadata-mainnet-394.json', label: 'current runtime, mainnet spec 394', expectV5: true }
 ];
 
 for (const { file, label, expectV5 } of FIXTURES) {

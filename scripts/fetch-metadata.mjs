@@ -2,9 +2,11 @@
 // Saves the Polkadex runtime metadata fixtures used by test/tx-extensions.test.js
 // and the other fixture suites.
 //
-//   node scripts/fetch-metadata.mjs                 both fixtures
+//   node scripts/fetch-metadata.mjs                 the current runtime, plus the
+//                                                   history fixture only if its file
+//                                                   is missing (an existing one is kept)
 //   node scripts/fetch-metadata.mjs --only 392      the current runtime only
-//   node scripts/fetch-metadata.mjs --only 373      the pre-392 runtime only
+//   node scripts/fetch-metadata.mjs --only 373      the pre-392 runtime only (always refetches)
 //   --mainnet <wss url>   current runtime, read at the finalized head
 //                         (default wss://rpc.polkadex.ee)
 //   --archive <wss url>   archive node for the 373 fixture
@@ -14,7 +16,10 @@
 //   --network <name>      name the output for this network instead of reading
 //                         it from the genesis hash (needed for unknown chains)
 //   --samples <n>  --out <dir>   (default out: test/fixtures)
-//   --blocks <n>    how many blocks to scan back (default 400)
+//   --blocks <n>    how many blocks to scan back (default 400). A pruned node
+//                   keeps only recent state: the scan stops where state ends and
+//                   keeps what it has. Use --mainnet wss://rpc2.polkadex.ee (the
+//                   archive) if a longer window is needed.
 //
 // Output names are derived from what was fetched: metadata-<network>-<spec>.json,
 // the network from the genesis hash (mainnet, testnet) and the spec from the
@@ -32,7 +37,8 @@
 //
 // The 373 fetch is HISTORY: the runtime mainnet ran before 29 October
 // 2026, read at a fixed block from an archive node. It backs the historical
-// decode tests and changes only if that file is lost. A block that is not
+// decode tests and changes only if that file is lost: a plain run skips it when the file exists
+// ("kept existing"); pass --only 373 to refetch. A block that is not
 // under spec 373 is refused and nothing is written.
 //
 // Each file holds the metadata from state_getMetadata (v14), the v15/v16
@@ -44,13 +50,14 @@
 // (global WebSocket). Plain JSON-RPC on purpose, so a library bug cannot
 // shape the fixture that is meant to test the library.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newFormatTally, tallyExtrinsic, sampleLabel, v5MissingMessage } from '../lib/extrinsic-formats.js';
 import { rpcClient } from '../lib/json-rpc-client.js';
 import { MIN_LIVE_SPEC } from '../lib/live-runtime.js';
 import { resolveFixtureName } from '../lib/fixture-name.js';
+import { isStateUnavailableError, shouldFetchTarget } from '../lib/fetch-guards.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -162,12 +169,19 @@ async function fetchTarget(t) {
             throw new Error(stateUnavailableMessage(e, t, blockNumber));
         }
         const genesisHash = await call('chain_getBlockHash', [0]);
+        const { network, file: fileName } = resolveFixtureName({ genesisHash, specVersion: rv.specVersion, networkOverride: NETWORK });
         console.log(`  ${t.at === null ? 'finalized' : 'block'} #${blockNumber} ${blockHash}, ${rv.specName} spec ${rv.specVersion} tx ${rv.transactionVersion}`);
         if (t.minSpec && rv.specVersion < t.minSpec) {
             throw new Error(`the node reports spec ${rv.specVersion} at its finalized head, below ${t.minSpec}: it is out of date or not mainnet. Nothing written; use an up-to-date endpoint with --mainnet.`);
         }
         if (t.exactSpec && rv.specVersion !== t.exactSpec) {
             throw new Error(`block #${blockNumber} runs spec ${rv.specVersion}, not ${t.exactSpec}. Nothing written; pick a block before the 392 upgrade with --at373.`);
+        }
+        const file = join(OUT, fileName);
+        const decision = shouldFetchTarget({ isHistoryTarget: t.label === '373', onlyFlag: ONLY, fileExists: existsSync(file) });
+        if (!decision.fetch) {
+            console.log(`  kept existing ${file}; pass --only 373 to refetch`);
+            return true;
         }
         let metadata;
         try {
@@ -195,7 +209,17 @@ async function fetchTarget(t) {
         while (walked < MAX_WALK && n > 0) {
             if (!wantV5 && have['v4-signed'] >= SAMPLES) break;
             const blk = await call('chain_getBlock', [hash]);
-            const v = (await call('state_getRuntimeVersion', [hash])).specVersion;
+            let v;
+            try {
+                v = (await call('state_getRuntimeVersion', [hash])).specVersion;
+            } catch (e) {
+                // A pruned node keeps only recent state: end the scan here, keep what is in hand.
+                if (walked > 0 && isStateUnavailableError(e)) {
+                    console.log(`  state is pruned beyond ${walked} blocks on this node; scan stopped there`);
+                    break;
+                }
+                throw e;
+            }
             if (v !== rv.specVersion) break;
             blk.block.extrinsics.forEach((hex, index) => {
                 const { version, kind } = tallyExtrinsic(seenFormats, hex);
@@ -216,7 +240,6 @@ async function fetchTarget(t) {
             if (missing) throw new Error(missing);
         }
 
-        const { network, file: fileName } = resolveFixtureName({ genesisHash, specVersion: rv.specVersion, networkOverride: NETWORK });
         console.log(`  network ${network}`);
         const out = {
             note: 'Written by scripts/fetch-metadata.mjs. Test fixture; regenerate rather than edit.',
@@ -227,7 +250,6 @@ async function fetchTarget(t) {
             extrinsics
         };
         mkdirSync(OUT, { recursive: true });
-        const file = join(OUT, fileName);
         writeFileSync(file, JSON.stringify(out, null, 1) + '\n');
         console.log(`  wrote ${file}`);
         return true;

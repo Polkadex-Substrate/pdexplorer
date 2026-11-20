@@ -1389,7 +1389,11 @@ function fakeApi() {
             author: { submitAndWatchExtrinsic: (ext) => { submitted.push(typeof ext === 'string' ? ext : ext.toHex()); return of(registry.createType('ExtrinsicStatus', 'Ready')); } }
         },
         on: (e, f) => { (listeners[e] = listeners[e] || []).push(f); },
-        off: (e, f) => { listeners[e] = (listeners[e] || []).filter(x => x !== f); }
+        off: (e, f) => { listeners[e] = (listeners[e] || []).filter(x => x !== f); },
+        // The explorer closing its connection: 'disconnected', as a real WsProvider
+        // sends. A transaction still at "broadcast" stops its 90 s cap and its
+        // chain-check watchdog there, so the test file can exit on its own (Sprint 7 B1).
+        close: () => { for (const f of (listeners.disconnected || []).slice()) f(); }
     };
     return { api, submitted };
 }
@@ -1404,8 +1408,9 @@ const phoneSigner = (onSign = () => {}) => createWalletConnectSigner({
 });
 
 describe('tx-submit end to end with the WalletConnect signer', () => {
-    test('signAsync, check, send: the submitted extrinsic is signed by the account with a valid MultiSignature', async () => {
+    test('signAsync, check, send: the submitted extrinsic is signed by the account with a valid MultiSignature', async (t) => {
         const { api, submitted } = fakeApi();
+        t.after(() => api.close());
         const errors = [], shown = [];
         const run = trackSignedTx({
             api, action: { id: 'a', key: 'system.remark', params: {} },
@@ -1427,8 +1432,9 @@ describe('tx-submit end to end with the WalletConnect signer', () => {
         assert.ok(shown.some(m => m.stage === 'broadcast'));
     });
 
-    test('a phone that returns the signed transaction: exactly those bytes are submitted', async () => {
+    test('a phone that returns the signed transaction: exactly those bytes are submitted', async (t) => {
         const { api, submitted } = fakeApi();
+        t.after(() => api.close());
         const errors = [];
         let sent = null;
         const run = trackSignedTx({ api, action: { id: 'd', key: 'system.remark', params: {} }, show: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex), onError: (t) => errors.push(t) });
@@ -1440,8 +1446,9 @@ describe('tx-submit end to end with the WalletConnect signer', () => {
         assert.deepEqual(submitted, [sent]);
     });
 
-    test('a phone that returns a different signed transaction (another nonce): nothing is sent', async () => {
+    test('a phone that returns a different signed transaction (another nonce): nothing is sent', async (t) => {
         const { api, submitted } = fakeApi();
+        t.after(() => api.close());
         const errors = [];
         const run = trackSignedTx({ api, action: { id: 'e', key: 'system.remark', params: {} }, show: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex), onError: (t) => errors.push(t) });
         run.start();
@@ -1452,8 +1459,9 @@ describe('tx-submit end to end with the WalletConnect signer', () => {
         assert.ok(errors.some(e => e.includes(DIFFERENT_TX)), errors.join(' | '));
     });
 
-    test('the wallet changes while the phone is signing: nothing is sent', async () => {
+    test('the wallet changes while the phone is signing: nothing is sent', async (t) => {
         const { api, submitted } = fakeApi();
+        t.after(() => api.close());
         const errors = [];
         let valid = true;
         const run = trackSignedTx({ api, action: { id: 'b', key: 'system.remark', params: {} }, show: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex), onError: (t) => errors.push(t) });
@@ -1464,8 +1472,9 @@ describe('tx-submit end to end with the WalletConnect signer', () => {
         assert.ok(errors.some(e => e.includes(WALLET_CHANGED_SIGNED)), errors.join(' | '));
     });
 
-    test('a cancel on the phone ends the card as failed, nothing sent, the button usable again', async () => {
+    test('a cancel on the phone ends the card as failed, nothing sent, the button usable again', async (t) => {
         const { api, submitted } = fakeApi();
+        t.after(() => api.close());
         const errors = [];
         const run = trackSignedTx({ api, action: { id: 'c', key: 'system.remark', params: {} }, show: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex), onError: (t) => errors.push(t) });
         run.start();

@@ -41,6 +41,7 @@ function chain(file, version) {
     return { registry, ex: decorateExtrinsics(registry, registry.metadata, version), decode: (c) => registry.createType('Call', c.toHex()) };
 }
 const p392 = chain('metadata-testnet-393.json', 15);
+const p394 = chain('metadata-mainnet-394.json', 15);
 const p373 = chain('metadata-mainnet-373.json', 14);
 const sub = (() => {
     const registry = registryFromMetadata(substrateMetadata);
@@ -106,15 +107,15 @@ describe('2. pallets whose Balance is not PDEX', () => {
     });
 
     test('assetRewards and the other asset-side pallets are listed explicitly', () => {
-        for (const s of ['assetConversion', 'assetRewards', 'poolAssets', 'assets', 'ocex', 'thea', 'theaExecutor', 'hyperFungibleToken', 'crowdSourceLMP']) {
+        for (const s of ['assetConversion', 'assetRewards', 'poolAssets', 'assets', 'ocex', 'thea', 'theaExecutor', 'hyperFungibleToken', 'ismp', 'ismpParams', 'crowdSourceLMP']) {
             assert.ok(ASSET_PALLETS.has(s), s);
             assert.equal(isNativeBalanceField(s, 'any', 'amount', 'T::Balance', []), false, s);
         }
     });
 
-    test('every pallet in the 392 and 373 metadata whose calls name an asset (other than treasury) is an asset pallet', () => {
+    test('every pallet in the 393, 394 and 373 metadata whose calls name an asset (other than treasury) is an asset pallet', () => {
         const missing = [];
-        for (const { registry } of [p392, p373]) {
+        for (const { registry } of [p392, p394, p373]) {
             for (const p of registry.metadata.pallets) {
                 if (p.calls.isNone) continue;
                 const name = stringCamelCase(p.name.toString());

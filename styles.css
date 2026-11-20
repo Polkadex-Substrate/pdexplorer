@@ -659,6 +659,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .item-link:hover { color: var(--brand-primary); }
 .item-link.is-inline { text-decoration: underline; }
+.wallet-history-link { font-size: 0.78rem; }
 
 .item-meta {
     text-align: right;
@@ -1569,6 +1570,14 @@ h1, h2, h3 { font-weight: 600; }
 }
 .connect-wallet-btn.is-connected i { color: var(--brand-secondary, #00E676); }
 .connect-wallet-btn.is-connected:hover { background: rgba(124, 58, 237, 0.20); }
+/* Sprint 7: while the Connect wallet chooser is open its lead row is the one primary; the header button steps
+   back to an outline in the same colour. */
+.connect-wallet-btn.is-outline {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--brand-primary);
+    padding: 8px 15px;
+}
 
 /* --- Mobile wallet connect cards --- */
 .wallet-empty-msg {
@@ -5178,5 +5187,14 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-manage-rule { font-weight: 700; color: var(--text-primary); }
 .validate-manage-facts { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
 .validate-manage .validate-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
+/* Sprint 7: the stashes the connected account is a proxy for (text links only), and the validator page's
+   secondary "Manage this validator". No colour of their own. */
+.validate-proxied { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color); }
+.validate-proxied h3 { margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+.validate-proxied-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.validate-proxied-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; overflow-wrap: anywhere; }
+.validator-manage-link { margin-bottom: 25px; }
+.validator-manage-link:empty { display: none; }
+.validator-manage-link a.validate-secondary { text-decoration: none; }
 .validate-alerts { margin-top: 20px; }
 .validate-alerts .validate-lookup-row input[type="email"] { flex: 1 1 220px; min-width: 0; }

@@ -30,7 +30,7 @@ import { createScrollMemory } from '../../lib/scroll-reset.js';
 import * as txSubmit from '../../lib/tx-submit.js';
 import { Window } from 'happy-dom';
 import { escapeHtml } from '../../lib/html-escape.js';
-import { closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml } from '../../lib/wallet-aware.js';
+import { closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml, createRouteScope, walletDashboardSeo } from '../../lib/wallet-aware.js';
 
 const SCRIPT = readFileSync(new URL('../../script.js', import.meta.url), 'utf8');
 
@@ -74,7 +74,13 @@ export function fakeExtension(key, accounts) {
 function el(id) {
     const e = {
         id, listeners: {}, style: {}, attrs: {}, textContent: '', _html: '', _kids: new Map(), value: '',
-        classList: { add() {}, remove() {}, toggle() {} },
+        // Classes are kept, so a test can read the header button's look (Sprint 7 B7).
+        classes: new Set(),
+        classList: {
+            add(...c) { for (const x of c) e.classes.add(x); }, remove(...c) { for (const x of c) e.classes.delete(x); },
+            toggle(c, on) { const want = on === undefined ? !e.classes.has(c) : !!on; if (want) e.classes.add(c); else e.classes.delete(c); return want; },
+            contains(c) { return e.classes.has(c); }
+        },
         setAttribute(k, v) { this.attrs[k] = v; },
         getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
         addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); },
@@ -121,6 +127,8 @@ const LIFTED = [
     'toPolkadexAddress', 'isSameAddress', 'getStoredWallet', 'isWalletRoute', 'onWalletChanged', 'refreshConnectWalletButton',
     'getInjectedAccounts', 'connectWallet', 'openWalletPicker', 'selectWallet', 'revokeDiscussSession', 'reconcileDiscussSession', 'logoutDiscussToken', 'disconnectWallet',
     'initWalletPage', 'tryAutoSelectFirstWallet', 'renderWalletConnectPanel', 'invalidateWalletFetch', 'fetchWalletDashboard',
+    // Sprint 7: the header button's look while the chooser is open, and the title following the session.
+    'markWalletChooserOpen', 'refreshWalletPageTitle',
     'getDiscussSession', 'discussAuthStore', 'getWalletSigner', 'resolveWalletSigner', 'navigateTo', 'readSafeReturnTo',
     // WalletConnect wiring (lib/walletconnect-gate.js is replaced by profile.wcGate):
     // The legacy multisig signer lookup (the review's "Find my signer" click):
@@ -177,6 +185,8 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
         createDiscussAuth, signInForDiscussion, WALLET_CHANGED_STALE: txSubmit.WALLET_CHANGED_STALE,
         mountWalletPicker, sourceLabel,
         closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
+        // Sprint 7: the route scope (the chooser marks the header while it is open) and the wallet page's title.
+        pageScope: createRouteScope(), walletDashboardSeo,
         multisigUI: { mountAccounts() {} },
         // The WalletConnect gate: off unless a test puts one on the profile.
         wcGate: profile.wcGate || { enabled: false, providers: () => ({}), isConnected: () => false, peerName: () => '', connect: async () => [], cancel() {}, disconnect: async () => {}, restore: async () => [] },
