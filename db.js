@@ -449,6 +449,29 @@ CREATE TABLE IF NOT EXISTS validator_alert_follows (
 CREATE INDEX IF NOT EXISTS idx_validator_alert_follows_stash
     ON validator_alert_follows(stash, confirmed_at, unsubscribed_at);
 
+-- Validator alerts that were reserved in email_dispatches (result 'pending') but not yet
+-- handed to the mail provider. One row per (kind, stash:occurrence, subscriber), the same
+-- key as the sent log, so a retry reuses the reserved row and never creates a second one.
+-- The row carries what the mail needs (detail) and the retry state, so a pending alert
+-- does not depend on the stored baseline and survives a restart or a lease handover.
+-- The row is deleted when the alert is settled (sent, or a final failure). Small and
+-- short-lived; new table only, nothing existing is altered.
+CREATE TABLE IF NOT EXISTS validator_alert_pending (
+  event_kind       TEXT    NOT NULL,
+  event_id         TEXT    NOT NULL,
+  subscriber_id    INTEGER NOT NULL,
+  stash            TEXT    NOT NULL,
+  detail           TEXT    NOT NULL,
+  created_at       INTEGER NOT NULL,
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at  INTEGER NOT NULL,
+  last_result      TEXT,
+  PRIMARY KEY (event_kind, event_id, subscriber_id),
+  FOREIGN KEY (subscriber_id) REFERENCES email_subscribers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_validator_alert_pending_due
+    ON validator_alert_pending(next_attempt_at);
+
 -- O(1) row counters for the high-volume, ever-growing tables. A plain
 -- SELECT COUNT(*) on events/transactions is a full-table scan that becomes
 -- untenable as the chain (and, post-orderbook, transaction volume) grows.
@@ -1281,6 +1304,32 @@ export function updateValidatorName(address, name) {
 export function updateHolderName(address, name) {
     return Number(db.prepare('UPDATE holders SET name = ? WHERE address = ? AND (name IS NOT ?)').run(name, address, name).changes);
 }
+// Healing of names stored as NULL after a failed identity read (lib/identity-heal.js). All of them
+// touch only rows whose name is still NULL, and are bounded by a block window the caller keeps small
+// (HEAL_WINDOW_BLOCKS): blocks by primary-key range, events by idx_events_block, which is always
+// present. The events statement must not depend on idx_events_signer_block (optional, may be missing
+// in production) and must not fall back to idx_events_signer (an unbounded read of a busy signer), so
+// the block index is named; test/identity-heal-s8.test.js pins the plan on a database without it.
+export const HEAL_EVENT_SIGNER_SQL = `UPDATE events INDEXED BY idx_events_block SET signer_name = ?
+    WHERE block >= ? AND block <= ? AND signer_address = ? AND signer_name IS NULL`;
+export function healBlockAuthorNames(address, name, fromBlock, toBlock) {
+    return Number(db.prepare('UPDATE blocks SET author_name = ? WHERE number >= ? AND number <= ? AND author_address = ? AND author_name IS NULL')
+        .run(name, fromBlock, toBlock, address).changes);
+}
+export function healEventSignerNames(address, name, fromBlock, toBlock) {
+    return Number(db.prepare(HEAL_EVENT_SIGNER_SQL).run(name, fromBlock, toBlock, address).changes);
+}
+// The highest stored block number (primary key, one seek), or null when there are none.
+export function getMaxBlockNumber() {
+    const r = db.prepare('SELECT MAX(number) AS n FROM blocks').get();
+    return r && r.n != null ? Number(r.n) : null;
+}
+export function getUnnamedDiscussionAuthors(limit = 50) {
+    return db.prepare('SELECT DISTINCT author FROM discussion_posts WHERE author_name IS NULL AND author IS NOT NULL LIMIT ?').all(limit).map(r => r.author);
+}
+export function healDiscussionAuthorNames(address, name) {
+    return Number(db.prepare('UPDATE discussion_posts SET author_name = ? WHERE author = ? AND author_name IS NULL').run(name, address).changes);
+}
 export function getValidators() {
     // Audit F-044, found by checking the LIVE endpoint rather than the tests.
     //
@@ -1297,7 +1346,7 @@ export function getValidators() {
     // guess. The alias list stays in lib/apy.js so dropping a name is still one
     // edit. NOT a schema change: adding a column would mean a migration on a
     // multi-million-row table to store a third copy of a number we already have.
-    const rows = db.prepare('SELECT address, name, total_stake AS totalStake, commission, real_apy AS storedApy FROM validators ORDER BY position ASC').all();
+    const rows = db.prepare("SELECT address, COALESCE(name, 'Unknown') AS name, total_stake AS totalStake, commission, real_apy AS storedApy FROM validators ORDER BY position ASC").all();
     const validators = rows.map(({ storedApy, ...rest }) => {
         const value = storedApy == null ? null : Number(storedApy);
         const out = { ...rest, [APY_FIELD]: value };
@@ -1405,7 +1454,7 @@ export function replaceHolders(list, meta) {
     setSyncState('holders', { totalCount: meta.totalCount, lastSync: meta.lastSync, status: meta.status });
 }
 export function getHolders() {
-    const holders = db.prepare('SELECT address, rank, name, balance, share FROM holders ORDER BY rank ASC').all();
+    const holders = db.prepare("SELECT address, rank, COALESCE(name, 'Unknown') AS name, balance, share FROM holders ORDER BY rank ASC").all();
     const s = getSyncState('holders');
     return { holders, totalCount: s.totalCount ?? holders.length, lastSync: s.lastSync ?? 0, status: s.status ?? 'Initializing' };
 }
@@ -1480,12 +1529,16 @@ export function countTransactions() {
 export function insertBlocks(list) {
     if (!list || !list.length) return;
     runTx(() => {
-        const stmt = db.prepare('INSERT OR REPLACE INTO blocks(number,hash,author_address,author_name,extrinsics_count,events_count,timestamp) VALUES(?,?,?,?,?,?,?)');
-        for (const b of list) stmt.run(b.number, b.hash ?? null, b.authorAddress ?? null, b.authorName ?? null, b.extrinsicsCount ?? 0, b.eventsCount ?? 0, b.timestamp ?? null);
+        // A block scanned while the identity read failed carries no author name (null, not 'Unknown'):
+        // a REPLACE then keeps the name already stored, and the healing pass (lib/identity-heal.js)
+        // fills the rest. The old row is read inside the same statement, before it is replaced. The stored
+        // name is kept only for the SAME author: a re-scan (reorg repair) with another author stores NULL.
+        const stmt = db.prepare('INSERT OR REPLACE INTO blocks(number,hash,author_address,author_name,extrinsics_count,events_count,timestamp) VALUES(?,?,?,COALESCE(?, (SELECT author_name FROM blocks WHERE number = ? AND author_address = ?)),?,?,?)');
+        for (const b of list) stmt.run(b.number, b.hash ?? null, b.authorAddress ?? null, b.authorName ?? null, b.number, b.authorAddress ?? null, b.extrinsicsCount ?? 0, b.eventsCount ?? 0, b.timestamp ?? null);
     });
 }
 export function getRecentBlocks(limit) {
-    return db.prepare('SELECT number, hash, author_address AS authorAddress, author_name AS authorName, extrinsics_count AS extrinsicsCount, events_count AS eventsCount, timestamp FROM blocks ORDER BY number DESC LIMIT ?').all(limit);
+    return db.prepare("SELECT number, hash, author_address AS authorAddress, COALESCE(author_name, 'Unknown') AS authorName, extrinsics_count AS extrinsicsCount, events_count AS eventsCount, timestamp FROM blocks ORDER BY number DESC LIMIT ?").all(limit);
 }
 export function hasBlock(number) {
     return !!db.prepare('SELECT 1 FROM blocks WHERE number = ?').get(number);
@@ -1712,8 +1765,11 @@ function mapEventRow(r) {
     try { data = JSON.parse(r.data); } catch (e) { }
     return { ...r, data };
 }
-const EVENT_COLS = 'hash, tx_hash AS txHash, block_hash AS blockHash, block, event_index AS eventIndex, extrinsic_index AS extrinsicIndex, section, method, data, signer_address AS signerAddress, signer_name AS signerName, timestamp, status';
-const EVENT_COLS_E = EVENT_COLS.split(', ').map(c => `e.${c}`).join(', ');   // the same columns from events joined as e
+// A signer name stored as NULL means "the identity read failed when this was indexed"; it reads as
+// Unknown until the healing pass (lib/identity-heal.js) names it.
+const eventCols = (p = '') => `${p}hash, ${p}tx_hash AS txHash, ${p}block_hash AS blockHash, ${p}block, ${p}event_index AS eventIndex, ${p}extrinsic_index AS extrinsicIndex, ${p}section, ${p}method, ${p}data, ${p}signer_address AS signerAddress, COALESCE(${p}signer_name, 'Unknown') AS signerName, ${p}timestamp, ${p}status`;
+const EVENT_COLS = eventCols();
+const EVENT_COLS_E = eventCols('e.');   // the same columns from events joined as e
 // Link rows for the accounts an event names (e.accounts, set by lib/account-links.js); returns how many were new.
 function linkEvent(stmt, e, rowid) {
     let added = 0;
@@ -2120,10 +2176,10 @@ export function createPost(p) {
     return Number(r.lastInsertRowid);
 }
 export function getPosts(threadId) {
-    return db.prepare('SELECT id, thread_id AS threadId, author, author_name AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE thread_id = ? ORDER BY created_at ASC').all(threadId);
+    return db.prepare("SELECT id, thread_id AS threadId, author, COALESCE(author_name, 'Unknown') AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE thread_id = ? ORDER BY created_at ASC").all(threadId);
 }
 export function getPost(id) {
-    return db.prepare('SELECT id, thread_id AS threadId, author, author_name AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE id = ?').get(id) || null;
+    return db.prepare("SELECT id, thread_id AS threadId, author, COALESCE(author_name, 'Unknown') AS authorName, content, created_at AS createdAt, edited_at AS editedAt FROM discussion_posts WHERE id = ?").get(id) || null;
 }
 export function updatePostContent(id, content, editedAt) {
     db.prepare('UPDATE discussion_posts SET content = ?, edited_at = ? WHERE id = ?').run(content, editedAt, id);
@@ -3304,6 +3360,73 @@ export function unsubscribeValidatorAlertFollow(token) {
 }
 
 // Confirmed, not left, and the address has not left all explorer mail.
+// Reserve a validator alert and queue it for sending, in one transaction: the dedupe row in
+// email_dispatches and the pending row appear together or not at all, so a crash between the
+// two can neither lose the alert nor leave a reserved row nobody will send. Returns false when
+// the (kind, stash:occurrence, subscriber) was already reserved (sent, pending or given up).
+export function reserveValidatorAlert({ eventKind, eventId, subscriberId, stash, detail, now = Date.now() }) {
+    return runTx(() => {
+        if (!reserveEmailDispatch({ eventKind, eventId, subscriberId })) return false;
+        db.prepare(`INSERT OR IGNORE INTO validator_alert_pending
+            (event_kind, event_id, subscriber_id, stash, detail, created_at, attempts, next_attempt_at)
+            VALUES (?,?,?,?,?,?,0,?)`).run(String(eventKind), String(eventId), subscriberId, String(stash), JSON.stringify(detail || {}), now, now);
+        return true;
+    });
+}
+
+// Pending alerts whose next attempt is due, with the follow they belong to. `active` is false when
+// the follow was unsubscribed (or the address left all explorer mail) since the alert was queued.
+export function getDueValidatorAlerts({ now = Date.now(), limit = 500 } = {}) {
+    const rows = db.prepare(`SELECT p.*, f.unsubscribe_token AS unsubscribe_token, s.email AS email,
+            (f.confirmed_at IS NOT NULL AND f.unsubscribed_at IS NULL AND s.unsubscribed_at IS NULL) AS active
+        FROM validator_alert_pending p
+        JOIN email_subscribers s ON s.id = p.subscriber_id
+        LEFT JOIN validator_alert_follows f ON f.subscriber_id = p.subscriber_id AND f.stash = p.stash
+        WHERE p.next_attempt_at <= ?
+        ORDER BY CASE p.event_kind WHEN 'validator.slashed' THEN 0 WHEN 'validator.disabled' THEN 1 WHEN 'validator.not-elected' THEN 2 ELSE 3 END,
+            p.created_at, p.event_id LIMIT ?`).all(now, limit);
+    return rows.map(r => {
+        let detail = {};
+        try { detail = JSON.parse(r.detail); } catch (_) { detail = {}; }
+        return {
+            eventKind: r.event_kind, eventId: r.event_id, subscriberId: r.subscriber_id, stash: r.stash, detail,
+            createdAt: r.created_at, attempts: r.attempts, nextAttemptAt: r.next_attempt_at, lastResult: r.last_result, email: r.email,
+            unsubscribeToken: r.unsubscribe_token, active: !!r.active
+        };
+    });
+}
+
+// Claim a due alert before sending it: compare-and-set of next_attempt_at against the value the
+// caller read. True only for the one caller whose update changed the row, so two drains (a lease
+// takeover mid-drain) never both send it. A claim that is never settled expires at `until`.
+export function claimValidatorAlert({ eventKind, eventId, subscriberId, expectNextAttemptAt, until }) {
+    return Number(db.prepare(`UPDATE validator_alert_pending SET next_attempt_at = ?
+        WHERE event_kind = ? AND event_id = ? AND subscriber_id = ? AND next_attempt_at = ?`)
+        .run(until, String(eventKind), String(eventId), subscriberId, expectNextAttemptAt).changes) === 1;
+}
+
+// Is the follow behind a pending alert still confirmed and subscribed (checked just before a send)?
+export function isValidatorAlertFollowActive({ subscriberId, stash }) {
+    return !!db.prepare(`SELECT 1 FROM validator_alert_follows f JOIN email_subscribers s ON s.id = f.subscriber_id
+        WHERE f.subscriber_id = ? AND f.stash = ? AND f.confirmed_at IS NOT NULL AND f.unsubscribed_at IS NULL AND s.unsubscribed_at IS NULL`)
+        .get(subscriberId, String(stash));
+}
+
+// The provider did not take it (rate-limited, or the send threw): record the attempt count, schedule the next.
+export function deferValidatorAlert({ eventKind, eventId, subscriberId, attempts, nextAttemptAt, lastResult }) {
+    db.prepare(`UPDATE validator_alert_pending SET attempts = ?, next_attempt_at = ?, last_result = ?
+        WHERE event_kind = ? AND event_id = ? AND subscriber_id = ?`).run(attempts, nextAttemptAt, lastResult ?? null, String(eventKind), String(eventId), subscriberId);
+}
+
+// Settle a pending alert: the dispatch row gets its final result and the pending row goes, together.
+export function settleValidatorAlert({ eventKind, eventId, subscriberId, providerId, result }) {
+    runTx(() => {
+        recordEmailDispatchResult({ eventKind, eventId, subscriberId, providerId, result });
+        db.prepare('DELETE FROM validator_alert_pending WHERE event_kind = ? AND event_id = ? AND subscriber_id = ?')
+            .run(String(eventKind), String(eventId), subscriberId);
+    });
+}
+
 export function getActiveValidatorAlertFollows() {
     return db.prepare(`${FOLLOW_SELECT}
         WHERE f.confirmed_at IS NOT NULL AND f.unsubscribed_at IS NULL AND s.unsubscribed_at IS NULL
