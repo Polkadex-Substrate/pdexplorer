@@ -9,6 +9,7 @@ missing file and pins each file's chain and spec version.
 |---|---|---|---|---|---|
 | `metadata-mainnet-373.json` | Polkadex mainnet (`wss://rpc.polkadex.ee`) | 373 (transactionVersion 2) | 13,272,831 | 2026-10-19 | 846 KB |
 | `metadata-testnet-393.json` | Polkadex TESTNET (`wss://polkadex-testnet.polkadex.ee`) | 393 (transactionVersion 3) | 57,924 | 2026-10-27 | 2.2 MB |
+| `metadata-mainnet-394.json` | Polkadex mainnet (`wss://rpc2.polkadex.ee`, archive) | 394 (transactionVersion 3) | 13,494,792 | 2026-11-20 | 2.3 MB |
 
 Both are well under 5 MB, so they are stored as plain JSON (no gzip).
 
@@ -56,11 +57,4 @@ Check `git status` for the new file name. If the spec or chain changed, delete
 the superseded file, update `EXPECTED` in `test/fixtures.test.js` and every
 `loadFixture(...)` call, and update the table above. Run `npm test`.
 
-Spec 394 (mainnet, live 2026-11-19): not fetched yet. The build sandbox refused the
-WebSocket to wss://rpc.polkadex.ee. From a machine with network access run
-`node scripts/fetch-metadata.mjs --only 392` (the public endpoint is pruned; that is
-fine, the scan stops where its state ends, and `--mainnet wss://rpc2.polkadex.ee` is the
-archive if you want a longer window; a plain run leaves the 373 history file alone), commit the resulting
-metadata-mainnet-394.json, add it to EXPECTED in test/fixtures.test.js, then run the
-static-call test (every api.tx builder exists) and the session-keys and proxy-filter
-tests against it.
+Spec 394 (mainnet) was fetched 2026-11-20 from the archive (`wss://rpc2.polkadex.ee`) and holds inherent samples only: the 400-block window had no signed extrinsic.

@@ -11,7 +11,8 @@ import { FIXTURE_DIR, loadFixture } from './helpers/extrinsic-builders.js';
 
 const EXPECTED = [
     { file: 'metadata-mainnet-373.json', network: 'mainnet', specVersion: 373 },
-    { file: 'metadata-testnet-393.json', network: 'testnet', specVersion: 393 }
+    { file: 'metadata-testnet-393.json', network: 'testnet', specVersion: 393 },
+    { file: 'metadata-mainnet-394.json', network: 'mainnet', specVersion: 394 }
 ];
 
 test('every metadata fixture the suites read is present and non-empty', () => {
