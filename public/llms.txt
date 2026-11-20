@@ -70,6 +70,9 @@ Access notes:
   (not-bonded, bonded-no-keys, keys-not-validating, waiting, elected-next,
   active, active-leaving, disabled), headline and rows (keys, online, points,
   offences, stake, nominators, commission, identity, access)
+- GET /api/proxied-stashes/:address - the stashes this account is a proxy for,
+  found in the explorer's index of proxy events and checked live against
+  Proxy.Proxies (each with its proxy types, delay and whether it validates)
 - GET /api/telemetry/node?name=<node name> - Check my node: Polkadex nodes on
   the telemetry feed under that --name (version, best and finalized block, peers,
   blocks behind the explorer's chain head, stale), similar names, the official
@@ -334,7 +337,7 @@ backoff — it is not a permanent error. `RPC_NOT_READY` is currently the only
 - Short — high-velocity feeds (/api/blocks, /api/transactions, /api/events,
   /api/council, /api/technical-committee, /api/governance/latest, /api/state/* at the current head,
   /api/staking/validator-choice, /api/validator/:address/status,
-  /api/telemetry/node):
+  /api/proxied-stashes/:address, /api/telemetry/node):
   public, max-age=5, s-maxage=10, stale-while-revalidate=30
 - Medium — /api/validators, /api/validator/params, /api/network-info, /api/holders, /api/price-latest,
   /api/discussions, /api/staking-rewards-status, /api/analytics/*, and

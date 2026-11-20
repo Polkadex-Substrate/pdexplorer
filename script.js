@@ -88,7 +88,8 @@ import { mountValidatePage } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
-import { validatorCallGuard, validatorCallNote, readWalletValidator } from './lib/validator-delegate-chain.js';
+import { validatorCallGuard, validatorCallNote, readWalletValidator, readProxyDefs } from './lib/validator-delegate-chain.js';
+import { mountManageLink } from './lib/validator-manage-link.js';
 import { walletValidatorCard, proxyPrefill, proxyTypesOf } from './lib/validator-delegate.js';
 // The Validate area: off unless FEATURE_FLAGS.validate or ?validate=1 in this browser. Its help topics follow the flag.
 const VALIDATE_ON = validateEnabled({ flag: FEATURE_FLAGS.validate, storage: localStorage, search: window.location.search });
@@ -6773,6 +6774,16 @@ function renderValidatorScorecard(scorecard) {
     `;
 }
 
+// Sprint 7 (design 5.1): "Manage this validator" for the stash, its controller, a proxy or a multisig member (lib/validator-manage-link.js).
+function mountValidatorManageLink(data) {
+    const mount = () => mountManageLink(document.getElementById('validator-manage-link-slot'), { enabled: VALIDATE_ON, account: walletSession.getActiveAccount(),
+        stash: data.address, controller: data.controller, readProxies: (a) => (globalApi ? readProxyDefs(globalApi, a) : Promise.reject(new Error('not connected'))),
+        findMultisig: (a) => multisigStore.find(a), isSame: isSameAddress, esc: stakingEscapeHtml,
+        selectMultisig: (a) => walletSession.select(toPolkadexAddress(a), 'multisig'), navigate: (r) => navigateTo(r) });
+    if (VALIDATE_ON) pageScope.add(walletSession.onActiveAccountChange(mount));
+    mount();
+}
+
 async function fetchValidatorDetails(address) {
     const container = document.getElementById('validator-details-container');
     if (!container) return;
@@ -6893,6 +6904,7 @@ async function fetchValidatorDetails(address) {
                     <strong style="display: block; margin-bottom: 5px;">Controller account:</strong>
                     <span class="address-cell">${stakingEscapeHtml(data.controller)}</span> <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span>
                 </div>
+                <div id="validator-manage-link-slot" class="validator-manage-link"></div>
 
                 ${renderValidatorScorecard(data.scorecard)}
 
@@ -6921,6 +6933,7 @@ async function fetchValidatorDetails(address) {
                 </div>
             </div>
         `;
+        mountValidatorManageLink(data);
 
         // Audit F-122: copy bound via listener + escaped data-address, not an
         // inline onclick holding a raw string in a JS-in-HTML context.

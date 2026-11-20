@@ -1784,6 +1784,20 @@ export function getValidatorIncidents(address, sinceBlock = 0, limit = 20) {
           AND ((e.section = 'imOnline' AND e.method = 'SomeOffline') OR (e.section = 'staking' AND e.method IN ('SlashReported', 'Slashed')))
         ORDER BY l.block DESC, l.event_rowid DESC LIMIT ?`).all(address, sinceBlock, limit).map(r => ({ block: r.block, kind: r.kind }));
 }
+// Proxy events that may make an account a proxy of another (lib/proxied-stashes.js): proxy.ProxyAdded naming it as
+// the delegatee and proxy.PureCreated naming it as the spawner, linked (event_accounts) or signed by it (an Any proxy
+// adding itself another type through proxy.proxy). Each branch looks at the account's newest PROXY_SCAN_ROWS rows
+// only, so a busy account costs a bounded read; newest first, at most limit.
+const PROXY_SCAN_ROWS = 5000;
+export function getProxyEventsFor(address, limit = 200) {
+    const kinds = "section = 'proxy' AND method IN ('ProxyAdded', 'PureCreated')";
+    return db.prepare(`SELECT * FROM (
+            SELECT ${EVENT_COLS_E}, e.rowid AS rowId FROM (SELECT block, event_rowid, event_hash FROM event_accounts WHERE address = ? ORDER BY block DESC, event_rowid DESC LIMIT ${PROXY_SCAN_ROWS}) l
+                JOIN events e ON e.rowid = l.event_rowid AND e.hash = l.event_hash WHERE e.${kinds}
+            UNION
+            SELECT ${EVENT_COLS}, rowid AS rowId FROM (SELECT rowid, * FROM events WHERE signer_address = ? ORDER BY block DESC, rowid DESC LIMIT ${PROXY_SCAN_ROWS}) WHERE ${kinds}
+        ) ORDER BY block DESC, rowId DESC LIMIT ?`).all(address, address, limit).map(mapEventRow);
+}
 // Two index counts: this sum assumes the two sets are disjoint, i.e. that the signer is never linked.
 export function countEventsByAddress(address) {
     return db.prepare('SELECT (SELECT COUNT(*) FROM events WHERE signer_address = ?) + (SELECT COUNT(*) FROM event_accounts WHERE address = ?) AS n')
