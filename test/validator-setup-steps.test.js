@@ -491,7 +491,7 @@ describe('finding 3: a transaction that may be in flight', () => {
         const api = fakeApi();
         const plan = await C.buildStepwisePlan(api, reviewFor(await C.readSetupState(api, STASH)), { revision: 'r1', keyNames: NAMES });
         Object.assign(api.st, { nonce: 7, nextIndex: 8 });
-        await assert.rejects(C.buildCheckedSetupStepTx(api, plan, 'setKeys'), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed.' });
+        await assert.rejects(C.buildCheckedSetupStepTx(api, plan, 'setKeys'), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed. Wait for it to be included, then try again.' });
         api.st.nextIndex = 7;
         await C.buildCheckedSetupStepTx(api, plan, 'setKeys');
     });

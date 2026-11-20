@@ -542,7 +542,7 @@ describe('chain reads: live limits, the stash state, resume', () => {
         const api = fakeApi({ nonce: 3, nextIndex: 4 });
         const limits = await C.readSetupLimits(api);
         const review = { stash: STASH, steps: S.planSetup(fresh, input).steps, keys: parsed(BLOB), keysHex: BLOB, bond: 500n * PDEX, extra: 0n, commission: 50_000_000, state: fresh, limits };
-        await assert.rejects(C.buildCheckedSetupTx(api, review), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed.' });
+        await assert.rejects(C.buildCheckedSetupTx(api, review), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed. Wait for it to be included, then try again.' });
         api.st.nextIndex = 3;
         assert.equal((await C.buildCheckedSetupTx(api, review)).method, 'batchAll');
         api.rpc.system.accountNextIndex = async () => { throw new Error('rpc down'); };
