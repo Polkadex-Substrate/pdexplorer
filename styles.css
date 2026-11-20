@@ -5173,6 +5173,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .validate-setup-progress { display: block; }
     .validate-steps { display: none; }
     .validate-stepwise-actions .validate-primary { width: 100%; min-height: 44px; justify-content: center; box-sizing: border-box; }
+    .validate-stepwise-actions .validate-secondary, .validate-stepwise-actions .validate-text-btn { min-height: 44px; }
     .validate-stepwise-step { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
     .validate-stepwise-step .validate-word { margin-left: 0; }
 }
