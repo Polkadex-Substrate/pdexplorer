@@ -444,6 +444,17 @@ describe('6.2 page furniture and colour is never the only signal', () => {
         assert.ok(el.querySelector('.wc-status .ui-dot'));
         assert.equal(find('.wc-steps li::marker', 'color'), 'var(--accent-violet-text)');
     });
+    test('24b: pairing: once connected the amber dot gives way to a green check, and the word stays', () => {
+        const d = new Window().document; const el = d.createElement('div'); d.body.appendChild(el);
+        const p = mountPairingPanel(el, { uri: 'wc:abc@2?relay-protocol=irn&symKey=00', onMobile: false, clipboard: {}, onCancel() {} });
+        p.setStatus('Connected. Reading your accounts...', 'connected');
+        const st = el.querySelector('.wc-status');
+        assert.ok(st.querySelector('.bx-check') && !st.querySelector('.ui-dot'), 'a check, no dot');
+        assert.match(st.textContent, /Connected\. Reading your accounts/);
+        assert.equal(find('.wc-status .bx-check', 'color'), 'var(--accent-green)');
+        p.setStatus('Waiting for your phone...');
+        assert.ok(st.querySelector('.ui-dot.is-amber') && !st.querySelector('.bx-check'), 'back to the amber dot');
+    });
     test('25: every chip and panel on every scene has an icon and a word, every dot sits beside a word, every icon is aria-hidden', async (t) => {
         const err = [];
         for (const name of Object.keys(SCENES)) {
