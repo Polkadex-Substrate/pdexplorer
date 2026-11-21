@@ -451,7 +451,7 @@ describe('6.2 page furniture and colour is never the only signal', () => {
         const st = el.querySelector('.wc-status');
         assert.ok(st.querySelector('.bx-check') && !st.querySelector('.ui-dot'), 'a check, no dot');
         assert.match(st.textContent, /Connected\. Reading your accounts/);
-        assert.equal(find('.wc-status .bx-check', 'color'), 'var(--accent-green)');
+        assert.equal(find('.wc-status-ok', 'color'), 'var(--accent-green)');
         p.setStatus('Waiting for your phone...');
         assert.ok(st.querySelector('.ui-dot.is-amber') && !st.querySelector('.bx-check'), 'back to the amber dot');
     });

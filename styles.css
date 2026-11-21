@@ -21,6 +21,34 @@
     /* Indicators */
     --success: #14F195;
     --error: #FF4D4D;
+
+    /* Colour roles (spec 2026-11-21, section 2.2; dark values, the explorer is dark only).
+       Pink acts, violet structures, green is good, amber is attention, blue is guidance, red is failure.
+       Raw violet and raw blue are fills and edges only; text uses the -text tokens. */
+    --accent-violet: var(--violet);
+    --accent-violet-text: #A48FE4;
+    --accent-violet-tint: rgba(103, 69, 210, 0.18);
+    --accent-violet-line: rgba(103, 69, 210, 0.55);
+    --accent-green: var(--success);
+    --accent-green-tint: rgba(20, 241, 149, 0.12);
+    --accent-green-line: rgba(20, 241, 149, 0.35);
+    --accent-green-wash: rgba(20, 241, 149, 0.06);
+    --accent-amber: #FFA500;
+    --accent-amber-tint: rgba(255, 165, 0, 0.12);
+    --accent-amber-line: rgba(255, 165, 0, 0.35);
+    --accent-amber-wash: rgba(255, 165, 0, 0.06);
+    --accent-blue: #148FE8;
+    --accent-blue-text: #4FABEE;
+    --accent-blue-tint: rgba(20, 143, 232, 0.16);
+    --accent-blue-line: rgba(20, 143, 232, 0.45);
+    --accent-blue-wash: rgba(20, 143, 232, 0.06);
+    --accent-red: var(--error);
+    --accent-red-tint: rgba(255, 77, 77, 0.12);
+    --accent-red-line: rgba(255, 77, 77, 0.35);
+    --accent-red-wash: rgba(255, 77, 77, 0.08);
+    --accent-pink-tint: rgba(230, 0, 122, 0.12);
+    --accent-pink-line: rgba(230, 0, 122, 0.40);
+    --warning: var(--accent-amber); /* read by four older rules; was undefined, with an off-kit orange fallback */
     
     /* Spacing & Layout */
     --radius-sm: 8px;
@@ -1761,10 +1789,6 @@ h1, h2, h3 { font-weight: 600; }
     background: rgba(255, 255, 255, 0.05);
 }
 .wallet-account-name { font-size: 0.88rem; font-weight: 600; }
-.wallet-account-badge {
-    margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-size: 0.68rem; font-weight: 600;
-    color: var(--brand-secondary, #00E676); border: 1px solid var(--brand-secondary, #00E676);
-}
 
 /* --- My Account menu (header) --- */
 .wallet-menu {
@@ -4352,7 +4376,7 @@ h1, h2, h3 { font-weight: 600; }
    nominator's share is genuinely marginal. */
 .badge.commission-raised {
     background: rgba(245, 166, 35, 0.18);
-    color: var(--warning, #f5a623);
+    color: var(--warning);
     border: 1px solid rgba(245, 166, 35, 0.45);
     font-size: 0.62rem;
     letter-spacing: 0.03em;
@@ -4367,7 +4391,7 @@ h1, h2, h3 { font-weight: 600; }
     line-height: 1.35;
 }
 .stake-val-history.is-volatile {
-    color: var(--warning, #f5a623);
+    color: var(--warning);
 }
 
 /* Stake picker filters (lib/stake-picker-view.js). */
@@ -4419,7 +4443,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .stake-f { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .stake-f-check input { accent-color: var(--brand-primary); }
-.stake-f-count { color: var(--warning, #f5a623); font-size: 0.7rem; }
+.stake-f-count { color: var(--warning); font-size: 0.7rem; }
 .stake-why {
     display: inline-flex; align-items: center; justify-content: center;
     width: 15px; height: 15px; border-radius: 50%;
@@ -4441,7 +4465,7 @@ h1, h2, h3 { font-weight: 600; }
     padding: 8px 10px;
     border-radius: 6px;
     font-size: 0.72rem;
-    color: var(--warning, #f5a623);
+    color: var(--warning);
     background: rgba(245, 166, 35, 0.08);
     border: 1px solid rgba(245, 166, 35, 0.3);
 }
@@ -4753,15 +4777,74 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-viewing-note.is-readonly .bx { font-size: 16px; vertical-align: -2px; color: var(--brand-primary); }
 #wallet-switch-btn[hidden] { display: none; }
 
+/* ── Colour roles: the shared ui-* parts (spec 2026-11-21, section 2.4) ──
+   Colour is carried by small full-strength parts on neutral surfaces: a chip, a tile, a step marker, a dot, a
+   panel edge. An accent never fills a row, a card or a page section. Every coloured state also has an icon and a word.
+   Pink acts (.validate-primary and the wallet lead pill are the one primary); violet structures; green is good;
+   amber is attention; blue is guidance; red is failure. Text uses only the -text tokens for violet and blue. */
+.ui-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; box-sizing: border-box; border-radius: var(--radius-sm); font-size: 0.82rem; font-weight: 600; line-height: 1; white-space: nowrap; background: rgba(255, 255, 255, 0.06); color: var(--text-primary); }
+.ui-chip .bx { font-size: 16px; flex-shrink: 0; }
+.ui-chip.is-positive { background: var(--accent-green-tint); color: var(--accent-green); }
+.ui-chip.is-wait { background: var(--accent-amber-tint); color: var(--accent-amber); }
+.ui-chip.is-info { background: var(--accent-blue-tint); color: var(--accent-blue-text); }
+.ui-chip.is-step { background: var(--accent-violet-tint); color: var(--accent-violet-text); border: 1px solid var(--accent-violet-line); }
+.ui-chip.is-error { background: var(--accent-red-tint); color: var(--accent-red); }
+.ui-chip.is-neutral { background: rgba(255, 255, 255, 0.06); color: var(--text-primary); }
+.ui-tile { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 8px; font-size: 20px; line-height: 1; }
+.ui-tile.is-sm { width: 28px; height: 28px; font-size: 16px; }
+.ui-tile.is-lg { width: 48px; height: 48px; border-radius: 12px; font-size: 24px; }
+.ui-tile.is-violet { background: var(--accent-violet-tint); border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
+.ui-tile.is-green { background: var(--accent-green-tint); border-color: var(--accent-green-line); color: var(--accent-green); }
+.ui-tile.is-amber { background: var(--accent-amber-tint); border-color: var(--accent-amber-line); color: var(--accent-amber); }
+.ui-tile.is-blue { background: var(--accent-blue-tint); border-color: var(--accent-blue-line); color: var(--accent-blue-text); }
+.ui-tile.is-pink { background: var(--accent-pink-tint); border-color: var(--accent-pink-line); color: var(--brand-primary); }
+.ui-tile.is-brand { background: var(--brand-gradient); border: 0; color: var(--text-primary); }
+.ui-tile.is-neutral { background: rgba(255, 255, 255, 0.08); border-color: transparent; color: var(--text-secondary); }
+.ui-step { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 50%; background: transparent; color: var(--text-secondary); font-size: 0.82rem; font-weight: 700; line-height: 1; }
+.ui-step .bx { font-size: 16px; }
+.ui-step.is-later { border-color: rgba(255, 255, 255, 0.16); color: var(--text-secondary); }
+.ui-step.is-open { border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
+.ui-step.is-current { background: var(--accent-violet); border-color: var(--accent-violet); color: var(--text-primary); box-shadow: 0 0 0 3px var(--accent-violet-tint); }
+.ui-step.is-done { background: var(--accent-green-tint); border-color: var(--accent-green-line); color: var(--accent-green); }
+.ui-dot { display: inline-block; flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); }
+.ui-dot.is-green { background: var(--accent-green); }
+.ui-dot.is-amber { background: var(--accent-amber); }
+.ui-dot.is-red { background: var(--accent-red); }
+.ui-dot.is-blue { background: var(--accent-blue); }
+.ui-panel { position: relative; display: flex; align-items: flex-start; gap: 12px; box-sizing: border-box; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
+.ui-panel > .bx { flex-shrink: 0; font-size: 20px; line-height: 1.5; }
+.ui-panel-title { margin: 0 0 4px; font-size: 0.9rem; font-weight: 600; }
+.ui-panel-body { min-width: 0; flex: 1; }
+.ui-panel.is-warn { background: linear-gradient(var(--accent-amber-wash), var(--accent-amber-wash)), var(--bg-surface); border-color: var(--accent-amber-line); box-shadow: inset 3px 0 0 var(--accent-amber); }
+.ui-panel.is-warn > .bx { color: var(--accent-amber); }
+.ui-panel.is-info { background: linear-gradient(var(--accent-blue-wash), var(--accent-blue-wash)), var(--bg-surface); border-color: var(--accent-blue-line); box-shadow: inset 3px 0 0 var(--accent-blue); }
+.ui-panel.is-info > .bx { color: var(--accent-blue-text); }
+.ui-panel.is-error { background: linear-gradient(var(--accent-red-wash), var(--accent-red-wash)), var(--bg-surface); border-color: var(--accent-red-line); box-shadow: inset 3px 0 0 var(--accent-red); }
+.ui-panel.is-error > .bx { color: var(--accent-red); }
+.ui-panel.is-ok { background: linear-gradient(var(--accent-green-wash), var(--accent-green-wash)), var(--bg-surface); border-color: var(--accent-green-line); box-shadow: inset 3px 0 0 var(--accent-green); }
+.ui-panel.is-ok > .bx { color: var(--accent-green); }
+.ui-panel.is-line { padding: 0; border: 0; background: none; box-shadow: none; }
+.ui-trust { display: flex; align-items: center; gap: 12px; color: var(--text-primary); font-size: 0.82rem; line-height: 1.5; }
+.ui-trust[hidden] { display: none; }
+.ui-trust p { margin: 0; min-width: 0; }
+.ui-hairline { position: relative; overflow: hidden; }
+.ui-hairline::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--brand-gradient); }
+@media (forced-colors: active) {
+    .ui-chip, .ui-tile, .ui-step, .ui-panel { border: 1px solid CanvasText; background: Canvas; color: CanvasText; box-shadow: none; }
+    .ui-step.is-current, .ui-tile.is-brand { background: Highlight; color: HighlightText; border-color: Highlight; }
+}
+
 /* Switch wallet / Connect wallet page (lib/wallet-picker-view.js). The account
    list is the page; everything else is one line, a disclosure, or a footnote. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .wallet-picker-head .close-control { order: 2; margin-left: auto; }
-.wallet-picker-titlebox { display: flex; align-items: center; gap: 8px; }
+.wallet-picker-titlebox { display: flex; align-items: center; gap: 12px; }
+.wallet-picker-titlebox .ui-chip { margin-left: 4px; }
 .wallet-picker-head h2:focus { outline: none; }
 .wallet-picker-head h2:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
 .wallet-picker-body { padding: 20px 24px 24px; }
 .wallet-picker-sub { margin: 0 0 16px; color: var(--text-secondary); font-size: 0.9rem; }
+.wallet-picker-sub .bx-info-circle { margin-right: 6px; font-size: 16px; vertical-align: -3px; color: var(--accent-blue-text); }
 .wallet-picker-label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-secondary); }
 .wp-icon-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 36px; min-height: 36px; padding: 0; background: none; border: 1px solid transparent; border-radius: 999px; color: var(--text-secondary); font: inherit; font-size: 20px; cursor: pointer; }
 .wp-icon-btn:hover, .wp-icon-btn:focus-visible { color: var(--text-primary); border-color: var(--border-color); outline: none; }
@@ -4776,13 +4859,21 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 #wallet-accounts { display: flex; flex-direction: column; gap: 16px; }
 .wallet-account-group { display: flex; flex-direction: column; gap: 8px; }
 .wallet-group-head { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); }
-.wallet-ext-tile { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 20px; height: 20px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: var(--radius-sm); font-size: 0.6rem; font-weight: 700; letter-spacing: 0; color: var(--text-primary); background: linear-gradient(47.94deg, rgba(230, 0, 122, 0.22) 0%, rgba(103, 69, 210, 0.22) 98.88%); flex-shrink: 0; }
-.wallet-ext-tile.tile-icon { color: var(--text-primary); font-size: 16px; }
-.wallet-option-row.is-quiet .wallet-ext-tile { background: rgba(255, 255, 255, 0.08); border-color: transparent; color: var(--text-secondary); }
+.wallet-ext-tile { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 20px; height: 20px; border: 1px solid var(--accent-violet-line); border-radius: var(--radius-sm); font-size: 0.6rem; font-weight: 700; letter-spacing: 0; color: var(--accent-violet-text); background: var(--accent-violet-tint); flex-shrink: 0; }
+.wallet-ext-tile.tile-icon { font-size: 16px; }
+.wallet-ext-tile[data-kind="ext"], .wallet-ext-tile[data-kind="multisig"] { background: var(--accent-violet-tint); border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
+.wallet-ext-tile[data-kind="phone"] { background: var(--accent-pink-tint); border-color: var(--accent-pink-line); color: var(--text-primary); }
+.wallet-ext-tile.is-lg[data-kind="phone"] { color: var(--brand-primary); }
+.wallet-ext-tile[data-kind="get"], .wallet-ext-tile[data-kind="apps"] { background: var(--accent-blue-tint); border-color: var(--accent-blue-line); color: var(--accent-blue-text); }
+.wallet-ext-tile[data-kind="watch"] { background: var(--accent-amber-tint); border-color: var(--accent-amber-line); color: var(--accent-amber); }
+.wallet-ext-tile[data-kind="quiet"] { background: rgba(255, 255, 255, 0.08); border-color: transparent; color: var(--accent-violet-text); }
 /* Chooser contrast pass, Revision 3: row position is set once on the li; rows read it with fallbacks. */
 .wallet-option-list > .wallet-option, #wallet-accounts .wallet-account-list > li { --row-border: rgba(255, 255, 255, 0.12); --row-hover: rgba(255, 255, 255, 0.09); }
-.wallet-option-list > .wallet-option:nth-child(odd), #wallet-accounts .wallet-account-list > li:nth-child(odd) { --row-fill: rgba(255, 255, 255, 0.03); --row-edge: var(--brand-primary); }
-.wallet-option-list > .wallet-option:nth-child(even), #wallet-accounts .wallet-account-list > li:nth-child(even) { --row-fill: rgba(255, 255, 255, 0.06); --row-edge: var(--violet); }
+/* Colour roles (6.1): option rows are unlike things, so their edge comes from the row's data-kind; only account lists (like things) alternate pink and violet by position (R7). */
+.wallet-option-list > .wallet-option:nth-child(odd) { --row-fill: rgba(255, 255, 255, 0.03); }
+.wallet-option-list > .wallet-option:nth-child(even) { --row-fill: rgba(255, 255, 255, 0.06); }
+#wallet-accounts .wallet-account-list > li:nth-child(odd) { --row-fill: rgba(255, 255, 255, 0.03); --row-edge: var(--brand-primary); }
+#wallet-accounts .wallet-account-list > li:nth-child(even) { --row-fill: rgba(255, 255, 255, 0.06); --row-edge: var(--violet); }
 .wallet-account-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .wallet-account-list .wallet-account-btn, .wallet-account-row { min-height: 56px; padding: 8px 16px; box-sizing: border-box; text-align: left; box-shadow: inset 2px 0 0 var(--row-edge, transparent); }
 .wallet-account-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--row-border, var(--border-color)); border-radius: var(--radius-sm); background: var(--row-fill, rgba(255, 255, 255, 0.03)); color: var(--text-primary); cursor: default; }
@@ -4794,7 +4885,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-account-btn:hover { background: var(--row-hover, rgba(255, 255, 255, 0.05)); box-shadow: inset 2px 0 0 var(--row-edge, transparent), 0 0 0 3px var(--brand-primary-glow); }
 .wallet-account-btn:hover .bx-chevron-right, .wallet-account-btn:focus-visible .bx-chevron-right { color: var(--brand-primary); }
 .wallet-account-btn:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; box-shadow: inset 2px 0 0 var(--row-edge, transparent), 0 0 0 3px var(--brand-primary-glow); }
-.wallet-account-badge { flex-shrink: 0; }
+.wallet-account-badge { flex-shrink: 0; margin-left: 8px; color: var(--accent-green); border: 1px solid var(--accent-green-line); }
 .wallet-account-row.is-current {
     position: relative; overflow: hidden; border: 1px solid transparent;
     background: linear-gradient(90deg, rgba(103, 69, 210, 0.16) 0%, rgba(103, 69, 210, 0.04) 60%, rgba(103, 69, 210, 0) 100%) padding-box,
@@ -4814,6 +4905,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-picker-empty { padding: 20px 8px; text-align: center; color: var(--text-secondary); font-size: 0.88rem; line-height: 1.6; }
 .wallet-picker-empty h3 { margin: 6px 0; font-size: 1rem; color: var(--text-primary); }
 .wallet-onboarding-note { margin: 12px 0 8px; color: var(--text-primary); }
+.wallet-onboarding-note.ui-panel { margin: 12px 0 8px; font-size: 0.9rem; }
 .wallet-wc-panel { margin-top: 12px; }
 /* The chooser (2026-11-16): one full-width row per way to connect. */
 .wallet-option-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -4823,10 +4915,16 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-option-row:hover { border-color: var(--border-hover); background: var(--row-hover, rgba(255, 255, 255, 0.05)); box-shadow: inset 2px 0 0 var(--row-edge, transparent), 0 0 0 3px var(--brand-primary-glow); }
 .wallet-option-row:hover .bx-chevron-right, .wallet-option-row:focus-visible .bx-chevron-right, .wallet-option-row:hover .bx-link-external { color: var(--brand-primary); }
 .wallet-option-row:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; box-shadow: inset 2px 0 0 var(--row-edge, transparent), 0 0 0 3px var(--brand-primary-glow); }
+.wallet-option-row[data-kind="ext"] .wallet-option-action:not(.is-count) { border-color: var(--accent-violet-line); }
+.wallet-option-row[data-kind="phone"] .wallet-option-action:not(.is-count) { border-color: var(--accent-pink-line); }
 .wallet-option-row:hover .wallet-option-action:not(.is-count), .wallet-option-row:focus-visible .wallet-option-action:not(.is-count) { border-color: var(--brand-primary); }
-.wallet-option-row.is-quiet { color: var(--text-secondary); --row-edge: transparent; }
+.wallet-option-row.is-quiet { color: var(--text-secondary); }
+.wallet-option-row[data-kind="ext"] { --row-edge: var(--accent-violet); }
+.wallet-option-row[data-kind="phone"] { --row-edge: var(--brand-primary); }
+.wallet-option-row[data-kind="get"], .wallet-option-row[data-kind="apps"] { --row-edge: var(--accent-blue); }
+.wallet-option-row[data-kind="quiet"] { --row-edge: transparent; }
 .wallet-option-row.is-quiet .wallet-option-name { font-weight: 500; }
-.wallet-option.is-waiting .wallet-option-row { border-color: var(--border-hover); box-shadow: inset 2px 0 0 var(--row-edge, transparent), 0 0 0 3px var(--brand-primary-glow); }
+.wallet-option.is-waiting .wallet-option-row { border-color: var(--accent-amber-line); box-shadow: inset 2px 0 0 var(--row-edge, transparent); }
 /* The lead row: gradient border over an opaque surface (without it the gradient shows through the fill), neutral fill, the one gradient action. */
 .wallet-option-row.is-primary, .wallet-account-btn.is-primary {
     border-color: transparent;
@@ -4847,14 +4945,15 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-option-name { font-size: 0.95rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wallet-option-sub { font-size: 0.82rem; color: var(--text-secondary); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .wallet-option-action { flex-shrink: 0; padding: 4px 12px; border: 1px solid rgba(255, 255, 255, 0.24); border-radius: 999px; background: transparent; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
-.wallet-option-action.is-count { padding: 0; border: 0; background: none; color: var(--text-secondary); font-weight: 400; }
+.wallet-option-action.is-count { padding: 0 8px; border: 0; border-radius: var(--radius-sm); font-weight: 600; }
 .wallet-option-row .bx-chevron-right, .wallet-option-row .bx-link-external { flex-shrink: 0; font-size: 20px; color: var(--text-secondary); }
-.wallet-option-spin { flex-shrink: 0; font-size: 20px; color: var(--brand-primary); animation: wp-spin 0.9s linear infinite; }
+.wallet-option-spin { flex-shrink: 0; font-size: 20px; color: var(--accent-amber); animation: wp-spin 0.9s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .wallet-option-spin { animation: none; } }
 .wallet-option-cancel { position: absolute; top: 50%; right: 12px; transform: translateY(-50%); min-height: 36px; padding: 8px 12px; background: none; border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; font-size: 0.82rem; cursor: pointer; }
 .wallet-option.is-waiting .wallet-option-cancel { top: 28px; }
 .wallet-option-problem { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 4px 4px 16px; color: var(--text-primary); font-size: 0.82rem; line-height: 1.45; }
 .wallet-option-problem p { margin: 0; flex: 1 1 260px; }
+.wallet-option-problem .bx-error { flex-shrink: 0; font-size: 16px; color: var(--accent-amber); }
 .wallet-option-retry, .wallet-wc-retry, .wallet-get-check, .wc-debug-copy, .wc-debug-close { min-height: 36px; padding: 8px 16px; background: none; border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; font-size: 0.82rem; cursor: pointer; }
 .wallet-option-retry:hover, .wallet-wc-retry:hover, .wallet-get-check:hover, .wc-debug-copy:hover, .wc-debug-close:hover, .wallet-option-cancel:hover { border-color: var(--border-hover); }
 .wallet-get-check { background: transparent; border: 1px solid rgba(255, 255, 255, 0.24); color: var(--text-primary); }
@@ -4878,13 +4977,15 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 #wallet-mobile-section.is-view > summary { display: none; }
 #wallet-picker-get .wallet-option-list { margin-bottom: 12px; }
 .wallet-get-note { margin: 0 0 12px; color: var(--text-secondary); font-size: 0.82rem; }
+.wallet-get-note.ui-panel { color: var(--text-primary); }
+.wallet-get-guide .bx-book-open { margin-right: 4px; font-size: 16px; vertical-align: -3px; color: var(--accent-blue-text); }
 .wallet-get-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .wallet-get-actions a, .wallet-get-create a, .wallet-get-note a { color: var(--text-primary); text-decoration: underline; }
 .wallet-get-actions a:hover, .wallet-get-create a:hover, .wallet-get-note a:hover { color: var(--brand-primary); }
 .wallet-get-create { margin: 12px 0 0; color: var(--text-secondary); font-size: 0.82rem; }
 .wc-pairing-main { display: flex; align-items: center; justify-content: center; gap: 20px; flex-wrap: wrap; }
 .wc-steps { margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 0.82rem; line-height: 1.7; }
-.wc-steps li::marker { color: var(--brand-primary); font-weight: 600; }
+.wc-steps li::marker { color: var(--accent-violet-text); font-weight: 600; }
 .wc-pairing { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .wc-pairing .wallet-get-note { margin: 0; text-align: center; }
 .wc-qr { padding: 12px; background: var(--text-primary); border-radius: var(--radius-sm); line-height: 0; box-shadow: 0 0 0 1px var(--border-hover), 0 0 24px var(--brand-primary-glow); }
@@ -4897,7 +4998,8 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .wallet-option-row.is-primary .wallet-option-action:not(.is-count), .wallet-onboarding-reload, .wc-open { background: Highlight; color: HighlightText; }
 }
 .wc-copyrow { width: 100%; max-width: 360px; }
-.wc-status { margin: 0; color: var(--text-secondary); }
+.wc-status { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-secondary); }
+.wc-status-ok { flex-shrink: 0; font-size: 16px; color: var(--accent-green); }
 .wc-error { color: var(--error); }
 .wc-pending { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 10050; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 32px); padding: 12px 16px; border-radius: var(--radius-sm); background: var(--bg-surface); border: 1px solid var(--border-hover); color: var(--text-primary); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 3px var(--brand-primary-glow); font-size: 0.82rem; }
 .wc-pending .bx { font-size: 24px; color: var(--brand-primary); }
@@ -4915,7 +5017,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-picker-disclosure[hidden] { display: none; }
 .wallet-picker-disclosure > summary { display: flex; align-items: center; gap: 6px; min-height: 36px; cursor: pointer; color: var(--text-secondary); font-size: 0.88rem; list-style: none; }
 .wallet-picker-disclosure > summary::-webkit-details-marker { display: none; }
-.wallet-picker-disclosure > summary::before { content: '\203A'; display: inline-block; width: 12px; color: var(--text-secondary); transition: transform var(--transition-fast); }
+.wallet-picker-disclosure > summary::before { content: '\203A'; display: inline-block; width: 12px; color: var(--accent-violet-text); transition: transform var(--transition-fast); }
 .wallet-picker-disclosure[open] > summary::before { transform: rotate(90deg); }
 .wallet-picker-disclosure > summary:hover, .wallet-picker-disclosure > summary:focus-visible { color: var(--text-primary); }
 .wallet-picker-disclosure-body { padding: 4px 0 6px 18px; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.6; }
@@ -4923,7 +5025,12 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-picker-disclosure-body ol { margin: 6px 0; padding-left: 20px; }
 .wallet-picker-divider { margin: 16px 0 6px; border: 0; border-top: 1px solid var(--border-color); }
 .wallet-picker-hint { margin: 0 0 8px; }
-.wallet-picker-footnote { margin: 20px 0 0; color: var(--text-secondary); font-size: 0.78rem; line-height: 1.5; }
+.wallet-picker-footnote { margin: 20px 0 0; padding-top: 16px; border-top: 1px solid var(--border-color); color: var(--text-primary); }
+.wallet-group-head .ui-chip { margin: 0 auto 0 8px; }
+.wallet-picker-disclosure > summary .ui-tile { margin-right: 2px; }
+.wallet-picker-view-row { position: relative; }
+.wallet-picker-view-row > .ui-chip { position: absolute; top: 6px; right: 0; pointer-events: none; }
+.wallet-option-sub .ui-dot { margin-right: 6px; vertical-align: 1px; }
 .wallet-picker-footnote[hidden] { display: none; }
 .wallet-picker .wallet-create-line { margin-top: 8px; }
 .ms-compact-wrap { position: relative; }
@@ -5067,8 +5174,8 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-lookup-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .validate-lookup-row input { flex: 1 1 320px; min-width: 0; padding: 12px 16px; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.9rem; }
 .validate-msg { margin: 8px 0 0; font-size: 0.82rem; color: var(--text-primary); min-height: 1em; }
-.validate-primary { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; background: var(--brand-primary); color: var(--text-primary); border: none; border-radius: var(--radius-sm); font-size: 0.9rem; font-weight: 600; text-decoration: none; cursor: pointer; }
-.validate-primary:hover { opacity: 0.88; }
+.validate-primary { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; background: var(--brand-gradient); color: var(--text-primary); border: none; border-radius: var(--radius-sm); font-size: 0.9rem; font-weight: 600; text-decoration: none; cursor: pointer; }
+.validate-primary:hover { box-shadow: 0 0 0 3px var(--brand-primary-glow); }
 .validate-secondary { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: rgba(255, 255, 255, 0.05); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.82rem; font-weight: 600; font-family: inherit; cursor: pointer; }
 .validate-secondary:hover { border-color: var(--border-hover); }
 .validate-text-btn { background: none; border: none; padding: 8px 4px; color: var(--text-primary); font-size: 0.82rem; font-weight: 600; text-decoration: underline; cursor: pointer; }

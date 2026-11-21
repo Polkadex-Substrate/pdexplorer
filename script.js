@@ -3997,6 +3997,7 @@ function renderBrandPage() {
         textMuted:    v('--text-muted'),
         success:      v('--success'),
         error:        v('--error'),
+        warning:      v('--warning'),
         radiusSm:     v('--radius-sm'),
         radiusMd:     v('--radius-md'),
         radiusLg:     v('--radius-lg'),
@@ -4060,6 +4061,13 @@ function renderBrandPage() {
                 ${swatch('Success', tokens.success, true)}
                 ${swatch('Error',   tokens.error)}
             </div>
+
+            <h3>Colour roles</h3>
+            <p class="brand-note">Each colour means one thing and appears only where that thing is true. Colour sits on small parts (chips, tiles, markers, dots, edges), never on a whole row or card, and always comes with an icon and a word.</p>
+            <div class="brand-swatch-row">
+                ${[['Pink', 'acts: the one primary action', 'is-step', 'bx-pointer'], ['Violet', 'structures: steps, secondary actions', 'is-step', 'bx-layer'], ['Green', 'is good: active, done, safe', 'is-positive', 'bx-check'], ['Amber', 'is attention: waiting, caution', 'is-wait', 'bx-error'], ['Blue', 'is guidance: how to, why', 'is-info', 'bx-info-circle'], ['Red', 'is failure: failed, blocked', 'is-error', 'bx-error-circle']].map(([n, m, c, i]) => `<span class="ui-chip ${c}"><i class='bx ${i}' aria-hidden="true"></i>${n} ${m}</span>`).join('')}
+            </div>
+            <p class="brand-note">Amber ${tokens.warning} is the explorer's warning colour. Text uses <code>--accent-violet-text</code> and <code>--accent-blue-text</code>; raw violet and raw blue are fills and edges only.</p>
 
             <p class="brand-note">Use <strong>Primary</strong> for the most-important call to action on a screen
             (only one per view). <strong>Secondary</strong> highlights successful actions, growth, and confirmation.
