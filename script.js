@@ -84,7 +84,7 @@ import { mountNominationStatus } from './lib/nomination-status-view.js';
 import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
-import { mountValidatePage } from './lib/validator-status-view.js';
+import { mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE } from './lib/validator-status-view.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
@@ -7412,11 +7412,13 @@ function onStakingRewardsWalletChange(change) {
 
 // /validate (the connected wallet, following it) and /validate/<address> (any stash): lib/validator-status-view.js.
 // /validate/node: the node guide (lib/validator-node-guide.js). ?node=NAME is the telemetry name, kept in the URL only.
+// /validate/keys: the session keys checker (lib/validator-status-view.js mountKeysPage), its own title.
 function initValidatePage(address) {
     const nodeName = new URLSearchParams(window.location.search).get('node') || '';
     const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(history.state, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
     if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
     if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
+    if (address === 'keys') { updateSeoMeta('validate', { title: KEYS_PAGE_TITLE, canonicalPath: '/validate/keys' }); return mountKeysPage(document.getElementById('validate-root'), { getAccount: () => walletSession.getActiveAccount(), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml }); }
     const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
         fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName });
     pageScope.add(walletSession.onActiveAccountChange((change) => {
