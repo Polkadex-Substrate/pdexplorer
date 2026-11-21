@@ -74,7 +74,7 @@ function decl(sel, prop) {
 const has = (sel) => RULES.some(r => r.selectors.includes(sel));
 
 describe('lint: greens are for positive states, never for an action', () => {
-    const GREEN = /var\(--brand-secondary|var\(--success|#00e676|#14f195/i;
+    const GREEN = /var\(--brand-secondary|var\(--success|var\(--accent-green|#00e676|#14f195/i;   // amended (colour roles WP1): the new green tokens are linted too
     const COLOUR_PROPS = /^(color|background|background-color|border|border-color|border-(top|right|bottom|left)(-color)?|outline|outline-color|box-shadow|text-decoration-color|fill|stroke)$/;
     // Anything a user clicks or focuses: buttons, links, rows, the action and
     // CTA classes, and every hover/focus state.
@@ -122,7 +122,7 @@ describe('lint: greens are for positive states, never for an action', () => {
     });
 
     test('the three positive states keep their green (audit section 0)', () => {
-        assert.match(decl('.wallet-account-badge', 'color'), /--brand-secondary/);
+        assert.match(decl('.wallet-account-badge', 'color'), /--accent-green/);   // amended (colour roles 6.1): the badge is --accent-green
         // The Current row is marked with the brand gradient (contrast pass Revision 3, 5.5); only its badge is green.
         assert.doesNotMatch(decl('.wallet-account-row', 'border'), /--brand-secondary/);
         assert.equal(decl('.wallet-account-row.is-current', 'border'), '1px solid transparent');
@@ -133,7 +133,7 @@ describe('lint: greens are for positive states, never for an action', () => {
         const bar = '.wallet-account-row.is-current::before';
         assert.equal(decl(bar, 'content'), "''");
         for (const [p, v] of [['position', 'absolute'], ['left', '0'], ['top', '0'], ['bottom', '0'], ['width', '3px'], ['background', 'linear-gradient(180deg, var(--brand-primary), var(--violet))'], ['box-shadow', '0 0 10px var(--brand-primary-glow)']]) assert.equal(decl(bar, p), v, bar + ' ' + p);
-        assert.match(decl('.wallet-account-badge', 'border'), /--brand-secondary/);
+        assert.match(decl('.wallet-account-badge', 'border'), /--accent-green/);   // amended (colour roles 6.1)
         assert.match(decl('.connect-wallet-btn.is-connected i', 'color'), /--brand-secondary/);
     });
 });
@@ -142,8 +142,9 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
     const table = [
         // C1 Connect / Install labels are text; the account count is a state.
         ['.wallet-option-action', 'color', 'var(--text-primary)'],
-        ['.wallet-option-action.is-count', 'color', 'var(--text-secondary)'],
-        ['.wallet-option-action.is-count', 'font-weight', '400'],
+        // amended (colour roles 6.1): the count is a green chip (.ui-chip.is-positive supplies fill and colour), 600, radius 8.
+        ['.wallet-option-action.is-count', 'font-weight', '600'],
+        ['.wallet-option-action.is-count', 'border-radius', 'var(--radius-sm)'],
         // C2 Open wallet: the one Primary of the phone pairing view (Revision 3: the brand gradient).
         ['.wc-open', 'background', 'var(--brand-gradient)'],
         ['.wc-open', 'color', 'var(--text-primary)'],
@@ -167,7 +168,7 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         ['.wallet-picker-search:focus-within', 'border-color', 'var(--brand-primary)'],
         ['.wallet-picker-search:focus-within', 'box-shadow', '0 0 0 2px rgba(230, 0, 122, 0.15)'],
         // C7 (amended, brand pass 3.0) waiting is not positive, so not green: pink is brand emphasis.
-        ['.wallet-option-spin', 'color', 'var(--brand-primary)'],
+        ['.wallet-option-spin', 'color', 'var(--accent-amber)'],   // amended (colour roles 6.1)
         // C8 Approve on your phone.
         ['.wc-pending', 'background', 'var(--bg-surface)'],
         ['.wc-pending', 'border', '1px solid var(--border-hover)'],
@@ -190,13 +191,13 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         ['.wallet-viewing-note .item-link:hover', 'color', 'var(--brand-primary)'],
         // C12 neutral monogram tiles.
         // (amended, chooser contrast pass Revision 3, 5.3) one gradient tint for every tile, white glyph; quiet rows stay quiet.
-        ['.wallet-ext-tile', 'background', 'linear-gradient(47.94deg, rgba(230, 0, 122, 0.22) 0%, rgba(103, 69, 210, 0.22) 98.88%)'],
-        ['.wallet-ext-tile', 'border', '1px solid rgba(255, 255, 255, 0.12)'],
-        ['.wallet-ext-tile', 'color', 'var(--text-primary)'],
-        ['.wallet-ext-tile.tile-icon', 'color', 'var(--text-primary)'],
-        ['.wallet-option-row.is-quiet .wallet-ext-tile', 'background', 'rgba(255, 255, 255, 0.08)'],
-        ['.wallet-option-row.is-quiet .wallet-ext-tile', 'border-color', 'transparent'],
-        ['.wallet-option-row.is-quiet .wallet-ext-tile', 'color', 'var(--text-secondary)'],
+        // amended (colour roles 6.1): tiles are typed. The base tile is the violet extension tile; the kind rules are tested in colour-roles.test.js.
+        ['.wallet-ext-tile', 'background', 'var(--accent-violet-tint)'],
+        ['.wallet-ext-tile', 'border', '1px solid var(--accent-violet-line)'],
+        ['.wallet-ext-tile', 'color', 'var(--accent-violet-text)'],
+        ['.wallet-ext-tile[data-kind="quiet"]', 'background', 'rgba(255, 255, 255, 0.08)'],
+        ['.wallet-ext-tile[data-kind="quiet"]', 'border-color', 'transparent'],
+        ['.wallet-ext-tile[data-kind="quiet"]', 'color', 'var(--accent-violet-text)'],
         // C13 the QR stays dark on white, on palette.
         ['.wc-qr', 'background', 'var(--text-primary)'],
         ['.wc-qr-fallback', 'color', 'var(--bg-dark)'],
@@ -354,11 +355,11 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
         ['.wallet-option-row:hover .wallet-option-action:not(.is-count)', 'border-color', 'var(--brand-primary)'],
         ['.wallet-option-row:focus-visible .wallet-option-action:not(.is-count)', 'border-color', 'var(--brand-primary)'],
         ['.wallet-option-action', 'color', 'var(--text-primary)'],
-        ['.wallet-option-action.is-count', 'background', 'none'],
         ['.wallet-option-action.is-count', 'border', '0'],
-        ['.wallet-option-action.is-count', 'padding', '0'],
-        ['.wallet-option.is-waiting .wallet-option-row', 'border-color', 'var(--border-hover)'],
-        ['.wallet-option.is-waiting .wallet-option-row', 'box-shadow', EDGE_HALO],
+        ['.wallet-option-action.is-count', 'padding', '0 8px'],
+        // amended (colour roles 6.1): waiting is amber, with no pink halo
+        ['.wallet-option.is-waiting .wallet-option-row', 'border-color', 'var(--accent-amber-line)'],
+        ['.wallet-option.is-waiting .wallet-option-row', 'box-shadow', 'inset 2px 0 0 var(--row-edge, transparent)'],
         // 3.1 the lead row (Revision 3, 5.4: gradient border, neutral fill, the one gradient action)
         ['.wallet-option-row.is-primary', 'border-color', 'transparent'],
         ['.wallet-option-row.is-primary', 'background', LEAD_BG],
@@ -378,7 +379,7 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
         ['.wallet-account-btn.is-primary .bx-chevron-right', 'color', 'var(--brand-primary)'],
         // 3.3 pairing
         ['.wc-qr', 'box-shadow', '0 0 0 1px var(--border-hover), 0 0 24px var(--brand-primary-glow)'],
-        ['.wc-steps li::marker', 'color', 'var(--brand-primary)'],
+        ['.wc-steps li::marker', 'color', 'var(--accent-violet-text)'],   // amended (colour roles 6.2): violet markers
         ['.wc-steps li::marker', 'font-weight', '600'],
         ['.wc-pending', 'box-shadow', '0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 3px var(--brand-primary-glow)'],
         // 3.4 get a wallet
@@ -404,9 +405,9 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
     test('primary appears on every element the spec names (a token, the gradient or a Polkadex alpha, never a missing rule)', () => {
         const PINK = /var\(--brand-primary\)|var\(--brand-gradient\)|var\(--border-hover\)|rgba\(230, 0, 122,/;
         const placements = [
-            ['.wallet-ext-tile', 'background'], ['.wallet-option-row:hover .wallet-option-action:not(.is-count)', 'border-color'], ['.wallet-option-spin', 'color'],
+            ['.wallet-option-row:hover .wallet-option-action:not(.is-count)', 'border-color'],   // amended (colour roles): the tile fill, the spinner and the pairing markers are role colours now
             ['.wallet-option-row.is-primary', 'background'], ['.wallet-account-btn.is-primary', 'background'],
-            ['.wc-qr', 'box-shadow'], ['.wc-steps li::marker', 'color'], ['.wallet-get-check:hover', 'border-color'],
+            ['.wc-qr', 'box-shadow'], ['.wallet-get-check:hover', 'border-color'],
             ['.wallet-onboarding-reload', 'background'], ['.wallet-account-row.is-current', 'background'],
             ['.wallet-account-row.is-current::before', 'background'], ['.wallet-viewing-note.is-readonly', 'background'],
             ['.wallet-viewing-note.is-readonly .bx', 'color'], ['.wc-open', 'background']
@@ -441,7 +442,7 @@ describe('lint: pink is never the colour of small text', () => {
     const SCOPE = /wallet-(picker|option|ext|account|group|get|onboarding|viewing|connect|wc)|\.wc-|\.wp-/;
     const iconLike = (sel) => {
         const last = sel.split(/[\s>+~]+/).pop();
-        return /^(i|\.bx[\w-]*)(?![\w-])/.test(last) || /\.(tile-icon|wallet-option-spin)$/.test(last) || /::(marker|before|after)$/.test(last) || /:(hover|focus|focus-visible|focus-within)/.test(sel);
+        return /^(i|\.bx[\w-]*)(?![\w-])/.test(last) || /\.(tile-icon|wallet-option-spin)$/.test(last) || /^\.wallet-ext-tile\.is-lg\[data-kind="phone"\]$/.test(last)   /* amended: the 20 px phone tile glyph is pink */ || /::(marker|before|after)$/.test(last) || /:(hover|focus|focus-visible|focus-within)/.test(sel);
     };
     const offenders = (rules) => rules.filter(r => PINK.test(r.decls.color || '')).flatMap(r => r.selectors.filter(s => SCOPE.test(s) && !iconLike(s)).map(s => `styles.css:${r.line} ${s} { color: ${r.decls.color} }`));
 
@@ -569,7 +570,7 @@ describe('the chooser markup', () => {
         assert.ok(act('[data-action="phone"]').classList.contains('is-count'), '1 account on the phone row');
         assert.ok(!act('[data-source="polkadot-js"]').classList.contains('is-count'), 'Connect');
         const onboarding = readRepo('lib/wallet-onboarding.js', import.meta.url);
-        assert.match(onboarding, /<span class="wallet-option-action">Install<\/span>/, 'Install stays a plain action label');
+        assert.match(onboarding, /<span class="wallet-option-action"><i class='bx bx-link-external' aria-hidden="true"><\/i> Install<\/span>/, 'Install stays a plain action label (amended, colour roles 6.2: it carries the link icon)');
     });
 
     test('C11: the phone group head uses the neutral phone icon, not a blue WC monogram', () => {
@@ -717,8 +718,11 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
     const OPT_LI = '.wallet-option-list > .wallet-option', ACC_LI = '#wallet-accounts .wallet-account-list > li';
     const POS = [
         [[OPT_LI, ACC_LI], { '--row-border': 'rgba(255, 255, 255, 0.12)', '--row-hover': 'rgba(255, 255, 255, 0.09)' }],
-        [[OPT_LI + ':nth-child(odd)', ACC_LI + ':nth-child(odd)'], { '--row-fill': 'rgba(255, 255, 255, 0.03)', '--row-edge': 'var(--brand-primary)' }],
-        [[OPT_LI + ':nth-child(even)', ACC_LI + ':nth-child(even)'], { '--row-fill': 'rgba(255, 255, 255, 0.06)', '--row-edge': 'var(--violet)' }]
+        // amended (colour roles 6.1, R7): option rows keep the fill step by position, their edge comes from data-kind; only account lists alternate pink and violet
+        [[OPT_LI + ':nth-child(odd)'], { '--row-fill': 'rgba(255, 255, 255, 0.03)' }],
+        [[OPT_LI + ':nth-child(even)'], { '--row-fill': 'rgba(255, 255, 255, 0.06)' }],
+        [[ACC_LI + ':nth-child(odd)'], { '--row-fill': 'rgba(255, 255, 255, 0.03)', '--row-edge': 'var(--brand-primary)' }],
+        [[ACC_LI + ':nth-child(even)'], { '--row-fill': 'rgba(255, 255, 255, 0.06)', '--row-edge': 'var(--violet)' }]
     ];
     const ROW = /\.wallet-(option-row|account-btn|account-row)(?![\w-])[^\s>+~]*$/;
     const msg = (e) => e.join('\n');
@@ -793,12 +797,14 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
     }
     // Check 6: the gradient as a foreground fill (any layer not clipped to the border-box) only on the one primary action of a view.
     const PRIMARIES = ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', '.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', '.wallet-onboarding-reload', '.wc-open'];
+    // amended (colour roles 2.4): the gradient is also the page-header tile, the hairline and .validate-primary (the shared Primary); none is a wallet row or pill
+    const NON_ACTION_GRADIENT = ['.ui-tile.is-brand', '.ui-hairline::before', '.validate-primary'];
     function checkOnePrimary(css) {
         const rules = parseRules(css), err = [];
         for (const r of rules) for (const p of ['background', 'background-image']) {
             const v = r.decls[p]; if (!v) continue;
             if (!layers(v).some(x => x.includes('var(--brand-gradient)') && !/border-box$/.test(x))) continue;
-            for (const s of r.selectors) if (!PRIMARIES.includes(s)) err.push(`styles.css:${r.line} "${s}" fills with var(--brand-gradient), which is for the one primary action only`);
+            for (const s of r.selectors) if (!PRIMARIES.includes(s) && !NON_ACTION_GRADIENT.includes(s)) err.push(`styles.css:${r.line} "${s}" fills with var(--brand-gradient), which is for the one primary action only`);
         }
         for (const s of PRIMARIES) if (declOf(rules, s, 'background') !== 'var(--brand-gradient)') err.push(`"${s}" must fill with var(--brand-gradient), has ${declOf(rules, s, 'background')}`);
         return err;
@@ -818,7 +824,9 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
         const names = [...root.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]);
         assert.match(root, /--violet:\s*#6745D2\s*;/);
         assert.equal((root.match(/--brand-gradient:\s*([^;]+);/) || [])[1], GRADIENT);
-        assert.deepEqual(names.filter(n => !['--brand-primary', '--brand-secondary', '--brand-primary-glow', '--bg-dark', '--bg-surface', '--bg-glass', '--border-color', '--border-hover', '--text-primary', '--text-secondary', '--text-muted', '--success', '--error', '--radius-sm', '--radius-md', '--radius-lg', '--sidebar-width', '--transition-fast', '--transition-normal'].includes(n)), ['--violet', '--brand-gradient']);
+        // amended (colour roles 2.2): the 24 role tokens are the only other custom properties; they are tested in colour-roles.test.js
+        const ROLE = /^--(accent-(violet|green|amber|blue|red|pink)(-(text|tint|line|wash))?|warning)$/;
+        assert.deepEqual(names.filter(n => !ROLE.test(n)).filter(n => !['--brand-primary', '--brand-secondary', '--brand-primary-glow', '--bg-dark', '--bg-surface', '--bg-glass', '--border-color', '--border-hover', '--text-primary', '--text-secondary', '--text-muted', '--success', '--error', '--radius-sm', '--radius-md', '--radius-lg', '--sidebar-width', '--transition-fast', '--transition-normal'].includes(n)), ['--violet', '--brand-gradient']);
         assert.match(root, /--violet:[^\n]*gradient endpoint and even-row edge in the wallet chooser/);
     });
     test('2: the three position rules exist outside any media query with exactly the values (odd 0.03 + Primary, even 0.06 + Violet)', () => {
@@ -828,7 +836,7 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
         assert.deepEqual(checkRemoved(CSS), [], msg(checkRemoved(CSS)));
         assert.equal(declOf(RULES, '.wallet-option-row.is-quiet', 'background'), undefined);
         assert.equal(declOf(RULES, '.wallet-option-row.is-quiet', 'color'), 'var(--text-secondary)');
-        assert.equal(declOf(RULES, '.wallet-option-row.is-quiet', '--row-edge'), 'transparent', 'quiet rows keep their neutral step but no coloured edge');
+        assert.equal(declOf(RULES, '.wallet-option-row[data-kind="quiet"]', '--row-edge'), 'transparent', 'quiet rows keep their neutral step but no coloured edge (amended: by data-kind)');
         assert.equal(declOf(RULES, '.wallet-option-row.is-quiet .wallet-option-name', 'font-weight'), '500');
     });
     test('4: fill guard, every row background is neutral (lead and Current excepted); the rows read the position variables', () => {
@@ -848,14 +856,14 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
             assert.equal(declOf(RULES, sel, 'border-color'), 'var(--border-hover)', sel);
             assert.equal(declOf(RULES, sel, 'box-shadow'), `${EDGE}, ${HALO}`, sel);
         }
-        for (const sel of ['.wallet-option-row:focus-visible', '.wallet-account-btn:focus-visible', '.wallet-option.is-waiting .wallet-option-row']) assert.equal(declOf(RULES, sel, 'box-shadow'), `${EDGE}, ${HALO}`, sel);
+        for (const sel of ['.wallet-option-row:focus-visible', '.wallet-account-btn:focus-visible']) assert.equal(declOf(RULES, sel, 'box-shadow'), `${EDGE}, ${HALO}`, sel);
     });
     test('5: lead and Current are three layers over the opaque surface with the gradient border-box; the Current bar runs Primary to Violet', () => {
         assert.deepEqual(checkLayers(CSS), [], msg(checkLayers(CSS)));
         assert.equal(layers(decl('.wallet-account-row.is-current', 'background'))[0], 'linear-gradient(90deg, rgba(103, 69, 210, 0.16) 0%, rgba(103, 69, 210, 0.04) 60%, rgba(103, 69, 210, 0) 100%) padding-box');
         for (const sel of ['.wallet-option-row.is-primary', '.wallet-account-btn.is-primary']) assert.equal(layers(decl(sel, 'background'))[0], 'linear-gradient(rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.05)) padding-box', sel);
         assert.equal(decl('.wallet-account-row.is-current::before', 'width'), '3px');
-        assert.match(decl('.wallet-account-badge', 'color'), /--brand-secondary/);
+        assert.match(decl('.wallet-account-badge', 'color'), /--accent-green/);   // amended (colour roles 6.1)
         for (const sel of ['.wallet-option-row.is-primary', '.wallet-account-btn.is-primary']) {
             const r = RULES.find(x => !x.media && x.selectors.includes(sel + ':hover') && x.selectors.includes(sel + ':focus-visible'));
             assert.ok(r, sel + ' needs a hover and focus-visible rule');
@@ -930,14 +938,17 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
             const lis = Array.from(d.querySelectorAll(listSel + ' > li'));
             assert.ok(lis.length >= 4, listSel);
             lis.forEach((li, i) => {
-                const cs = w.getComputedStyle(li), want = i % 2 ? ['#6745D2', 'rgba(255, 255, 255, 0.06)'] : ['#E6007A', 'rgba(255, 255, 255, 0.03)'];
-                const got = [cs.getPropertyValue('--row-edge').trim(), cs.getPropertyValue('--row-fill').trim()];
+                // amended (colour roles 6.1, R7): only the account list alternates the edge by position; option rows read the fill only
+                const cs = w.getComputedStyle(li), accounts = listSel.startsWith('#wallet-accounts');
+                const want = accounts ? (i % 2 ? ['#6745D2', 'rgba(255, 255, 255, 0.06)'] : ['#E6007A', 'rgba(255, 255, 255, 0.03)']) : ['', i % 2 ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.03)'];
+                const got = [accounts ? cs.getPropertyValue('--row-edge').trim() : '', cs.getPropertyValue('--row-fill').trim()];
                 if (JSON.stringify(got) !== JSON.stringify(want)) err.push(`${listSel} > li:nth-child(${i + 1}) has ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
             });
         }
         const quiet = Array.from(d.querySelectorAll('.wallet-option-row.is-quiet'));
         assert.ok(quiet.length >= 1, 'the options list has a quiet row');
-        for (const q of quiet) if (w.getComputedStyle(q).getPropertyValue('--row-edge').trim() !== 'transparent') err.push(`quiet row ${q.className} keeps a coloured edge`);
+        // amended (colour roles 6.1): a quiet row of kind quiet has no edge; the quiet Get a wallet row (kind get) has the blue one
+        for (const q of quiet) { const want = q.getAttribute('data-kind') === 'quiet' ? 'transparent' : '#148FE8'; const got = w.getComputedStyle(q).getPropertyValue('--row-edge').trim(); if (got !== want) err.push(`quiet row ${q.className} (${q.getAttribute('data-kind')}) has edge "${got}", wanted ${want}`); }
         assert.deepEqual(err, [], msg(err));
     });
 
