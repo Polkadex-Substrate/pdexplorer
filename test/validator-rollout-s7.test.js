@@ -372,11 +372,12 @@ describe('A1 route: an index-missing answer is limited, memoised and cached; a f
 
 describe('A1 html: the retry line follows partial only', () => {
     const esc = (x) => String(x);
-    test('limited alone: no partial line, no retry button, the always-line stays', () => {
+    // Amended for the validate redesign (spec 2026-11-21 section 4): limited shows its own info line.
+    test('limited alone: no partial line, no retry button, the limited line instead', () => {
         const h = proxiedStashesHtml({ stashes: [], capped: false, partial: false, limited: true, reason: 'SIGNER_INDEX_MISSING' }, { esc });
         assert.ok(!h.includes('data-proxied-partial'));
         assert.ok(!h.includes('data-proxied-retry'));
-        assert.ok(h.includes('Found from indexed proxy events'));
+        assert.ok(h.includes('The proxy index is not available right now, so this list may be incomplete.'));
     });
     test('partial (with or without limited): the line and the retry button', () => {
         for (const r of [{ stashes: [], partial: true }, { stashes: [], partial: true, limited: true }]) {
@@ -424,7 +425,7 @@ describe('A1 /validate: stashes you are a proxy for, pick one to manage', () => 
         const sec = el.querySelector('#validate-proxied-slot section');
         assert.ok(sec, 'the list is shown');
         assert.equal(sec.querySelector('h3').textContent, 'Accounts you are a proxy for');
-        assert.ok(sec.textContent.includes('This account is a proxy for the accounts below. Open one to see its validator status and what this proxy can do there.'));
+        assert.ok(!sec.textContent.includes('This account is a proxy for the accounts below.'), 'the intro line is deleted (spec 2026-11-21 section 4)');
         const rows = Array.from(sec.querySelectorAll('li'));
         assert.equal(rows.length, 2);
         assert.match(rows[0].textContent, /Staking proxy/);
@@ -438,12 +439,14 @@ describe('A1 /validate: stashes you are a proxy for, pick one to manage', () => 
         assert.match(links[0].getAttribute('aria-label'), new RegExp('Manage ' + S1));
         assert.ok(el.querySelectorAll('.validate-primary').length <= 1, 'at most one primary in the view');
     });
-    const ALWAYS = 'Found from indexed proxy events, so an older proxy may be missing. To open an account not listed, enter its address under Any validator stash above.';
-    test('nothing found: the always-line alone, no empty heading; a failed fetch: nothing', async () => {
+    // Amended for the validate redesign (spec 2026-11-21 section 4): the caption is shorter (its second
+    // sentence moved to the lookup helper), and an empty complete list renders nothing.
+    const ALWAYS = 'From indexed proxy events, so an older proxy may be missing.';
+    test('nothing found: nothing rendered, no empty heading; a failed fetch: nothing', async () => {
         const a = pageDom();
         await mountValidatePage(a.el, pageDeps({ address: ME, stashes: [], capped: false })); await settle();
         const slot = a.el.querySelector('#validate-proxied-slot');
-        assert.equal(slot.textContent.trim(), ALWAYS);
+        assert.equal(slot.textContent.trim(), '');
         assert.equal(slot.querySelector('h3'), null);
         const b = pageDom();
         await mountValidatePage(b.el, pageDeps(new Error('503'))); await settle();
