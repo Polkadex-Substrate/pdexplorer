@@ -13,7 +13,8 @@
 // A palette sheet (wp<N>-palette.html) shows every colour token as a swatch with its name, value and role,
 // and a sample of each shared ui-* part, from the same stylesheet.
 //
-// Later work packages add their scenes to the WORK_PACKAGES table below (a scene is { id, primary, build }).
+// Later work packages add their scenes to the WORK_PACKAGES table below (a scene is { id, primary, build }; a
+// package may bring its own page guard as `check`). WP2: the Validate hub, the dashboard and /validate/keys.
 //
 // Guards: a file is not written when a scene lacks a required element, when the scene shows the wrong
 // number of primary actions, when styles.css is not inlined byte for byte, or when any stylesheet, script,
@@ -26,6 +27,10 @@ import { Window } from 'happy-dom';
 import { mountChooser, fakeWallet, acct, addr, tick } from '../test/helpers/chooser-world.js';
 import { mountPairingPanel } from '../lib/walletconnect-view.js';
 import { rootProps } from '../test/helpers/css-rules.js';
+import { mountValidatePage, mountKeysPage } from '../lib/validator-status-view.js';
+import { validatorStatusModel } from '../lib/validator-status.js';
+import { EXPECTED_LAYOUT } from '../lib/session-keys.js';
+import { escapeHtml } from '../lib/html-escape.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -62,23 +67,26 @@ const APP_CSS = interCss() + '\n' + STYLES_PV + '\n' + boxiconsCss();
 const logoUri = 'data:image/png;base64,' + b64('logo.png');
 const qrSrc = rd('node_modules/qrcodejs/qrcode.min.js');
 
-// ── the real shell ──
-function shellHtml() {
+// ── the real shell ── (page: the data-page kept; nav: the sidebar entry shown as active)
+function shellHtml(page = 'wallet', nav = '#nav-my-account') {
     const html = rd('index.html');
     const body = html.slice(html.indexOf('<body'), html.lastIndexOf('</body>') + 7).replace(/<script[\s\S]*?<\/script>/g, '');
     const doc = new Window().document;
     doc.body.outerHTML = body;
     const app = doc.querySelector('.app-container');
-    for (const sec of Array.from(app.querySelectorAll('.page-section'))) if (sec.getAttribute('data-page') !== 'wallet') sec.remove();
-    const wallet = app.querySelector('.page-section[data-page="wallet"]');
-    wallet.removeAttribute('style');
+    for (const sec of Array.from(app.querySelectorAll('.page-section'))) if (sec.getAttribute('data-page') !== page) sec.remove();
+    const kept = app.querySelector(`.page-section[data-page="${page}"]`);
+    kept.removeAttribute('style');
     for (const n of app.querySelectorAll('.nav-item.active')) n.classList.remove('active');
-    app.querySelector('#nav-my-account').classList.add('active');
+    const navEl = app.querySelector(nav);
+    navEl.hidden = false;
+    navEl.classList.add('active');
     for (const m of Array.from(app.querySelectorAll('[id$="-modal"]'))) if (!m.closest('.wallet-picker')) m.remove();
     for (const img of app.querySelectorAll('img[src="logo.png"]')) img.setAttribute('src', logoUri);
     return app.outerHTML;
 }
 const SHELL = shellHtml();
+const VALIDATE_SHELL = shellHtml('validate', '#nav-validate');
 
 // ── WP1 scenes: the wallet connect page ──
 const TALISMAN = () => fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings')]);
@@ -119,16 +127,112 @@ const WALLET_SCENES = [
     { id: 'wallet-row-hover-and-focus', primary: 0, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true }, async (w) => { w.row('polkadot-js').classList.add('pv-hover'); w.row('talisman').classList.add('pv-focus'); w.action('phone').classList.add('pv-hover'); withMs(w); }) }
 ];
 
+// ── WP2 scenes: the Validate hub, the dashboard and the keys page (spec section 8) ──
+// The real mount functions in the real shell, with the explorer API answered from fixed snapshots.
+const vaddr = (n) => addr(n, 88);
+const ME = vaddr(31), THEM = vaddr(32), P1 = vaddr(33), P2 = vaddr(34), P3 = vaddr(35);
+const PDEX = 10n ** 12n;
+const hexRep = (b, n) => b.repeat(n);
+const VKEYS = { grandpa: '0x' + hexRep('11', 32), babe: '0x' + hexRep('22', 32), im_online: '0x' + hexRep('33', 32), authority_discovery: '0x' + hexRep('44', 32), mixnet: '0x' + hexRep('55', 32), beefy: '0x02' + hexRep('66', 32) };
+const VBLOB = '0x' + Object.values(VKEYS).map(h => h.slice(2)).join('');
+const vsnap = (over = {}) => ({
+    address: ME, bonded: true, controller: ME, ledger: { total: String(25_000n * PDEX), active: String(25_000n * PDEX) },
+    intent: true, prefs: { commission: 50_000_000, blocked: false }, nextKeys: VKEYS, queuedKeys: VKEYS, inQueued: true, inSession: true,
+    activeImOnlineKey: VKEYS.im_online, disabled: false, imOnline: true, heartbeat: true, blocks: 2,
+    activeEra: 512, currentEra: 512, sessionIndex: 3071, sessionProgress: 0.62, epochDuration: 1200, blockTimeMs: 12000, sessionsPerEra: 6, eraStartSession: 3068,
+    exposure: { total: String(184_000n * PDEX), own: String(25_000n * PDEX), nominatorCount: 184, pageCount: 1 }, nextExposure: null,
+    points: { points: 4320, rank: 7, of: 22 }, lastEra: { points: 7000, reward: String(37n * PDEX) },
+    lastSlashEra: null, incidents: [], identity: { name: 'Example validator', judgements: [] }, proxies: [], bondingDuration: 28, ...over
+});
+const VPARAMS = { specVersion: 393, layout: { ok: true, bytes: 193, hexLength: 388 }, minValidatorBond: String(10_000n * PDEX), minCommission: 10_000_000, maxValidatorsCount: 50, lowestElectedTotal: String(90_000n * PDEX), medianCommission: 40_000_000 };
+const NOT_BONDED = { bonded: false, controller: null, ledger: null, intent: false, prefs: null, nextKeys: null, queuedKeys: null, inQueued: false, inSession: false, exposure: null, points: null, lastEra: null };
+const NO_PROXIES = { address: ME, stashes: [], capped: false, partial: false };
+const THREE = { address: ME, capped: false, partial: false, stashes: [
+    { stash: P1, proxies: [{ type: 'Staking', delay: 0 }], validating: true },
+    { stash: P2, proxies: [{ type: 'Staking', delay: 0 }], validating: false },
+    { stash: P3, proxies: [{ type: 'Governance', delay: 0 }], validating: null }] };
+const httpErr = (status) => Object.assign(new Error('x'), { status });
+const keysRows = (other) => EXPECTED_LAYOUT.map((l, i) => ({ name: l.name, typeId: l.typeId, preview: '0x' + String(i + 1).repeat(8) + '...' + String(i + 1).repeat(8), result: other && i === 1 ? 'other' : i === 0 ? 'own' : 'free', owner: other && i === 1 ? THEM : null }));
+const never = new Promise(() => {});
+// o: { account, url (the URL address), state (snapshot over), status (an answer or an Error or 'hang'), proxied, alerts, params, keysAnswer }
+function vworld(o = {}) {
+    const window = new Window({ url: 'https://explorer.test/validate', width: 1280, settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
+    const doc = window.document;
+    doc.body.innerHTML = VALIDATE_SHELL;
+    for (const img of doc.querySelectorAll('img')) if (!/^data:/.test(img.getAttribute('src') || '')) img.setAttribute('src', logoUri);
+    const root = doc.getElementById('validate-root');
+    const account = o.account === undefined ? { status: 'connected', address: ME } : o.account;
+    const d = {
+        account, getAccount: () => account, urlAddress: o.url || '', isSame: (a, b) => a === b,
+        fetchJson: async (u) => {
+            if (u === '/api/validator/params') return o.params || VPARAMS;
+            if (u.startsWith('/api/proxied-stashes/')) return o.proxied || NO_PROXIES;
+            if (u === '/api/validator-alerts/status') return { enabled: o.alerts !== false, maxPerEmail: 5 };
+            if (u.startsWith('/api/session-keys/check')) return o.keysAnswer;
+            const m = /^\/api\/validator\/([^/]+)\/status$/.exec(u);
+            if (m) {
+                if (o.status === 'hang') return never;
+                if (o.status instanceof Error) throw o.status;
+                return { ...validatorStatusModel(vsnap({ address: decodeURIComponent(m[1]), ...(o.state || {}) }), VPARAMS), address: decodeURIComponent(m[1]) };
+            }
+            throw new Error('unexpected ' + u);
+        },
+        helpIcon: () => '', esc: escapeHtml, shortAddr: (a) => a.slice(0, 6) + '...' + a.slice(-6), navigate: () => {}
+    };
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const visible = (el) => !!el && !el.closest('[hidden]');
+    return { window, doc, root, d, qa, visible, q: (sel) => doc.querySelector(sel) };
+}
+const tickv = (ms = 30) => new Promise(r => setTimeout(r, ms));
+const hub = (o = {}, steps = async () => {}) => async () => { const w = vworld(o); const p = mountValidatePage(w.root, w.d); await (o.status === 'hang' ? tickv(20) : p); await tickv(30); await steps(w); return w; };
+const keysPage = (o = {}, steps = async () => {}) => async () => { const w = vworld(o); await mountKeysPage(w.root, w.d); await tickv(20); await steps(w); return w; };
+const submitKeys = (value) => async (w) => { w.q('#validate-keys-input').value = value; w.q('#validate-keys-form').dispatchEvent(new w.window.Event('submit', { cancelable: true })); await tickv(30); };
+const VALIDATE_SCENES = [
+    { id: 'hub-no-wallet', primary: 1, need: '.validate-connect', build: hub({ account: { status: 'none', address: '' } }) },
+    { id: 'hub-not-bonded', primary: 1, need: '.validate-path', build: hub({ state: NOT_BONDED }) },
+    { id: 'hub-keys-not-validating', primary: 1, need: '.validate-path', build: hub({ state: { intent: false, prefs: null, inQueued: false, inSession: false, exposure: null } }) },
+    { id: 'hub-active', primary: 0, need: '.validate-tiles', build: hub({}) },
+    { id: 'hub-waiting', primary: 0, need: '.validate-tiles', build: hub({ state: { inQueued: false, inSession: false, exposure: null } }) },
+    { id: 'hub-disabled-slashed', primary: 0, need: '.validate-tiles', build: hub({ state: { disabled: true, lastSlashEra: 510 } }) },
+    { id: 'hub-offline', primary: 0, need: '.validate-tiles', build: hub({ state: { heartbeat: false, blocks: 0, sessionProgress: 0.9, incidents: [{ kind: 'imOnline.SomeOffline' }] } }) },
+    { id: 'hub-loading', primary: 0, need: '.validate-skeleton', build: hub({ status: 'hang' }) },
+    { id: 'hub-chain-down', primary: 0, need: '.ui-panel.is-warn', build: hub({ status: httpErr(503) }) },
+    { id: 'hub-limited', primary: 0, need: '.validate-tiles', build: hub({ state: { exposure: null } }) },
+    { id: 'hub-lookup-other', primary: 0, need: '.validate-tiles', build: hub({ url: THEM }) },
+    { id: 'hub-lookup-bad-address', primary: 0, need: '.validate-msg.is-error', build: hub({ account: { status: 'none', address: '' }, url: 'e-not-an-address', status: httpErr(400) }) },
+    { id: 'hub-proxy-with-three-stashes', primary: 0, need: '.validate-proxied', build: hub({ proxied: THREE }) },
+    { id: 'hub-proxy-limited', primary: 0, need: '.validate-proxied', build: hub({ proxied: { ...NO_PROXIES, limited: true, reason: 'SIGNER_INDEX_MISSING' } }) },
+    { id: 'keys-empty', primary: 1, need: '#validate-keys-form', build: keysPage({ account: { status: 'none', address: '' } }) },
+    { id: 'keys-ok', primary: 1, need: '.validate-keys-table', build: keysPage({ keysAnswer: { ok: true, conflict: false, bytes: 193, summary: '6 keys, 193 bytes, none registered to another account.', rows: keysRows(false) } }, submitKeys(VBLOB)) },
+    { id: 'keys-conflict', primary: 1, need: '.validate-alert', build: keysPage({ keysAnswer: { ok: true, conflict: true, bytes: 193, summary: `Key 2 (babe) is already registered to ${THEM}. The chain will reject these keys.`, rows: keysRows(true) } }, submitKeys(VBLOB)) },
+    { id: 'keys-invalid', primary: 1, need: '#validate-keys-input[aria-invalid="true"]', build: keysPage({}, submitKeys('0x1234')) },
+    { id: 'keys-mismatch', primary: 0, need: '.validate-mismatch', build: keysPage({ params: { ...VPARAMS, specVersion: 394, layout: { ok: false } } }) }
+];
+// The page's own guards: shell, page and the one primary (spec R3 and section 3.3).
+function checkValidateScene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-validate')) err.push('no active #nav-validate in the sidebar');
+    if (!w.doc.querySelector('.page-section[data-page="validate"] #validate-root .validate-hub')) err.push('no .validate-hub in #validate-root');
+    const n = w.qa('.validate-primary').filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+
 // ── work packages: later rounds add theirs here ──
-const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true } };
+const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
-async function renderScene(s) {
+async function renderScene(s, check = null) {
     const w = await s.build();
     const err = [];
     const app = w.doc.querySelector('.app-container');
     if (!app) err.push('no .app-container');
+    if (check) {
+        if (!w.doc.querySelector('header.topbar .connect-wallet-btn')) err.push('no header.topbar .connect-wallet-btn');
+        check(w, s, err);
+        if (err.length) throw new Error(`scene "${s.id}": ${err.join('; ')}`);
+        return app.outerHTML;
+    }
     if (!w.doc.querySelector('aside.sidebar .nav-item.active')) err.push('no aside.sidebar .nav-item.active');
     if (!w.doc.querySelector('header.topbar .connect-wallet-btn')) err.push('no header.topbar .connect-wallet-btn');
     if (!w.doc.querySelector('section.list-container.glass.wallet-picker')) err.push('no section.list-container.glass.wallet-picker');
@@ -208,6 +312,9 @@ async function guardSelfTest() {
     await expectFail('remote image', async () => checkFile(ok.replace('srcdoc="', 'srcdoc="&lt;img src=&quot;logo.png&quot;&gt;')), /not a data: URI|byte for byte/);
     await expectFail('styles.css changed', async () => checkFile(ok.replace('.wallet-ext-tile {', '.wallet-ext-tile  {')), /byte for byte/);
     await expectFail('font without data source', async () => checkFile(ok.replace(/@font-face \{ font-family: 'Inter'/g, "@font-face { font-family: 'Other'")), /Inter @font-face/);
+    const hubScene = VALIDATE_SCENES[1];
+    await expectFail('hub: two primaries', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('.validate-path-link').classList.add('validate-primary'); return w; } }, checkValidateScene), /2 primary actions visible/);
+    await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);
 }
 
 // ── run ──
@@ -223,7 +330,7 @@ async function main() {
         if (!wp) { console.error('no work package ' + n); return 2; }
         for (const s of wp.scenes) {
             if (only && s.id !== only) continue;
-            const inner = await renderScene(s);
+            const inner = await renderScene(s, wp.check);
             for (const width of WIDTHS) { const html = sceneFile(s.id, inner, width); checkFile(html); files.push([`wp${n}-${s.id}-${width}.html`, html]); }
         }
         if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); files.push([`wp${n}-palette.html`, html]); }
