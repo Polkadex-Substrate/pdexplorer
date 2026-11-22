@@ -1597,13 +1597,13 @@ h1, h2, h3 { font-weight: 600; }
    identity rather than a CTA, and the wallet icon turns into a check-style
    indicator via the brand secondary color. */
 .connect-wallet-btn.is-connected {
-    background: rgba(124, 58, 237, 0.12);
+    background: var(--accent-violet-tint);
     color: var(--text-primary);
-    border: 1px solid rgba(124, 58, 237, 0.45);
+    border: 1px solid var(--accent-violet-line);
     padding: 7px 14px;
 }
-.connect-wallet-btn.is-connected i { color: var(--brand-secondary, #00E676); }
-.connect-wallet-btn.is-connected:hover { background: rgba(124, 58, 237, 0.20); }
+.connect-wallet-btn.is-connected i { color: var(--accent-green); }
+.connect-wallet-btn.is-connected:hover { border-color: var(--accent-violet); }
 /* Sprint 7: while the Connect wallet chooser is open its lead row is the one primary; the header button steps
    back to an outline in the same colour. */
 .connect-wallet-btn.is-outline {
@@ -1642,7 +1642,7 @@ h1, h2, h3 { font-weight: 600; }
 .mobile-wallet-cta {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     padding: 8px 12px;
-    background: var(--brand-primary, #7c3aed);
+    background: var(--brand-primary);
     color: #fff;
     border-radius: 6px;
     text-decoration: none;
@@ -1651,9 +1651,9 @@ h1, h2, h3 { font-weight: 600; }
 }
 .mobile-wallet-cta:hover { opacity: 0.92; }
 .mobile-wallet-cta.secondary {
-    background: rgba(124, 58, 237, 0.12);
+    background: var(--accent-violet-tint);
     color: var(--text-primary);
-    border: 1px solid rgba(124, 58, 237, 0.4);
+    border: 1px solid var(--accent-violet-line);
 }
 .mobile-wallet-storelinks { display: flex; gap: 8px; }
 .mobile-wallet-storelinks a {
@@ -1714,7 +1714,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .wallet-readonly-head > i {
     font-size: 1.5rem;
-    color: #f5a623;
+    color: var(--accent-amber);
     flex-shrink: 0;
     margin-top: 1px;
 }
@@ -3183,8 +3183,8 @@ h1, h2, h3 { font-weight: 600; }
     line-height: 1.55;
 }
 .help-callout.warn {
-    background: rgba(245, 166, 35, 0.08);
-    border-left-color: #f5a623;
+    background: var(--accent-amber-wash);
+    border-left-color: var(--accent-amber);
 }
 .help-glossary { margin: 0; padding: 0; }
 .help-glossary dt {
@@ -3730,7 +3730,7 @@ h1, h2, h3 { font-weight: 600; }
 .calendar-status.active   { color: #5cf591; font-weight: 600; }
 .calendar-status.resolved { color: rgba(255,255,255,0.6); }
 .calendar-countdown { color: rgba(255,255,255,0.55); font-size: 0.78rem; }
-.calendar-countdown.soon { color: #f5a623; }
+.calendar-countdown.soon { color: var(--accent-amber); }
 
 /* Month view */
 .calendar-month-header {
@@ -4381,9 +4381,9 @@ h1, h2, h3 { font-weight: 600; }
    them of. Red is reserved for commission above 50% (HIGH RISK), where the
    nominator's share is genuinely marginal. */
 .badge.commission-raised {
-    background: rgba(245, 166, 35, 0.18);
+    background: var(--accent-amber-tint);
     color: var(--warning);
-    border: 1px solid rgba(245, 166, 35, 0.45);
+    border: 1px solid var(--accent-amber-line);
     font-size: 0.62rem;
     letter-spacing: 0.03em;
     cursor: help;
@@ -4472,8 +4472,8 @@ h1, h2, h3 { font-weight: 600; }
     border-radius: 6px;
     font-size: 0.72rem;
     color: var(--warning);
-    background: rgba(245, 166, 35, 0.08);
-    border: 1px solid rgba(245, 166, 35, 0.3);
+    background: var(--accent-amber-wash);
+    border: 1px solid var(--accent-amber-line);
 }
 @media (max-width: 720px) {
     .stake-modal-body { padding: 18px 14px; max-height: 96vh; }
@@ -4517,14 +4517,14 @@ h1, h2, h3 { font-weight: 600; }
 }
 .tx-card.tx-pending { border-left-color: #00c4ff; }
 .tx-card.tx-ok { border-left-color: var(--success); }
-.tx-card.tx-warn { border-left-color: #f5a623; }
+.tx-card.tx-warn { border-left-color: var(--accent-amber); }
 .tx-card.tx-error { border-left-color: var(--error); }
 .tx-card.tx-neutral { border-left-color: var(--text-secondary); }
 .tx-card-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .tx-card-head .bx { font-size: 1.15rem; }
 .tx-card.tx-ok .tx-card-head .bx { color: var(--success); }
 .tx-card.tx-error .tx-card-head .bx { color: #ff8080; }
-.tx-card.tx-warn .tx-card-head .bx { color: #f5a623; }
+.tx-card.tx-warn .tx-card-head .bx { color: var(--accent-amber); }
 .tx-card-stage { flex: 1; }
 .tx-card-close {
     background: none; border: none; color: #d1d5db; cursor: pointer;
@@ -4565,7 +4565,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .propose-threshold-warning {
     margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm);
-    background: rgba(245, 166, 35, 0.1); border: 1px solid rgba(245, 166, 35, 0.4); color: #f5c76b; font-size: 0.8rem;
+    background: var(--accent-amber-tint); border: 1px solid var(--accent-amber-line); color: #f5c76b; font-size: 0.8rem;
 }
 .propose-threshold-warning label { margin-top: 6px; display: flex; gap: 8px; align-items: center; color: var(--text-primary); cursor: pointer; }
 
@@ -4726,8 +4726,8 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .balance-locks-id code { white-space: pre; }
 .balance-locks-refs { margin-top: 6px; font-size: 0.78rem; color: var(--text-secondary); }
 .balance-locks-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
-.balance-locks-orphan { background: rgba(245, 166, 35, 0.15); color: #f5a623; }
-.balance-locks-legacy { background: rgba(245, 166, 35, 0.1); color: #f5a623; }
+.balance-locks-orphan { background: var(--accent-amber-tint); color: var(--accent-amber); }
+.balance-locks-legacy { background: var(--accent-amber-tint); color: var(--accent-amber); }
 .balance-locks-unknown { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary); }
 .balance-locks-empty { padding: 16px 24px; color: var(--text-muted); font-size: 0.85rem; }
 .lock-actions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 0.8rem; color: var(--text-secondary); }
@@ -4741,7 +4741,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .lock-withdraw-ready { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .lock-withdraw-pending { color: var(--text-secondary); font-size: 0.8rem; }
 .nom-status { margin-bottom: 20px; }
-.nom-banner { margin: 10px 24px 0; padding: 10px 14px; border-radius: 8px; font-size: 0.84rem; line-height: 1.5; background: rgba(245, 166, 35, 0.12); border: 1px solid rgba(245, 166, 35, 0.35); }
+.nom-banner { margin: 10px 24px 0; padding: 10px 14px; border-radius: 8px; font-size: 0.84rem; line-height: 1.5; background: var(--accent-amber-tint); border: 1px solid var(--accent-amber-line); }
 .nom-banner .staking-download-btn { margin-left: 8px; padding: 4px 12px; font-size: 0.78rem; }
 @media (max-width: 640px) {
     .balance-locks-table thead { display: none; }
