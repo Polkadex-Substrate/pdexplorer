@@ -10,7 +10,7 @@ import * as SETUP from '../../lib/validator-setup.js';
 import * as MANAGE from '../../lib/validator-manage.js';
 import * as DELEGATE from '../../lib/validator-delegate.js';
 import { SETUP_STEPS } from '../../lib/validator-setup-view.js';
-import { buildState, ALL_STATE_IDS, snapshotOf } from './wp3-world.js';
+import { buildState, closeWorld, ALL_STATE_IDS, snapshotOf } from './wp3-world.js';
 
 const ARGS = [[], [1], [1, 3], [2, 3, 'X'], [2n, 3, 'X', 4]];
 function fromValue(out, key, v) {
@@ -37,6 +37,7 @@ export async function collectStates() {
         const w = await buildState(id);
         out[id] = snapshotOf(w.el);
         if (w.release) w.release();
+        await closeWorld(w);
     }
     return out;
 }

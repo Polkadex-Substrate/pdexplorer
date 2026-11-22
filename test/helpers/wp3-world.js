@@ -361,4 +361,8 @@ export async function buildState(id, extra = {}) {
     if (id === 'guide-published') return guideWorld({ ...extra, published: true });
     throw new Error('no WP3 state ' + id);
 }
+// Close a state's page (its timers and its memory) once it has been read.
+export async function closeWorld(w) {
+    try { if (w.window.happyDOM && w.window.happyDOM.abort) await w.window.happyDOM.abort(); w.window.close(); } catch (e) { /* already closed */ }
+}
 export const ALL_STATE_IDS = [...SETUP_STATES.map(s => s[0]), ...MANAGE_STATES.map(s => s[0])];
