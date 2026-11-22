@@ -85,6 +85,7 @@ import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE } from './lib/validator-status-view.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR } from './lib/ui-parts.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
@@ -4065,7 +4066,8 @@ function renderBrandPage() {
             <h3>Colour roles</h3>
             <p class="brand-note">Each colour means one thing and appears only where that thing is true. Colour sits on small parts (chips, tiles, markers, dots, edges), never on a whole row or card, and always comes with an icon and a word.</p>
             <div class="brand-swatch-row">
-                ${[['Pink', 'acts: the one primary action', 'is-step', 'bx-pointer'], ['Violet', 'structures: steps, secondary actions', 'is-step', 'bx-layer'], ['Green', 'is good: active, done, safe', 'is-positive', 'bx-check'], ['Amber', 'is attention: waiting, caution', 'is-wait', 'bx-error'], ['Blue', 'is guidance: how to, why', 'is-info', 'bx-info-circle'], ['Red', 'is failure: failed, blocked', 'is-error', 'bx-error-circle']].map(([n, m, c, i]) => `<span class="ui-chip ${c}"><i class='bx ${i}' aria-hidden="true"></i>${n} ${m}</span>`).join('')}
+                <span class="brand-role"><span class="ui-tile is-brand is-sm" aria-hidden="true"><i class='bx bx-pointer'></i></span>Pink acts: the one primary action</span>
+                ${[['Violet', 'structures: steps, secondary actions', 'is-step', 'bx-layer'], ['Green', 'is good: active, done, safe', 'is-positive', 'bx-check'], ['Amber', 'is attention: waiting, caution', 'is-wait', 'bx-error'], ['Blue', 'is guidance: how to, why', 'is-info', 'bx-info-circle'], ['Red', 'is failure: failed, blocked', 'is-error', 'bx-error-circle']].map(([n, m, c, i]) => `<span class="ui-chip ${c}"><i class='bx ${i}' aria-hidden="true"></i>${n} ${m}</span>`).join('')}
             </div>
             <p class="brand-note">Amber ${tokens.warning} is the explorer's warning colour. Text uses <code>--accent-violet-text</code> and <code>--accent-blue-text</code>; raw violet and raw blue are fills and edges only.</p>
 
@@ -7416,11 +7418,15 @@ function onStakingRewardsWalletChange(change) {
 function initValidatePage(address) {
     const nodeName = new URLSearchParams(window.location.search).get('node') || '';
     const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(history.state, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
+    // The page draws its own primary on most views: the header button follows (markHeaderOutline).
+    validatePageOpen = true;
+    pageScope.add(() => { validatePageOpen = false; markHeaderOutline(); });
+    const settleHeader = (p) => { markHeaderOutline(); Promise.resolve(p).then(markHeaderOutline, markHeaderOutline); return p; };
     if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
     if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
-    if (address === 'keys') { updateSeoMeta('validate', { title: KEYS_PAGE_TITLE, canonicalPath: '/validate/keys' }); return mountKeysPage(document.getElementById('validate-root'), { getAccount: () => walletSession.getActiveAccount(), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml }); }
-    const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
-        fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName });
+    if (address === 'keys') { updateSeoMeta('validate', { title: KEYS_PAGE_TITLE, canonicalPath: '/validate/keys' }); return settleHeader(mountKeysPage(document.getElementById('validate-root'), { getAccount: () => walletSession.getActiveAccount(), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml })); }
+    const mount = (a) => settleHeader(mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
+        fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName }));
     pageScope.add(walletSession.onActiveAccountChange((change) => {
         const viewed = readRouteFromLocation().slice('validate/'.length);
         const follow = viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress });
@@ -8178,10 +8184,21 @@ function refreshWalletPageTitle() {
     if (here.startsWith('wallet/')) updateSeoMeta('wallet', walletDashboardSeo(here.slice('wallet/'.length), getStoredWallet(), { isSame: isSameAddress, shortAddr: stakingShortAddress }));
 }
 
-// While the Connect wallet chooser is open its own lead row is the one primary (BRAND.md): the header button is an outline.
-function markWalletChooserOpen(open) {
+// One primary per view (BRAND.md), and the header button counts as one (fidelity review 4): with no wallet
+// connected, a page that draws its own primary (the chooser's lead row, a .validate-primary) turns the
+// header Connect Wallet into an outline. Re-read after every validate mount and on every wallet change.
+let walletChooserOpen = false;
+let validatePageOpen = false;
+function markHeaderOutline() {
     const btn = document.getElementById('connect-wallet-btn');
-    if (btn) btn.classList.toggle('is-outline', !!open && !walletSession.getActiveAccount().address);
+    if (!btn) return;
+    const root = validatePageOpen ? document.getElementById('validate-root') : null;
+    const pagePrimary = walletChooserOpen || !!(root && root.querySelector(PAGE_PRIMARY_SELECTOR));
+    btn.classList.toggle('is-outline', headerLook({ connected: !!walletSession.getActiveAccount().address, pagePrimary }) === 'outline');
+}
+function markWalletChooserOpen(open) {
+    walletChooserOpen = !!open;
+    markHeaderOutline();
 }
 
 // The header button, the My Account menu and the sidebar item. Drawn from the
@@ -11586,6 +11603,7 @@ const disconnectWalletBtn = document.getElementById('disconnect-wallet-btn');
 if (disconnectWalletBtn) disconnectWalletBtn.addEventListener('click', disconnectWallet);
 // Connect, switch, Disconnect, another tab, a phone session ending: every path announces it.
 walletSession.onActiveAccountChange(() => refreshConnectWalletButton());
+walletSession.onActiveAccountChange(() => markHeaderOutline());   // the outline rule reads the session too (fidelity review 4)
 walletSession.onActiveAccountChange(() => paintWalletViewingSlot());
 refreshConnectWalletButton();
 

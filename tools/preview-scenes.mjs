@@ -3,7 +3,7 @@
 //
 //   node --experimental-sqlite tools/preview-scenes.mjs --out <dir> [--wp 1] [--scene <id>] [--selftest]
 //
-// Each scene is ONE self-contained HTML file named  wp<N>-<scene>-<width>.html  (width 1280 or 375, dark
+// Each scene is ONE self-contained HTML file named  wp<N>-<scene>-<width>.html  (width 1280 and 375, or the scene's own widths; dark
 // theme). It holds the branch's REAL index.html shell (sidebar, topbar, the page section), the REAL view
 // functions rendered into it in happy-dom, and the REAL styles.css, byte for byte, inside an iframe whose
 // width is the scene width, so the stylesheet's media queries answer to 375 px as they would on a phone.
@@ -20,9 +20,17 @@
 // number of primary actions, when styles.css is not inlined byte for byte, or when any stylesheet, script,
 // font or image reference is not a data: URI. `--selftest` breaks each guard once and renders its message.
 //
+// The header (fidelity review 5): the shell's Connect Wallet is drawn as the real page draws it, by the one
+// rule in lib/ui-parts.js headerLook: "My Account" and the short address when a wallet is connected, an
+// outline when none is and the page shows its own primary (the chooser, the connect bar, Check keys), else
+// solid. A guard refuses a scene whose header does not follow that rule.
+//
+// Importable (tests build scenes in-process through sceneWorld); the generator runs only from the command line.
+//
 // Addresses are synthetic (32 repeated bytes): they belong to no one.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 import { mountChooser, fakeWallet, acct, addr, tick } from '../test/helpers/chooser-world.js';
 import { mountPairingPanel } from '../lib/walletconnect-view.js';
@@ -31,6 +39,8 @@ import { mountValidatePage, mountKeysPage } from '../lib/validator-status-view.j
 import { validatorStatusModel } from '../lib/validator-status.js';
 import { EXPECTED_LAYOUT } from '../lib/session-keys.js';
 import { escapeHtml } from '../lib/html-escape.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR } from '../lib/ui-parts.js';
+import { fakeManageApi } from '../test/helpers/manage-fake-chain.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -118,7 +128,7 @@ const WALLET_SCENES = [
     { id: 'wallet-ext-shared-accounts', primary: 0, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true }, async (w) => { w.row('talisman').click(); await w.settle(); w.q('#wallet-picker-back').click(); await w.settle(); withMs(w); }) },
     { id: 'wallet-waiting', primary: 0, build: () => setup({ wallets: [Object.assign(TALISMAN(), { hold: true }), POLKADOT()] }, async (w) => { w.row('talisman').click(); await tick(20); withMs(w); }) },
     { id: 'wallet-problem', primary: 0, build: () => setup({ wallets: [Object.assign(POLKADOT(), { reject: true }), TALISMAN()] }, async (w) => { w.row('polkadot-js').click(); await w.settle(); withMs(w); }) },
-    { id: 'wallet-switch-current', primary: 0, need: '.wallet-account-row.is-current', build: () => setup({ wallets: [TALISMAN(), POLKADOT()], current: addr(10, 42), currentSource: 'talisman', lastSource: 'talisman' }, withMs) },
+    { id: 'wallet-switch-current', primary: 0, connected: addr(10, 42), need: '.wallet-account-row.is-current', build: () => setup({ wallets: [TALISMAN(), POLKADOT()], current: addr(10, 42), currentSource: 'talisman', lastSource: 'talisman' }, withMs) },
     { id: 'wallet-accounts-five', primary: 0, build: () => setup({ wallets: [fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings'), acct(15, 'Trading'), acct(16, 'Cold storage')])] }, async (w) => { w.row('talisman').click(); await w.settle(); }) },
     { id: 'wallet-get', primary: 0, build: () => setup({}, async (w) => { w.action('get').click(); await w.settle(); }) },
     { id: 'wallet-get-retried', primary: 1, extra: '.wallet-onboarding-reload', build: () => setup({}, async (w) => { w.action('get').click(); await w.settle(); w.q('.wallet-get-check').click(); await w.settle(); }) },
@@ -154,9 +164,12 @@ const THREE = { address: ME, capped: false, partial: false, stashes: [
 const httpErr = (status) => Object.assign(new Error('x'), { status });
 const keysRows = (other) => EXPECTED_LAYOUT.map((l, i) => ({ name: l.name, typeId: l.typeId, preview: '0x' + String(i + 1).repeat(8) + '...' + String(i + 1).repeat(8), result: other && i === 1 ? 'other' : i === 0 ? 'own' : 'free', owner: other && i === 1 ? THEM : null }));
 const never = new Promise(() => {});
-// o: { account, url (the URL address), state (snapshot over), status (an answer or an Error or 'hang'), proxied, alerts, params, keysAnswer }
+// The real help icon markup (script.js helpIcon) and a real manage panel on a fake chain (test/helpers/manage-fake-chain.js).
+const helpIcon = (slug, label) => `<a href="/help/${slug}" class="help-inline-icon" title="${escapeHtml(label || '')}" aria-label="${escapeHtml(label || '')}"><i class='bx bx-help-circle'></i></a>`;
+const shortAddr = (a) => a.slice(0, 8) + '\u2026' + a.slice(-6);
+// o: { account, url (the URL address), state (snapshot over), status (an answer or an Error or 'hang'), proxied, alerts, params, keysAnswer, manage }
 function vworld(o = {}) {
-    const window = new Window({ url: 'https://explorer.test/validate', width: 1280, settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
+    const window = new Window({ url: 'https://explorer.test/validate', width: o.width || 1280, settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
     const doc = window.document;
     doc.body.innerHTML = VALIDATE_SHELL;
     for (const img of doc.querySelectorAll('img')) if (!/^data:/.test(img.getAttribute('src') || '')) img.setAttribute('src', logoUri);
@@ -177,22 +190,25 @@ function vworld(o = {}) {
             }
             throw new Error('unexpected ' + u);
         },
-        helpIcon: () => '', esc: escapeHtml, shortAddr: (a) => a.slice(0, 6) + '...' + a.slice(-6), navigate: () => {}
+        helpIcon, esc: escapeHtml, shortAddr, navigate: () => {}
     };
+    if (o.manage) d.manage = { account, getApi: () => fakeManageApi(ME, VKEYS), isMultisig: () => false, revision: () => 'r1', submit: () => {}, fetchJson: d.fetchJson, esc: escapeHtml, helpIcon, shortAddr, isAddress: () => true, isSame: (a, b) => a === b, apiWaitMs: 50 };
     const qa = (sel) => Array.from(doc.querySelectorAll(sel));
     const visible = (el) => !!el && !el.closest('[hidden]');
     return { window, doc, root, d, qa, visible, q: (sel) => doc.querySelector(sel) };
 }
 const tickv = (ms = 30) => new Promise(r => setTimeout(r, ms));
-const hub = (o = {}, steps = async () => {}) => async () => { const w = vworld(o); const p = mountValidatePage(w.root, w.d); await (o.status === 'hang' ? tickv(20) : p); await tickv(30); await steps(w); return w; };
+const hub = (o = {}, steps = async () => {}) => async () => { const w = vworld(o); const p = mountValidatePage(w.root, w.d); await (o.status === 'hang' ? tickv(20) : p); await tickv(o.manage ? 120 : 30); await steps(w); return w; };
 const keysPage = (o = {}, steps = async () => {}) => async () => { const w = vworld(o); await mountKeysPage(w.root, w.d); await tickv(20); await steps(w); return w; };
 const submitKeys = (value) => async (w) => { w.q('#validate-keys-input').value = value; w.q('#validate-keys-form').dispatchEvent(new w.window.Event('submit', { cancelable: true })); await tickv(30); };
 const VALIDATE_SCENES = [
     { id: 'hub-no-wallet', primary: 1, need: '.validate-connect', build: hub({ account: { status: 'none', address: '' } }) },
     { id: 'hub-not-bonded', primary: 1, need: '.validate-path', build: hub({ state: NOT_BONDED }) },
-    { id: 'hub-keys-not-validating', primary: 1, need: '.validate-path', build: hub({ state: { intent: false, prefs: null, inQueued: false, inSession: false, exposure: null } }) },
-    { id: 'hub-active', primary: 0, need: '.validate-tiles', build: hub({}) },
-    { id: 'hub-waiting', primary: 0, need: '.validate-tiles', build: hub({ state: { inQueued: false, inSession: false, exposure: null } }) },
+    { id: 'hub-keys-not-validating', primary: 1, need: '.validate-path', build: hub({ state: { intent: false, prefs: null, inQueued: false, inSession: false, exposure: null, points: null } }) },
+    { id: 'hub-active', primary: 0, need: '#validate-manage-slot .validate-manage', build: hub({ manage: true }) },
+    // The phone view of an own active stash: the compact path, the lookup folded behind its summary (375 only).
+    { id: 'hub-active-compact', primary: 0, widths: [375], need: '.validate-lookup-fold', build: hub({ manage: true, width: 375 }) },
+    { id: 'hub-waiting', primary: 0, need: '.validate-tiles', build: hub({ state: { inQueued: false, inSession: false, exposure: null, points: null } }) },
     { id: 'hub-disabled-slashed', primary: 0, need: '.validate-tiles', build: hub({ state: { disabled: true, lastSlashEra: 510 } }) },
     { id: 'hub-offline', primary: 0, need: '.validate-tiles', build: hub({ state: { heartbeat: false, blocks: 0, sessionProgress: 0.9, incidents: [{ kind: 'imOnline.SomeOffline' }] } }) },
     { id: 'hub-loading', primary: 0, need: '.validate-skeleton', build: hub({ status: 'hang' }) },
@@ -217,14 +233,49 @@ function checkValidateScene(w, s, err) {
     if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
 }
 
+// ── the header: the real rule (lib/ui-parts.js headerLook), drawn as script.js refreshConnectWalletButton draws it ──
+// WP1 scenes are the chooser (always a page primary); WP2 scenes read the page for a visible primary.
+function sceneHeader(w, s, wp) {
+    const connected = s.connected || (w.d && w.d.account && w.d.account.status === 'connected' ? w.d.account.address : '');
+    const pagePrimary = wp === 1 ? true : w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length > 0;
+    return { connected, look: headerLook({ connected: !!connected, pagePrimary }) };
+}
+function paintHeader(w, s, wp) {
+    const { connected, look } = sceneHeader(w, s, wp);
+    const btn = w.doc.querySelector('#connect-wallet-btn'), label = w.doc.querySelector('#connect-wallet-label'), sub = w.doc.querySelector('#connect-wallet-sub');
+    if (!btn) return;
+    btn.classList.toggle('is-connected', look === 'connected');
+    btn.classList.toggle('is-outline', look === 'outline');
+    if (label) label.textContent = look === 'connected' ? 'My Account' : 'Connect Wallet';
+    if (sub) { sub.textContent = look === 'connected' ? shortAddr(connected) : ''; sub.style.display = look === 'connected' ? 'block' : 'none'; }
+}
+function checkHeader(w, s, wp, err) {
+    const btn = w.doc.querySelector('header.topbar #connect-wallet-btn');
+    if (!btn) return;
+    const { look } = sceneHeader(w, s, wp);
+    const drawn = btn.classList.contains('is-connected') ? 'connected' : btn.classList.contains('is-outline') ? 'outline' : 'solid';
+    if (drawn !== look) err.push(`the header is drawn ${drawn}, the page rule says ${look}`);
+}
+
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
-async function renderScene(s, check = null) {
+const wpOf = (s) => (WALLET_SCENES.includes(s) || WALLET_SCENES.some(x => x.id === s.id) ? 1 : 2);
+// A scene's world, header drawn: for the tests (test/validate-fidelity.test.js) and renderScene.
+export async function sceneWorld(wp, id) {
+    const s = WORK_PACKAGES[wp].scenes.find(x => x.id === id);
+    if (!s) throw new Error(`no scene ${id} in work package ${wp}`);
     const w = await s.build();
+    paintHeader(w, s, wp);
+    return w;
+}
+async function renderScene(s, check = null, { paint = true } = {}) {
+    const w = await s.build();
+    if (paint) paintHeader(w, s, wpOf(s));
     const err = [];
+    checkHeader(w, s, wpOf(s), err);
     const app = w.doc.querySelector('.app-container');
     if (!app) err.push('no .app-container');
     if (check) {
@@ -312,6 +363,7 @@ async function guardSelfTest() {
     await expectFail('remote image', async () => checkFile(ok.replace('srcdoc="', 'srcdoc="&lt;img src=&quot;logo.png&quot;&gt;')), /not a data: URI|byte for byte/);
     await expectFail('styles.css changed', async () => checkFile(ok.replace('.wallet-ext-tile {', '.wallet-ext-tile  {')), /byte for byte/);
     await expectFail('font without data source', async () => checkFile(ok.replace(/@font-face \{ font-family: 'Inter'/g, "@font-face { font-family: 'Other'")), /Inter @font-face/);
+    await expectFail('header not drawn by the rule', () => renderScene(one, null, { paint: false }), /the header is drawn solid, the page rule says outline/);
     const hubScene = VALIDATE_SCENES[1];
     await expectFail('hub: two primaries', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('.validate-path-link').classList.add('validate-primary'); return w; } }, checkValidateScene), /2 primary actions visible/);
     await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);
@@ -331,7 +383,7 @@ async function main() {
         for (const s of wp.scenes) {
             if (only && s.id !== only) continue;
             const inner = await renderScene(s, wp.check);
-            for (const width of WIDTHS) { const html = sceneFile(s.id, inner, width); checkFile(html); files.push([`wp${n}-${s.id}-${width}.html`, html]); }
+            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width); checkFile(html); files.push([`wp${n}-${s.id}-${width}.html`, html]); }
         }
         if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); files.push([`wp${n}-palette.html`, html]); }
     }
@@ -340,4 +392,6 @@ async function main() {
     console.log(`wrote ${files.length} files to ${out}`);
     return 0;
 }
-try { process.exit(await main()); } catch (e) { console.error('REFUSED, no file written:\n' + e.message); process.exit(1); }
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+    try { process.exit(await main()); } catch (e) { console.error('REFUSED, no file written:\n' + e.message); process.exit(1); }
+}

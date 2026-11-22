@@ -30,6 +30,7 @@ import { createScrollMemory } from '../../lib/scroll-reset.js';
 import * as txSubmit from '../../lib/tx-submit.js';
 import { Window } from 'happy-dom';
 import { escapeHtml } from '../../lib/html-escape.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR } from '../../lib/ui-parts.js';
 import { closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml, createRouteScope, walletDashboardSeo } from '../../lib/wallet-aware.js';
 
 const SCRIPT = readFileSync(new URL('../../script.js', import.meta.url), 'utf8');
@@ -128,7 +129,7 @@ const LIFTED = [
     'getInjectedAccounts', 'connectWallet', 'openWalletPicker', 'selectWallet', 'revokeDiscussSession', 'reconcileDiscussSession', 'logoutDiscussToken', 'disconnectWallet',
     'initWalletPage', 'tryAutoSelectFirstWallet', 'renderWalletConnectPanel', 'invalidateWalletFetch', 'fetchWalletDashboard',
     // Sprint 7: the header button's look while the chooser is open, and the title following the session.
-    'markWalletChooserOpen', 'refreshWalletPageTitle',
+    'markWalletChooserOpen', 'markHeaderOutline', 'refreshWalletPageTitle',
     'getDiscussSession', 'discussAuthStore', 'getWalletSigner', 'resolveWalletSigner', 'navigateTo', 'readSafeReturnTo',
     // WalletConnect wiring (lib/walletconnect-gate.js is replaced by profile.wcGate):
     // The legacy multisig signer lookup (the review's "Find my signer" click):
@@ -181,7 +182,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
     const ctx = {
         console, Promise, Object, JSON, URLSearchParams, Array, Map, Set, setTimeout, clearTimeout, setInterval, clearInterval, encodeURIComponent, String, Number,
         encodeAddress, decodeAddress, isValidPolkadexAddress, createWalletSession, pickSigningAccount, orderSources, WALLET_KEYS,
-        createSourceRegistry, detectSources, signingKeys, findSigner,
+        createSourceRegistry, detectSources, signingKeys, findSigner, headerLook, PAGE_PRIMARY_SELECTOR,
         createDiscussAuth, signInForDiscussion, WALLET_CHANGED_STALE: txSubmit.WALLET_CHANGED_STALE,
         mountWalletPicker, sourceLabel,
         closeSigningModals, selfManagedRoute, pickerTarget, viewingBannerHtml,
@@ -252,6 +253,7 @@ export function openTab(profile, { path = '/wallet', search = '' } = {}) {
     const prelude = `
         const DISCUSS_TOKEN_KEY = 'pdex_discuss_session';
         const WALLET_STORAGE_KEY = 'pdex_wallet_address', LAST_USED_ADDRESS_KEY = 'pdex_last_used_wallet_address', SKIP_AUTO_PICK_KEY = 'pdex_skip_wallet_auto_pick';
+        let walletChooserOpen = false, validatePageOpen = false;   // script.js: the header outline rule (markHeaderOutline)
         let walletActionsBlockedReason = null, walletEntryIntent = null, _walletSigningRecheckTimer = null, walletFetchGen = 0, walletMenu = null;
         const walletSession = createWalletSession({ storage: localStorage, toAddress: toPolkadexAddress, isSame: isSameAddress, isValid: isValidPolkadexAddress,
             revokeDiscuss: () => revokeDiscussSession(), onChange: () => onWalletChanged() });

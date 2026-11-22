@@ -28,13 +28,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 import { encodeAddress } from '@polkadot/util-crypto';
-import { decorateExtrinsics } from '@polkadot/types/metadata/decorate';
 import { mountValidatePage } from '../../lib/validator-status-view.js';
 import { validatorStatusModel } from '../../lib/validator-status.js';
 import { EXPECTED_LAYOUT } from '../../lib/session-keys.js';
 import { renderCallHtml } from '../../lib/call-args-format.js';
 import { callToTree } from '../../lib/call-tree.js';
-import { registryFromMetadata, loadFixture } from './extrinsic-builders.js';
+import { fakeManageApi } from './manage-fake-chain.js';
 import { escapeHtml } from '../../lib/html-escape.js';
 
 const root = new URL('../../', import.meta.url);
@@ -75,33 +74,15 @@ function boxiconsCss() {
 const STYLES = rd('styles.css');
 const APP_CSS = interCss() + '\n' + STYLES + '\n' + boxiconsCss();
 
-// ── a fake chain: real spec 393 codecs for the calls, synthetic state ──
-const registry = registryFromMetadata(loadFixture('metadata-testnet-393.json').metadata);
-const ex = decorateExtrinsics(registry, registry.metadata, 15);
+// ── a fake chain: real spec 393 codecs for the calls, synthetic state (test/helpers/manage-fake-chain.js) ──
 const STASH = encodeAddress(new Uint8Array(32).fill(211), 88);
 const PDEX = 10n ** 12n;
 const rep = (b, n) => b.repeat(n);
 const KEYS = { grandpa: '0x' + rep('11', 32), babe: '0x' + rep('22', 32), im_online: '0x' + rep('33', 32), authority_discovery: '0x' + rep('44', 32), mixnet: '0x' + rep('55', 32), beefy: '0x02' + rep('66', 32) };
 const NEWKEYS = { grandpa: '0x' + rep('a1', 32), babe: '0x' + rep('b2', 32), im_online: '0x' + rep('77', 32), authority_discovery: '0x' + rep('c3', 32), mixnet: '0x' + rep('d4', 32), beefy: '0x03' + rep('e5', 32) };
 const NEWBLOB = '0x' + EXPECTED_LAYOUT.map(l => NEWKEYS[l.name].slice(2)).join('');
-const opt = (v) => (v == null ? { isSome: false, isNone: true } : { isSome: true, isNone: false, unwrap: () => v });
-const num = (v) => ({ toNumber: () => Number(v), toString: () => String(v), toBigInt: () => BigInt(v) });
-const keysCodec = (k) => ({ toJSON: () => ({ grandpa: k.grandpa, babe: k.babe, imOnline: k.im_online, authorityDiscovery: k.authority_discovery, mixnet: k.mixnet, beefy: k.beefy }) });
-function fakeApi() {
-    const validators = async () => ({ commission: num(50_000_000), blocked: { isTrue: false } });
-    validators.size = async () => num(5);
-    const tx = new Proxy(ex, { get: (t, sec) => new Proxy(t[sec], { get: (p, m) => (...args) => { const c = p[m](...args); c.paymentInfo = async () => ({ partialFee: num(15_800_000_000n) }); return c; } }) });
-    return { registry, tx, runtimeVersion: { specVersion: num(393) },
-        consts: { balances: { existentialDeposit: num(PDEX) }, staking: { maxUnlockingChunks: num(32), bondingDuration: num(28), sessionsPerEra: num(6) } },
-        query: {
-            system: { account: async () => ({ data: { free: num(2_400n * PDEX), reserved: num(48_000n * PDEX), frozen: num(0) } }) },
-            staking: { minValidatorBond: async () => num(100n * PDEX), minCommission: async () => num(0), minNominatorBond: async () => num(10n * PDEX), currentEra: async () => opt(num(1210)),
-                bonded: async () => opt(STASH), ledger: async () => opt({ stash: STASH, total: num(48_000n * PDEX), active: num(48_000n * PDEX), unlocking: [] }),
-                validators, nominators: async () => opt(null), payee: async () => registry.createType('Option<RewardDestination>', 'Staked') },
-            session: { nextKeys: async () => opt(keysCodec(KEYS)), queuedKeys: async () => [], keyOwner: async () => opt(null) },
-            proxy: { proxies: async () => [[], num(0)] }
-        } };
-}
+const fakeApi = () => fakeManageApi(STASH, KEYS);
+
 const PARAMS = { specVersion: 393, layout: { ok: true, bytes: 193, hexLength: 388 }, minValidatorBond: String(100n * PDEX), minCommission: 0, lowestElectedTotal: String(41_250n * PDEX), medianCommission: 30_000_000,
     sessionProgress: 0.4, epochDuration: 1200, blockTimeMs: 12000, activeEra: 1210, currentEra: 1210, electionPhase: 'Off', sessionsPerEra: 6 };
 // The status model from the real lib/validator-status.js: an active validator, heartbeat received.

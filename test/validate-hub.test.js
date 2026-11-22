@@ -545,7 +545,7 @@ describe('the keys page (/validate/keys)', () => {
     });
     test('13: script.js mounts the keys page on /validate/keys with its own title; the sitemap lists it with the public guide', () => {
         const script = stripComments(readRepo('script.js', import.meta.url));
-        assert.match(script, /if \(address === 'keys'\) \{ updateSeoMeta\('validate', \{ title: KEYS_PAGE_TITLE, canonicalPath: '\/validate\/keys' \}\); return mountKeysPage\(document\.getElementById\('validate-root'\), \{/);
+        assert.match(script, /if \(address === 'keys'\) \{ updateSeoMeta\('validate', \{ title: KEYS_PAGE_TITLE, canonicalPath: '\/validate\/keys' \}\); return settleHeader\(mountKeysPage\(document\.getElementById\('validate-root'\), \{/);   // amended (fidelity review 4): the header re-reads the page primary
         assert.match(script, /import \{ mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE \} from '\.\/lib\/validator-status-view\.js'/);
         assert.ok(readRepo('script.js', import.meta.url).split('\n').length <= 15000);
         assert.ok(validateSitemapRoutes(true, []).some(r => r.path === '/validate/keys'));

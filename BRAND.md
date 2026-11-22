@@ -65,6 +65,8 @@ has an icon and a word.
 | Blue `#148FE8` | guidance: how-to, timing, "why" | `--accent-blue-text` `#4FABEE` |
 | Red `#FF4D4D` | failure or loss: failed, blocked, invalid | `--accent-red` |
 
+The full roles table (what each colour may appear as, and where it never appears) is in the design spec `2026-11-21-validate-redesign-and-colour-roles.md`, section 2.1.
+
 Tokens live in the `:root` block of `styles.css` (`--accent-*`, with `-tint`, `-line` and `-wash` variants, and
 `--warning`); the shared parts are the `ui-*` classes (`ui-chip`, `ui-tile`, `ui-step`, `ui-dot`, `ui-panel`,
 `ui-trust`, `ui-hairline`). The explorer is dark only; light values are not shipped.

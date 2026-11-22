@@ -862,7 +862,7 @@ h1, h2, h3 { font-weight: 600; }
     .mobile-top-bar .logo span { display: none; } /* Hide logo text on phones to prevent wrapping and height bleeding */
     /* The topbar must fit 375 px: Donate folds to its heart (the link keeps its title). */
     .donate-btn span { display: none; }
-    .donate-btn { padding: 8px 10px; }
+    .donate-btn { padding: 8px 10px; min-width: 44px; min-height: 44px; justify-content: center; box-sizing: border-box; }
     
     /* Table Optimization */
     .validators-table th, .validators-table td {
@@ -4779,8 +4779,9 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-viewing-note .item-link:hover,
 .wallet-connect-note .item-link:hover { color: var(--brand-primary); }
 /* Nothing connected on /wallet/<address> (lib/wallet-aware.js notConnectedNoteHtml). */
-.wallet-viewing-note.is-readonly { padding: 12px 16px; border: 1px solid var(--border-hover); border-radius: var(--radius-sm); background: rgba(230, 0, 122, 0.08); color: var(--text-primary); }
-.wallet-viewing-note.is-readonly .bx { font-size: 16px; vertical-align: -2px; color: var(--brand-primary); }
+/* Read only is attention, not an action: amber (fidelity review 7). */
+.wallet-viewing-note.is-readonly { padding: 12px 16px; border: 1px solid var(--accent-amber-line); border-radius: var(--radius-sm); background: linear-gradient(var(--accent-amber-wash), var(--accent-amber-wash)), var(--bg-surface); box-shadow: inset 3px 0 0 var(--accent-amber); color: var(--text-primary); }
+.wallet-viewing-note.is-readonly .bx { font-size: 16px; vertical-align: -2px; color: var(--accent-amber); }
 #wallet-switch-btn[hidden] { display: none; }
 
 /* ── Colour roles: the shared ui-* parts (spec 2026-11-21, section 2.4) ──
@@ -5220,7 +5221,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-keys-input[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .validate-alert .bx { color: var(--accent-red); font-size: 20px; vertical-align: -4px; }
-.validate-alert { padding: 12px 16px; border: 1px solid rgba(255, 77, 77, 0.35); border-radius: var(--radius-sm); background: rgba(255, 77, 77, 0.08); color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
+.validate-alert { padding: 12px 16px; border: 1px solid var(--accent-red-line); border-radius: var(--radius-sm); background: var(--accent-red-wash); color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
 .validate-mismatch { margin: 0; }
 .validate-keys-table td { overflow-wrap: anywhere; }
 .validate-keys-table tbody th { padding: 13px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 0.85rem; font-weight: 400; text-align: left; color: var(--text-primary); vertical-align: middle; overflow-wrap: anywhere; }
@@ -5324,6 +5325,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-msg.is-ok .bx { color: var(--accent-green); }
 .validate-lookup-row input[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-trust { flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color); }
+.validate-hub > .validate-trust { margin-top: 0; }
 .validate-trust > p { flex: 1 1 240px; }
 .validate-disclosure summary { cursor: pointer; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
 .validate-disclosure summary::marker { color: var(--accent-violet-text); }
@@ -5350,6 +5352,24 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-path.is-compact { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .validate-path.is-compact .validate-path-card { align-items: center; padding: 0; border: 0; background: none; min-height: 0; }
 .validate-path.is-compact .validate-path-card::after { display: none; }
+.validate-path.is-compact .validate-path-link { margin-top: 0; }
+.validate-path.is-compact .validate-path-link::before { border-radius: var(--radius-sm); }
+/* The lookup field grows beside its button (fidelity review 13); the input-actions wrapper is the flex item. */
+.validate-lookup-row > .ia-wrap { flex: 1 1 160px; min-width: 0; }
+.validate-lookup-row > .ia-wrap > input { width: 100%; box-sizing: border-box; }
+.validate-lookup-fold { flex: 1 1 100%; min-width: 0; }
+.validate-lookup-fold > summary { min-height: 44px; display: flex; align-items: center; }
+.validate-lookup-fold[open] > .validate-lookup { margin-top: 8px; }
+.validate-note-slot:empty { display: none; }
+/* The manage panel in its own card (fidelity review 22): the whole row, no top rule of its own. */
+.validate-cards > .validate-manage-card { grid-column: 1 / -1; padding: 24px; }
+.validate-manage-card > .validate-manage { margin-top: 0; padding-top: 0; border-top: 0; }
+.validate-keys-body .validate-keys-holds { font-size: 0.82rem; color: var(--text-secondary); }
+.validate-keys-names { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The View button in "View any address" is a secondary, not a second pink fill (fidelity review 18). */
+.wallet-picker-view-bar button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: rgba(255, 255, 255, 0.05); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.82rem; font-weight: 600; font-family: inherit; cursor: pointer; }
+.wallet-picker-view-bar button:hover { opacity: 1; background: rgba(255, 255, 255, 0.05); border-color: var(--border-hover); }
+.brand-role { display: inline-flex; align-items: center; gap: 8px; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
 .validate-connect { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 16px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-surface); }
 .validate-connect p { flex: 1 1 240px; margin: 0; font-size: 0.9rem; color: var(--text-primary); }
 .validate-dash[hidden] { display: none; }
@@ -5408,6 +5428,9 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .validate-hub > .list-container, .validate-cards > div > .list-container { padding: 16px; }
     .validate-lookup { flex-basis: 100%; }
     .validate-lookup .validate-lookup-row input { flex-basis: 100%; }
+    .validate-lookup-row > .ia-wrap { flex-basis: 100%; }
+    .validate-cards > .validate-manage-card { padding: 16px; }
+    .validate-path.is-compact .validate-path-link { min-height: 44px; }
     .validate-lookup .validate-secondary { width: 100%; min-height: 44px; justify-content: center; }
     .validate-path { grid-template-columns: 1fr; gap: 0; }
     .validate-path-card { min-height: 56px; border-radius: 0; border-width: 0 0 1px; background: none; padding: 12px 0; }

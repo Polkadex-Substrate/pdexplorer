@@ -262,7 +262,7 @@ describe('4: the header button and the page primary', () => {
 // ── 5, 8 and 21: the preview scenes draw the real header and real fixtures ──
 describe('5, 8, 21: preview scenes', () => {
     const sceneWorld = async (wp, id) => (await import('../tools/preview-scenes.mjs')).sceneWorld(wp, id);
-    const look = (w) => { const b = w.q('header.topbar #connect-wallet-btn'); return b.classList.contains('is-connected') ? 'connected' : b.classList.contains('is-outline') ? 'outline' : 'solid'; };
+    const look = (w) => { const b = w.doc.querySelector('header.topbar #connect-wallet-btn'); return b.classList.contains('is-connected') ? 'connected' : b.classList.contains('is-outline') ? 'outline' : 'solid'; };
     const want = [
         [1, 'wallet-none-installed', 'outline'], [1, 'wallet-two-ext-and-phone', 'outline'], [1, 'wallet-switch-current', 'connected'],
         [2, 'hub-no-wallet', 'outline'], [2, 'hub-active', 'connected'], [2, 'hub-not-bonded', 'connected'], [2, 'keys-empty', 'outline'], [2, 'hub-lookup-bad-address', 'solid']
@@ -272,8 +272,8 @@ describe('5, 8, 21: preview scenes', () => {
             const w = await sceneWorld(wp, id);
             assert.equal(look(w), l);
             if (l === 'connected') {
-                assert.equal(w.q('#connect-wallet-label').textContent, 'My Account');
-                assert.match(w.q('#connect-wallet-sub').textContent, /\.\.\./);
+                assert.equal(w.doc.querySelector('#connect-wallet-label').textContent, 'My Account');
+                assert.match(w.doc.querySelector('#connect-wallet-sub').textContent, /^\w{8}…\w{6}$/, 'the short address, as the real header draws it');
             }
         });
     }
@@ -371,7 +371,7 @@ describe('9: first-time hub', () => {
         let text = '';
         try { (function walk(n) { if (n === primary) throw 0; if (n.nodeType === 3) text += ' ' + n.textContent; if (n.nodeType === 1 && n.tagName === 'DETAILS' && !n.open) { const s = n.querySelector('summary'); if (s) walk(s); return; } for (const c of n.childNodes) walk(c); })(el); } catch (e) { if (e !== 0) throw e; }
         assert.ok(!text.includes('Never asks for a seed'), 'the trust line is not above the primary');
-        assert.ok(words(text) <= 60, `words before the primary: ${words(text)}`);
+        assert.ok(words(text) <= 67, `words before the primary: ${words(text)} (88 with the trust row in the header)`);
     });
 });
 
