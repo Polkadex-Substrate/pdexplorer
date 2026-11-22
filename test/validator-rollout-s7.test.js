@@ -550,17 +550,17 @@ describe('A2 mountManageLink: the secondary button on the validator page', () =>
         const a = el.querySelector('a');
         assert.equal(a.textContent, MANAGE_LINK_TEXT);
         assert.equal(MANAGE_LINK_TEXT, 'Manage this validator');
-        assert.equal(a.getAttribute('href'), '/validate');
+        assert.equal(a.getAttribute('href'), '/validate#validate-manage-title');   // Q27
         assert.ok(a.classList.contains('validate-secondary'));
         assert.equal(el.querySelectorAll('.validate-primary').length, 0);
     });
     test('the controller and a Staking proxy: a link to /validate/<stash>', async () => {
         const c = pageDom();
         await mountManageLink(c.el, linkDeps({ account: { status: 'connected', address: CTRL } }));
-        assert.equal(c.el.querySelector('a').getAttribute('href'), '/validate/' + S1);
+        assert.equal(c.el.querySelector('a').getAttribute('href'), '/validate/' + S1 + '#validate-manage-title');
         const p = pageDom();
         await mountManageLink(p.el, linkDeps({ readProxies: async () => [{ delegate: ME, type: 'Staking', delay: 0 }] }));
-        assert.equal(p.el.querySelector('a').getAttribute('href'), '/validate/' + S1);
+        assert.equal(p.el.querySelector('a').getAttribute('href'), '/validate/' + S1 + '#validate-manage-title');
     });
     test('a multisig member: the button switches to the multisig wallet, then opens its dashboard', async () => {
         const { el } = pageDom();

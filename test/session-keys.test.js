@@ -218,7 +218,7 @@ describe('classifyKeyOwners: Session.KeyOwner and Session.QueuedKeys, per key', 
         const r = classifyKeyOwners(keys, { owners: none, queued: [], stash: STASH, nextKeys: null, isSame: same });
         assert.equal(r.conflict, false);
         assert.ok(r.rows.every(x => x.result === 'free'));
-        assert.equal(keyCheckSummary(r, keys), '6 keys, 193 bytes, none registered to another account.');
+        assert.equal(keyCheckSummary(r, keys), 'These 6 keys are free to register.');
     });
     test('owned by this stash: fine, and identical to NextKeys means already registered', () => {
         const nextKeys = Object.fromEntries(keys.map(k => [k.name, k.hex]));

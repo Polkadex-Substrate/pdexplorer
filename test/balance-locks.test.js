@@ -170,6 +170,9 @@ describe('the fee follows reducible_balance: a hold covers a lock (spec 393 Fung
         const m = describeAccountLocks(snap({ free: s(100n * PDEX), reserved: s(50n * PDEX), frozen: s(300n * PDEX),
             locks: [{ id: 'democrac', amount: s(300n * PDEX), reasons: 'All' }], holds: [{ id: 'Staking.Staking', amount: s(50n * PDEX) }],
             staking: { bonded: true, total: s(50n * PDEX), active: s(50n * PDEX), unlocking: '0' } }));
+        const staked = m.items.find(i => i.id === 'staking ');
+        assert.match(staked.unlock, /^Unstake from My Account, wait the unbonding period, then withdraw it here\./);   // Q9
+        assert.doesNotMatch(staked.unlock, /wallet dashboard|Withdraw unbonded/);
         assert.equal(m.balance.transferable, '0');
         assert.equal(m.balance.canPayFee, false);
         assert.equal(m.balance.feeTopUp, s(150n * PDEX + FEE_MARGIN));
@@ -359,8 +362,8 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         assert.doesNotMatch(r.reason, /\b39\d\b/, 'version-neutral: no spec number in user copy');
         // Since staking.migrateCurrency was confirmed permissionless for an
         // unbonded stash (pallet-staking 45.1.0), the row offers the fix.
-        assert.match(r.unlock, /Remove leftover staking lock/);
-        assert.match(r.unlock, /refunded/);
+        assert.equal(r.unlock, 'Use Remove leftover staking lock below. Anyone can submit it, and the fee is refunded when it succeeds. The PDEX still belongs to this account.');   // Q10
+        assert.doesNotMatch(r.unlock, /migrateCurrency/);
         assert.doesNotMatch(r.unlock, /preparing a fix/);
         assert.equal(r.link.href, `/help/${LOCK_HELP_SLUG}`);
         assert.equal(m.balance.transferable, s(P(619.9975)));
@@ -418,7 +421,8 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         const r = item(m, i => i.id === 'phrelect');
         assert.match(r.source, /[Cc]ouncil/);
         assert.match(r.reason, /3 candidates/);
-        assert.match(r.unlock, /removeVoter/);
+        assert.equal(r.unlock, 'Use Remove council vote below. The lock and the voting deposit are released at once.');
+        assert.doesNotMatch(r.unlock, /elections\./);   // Q11: no call name in the sentence
         const d = item(m, i => i.kind === 'deposit' && /voting deposit/i.test(i.source));
         assert.equal(d.amount, s(PDEX));
         assert.equal(m.unattributedReserved, '0');
