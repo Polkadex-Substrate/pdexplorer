@@ -15,6 +15,8 @@
 //
 // Later work packages add their scenes to the WORK_PACKAGES table below (a scene is { id, primary, build }; a
 // package may bring its own page guard as `check`). WP2: the Validate hub, the dashboard and /validate/keys.
+// WP3: the setup wizard, the separate steps, the manage panel (in its own card) and the node guide, driven
+// through test/helpers/wp3-world.js; a scene may name an element to scroll to (`scroll`), set on load.
 //
 // Guards: a file is not written when a scene lacks a required element, when the scene shows the wrong
 // number of primary actions, when styles.css is not inlined byte for byte, or when any stylesheet, script,
@@ -41,6 +43,7 @@ import { EXPECTED_LAYOUT } from '../lib/session-keys.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { headerLook, PAGE_PRIMARY_SELECTOR } from '../lib/ui-parts.js';
 import { fakeManageApi } from '../test/helpers/manage-fake-chain.js';
+import { buildState } from '../test/helpers/wp3-world.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -233,6 +236,53 @@ function checkValidateScene(w, s, err) {
     if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
 }
 
+// ── WP3 scenes: wizard, separate steps, manage, node guide (spec section 8) ──
+// The real mounts in the real shell; the manage panel in its own card, as the hub mounts it (fidelity review 22).
+const manageSlot = (p) => {
+    p.el.innerHTML = '<div class="validate-hub"><div class="validate-cards"><div id="validate-manage-slot" class="list-container glass validate-manage-card"></div></div></div>';
+    return p.doc.getElementById('validate-manage-slot');
+};
+const wp3 = (state, extra = {}) => async () => {
+    const w = await buildState(state, { shell: VALIDATE_SHELL, ...extra });
+    w.root = w.doc.getElementById('validate-root');
+    w.qa = (sel) => Array.from(w.doc.querySelectorAll(sel));
+    w.q = (sel) => w.doc.querySelector(sel);
+    w.visible = (el) => !!el && !el.closest('[hidden]');
+    return w;
+};
+const WP3_SCENES = [
+    { id: 'wizard-step1', primary: 1, need: '.validate-setup .validate-path.is-compact', build: wp3('wiz-step1') },
+    { id: 'wizard-step2', primary: 1, need: '#validate-setup-keys', build: wp3('wiz-step2-parsed') },
+    { id: 'wizard-step3', primary: 1, need: '.validate-stash-notes', build: wp3('wiz-step3') },
+    { id: 'wizard-step4', primary: 1, need: '#validate-setup-commission', build: wp3('wiz-step4-warn') },
+    { id: 'wizard-step5-review', primary: 1, need: '.validate-warnings.ui-panel.is-warn', build: wp3('wiz-review-ack') },
+    { id: 'wizard-review-multisig', primary: 1, need: '.validate-warnings', build: wp3('wiz-review-multisig') },
+    { id: 'wizard-signing', primary: 1, need: '[data-setup-action="sign"][disabled]', build: wp3('wiz-signing') },
+    { id: 'wizard-done', primary: 1, need: '.ui-panel.is-ok', build: wp3('wiz-result-applied') },
+    { id: 'steps-S0', primary: 1, need: '.validate-stepwise-panel', build: wp3('steps-S0') },
+    { id: 'steps-S2', primary: 1, need: '#validate-stepwise-status[data-state="S2"]', build: wp3('steps-S2') },
+    { id: 'steps-S4', primary: 1, need: '.validate-stepwise-stop', build: wp3('steps-S4-bonded') },
+    { id: 'steps-S6', primary: 1, need: '.validate-word.is-error', build: wp3('steps-S6') },
+    { id: 'steps-S7', primary: 0, need: '[data-setup-action="step-check"]', build: wp3('steps-S7') },
+    { id: 'steps-S8', primary: 0, need: '.validate-alert', build: wp3('steps-S8') },
+    { id: 'steps-S9', primary: 1, need: '#validate-stepwise-status.is-warn', build: wp3('steps-S9') },
+    { id: 'steps-S10', primary: 1, need: '.validate-stepwise-done', build: wp3('steps-S10') },
+    { id: 'manage-idle', primary: 0, need: '#validate-manage-slot .validate-manage-actions', build: wp3('man-idle', { slot: manageSlot }) },
+    { id: 'manage-rotate-keys', primary: 1, need: '#validate-manage-keys', build: wp3('man-keys', { slot: manageSlot }) },
+    { id: 'manage-stop', primary: 1, need: '.validate-manage-facts', build: wp3('man-chill', { slot: manageSlot }) },
+    { id: 'manage-pending-multisig', primary: 0, need: '.validate-manage-pending', build: wp3('man-ms-pending', { slot: manageSlot }) },
+    { id: 'guide-top', primary: 1, need: '.validate-guide .validate-path.is-compact', build: wp3('guide-pending') },
+    { id: 'guide-step-commands', primary: 1, need: '[aria-labelledby="node-step-client"] .validate-cmd', scroll: '#node-step-client', build: wp3('guide-published') },
+    { id: 'guide-end', primary: 1, need: '.validate-guide-next', scroll: '.validate-guide-next', build: wp3('guide-pending') }
+];
+function checkWp3Scene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-validate')) err.push('no active #nav-validate in the sidebar');
+    if (!w.doc.querySelector('.page-section[data-page="validate"] #validate-root')) err.push('no #validate-root');
+    const n = w.qa('.validate-primary').filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+
 // ── the header: the real rule (lib/ui-parts.js headerLook), drawn as script.js refreshConnectWalletButton draws it ──
 // WP1 scenes are the chooser (always a page primary); WP2 scenes read the page for a visible primary.
 function sceneHeader(w, s, wp) {
@@ -258,11 +308,11 @@ function checkHeader(w, s, wp, err) {
 }
 
 // ── work packages: later rounds add theirs here ──
-const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene } };
+const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
-const wpOf = (s) => (WALLET_SCENES.includes(s) || WALLET_SCENES.some(x => x.id === s.id) ? 1 : 2);
+const wpOf = (s) => (WALLET_SCENES.some(x => x.id === s.id) ? 1 : WP3_SCENES.some(x => x.id === s.id) ? 3 : 2);
 // A scene's world, header drawn: for the tests (test/validate-fidelity.test.js) and renderScene.
 export async function sceneWorld(wp, id) {
     const s = WORK_PACKAGES[wp].scenes.find(x => x.id === id);
@@ -294,11 +344,13 @@ async function renderScene(s, check = null, { paint = true } = {}) {
     if (err.length) throw new Error(`scene "${s.id}": ${err.join('; ')}`);
     return app.outerHTML;
 }
-const frameDoc = (inner) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style id="app-css">${APP_CSS}</style></head><body>${inner}</body></html>`;
+// scroll: a selector the frame scrolls to once it has loaded (a scene of the middle or the end of a long page).
+const frameDoc = (inner, scroll = '') => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style id="app-css">${APP_CSS}</style></head>`
+    + `<body${scroll ? ` onload="var e=document.querySelector('${scroll}');if(e)e.scrollIntoView({block:'start'})"` : ''}>${inner}</body></html>`;
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 const OUTER_CSS = 'html,body{margin:0;height:100%;background:#08080C}body{display:flex;flex-direction:column;align-items:center;font-family:system-ui,sans-serif}iframe{border:0;background:#08080C;flex:1;min-height:640px;width:var(--w);max-width:none}.cap{color:#9CA3AF;font-size:12px;padding:6px}';
-function sceneFile(id, inner, width) {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${id} ${width}px dark</title><style>${OUTER_CSS}</style></head><body><div class="cap">${id} - ${width} px - dark</div><iframe title="${id} at ${width} px" style="--w:${width}px" srcdoc="${esc(frameDoc(inner))}"></iframe></body></html>`;
+function sceneFile(id, inner, width, scroll = '') {
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${id} ${width}px dark</title><style>${OUTER_CSS}</style></head><body><div class="cap">${id} - ${width} px - dark</div><iframe title="${id} at ${width} px" style="--w:${width}px" srcdoc="${esc(frameDoc(inner, scroll))}"></iframe></body></html>`;
 }
 
 // ── the palette sheet ──
@@ -366,6 +418,9 @@ async function guardSelfTest() {
     await expectFail('header not drawn by the rule', () => renderScene(one, null, { paint: false }), /the header is drawn solid, the page rule says outline/);
     const hubScene = VALIDATE_SCENES[1];
     await expectFail('hub: two primaries', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('.validate-path-link').classList.add('validate-primary'); return w; } }, checkValidateScene), /2 primary actions visible/);
+    const wizScene = WP3_SCENES[0];
+    await expectFail('wp3: two primaries', () => renderScene({ ...wizScene, build: async () => { const w = await wizScene.build(); w.q('[data-setup-action="check-node"]').classList.add('validate-primary'); return w; } }, checkWp3Scene), /2 primary actions visible/);
+    await expectFail('wp3: header solid on a connected wizard', () => renderScene(wizScene, checkWp3Scene, { paint: false }), /the header is drawn solid, the page rule says connected/);
     await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);
 }
 
@@ -383,7 +438,7 @@ async function main() {
         for (const s of wp.scenes) {
             if (only && s.id !== only) continue;
             const inner = await renderScene(s, wp.check);
-            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width); checkFile(html); files.push([`wp${n}-${s.id}-${width}.html`, html]); }
+            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`wp${n}-${s.id}-${width}.html`, html]); }
         }
         if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); files.push([`wp${n}-palette.html`, html]); }
     }
