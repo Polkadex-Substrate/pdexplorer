@@ -134,7 +134,7 @@ describe('lint: greens are for positive states, never for an action', () => {
         assert.equal(decl(bar, 'content'), "''");
         for (const [p, v] of [['position', 'absolute'], ['left', '0'], ['top', '0'], ['bottom', '0'], ['width', '3px'], ['background', 'linear-gradient(180deg, var(--brand-primary), var(--violet))'], ['box-shadow', '0 0 10px var(--brand-primary-glow)']]) assert.equal(decl(bar, p), v, bar + ' ' + p);
         assert.match(decl('.wallet-account-badge', 'border'), /--accent-green/);   // amended (colour roles 6.1)
-        assert.match(decl('.connect-wallet-btn.is-connected i', 'color'), /--brand-secondary/);
+        assert.match(decl('.connect-wallet-btn.is-connected i', 'color'), /--accent-green/);   // amended (fidelity review 6)
     });
 });
 
@@ -392,11 +392,11 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
         ['.wallet-get-check:hover', 'box-shadow', HALO],
         // 3.6 the not-connected note
         ['.wallet-viewing-note.is-readonly', 'padding', '12px 16px'],
-        ['.wallet-viewing-note.is-readonly', 'border', '1px solid var(--border-hover)'],
+        ['.wallet-viewing-note.is-readonly', 'border', '1px solid var(--accent-amber-line)'],   // amended (fidelity review 7): the read-only banner is amber
         ['.wallet-viewing-note.is-readonly', 'border-radius', 'var(--radius-sm)'],
-        ['.wallet-viewing-note.is-readonly', 'background', TINT08],
+        ['.wallet-viewing-note.is-readonly', 'background', 'linear-gradient(var(--accent-amber-wash), var(--accent-amber-wash)), var(--bg-surface)'],
         ['.wallet-viewing-note.is-readonly', 'color', 'var(--text-primary)'],
-        ['.wallet-viewing-note.is-readonly .bx', 'color', 'var(--brand-primary)']
+        ['.wallet-viewing-note.is-readonly .bx', 'color', 'var(--accent-amber)']
     ];
     for (const [sel, prop, want] of table) {
         test(`${sel} { ${prop}: ${want} }`, () => assert.equal(decl(sel, prop), want, `${sel} has ${prop}: ${decl(sel, prop)}`));
@@ -409,8 +409,7 @@ describe('brand pass: pink on the chooser, by selector and token', () => {
             ['.wallet-option-row.is-primary', 'background'], ['.wallet-account-btn.is-primary', 'background'],
             ['.wc-qr', 'box-shadow'], ['.wallet-get-check:hover', 'border-color'],
             ['.wallet-onboarding-reload', 'background'], ['.wallet-account-row.is-current', 'background'],
-            ['.wallet-account-row.is-current::before', 'background'], ['.wallet-viewing-note.is-readonly', 'background'],
-            ['.wallet-viewing-note.is-readonly .bx', 'color'], ['.wc-open', 'background']
+            ['.wallet-account-row.is-current::before', 'background'], ['.wc-open', 'background']   // amended (fidelity review 7): the read-only banner left pink for amber
         ];
         const missing = placements.filter(([s, p]) => !PINK.test(decl(s, p) || '')).map(([s, p]) => `${s} { ${p} }`);
         assert.deepEqual(missing, []);

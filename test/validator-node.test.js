@@ -309,7 +309,8 @@ describe('the node guide: commands, flags, keys, checklist (design 3.2 to 3.4)',
         assert.match(ROTATE_KEYS, /"method":"author_rotateKeys"/);
         assert.match(HAS_KEYS, /"method":"author_hasSessionKeys","params":\["KEYS"\]/);
         assert.match(html, /Run this only when the node has finished syncing and has peers\. The result is one line starting with 0x, 388 characters long\. It contains public keys only and is safe to paste\. Each time you run it the node creates new keys, so run it once and register what it printed\./);
-        assert.match(html, /<a href="\/validate" class="item-link" data-spa-link="true">Check session keys before you register them<\/a>/);
+        // amended (fidelity review 12): the checker has its own page.
+        assert.match(html, /Paste the line into <a href="\/validate\/keys" class="item-link" data-spa-link="true">Check session keys<\/a>\./);
     });
     test('the statement of section 3.1, verbatim, first', () => {
         assert.equal(GUIDE_STATEMENT, VALIDATE_STATEMENT);

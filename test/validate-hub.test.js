@@ -137,10 +137,11 @@ describe('7: pathState, the table of section 3.3', () => {
         assert.equal(pathState('active', { connected: true, own: false }), null);
     });
     test('the three steps, their icons, names, sub lines and links', () => {
-        assert.deepEqual(PATH_STEPS.map(s => [s.icon, s.name, s.sub, s.link.label, s.link.href]), [
+        // amended (fidelity review 9): step 3 has no link; its "See status" is deleted everywhere.
+        assert.deepEqual(PATH_STEPS.map(s => [s.icon, s.name, s.sub, s.link ? s.link.label : null, s.link ? s.link.href : null]), [
             ['bx-server', 'Run a node', 'Server, client, start command and session keys.', 'Open the guide', '/validate/node'],
             ['bx-rocket', 'Set up', 'Bond, register your keys and set commission.', 'Open setup', '/validate/setup'],
-            ['bx-slider-alt', 'Manage', 'Status, commission, key rotation and alerts.', 'See status', '/validate']
+            ['bx-slider-alt', 'Manage', 'Status, commission, key rotation and alerts.', null, null]
         ]);
     });
     test('chips: Done is positive with a check; Next, Start here and You are here are step chips; Later is neutral; each has an icon', () => {
@@ -411,7 +412,9 @@ describe('the hub (section 3)', () => {
         assert.equal(head.querySelector('h2').textContent.trim(), 'Validate');
         assert.equal(head.querySelector('.validate-purpose').textContent, 'Set up a Polkadex validator and keep it healthy.');
         assert.equal(head.querySelector('label[for="validate-lookup-input"]').textContent, 'Look up any stash');
-        const trust = head.querySelector('.ui-trust');
+        // amended (fidelity review 2): the trust row left the header; it is the hub's last element.
+        assert.equal(head.querySelector('.ui-trust'), null);
+        const trust = el.querySelector('.validate-hub > .ui-trust:last-child');
         assert.ok(trust.querySelector('.ui-tile.is-green.is-sm .bx-shield-quarter'));
         assert.ok(trust.textContent.includes(TRUST_LINE));
         assert.equal(TRUST_LINE, 'Never asks for a seed or private key. Cannot reach your server. You sign in your own wallet.');
@@ -451,13 +454,7 @@ describe('the hub (section 3)', () => {
         const b = dom(); await mountValidatePage(b.el, deps()); await flush();
         assert.ok(b.el.querySelector('.validate-path'));
     });
-    test('See status moves focus to the dashboard headline', async () => {
-        const { el, doc, w } = dom(); await mountValidatePage(el, deps()); await flush();
-        doc.body.focus && doc.body.focus();
-        const link = el.querySelector('[data-validate-action="see-status"]');
-        link.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
-        assert.equal(doc.activeElement && doc.activeElement.id, 'validate-headline');
-    });
+    // amended (fidelity review 9): "See status" is deleted, so its focus test went with it (test/validate-fidelity.test.js).
     test('words: the first-time hub shows fewer words than before (old: 116 visible words with the keys card on the page)', async () => {
         const { el } = dom(); await mountValidatePage(el, deps({ account: { status: 'none', address: '' } })); await flush();
         const total = words(visibleText(el));
@@ -503,7 +500,7 @@ describe('the keys page (/validate/keys)', () => {
             const want = parseSessionKeys(v, { layout: EXPECTED_LAYOUT, specVersion: 393 });
             const sent = d.urls.some(u => u.startsWith('/api/session-keys/check'));
             assert.equal(sent, want.ok, JSON.stringify(v));
-            if (!want.ok) { assert.equal(el.querySelector('#validate-keys-msg').textContent, want.message); assert.equal(el.querySelector('#validate-keys-input').getAttribute('aria-invalid'), 'true'); }
+            if (!want.ok) { assert.equal(el.querySelector('#validate-keys-msg').textContent.trim(), want.message); assert.equal(el.querySelector('#validate-keys-input').getAttribute('aria-invalid'), 'true'); }
         }
     });
     test('a valid line: the summary with a green check, result chips, the unchanged node note inside an info panel; for= the connected wallet', async () => {

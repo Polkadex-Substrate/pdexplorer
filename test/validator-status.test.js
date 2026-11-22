@@ -703,7 +703,8 @@ describe('the status view: live region, focus, table headers, retry on a row (re
             return real(u);
         };
         await mountValidatePage(el, d); await flush();
-        const btn = el.querySelector('.validate-rows [data-validate-action="retry"]');
+        // amended (fidelity review 14): the Retry sits on the tile only, not in "All details".
+        const btn = el.querySelector('.validate-tile [data-validate-action="retry"]');
         assert.ok(btn);
         assert.ok(!btn.classList.contains('validate-primary'));
         assert.equal(calls, 1);
