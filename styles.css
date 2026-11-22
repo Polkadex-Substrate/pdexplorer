@@ -5215,7 +5215,6 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-skeleton span { display: block; height: 16px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.06); }
 .validate-skeleton span:nth-child(2) { width: 80%; }
 .validate-skeleton span:nth-child(3) { width: 60%; }
-.validate-statement { margin: 0; padding: 12px 16px; border-left: 3px solid var(--brand-primary); background: var(--bg-surface); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
 .validate-keys-body p { margin: 0; color: var(--text-primary); line-height: 1.6; }
 .validate-keys-input { width: 100%; box-sizing: border-box; padding: 12px 16px; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.9rem; line-height: 1.6; resize: vertical; word-break: break-all; }
 .validate-keys-input[aria-invalid="true"] { border-color: var(--accent-red-line); }
@@ -5228,20 +5227,28 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 /* /validate/node: the node guide and Check my node (lib/validator-node-guide.js, lib/node-check-view.js) */
 .validate-guide-step { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-color); }
 .validate-guide-step p, .validate-guide-step li { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
-.validate-guide-h3 { margin: 0; font-size: 1.05rem; font-weight: 700; line-height: 1.2; color: var(--text-primary); }
+.validate-guide-h3 { display: flex; align-items: center; gap: 12px; margin: 0; font-size: 1.05rem; font-weight: 700; line-height: 1.2; color: var(--text-primary); }
 .validate-guide-h4 { margin: 8px 0 0; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
 .validate-caption { caption-side: top; text-align: left; padding: 0 0 8px; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
 .validate-guide-table tbody th { padding: 13px 14px; font-weight: 600; text-align: left; color: var(--text-primary); }
 .validate-cmd { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); }
 .validate-cmd-pre { flex: 1 1 auto; min-width: 0; margin: 0; padding: 12px 16px; overflow-x: auto; white-space: pre; font-size: 0.82rem; line-height: 1.6; color: var(--text-primary); }
 .validate-cmd-pre:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
-.validate-cmd .validate-text-btn { flex: 0 0 auto; padding: 12px 12px 8px 4px; }
+.validate-cmd .validate-text-btn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 12px 12px 8px 4px; }
+.validate-cmd .validate-text-btn .bx { font-size: 16px; color: var(--accent-violet-text); }
 .validate-guide-notes, .validate-node-notes { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 .validate-node-notes li { color: var(--text-primary); font-size: 0.82rem; line-height: 1.6; }
 .validate-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .validate-checklist li { display: flex; gap: 8px; align-items: flex-start; }
-.validate-checklist input { margin-top: 5px; accent-color: var(--brand-primary); }
-.validate-pending { padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); }
+.validate-checklist input { margin-top: 5px; accent-color: var(--accent-green); }
+.validate-pending { margin: 0; }
+.validate-pending .ui-chip { margin-right: 8px; vertical-align: middle; }
+/* The node guide's top and end (spec 2026-11-21 section 5.4): book tile, compact path, footer card with the one primary. */
+.validate-guide .list-header h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.validate-setup > .validate-path.is-compact, .validate-guide > .validate-path.is-compact { padding: 0 24px; margin: 0 0 8px; }
+a.validate-secondary { text-decoration: none; }
+.validate-guide-next { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin-top: 24px; padding: 24px; }
+.validate-guide-next p { margin: 0; font-size: 1rem; font-weight: 600; color: var(--text-primary); }
 .validate-advanced { border: 1px solid var(--border-color); border-radius: var(--radius-sm); }
 .validate-advanced summary { padding: 12px 16px; cursor: pointer; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
 .validate-advanced summary:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
@@ -5250,21 +5257,30 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-node-verdict { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
 .validate-node-table td, .validate-node-table th { overflow-wrap: anywhere; }
 /* Validator setup wizard (Sprint 3, lib/validator-setup-view.js). Brand: one primary per
-   view (.validate-primary), no colour of its own; green stays on Active and Heartbeat only,
-   so "Done on chain" is a word with a neutral tick. */
+   view (.validate-primary). Colour roles (spec 2026-11-21 section 5.1): violet step markers
+   and current edge, "Done on chain" green with its check, a five-segment bar on a phone. */
 .validate-setup-body { display: grid; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); gap: 24px; padding: 24px; align-items: start; }
-.validate-setup-body > .validate-headline, .validate-setup-body > p, .validate-setup-body > a, .validate-setup-body > button, .validate-setup-body > .validate-skeleton { grid-column: 1 / -1; }
+.validate-setup-body > .validate-headline, .validate-setup-body > p, .validate-setup-body > a, .validate-setup-body > button, .validate-setup-body > .validate-skeleton, .validate-setup-body > .validate-setup-bar { grid-column: 1 / -1; }
+.validate-setup-bar { display: none; gap: 4px; }
+.validate-setup-bar > span { flex: 1 1 0; height: 4px; border-radius: 2px; }
+.validate-setup-bar > .is-done { background: var(--accent-green); }
+.validate-setup-bar > .is-current { background: var(--accent-violet); }
+.validate-setup-bar > .is-later { background: rgba(255, 255, 255, 0.12); }
+@media (forced-colors: active) {
+    .validate-setup-bar > span { border: 1px solid CanvasText; }
+    .validate-setup-bar > .is-current { background: Highlight; }
+}
 .validate-setup-progress { display: none; margin: 0; font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
-.validate-steps { list-style: none; counter-reset: validate-step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.validate-step { counter-increment: validate-step; display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-left: 2px solid var(--border-color); color: var(--text-secondary); font-size: 0.9rem; }
-.validate-step::before { content: counter(validate-step) ". "; font-weight: 600; }
-.validate-step.is-current { border-left-color: var(--brand-primary); color: var(--text-primary); font-weight: 600; }
+.validate-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.validate-step { display: flex; align-items: flex-start; gap: 12px; padding: 8px 12px; border-left: 2px solid transparent; color: var(--text-secondary); font-size: 0.9rem; }
+.validate-step.is-current { border-left-color: var(--accent-violet); color: var(--text-primary); font-weight: 600; }
+.validate-step-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 4px; }
 .validate-step-name { color: inherit; }
-.validate-step-done { font-size: 0.82rem; font-weight: 400; color: var(--text-primary); }
-.validate-step-done .bx { color: var(--text-primary); }
+.validate-step-done { display: inline-flex; align-items: center; gap: 4px; font-size: 0.82rem; font-weight: 600; color: var(--accent-green); }
+.validate-step-done .bx { color: var(--accent-green); }
 .validate-setup-step { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .validate-setup-step input[type="text"], .validate-setup-step textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
-.validate-setup-step input[aria-invalid="true"], .validate-setup-step textarea[aria-invalid="true"] { border-color: var(--border-hover); }
+.validate-setup-step input[aria-invalid="true"], .validate-setup-step textarea[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .validate-setup-note { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
 .validate-setup-cmd { margin: 0; padding: 12px 16px; overflow-x: auto; white-space: pre; font-size: 0.82rem; line-height: 1.6; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); }
@@ -5272,19 +5288,25 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-setup-payee { margin: 0; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 8px; }
 .validate-setup-choice { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; color: var(--text-primary); }
 .validate-setup-choice input { accent-color: var(--brand-primary); }
-.validate-review { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; }
+.validate-review { list-style: none; counter-reset: validate-review; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .validate-review li { line-height: 1.6; }
+.validate-review > li { counter-increment: validate-review; position: relative; padding-left: 36px; overflow-wrap: anywhere; }
+.validate-review > li::before { content: counter(validate-review); position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-violet); color: var(--text-primary); font-size: 0.75rem; font-weight: 700; line-height: 1; }
+.validate-review code.mono { color: var(--accent-violet-text); }
 .validate-review-text { font-weight: 600; color: var(--text-primary); }
 .validate-review-args { margin-top: 4px; font-size: 0.82rem; overflow-wrap: anywhere; }
-.validate-warnings { padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); }
 .validate-warnings ul { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
 .validate-ack { display: flex; gap: 8px; align-items: center; margin: 0; font-weight: 600; color: var(--text-primary); }
 .validate-ack input { width: 18px; height: 18px; accent-color: var(--brand-primary); }
 .validate-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 /* Setup in separate steps (lib/validator-setup-steps-view.js): unlike .validate-steps the
-   stepper list stays visible on mobile; no colour of its own. */
-.validate-stepwise { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; }
-.validate-stepwise-step { line-height: 1.6; overflow-wrap: anywhere; }
+   stepper list stays visible on mobile. Roles (spec 2026-11-21 section 5.2): violet markers and
+   current edge, status words on their role colour. */
+.validate-stepwise { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.validate-stepwise-step { display: flex; align-items: flex-start; gap: 12px; padding: 2px 0 2px 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.validate-stepwise-step[aria-current="step"] { box-shadow: inset 2px 0 0 var(--accent-violet); }
+.validate-stepwise-main { min-width: 0; flex: 1 1 auto; }
+.validate-word.is-step { background: var(--accent-violet-tint); color: var(--accent-violet-text); border: 1px solid var(--accent-violet-line); }
 .validate-stepwise-step .validate-word { margin-left: 8px; }
 .validate-stepwise-stash { overflow-wrap: anywhere; }
 .validate-stepwise-status { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
@@ -5293,9 +5315,11 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .validate-setup-body { grid-template-columns: minmax(0, 1fr); padding: 16px; }
     .validate-setup-progress { display: block; }
     .validate-steps { display: none; }
+    .validate-setup-bar { display: flex; }
+    .validate-setup > .validate-path.is-compact, .validate-guide > .validate-path.is-compact { padding: 0 16px; }
     .validate-stepwise-actions .validate-primary { width: 100%; min-height: 44px; justify-content: center; box-sizing: border-box; }
     .validate-stepwise-actions .validate-secondary, .validate-stepwise-actions .validate-text-btn { min-height: 44px; }
-    .validate-stepwise-step { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+    .validate-stepwise-main { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
     .validate-stepwise-step .validate-word { margin-left: 0; }
 }
 @media (max-width: 640px) {
@@ -5303,6 +5327,11 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .validate-row dd { border-top: none; padding-top: 0; }
     .validate-body, .validate-keys-body { padding: 0 16px 16px; }
     .validate-cmd-pre { padding: 12px; }
+    /* Tap targets (spec section 7): 44 px for the primaries, the wizard lookup button and the compact path links. */
+    .validate-setup-actions .validate-primary, .validate-guide-next .validate-primary { min-height: 44px; box-sizing: border-box; }
+    .validate-setup-step .validate-lookup-row > button { min-height: 44px; }
+    .validate-path.is-compact .validate-path-link { min-height: 44px; }
+    .validate-guide-next { padding: 16px; }
 }
 
 /* The hub (spec 2026-11-21 section 3): header card, path strip, connect bar, dashboard, cards, tools. */
@@ -5451,13 +5480,26 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
    "Stop validating" is an outline button, never the error colour. Existing
    tokens only; no colour of its own. */
 .validate-manage { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--border-color); }
-.validate-manage-title { margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-primary); }
-.validate-manage-actions { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+.validate-manage-title { display: flex; align-items: center; gap: 12px; margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+/* The manage actions (spec 2026-11-21 section 5.3): a grid of 44 px secondaries, each led by a violet icon. */
+.validate-manage-actions { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.validate-manage-actions .validate-secondary { width: 100%; min-height: 44px; box-sizing: border-box; justify-content: flex-start; text-align: left; }
+.validate-manage-actions .validate-secondary .bx { flex-shrink: 0; font-size: 18px; color: var(--accent-violet-text); }
+.validate-manage-actions.validate-manage-ops { display: flex; flex-direction: column; gap: 12px; }
+.validate-manage-ops .validate-secondary { width: auto; }
+.validate-manage-ops .ui-chip { vertical-align: middle; }
+.validate-manage-pending .validate-headline { display: flex; align-items: center; gap: 8px; }
+@media (min-width: 1024px) {
+    .validate-manage-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+    .validate-manage-actions { grid-template-columns: 1fr; }
+}
 .validate-manage-links { margin: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.9rem; }
 .validate-manage-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .validate-manage-panel input[type="text"], .validate-manage-panel textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
 .validate-manage-panel .validate-lookup-row input[type="text"] { flex: 1 1 200px; width: auto; }
-.validate-manage-panel input[aria-invalid="true"], .validate-manage-panel textarea[aria-invalid="true"] { border-color: var(--border-hover); }
+.validate-manage-panel input[aria-invalid="true"], .validate-manage-panel textarea[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-manage-rule { font-weight: 700; color: var(--text-primary); }
 .validate-manage-facts { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
 .validate-manage .validate-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
