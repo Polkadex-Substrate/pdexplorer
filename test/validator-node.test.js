@@ -531,7 +531,8 @@ describe('wiring: server, docs, shell, script, help, brand', () => {
     });
     test('script.js: /validate/node mounts the guide; ?node= reaches the guide and the status; under 15,000 lines', () => {
         assert.match(script, /import \{ mountNodeGuide \} from '\.\/lib\/validator-node-guide\.js'/);
-        assert.match(script, /if \(address === 'node'\) return mountNodeGuide\(document\.getElementById\('validate-root'\), \{ fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam \}\)/);
+        // amended (fidelity review 4): every validate mount re-reads the header outline (settleHeader).
+        assert.match(script, /if \(address === 'node'\) return settleHeader\(mountNodeGuide\(document\.getElementById\('validate-root'\), \{ fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam \}\)/);
         assert.match(script, /new URLSearchParams\(window\.location\.search\)\.get\('node'\)/);
         assert.match(script, /isAddress: isSearchableAddress, nodeName \}/);
         assert.ok(readRepo('script.js', import.meta.url).split('\n').length <= 15000);

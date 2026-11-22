@@ -7422,8 +7422,8 @@ function initValidatePage(address) {
     validatePageOpen = true;
     pageScope.add(() => { validatePageOpen = false; markHeaderOutline(); });
     const settleHeader = (p) => { markHeaderOutline(); Promise.resolve(p).then(markHeaderOutline, markHeaderOutline); return p; };
-    if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
-    if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
+    if (address === 'node') return settleHeader(mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam }));
+    if (address === 'setup') return settleHeader(mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true)));
     if (address === 'keys') { updateSeoMeta('validate', { title: KEYS_PAGE_TITLE, canonicalPath: '/validate/keys' }); return settleHeader(mountKeysPage(document.getElementById('validate-root'), { getAccount: () => walletSession.getActiveAccount(), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml })); }
     const mount = (a) => settleHeader(mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
         fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName }));
@@ -7438,7 +7438,7 @@ function initValidatePage(address) {
 
 // /validate/setup (lib/validator-setup-view.js): signs through submitSignedTx; remounted on a wallet change.
 function validateSetupDeps(watch) {
-    if (watch) pageScope.add(walletSession.onActiveAccountChange(() => mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(false))));
+    if (watch) pageScope.add(walletSession.onActiveAccountChange(() => { const p = mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(false)); markHeaderOutline(); Promise.resolve(p).then(markHeaderOutline, markHeaderOutline); }));
     return { account: walletSession.getActiveAccount(), getApi: () => globalApi, isMultisig: (a) => !!multisigStore.find(a), revision: () => walletSession.revision(),
         findMultisig: (a) => multisigStore.find(a), multisigReview: (o) => multisigUI.review(o),
         submit: (o) => submitSignedTx(o), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, isAddress: isSearchableAddress,

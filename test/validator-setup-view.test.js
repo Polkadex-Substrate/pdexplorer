@@ -395,7 +395,7 @@ describe('wiring and brand', () => {
     });
     test('script.js: /validate/setup mounts the wizard through submitSignedTx; under 15,000 lines', () => {
         assert.match(script, /import \{ mountValidatorSetup \} from '\.\/lib\/validator-setup-view\.js'/);
-        assert.match(script, /if \(address === 'setup'\) return mountValidatorSetup\(/);
+        assert.match(script, /if \(address === 'setup'\) return settleHeader\(mountValidatorSetup\(/);   // amended (fidelity review 4): the header outline is re-read after the mount
         assert.match(script, /submit: \(o\) => submitSignedTx\(o\)/);
         assert.match(script, /isMultisig: \(a\) => !!multisigStore\.find\(a\)/);
         assert.match(script, /revision: \(\) => walletSession\.revision\(\)/);
