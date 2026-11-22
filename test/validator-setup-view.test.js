@@ -126,7 +126,8 @@ describe('the wizard opens at the first unsatisfied step; one primary per view',
         const items = Array.from(el.querySelectorAll('ol.validate-steps > li'));
         assert.deepEqual(items.map(li => li.querySelector('.validate-step-name').textContent), SETUP_STEPS);
         assert.equal(items[0].getAttribute('aria-current'), 'step');
-        assert.equal(el.querySelectorAll('[aria-current="step"]').length, 1);
+        // WP3: the compact path above the body marks its own current step (Set up), so count within the list.
+        assert.equal(el.querySelectorAll('ol.validate-steps [aria-current="step"]').length, 1);
         assert.deepEqual(primaries(el).map(b => b.textContent.trim()), ['My node is ready']);
         assert.match(el.querySelector('.validate-setup-progress').textContent, /^Step 1 of 5: Your node$/);
         assert.ok(el.querySelector('a[href="/validate/node"]'));
@@ -519,15 +520,18 @@ describe('a bond lower than asked for (finding 2)', () => {
     });
 });
 
-describe('the done tick is neutral, as the design says (finding 5)', () => {
-    test('no green on the tick; the header comment says neutral', () => {
+// WP3: spec 2026-11-21 supersedes "Done on chain uses the neutral tick, no green" (its header, item b):
+// done is a good state, so the word and its check take the green state token, never a raw colour.
+describe('the done tick is green, as the colour roles say (spec 2026-11-21 5.1, replacing finding 5)', () => {
+    test('the done word and its check use --accent-green and no colour literal; the header comment says so', () => {
         const css = readRepo('styles.css', import.meta.url).replace(/\/\*[\s\S]*?\*\//g, '');
         const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m => /\.validate-step-done/.test(m[1]));
         assert.ok(rules.length >= 1);
         for (const r of rules) assert.doesNotMatch(r[2], /--success|--brand-secondary|#[0-9a-f]{3,8}\b/i, r[1]);
+        assert.ok(rules.some(r => /color:\s*var\(--accent-green\)/.test(r[2])), 'the done word is green');
         const src = readRepo('lib/validator-setup-view.js', import.meta.url);
-        assert.doesNotMatch(src, /green only on\s+(\/\/\s*)?the done tick/);
-        assert.match(src, /done tick is neutral/);
+        assert.doesNotMatch(src, /done tick is neutral/);
+        assert.match(src, /"Done on chain" green with its check/);
     });
 });
 

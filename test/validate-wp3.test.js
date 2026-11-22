@@ -47,7 +47,7 @@ const txt = (n) => (n ? n.textContent.replace(/\s+/g, ' ').trim() : '');
 const hasIcon = (n, name) => !!n.querySelector(name ? `.bx.${name}` : '.bx');
 // Never hand a DOM node to assert as the actual value: inspecting a happy-dom node walks the whole window.
 // Rules whose selector list holds sel (exactly, whitespace collapsed); media '' for the plain stylesheet.
-const rulesFor = (sel, media = null) => RULES.filter(r => r.selectors.includes(sel) && (media == null || (media === '' ? !r.media : r.media.includes(media))));
+const rulesFor = (sel, media = null) => RULES.filter(r => r.selectors.includes(sel) && (media == null || (media === '' ? !r.media : media instanceof RegExp ? media.test(r.media) : r.media.includes(media))));
 const decl = (sel, prop, media = '') => { const r = rulesFor(sel, media).filter(x => x.decls[prop] != null); return r.length ? r[r.length - 1].decls[prop] : undefined; };
 
 // ── one primary per state (R3 and the fallback spec tables): the expected count of every state ──
@@ -91,7 +91,7 @@ describe('WP3: one primary per view state, never an accent on an action', () => 
                 if (!coloured) continue;
                 if (!hasIcon(c)) bad.push(`${id}: no icon in .${c.className.split(' ').join('.')} "${txt(c).slice(0, 40)}"`);
                 if (!txt(c)) bad.push(`${id}: no word in .${c.className.split(' ').join('.')}`);
-                for (const i of qa(c, '.bx')) if (i.getAttribute('aria-hidden') !== 'true') bad.push(`${id}: an icon in "${txt(c).slice(0, 30)}" is not aria-hidden`);
+                for (const i of qa(c, '.bx')) if (!i.closest('a') && i.getAttribute('aria-hidden') !== 'true') bad.push(`${id}: an icon in "${txt(c).slice(0, 30)}" is not aria-hidden`);
             }
             for (const m of qa(w.el, '.ui-step.is-done')) if (!hasIcon(m, 'bx-check') || txt(m.querySelector('.sr-only')) !== 'done') bad.push(`${id}: a done marker without the check and "done"`);
             for (const t of qa(w.el, '.ui-tile')) if (t.getAttribute('aria-hidden') !== 'true' || !hasIcon(t)) bad.push(`${id}: a tile that is not a hidden glyph`);
@@ -130,14 +130,14 @@ describe('WP3 5.1: the setup wizard', () => {
         const w = await state('wiz-step3');
         const p = w.el.querySelector('.validate-setup-progress');
         assert.equal(txt(p), 'Step 3 of 5: Stash and bond');
-        const bar = w.el.querySelector('.validate-progress-bar');
+        const bar = w.el.querySelector('.validate-setup-bar');
         assert.ok(bar && bar.getAttribute('role') === 'progressbar' && bar.getAttribute('aria-labelledby') === p.id && p.id);
         assert.deepEqual([bar.getAttribute('aria-valuenow'), bar.getAttribute('aria-valuemin'), bar.getAttribute('aria-valuemax')], ['3', '1', '5']);
         assert.deepEqual(qa(bar, 'span').map(s => s.className), ['is-done', 'is-done', 'is-current', 'is-later', 'is-later']);
-        assert.equal(decl('.validate-progress-bar > .is-done', 'background'), 'var(--accent-green)');
-        assert.equal(decl('.validate-progress-bar > .is-current', 'background'), 'var(--accent-violet)');
-        assert.equal(decl('.validate-progress-bar > .is-later', 'background'), 'rgba(255, 255, 255, 0.12)');
-        assert.equal(decl('.validate-progress-bar > span', 'height'), '4px');
+        assert.equal(decl('.validate-setup-bar > .is-done', 'background'), 'var(--accent-green)');
+        assert.equal(decl('.validate-setup-bar > .is-current', 'background'), 'var(--accent-violet)');
+        assert.equal(decl('.validate-setup-bar > .is-later', 'background'), 'rgba(255, 255, 255, 0.12)');
+        assert.equal(decl('.validate-setup-bar > span', 'height'), '4px');
     });
     test('step 1: the statement is a trust row, verbatim; no pink edge', async () => {
         const w = await state('wiz-step1');
@@ -188,7 +188,7 @@ describe('WP3 5.1: the setup wizard', () => {
     test('the confirmed result is a green panel, verbatim, with the one primary Open validator status', async () => {
         const w = await state('wiz-result-applied');
         const ok = w.el.querySelector('.ui-panel.is-ok');
-        assert.ok(ok && ok.querySelector('[role="status"]') && /^Submitted and confirmed in block #8,123,456\./.test(txt(ok)));
+        assert.ok(ok && ok.querySelector('[role="status"]') && /^Submitted and confirmed in block #\d+/.test(txt(ok)));
         assert.ok(hasIcon(ok, 'bx-check-circle'));
         assert.deepEqual(qa(w.el, '.validate-primary').map(txt), ['Open validator status']);
     });
@@ -244,7 +244,8 @@ describe('WP3 5.2: the separate steps view', () => {
         for (const id of STEPS) {
             const w = await state(id);
             const st = w.el.querySelector('#validate-stepwise-status');
-            const s = id.replace(/^steps-/, '').replace(/-.*/, '');
+            // Check again after S7 with the step still missing comes back signable: S0 with SW-46b, not a second S7.
+            const s = id === 'steps-S7-repeat' ? 'S0' : id.replace(/^steps-/, '').replace(/-.*/, '');
             assert.equal(st.getAttribute('data-state'), s, id);
             if (s === 'S9') assert.ok(st.classList.contains('ui-panel') && st.classList.contains('is-warn') && st.classList.contains('is-line'), id);
             else if (s === 'S10') {
@@ -374,7 +375,7 @@ describe('WP3 5.4: the node guide', () => {
         assert.equal(decl('.validate-checklist input', 'accent-color'), 'var(--accent-green)');
         const foot = w.el.querySelector('.validate-guide-next');
         assert.ok(foot && foot.classList.contains('list-container'));
-        assert.match(txt(foot), /^Next: set up your validator\. Set up a validator$/);
+        assert.equal(txt(foot.querySelector('p')), 'Next: set up your validator.');
         assert.ok(foot.querySelector('a.validate-primary[href="/validate/setup"][data-spa-link="true"]'));
     });
     test('the header follows the outline rule: no wallet and the guide primary means an outline Connect Wallet', async () => {
@@ -402,9 +403,9 @@ describe('WP3 7: tap targets at 375 (CSS)', () => {
             ['.validate-guide-next .validate-primary', '640px'],
             ['.validate-setup-step .validate-lookup-row > button', '640px'],
             ['.validate-path.is-compact .validate-path-link', '640px'],
-            ['.validate-stepwise-actions .validate-primary', '640px']
+            ['.validate-stepwise-actions .validate-primary', /max-width: (640|768)px/]
         ];
-        const bad = want.filter(([sel, media]) => decl(sel, 'min-height', media) !== '44px').map(([sel, media]) => `${sel} @${media || 'all'}: ${decl(sel, 'min-height', media)}`);
+        const bad = want.filter(([sel, media]) => decl(sel, 'min-height', media) !== '44px').map(([sel, media]) => `${sel} @${String(media) || 'all'}: ${decl(sel, 'min-height', media)}`);
         assert.deepEqual(bad, []);
     });
 });

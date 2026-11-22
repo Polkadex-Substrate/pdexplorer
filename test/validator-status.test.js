@@ -915,7 +915,8 @@ describe('wiring: server, docs, shell, script, brand', () => {
         const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] })).filter(r => /\.validate-/.test(r.sel));
         assert.ok(rules.length > 0, 'the validate styles exist');
         const green = rules.filter(r => /--success|--accent-green|--brand-secondary|#14f195|#00e676/i.test(r.body));
-        for (const r of green) assert.match(r.sel, /is-positive|is-done|is-ok|\.ui-/, r.sel);
+        // WP3 (spec 5.1 and 5.4): "Done on chain" and the security checklist ticks are done states too.
+        for (const r of green) assert.match(r.sel, /is-positive|is-done|is-ok|\.ui-|\.validate-step-done|\.validate-checklist input/, r.sel);
         const amber = rules.filter(r => /--accent-amber|--warning/.test(r.body));
         for (const r of amber) assert.match(r.sel, /is-wait|is-warn|\.ui-/, r.sel);
         const accent = rules.filter(r => /--error|--accent-(red|green|amber|blue)|#ff4d4d/i.test(r.body));

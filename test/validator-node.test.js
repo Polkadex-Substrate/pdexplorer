@@ -90,9 +90,10 @@ describe('nodeCheckModel: the states of design section 3.5', () => {
         assert.equal(IN_SYNC_BLOCKS, 5);
         assert.equal(MIN_PEERS, 3);
     });
-    test('the boundaries: 6 blocks behind is Behind (neutral); 2 peers is Reporting (neutral)', () => {
+    // WP3 (spec 2026-11-21 section 4 tone table): Behind is attention, amber ('wait'), still never red.
+    test('the boundaries: 6 blocks behind is Behind (amber, wait); 2 peers is Reporting (neutral)', () => {
         const behind = nodeCheckModel(ok({ head: 1_000_006 }));
-        assert.deepEqual([behind.state, behind.word, behind.tone], ['behind', 'Behind', 'neutral']);
+        assert.deepEqual([behind.state, behind.word, behind.tone], ['behind', 'Behind', 'wait']);
         assert.equal(behind.text, 'alpha-node is reporting but is 6 blocks behind. Wait until it has caught up before generating keys.');
         const few = nodeCheckModel(ok({ nodes: [node({ peers: 2 })] }));
         assert.deepEqual([few.state, few.tone], ['reporting', 'neutral']);
@@ -232,11 +233,12 @@ const pres = (html) => { const { el } = dom(); el.innerHTML = html; return Array
 
 describe('the node guide: release pending (D1)', () => {
     const html = renderNodeGuide({ esc, release: PENDING });
-    test('says the official release is pending; no download, no checksum, no primary button', () => {
+    // WP3 (spec 5.4): the page's one primary is "Set up a validator" in the footer card, release or not.
+    test('says the official release is pending; no download, no checksum; the one primary is Set up a validator', () => {
         assert.match(html, /The official release \(a tagged binary and a Docker image, with checksums\) is not published yet\./);
         assert.doesNotMatch(html, /Release notes|sha256sum|docker pull/);
         const { el } = dom(); el.innerHTML = html;
-        assert.equal(el.querySelectorAll('.validate-primary').length, 0);
+        assert.deepEqual(Array.from(el.querySelectorAll('.validate-primary')).map(a => [a.textContent, a.getAttribute('href')]), [['Set up a validator', '/validate/setup']]);
     });
     test('build from source only in a closed Advanced block, after the pending notice, never the main path', () => {
         const { el } = dom(); el.innerHTML = html;
@@ -257,13 +259,17 @@ describe('the node guide: release pending (D1)', () => {
 
 describe('the node guide: release published', () => {
     const html = renderNodeGuide({ esc, release: RELEASE });
-    test('the version, one primary (Release notes), binary, chain spec and image with their checksums', () => {
+    // WP3 (spec 5.4): "Release notes" is an external link, so a secondary with the external icon; the one
+    // primary is the footer's "Set up a validator".
+    test('the version, Release notes as a secondary, one primary (Set up a validator), binary, chain spec and image with their checksums', () => {
         const { el } = dom(); el.innerHTML = html;
         const primary = el.querySelectorAll('.validate-primary');
         assert.equal(primary.length, 1);
-        assert.equal(primary[0].textContent, 'Release notes');
-        assert.equal(primary[0].getAttribute('href'), RELEASE.releaseNotesUrl);
-        assert.equal(primary[0].getAttribute('rel'), 'noopener noreferrer');
+        assert.equal(primary[0].textContent, 'Set up a validator');
+        const notes = Array.from(el.querySelectorAll('a.validate-secondary')).find(a => a.textContent === 'Release notes');
+        assert.ok(notes && notes.querySelector('.bx-link-external'));
+        assert.equal(notes.getAttribute('href'), RELEASE.releaseNotesUrl);
+        assert.equal(notes.getAttribute('rel'), 'noopener noreferrer');
         assert.match(el.textContent, /polkadex-node 7\.0\.1/);
         const cmds = pres(html).join('\n');
         assert.ok(cmds.includes(`curl -fL -o polkadex-node ${RELEASE.binaryUrl}`));
@@ -339,7 +345,9 @@ describe('the node guide: accessibility basics', () => {
     test('one h2, then six numbered h3 sections, each section labelled by its heading', () => {
         assert.equal(el.querySelectorAll('h2').length, 1);
         const h3 = Array.from(el.querySelectorAll('section.validate-guide-step > h3'));
-        assert.deepEqual(h3.map(h => h.textContent), ['1. The server', '2. The client', '3. Run the node', '4. Check your node', '5. Session keys', '6. Security checklist']);
+        // WP3 (spec 5.4): the number is an open violet step marker, then the title.
+        assert.deepEqual(h3.map(h => h.textContent), ['1 The server', '2 The client', '3 Run the node', '4 Check your node', '5 Session keys', '6 Security checklist']);
+        assert.deepEqual(h3.map(h => h.querySelector('.ui-step.is-open').textContent), ['1', '2', '3', '4', '5', '6']);
         for (const s of el.querySelectorAll('section.validate-guide-step')) assert.ok(el.querySelector('#' + s.getAttribute('aria-labelledby')));
     });
     test('commands: a named group each, the command focusable (it scrolls, never wraps), a named Copy button', () => {
