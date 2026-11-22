@@ -574,7 +574,9 @@ describe('the control on the validator status page', () => {
     test('the status page mounts the control for the viewed stash only when a stash is shown (flag gating is the page flag)', async () => {
         const { el } = dom();
         const urls = [];
-        const model = { ...validatorStatusModel({ address: S1, bonded: false }, {}), address: S1 };
+        // amended (fidelity review 10): a stash that is not bonded gets no alerts card, so the stash here is bonded.
+        const model = { ...validatorStatusModel({ address: S1, bonded: true, controller: S1 }, {}), address: S1 };
+        assert.notEqual(model.state, 'not-bonded');
         const d = {
             account: { status: 'connected', address: S1 }, urlAddress: '', isSame: (a, b) => a === b,
             fetchJson: async (u) => { urls.push(u); if (u === '/api/validator-alerts/status') return { enabled: true, maxPerEmail: 5 }; if (u === '/api/validator/params') return { specVersion: 393, layout: { ok: true, bytes: 193, hexLength: 388 } }; if (/\/status$/.test(u)) return model; throw new Error('unexpected ' + u); },

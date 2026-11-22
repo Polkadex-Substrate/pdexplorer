@@ -366,7 +366,9 @@ describe('the status page mounts the manage panel for the connected wallet only'
         const { el } = dom();
         await mountValidatePage(el, pageDeps({ account: { status: 'disconnected' }, urlAddress: STASH }));
         await settle();
-        assert.equal(el.querySelector('#validate-manage-slot'), null);
+        // amended (fidelity review 22): the slot is a card of its own in .validate-cards; it stays empty.
+        assert.equal(el.querySelector('#validate-manage-slot .validate-manage'), null);
+        assert.equal(el.querySelector('#validate-manage-slot').innerHTML, '');
     });
 });
 
