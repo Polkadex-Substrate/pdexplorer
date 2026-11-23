@@ -109,7 +109,7 @@ async function card({ data, snapshots, payee = { kind: 'staked', account: '' }, 
         FEE_MARGIN, pdexToPlanck, maxNominationsFrom, createStakePicker, payeeOf, Math, Number, parseFloat, BigInt,
         stakingFormatPDEX: (n) => Number(n || 0).toFixed(4), stakingFormatNumber: (n) => String(n), showTxNotice: () => {},
         currentWalletData: data, stakeSelected: new Map(), stakeValidators: [], stakePicker: null, stakeCard: null,
-        stakeRefresh: { tracked: () => null },   // WP4: nothing tracked (test/stake-states.test.js runs the real one)
+        stakeRefresh: { tracked: () => null, opened: () => {} },   // WP4: nothing tracked (test/stake-states.test.js runs the real one)
         validatorsCache: null, validatorsCacheAt: 0, VALIDATORS_CACHE_TTL: 60_000, stakeQuotaWarned: false, walletEntryIntent: null,
         loadValidatorsForPicker: async () => {
             const next = queue.length > 1 ? queue.shift() : queue[0];
