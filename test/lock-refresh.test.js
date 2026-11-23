@@ -265,6 +265,7 @@ describe('(16) the message is inside the pressed row and survives a repaint', ()
         await pg.press('[data-lock-action="elections-remove"]');
         const msg = () => pg.row('Council vote').querySelector('.lock-row-msg');
         assert.equal(text(msg()), 'Nope.');
+        assert.ok(msg().classList.contains('lock-msg') && msg().classList.contains('is-error'));
         assert.equal(msg().getAttribute('role'), 'alert');
         assert.ok(msg().querySelector('.bx-error-circle'));
         assert.equal(pg.el.querySelectorAll('.lock-row-msg').length, 1, 'one message, in that row only');
@@ -437,11 +438,13 @@ describe('the stylesheet for the self-updating panel (5, 6)', () => {
         assert.equal(find('.lock-skeleton span', 'height'), '56px');
         assert.equal(find('.lock-skeleton span', 'background'), 'rgba(255, 255, 255, 0.06)');
         assert.equal(find('.lock-skeleton span', 'animation'), undefined, 'static');
-        assert.equal(find('.lock-row-msg.is-positive > .bx', 'color'), 'var(--accent-green)');
-        assert.equal(find('.lock-row-msg.is-wait > .bx', 'color'), 'var(--accent-amber)');
-        assert.equal(find('.lock-row-msg.is-info > .bx', 'color'), 'var(--accent-blue-text)');
-        assert.equal(find('.lock-row-msg.is-error > .bx', 'color'), 'var(--accent-red)');
+        assert.equal(find('.lock-msg.is-positive > .bx', 'color'), 'var(--accent-green)');
+        assert.equal(find('.lock-msg.is-wait > .bx', 'color'), 'var(--accent-amber)');
+        assert.equal(find('.lock-msg.is-info > .bx', 'color'), 'var(--accent-blue-text)');
+        assert.equal(find('.lock-msg.is-error > .bx', 'color'), 'var(--accent-red)');
         for (const sel of ['.lock-row-msg .validate-secondary', '.lock-failed .validate-secondary', '.lock-behind .validate-secondary']) assert.equal(find(sel, 'min-height'), '44px', sel);
+        // A message is a state, not a row or an action: its colour selectors never read as one (test/brand-chooser.test.js lint).
+        for (const r of RULES) if (r.selectors.some(x => /lock-row-msg/.test(x))) assert.ok(!Object.values(r.decls).some(v => /--accent-green/.test(v)), r.selectors.join(', '));
     });
     test('a leaving row collapses over T4 (240 ms); the amount wash is the shared neutral one; neither moves with reduced motion', () => {
         assert.match(String(find('.lock-row.is-leaving', 'transition')), /max-height 240ms/);
