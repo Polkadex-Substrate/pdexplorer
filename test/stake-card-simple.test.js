@@ -43,7 +43,7 @@ const V = (n) => addr(40 + n);
 const LETTER = (n) => String.fromCharCode(64 + n);
 
 const LIFT = ['openStakeModal', 'loadStakeChoice', 'stakeCardView', 'submitStakeTx', 'fillStakeMax', 'submitSignedTx', 'showStakeError', 'clearStakeError',
-    'stakeMaxNominations', 'renderStakeSelected', 'renderStakeValidatorList', 'stakePickerView', 'addStakeValidator', 'removeStakeValidator',
+    'stakeMaxNominations', 'renderStakeSelected', 'renderStakeValidatorList', 'stakePickerView', 'addStakeValidator',
     'getStakeableBalance', 'batchTx', 'buildBondOrExtra', 'formatDuration'];
 function lift(name) {
     const at = SCRIPT.indexOf(`function ${name}(`);
@@ -109,6 +109,7 @@ async function card({ data, snapshots, payee = { kind: 'staked', account: '' }, 
         FEE_MARGIN, pdexToPlanck, maxNominationsFrom, createStakePicker, payeeOf, Math, Number, parseFloat, BigInt,
         stakingFormatPDEX: (n) => Number(n || 0).toFixed(4), stakingFormatNumber: (n) => String(n), showTxNotice: () => {},
         currentWalletData: data, stakeSelected: new Map(), stakeValidators: [], stakePicker: null, stakeCard: null,
+        stakeRefresh: { tracked: () => null },   // WP4: nothing tracked (test/stake-states.test.js runs the real one)
         validatorsCache: null, validatorsCacheAt: 0, VALIDATORS_CACHE_TTL: 60_000, stakeQuotaWarned: false,
         loadValidatorsForPicker: async () => {
             loads++;
@@ -781,7 +782,9 @@ describe('the press is frozen against edits during the recheck (WP2 money path; 
         const c = await card({ data: firstTimer(), snapshots: [snap, reload.promise] });
         await c.type('150');
         const { done } = await pressing(c);
-        c.tab.fn('removeStakeValidator')(V(8));
+        // A selection changed under the press (WP4: script.js had a removeStakeValidator that nothing called; deleted).
+        c.tab.ctx.stakeSelected.delete(V(8));
+        c.tab.fn('renderStakeSelected')();
         await flush();
         reload.resolve(snap);
         await done; await flush();

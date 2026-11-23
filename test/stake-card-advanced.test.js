@@ -46,7 +46,7 @@ const OTHER = addr(7);
 const NOT_88 = encodeAddress(new Uint8Array(32).fill(7), 42);
 
 const LIFT = ['openStakeModal', 'loadStakeChoice', 'stakeCardView', 'submitStakeTx', 'fillStakeMax', 'submitSignedTx', 'showStakeError', 'clearStakeError',
-    'stakeMaxNominations', 'renderStakeSelected', 'renderStakeValidatorList', 'stakePickerView', 'addStakeValidator', 'removeStakeValidator',
+    'stakeMaxNominations', 'renderStakeSelected', 'renderStakeValidatorList', 'stakePickerView', 'addStakeValidator',
     'getStakeableBalance', 'batchTx', 'buildBondOrExtra', 'formatDuration', 'maybeRunWalletEntryIntent'];
 function lift(name) {
     const at = SCRIPT.indexOf(`function ${name}(`);
@@ -109,6 +109,7 @@ async function card({ data, snapshots, payee = { kind: 'staked', account: '' }, 
         FEE_MARGIN, pdexToPlanck, maxNominationsFrom, createStakePicker, payeeOf, Math, Number, parseFloat, BigInt,
         stakingFormatPDEX: (n) => Number(n || 0).toFixed(4), stakingFormatNumber: (n) => String(n), showTxNotice: () => {},
         currentWalletData: data, stakeSelected: new Map(), stakeValidators: [], stakePicker: null, stakeCard: null,
+        stakeRefresh: { tracked: () => null },   // WP4: nothing tracked (test/stake-states.test.js runs the real one)
         validatorsCache: null, validatorsCacheAt: 0, VALIDATORS_CACHE_TTL: 60_000, stakeQuotaWarned: false, walletEntryIntent: null,
         loadValidatorsForPicker: async () => {
             const next = queue.length > 1 ? queue.shift() : queue[0];
@@ -697,7 +698,8 @@ describe('Call details: the calls buildStakeTx builds, decoded from the built tr
 
 describe('the multisig co-signer sees the payee change (known item 1)', () => {
     test('the review of a stake batch with setPayee lists the payee change, decoded', async () => {
-        const plan = stakePlan.planStakeCalls({ hasBond: true, amountPlanck: 5n * PDEX, currentTargets: [V(1)], targets: [V(1)], currentPayee: { kind: 'staked' }, payee: { kind: 'account', account: OTHER } });
+        const plan = stakePlan.planStakeCalls({ hasBond: true, amountPlanck: 5n * PDEX, currentTargets: [V(1)], targets: [V(1)], currentPayee: { kind: 'staked' }, payee: { kind: 'account', account: OTHER },
+            isAddress: (a) => !!a });   // the card's check (WP4: with none, a rewards account is refused)
         const tx = stakePlan.buildStakeTx(api, plan, { stash: ME });
         const call = api.registry.createType('Call', tx.method.toHex());
         // What the multisig review modal draws under "Call to run" (lib/multisig-view.js).

@@ -18,6 +18,9 @@ import { planStakeCalls, buildStakeTx, stakeCalls, stakeAmountCheck, stakeAmount
     parseAmountPlanck, planckToPdexText, pdexNumberToPlanck, transferablePlanckOf, loadStakeView, saveStakeView, STAKE_VIEW_KEY,
     STAKE_COPY, stakeCopy, STAKE_FEE_RESERVE_PLANCK, payeeArg, stakeFormPlan } from '../lib/stake-plan.js';
 
+// The card passes the SS58 88 check (lib/wallet-safety.js); with no check a rewards account is refused (stake WP4, WP3 review
+// item 2), so the rows below that are about the plan, not the check, pass one that accepts any non-empty text.
+const anyAddress = (a) => !!a;
 const addr = (n, prefix = 88) => encodeAddress(new Uint8Array(32).fill(n), prefix);
 const [A, B, C, D, ME, OTHER] = [11, 12, 13, 14, 1, 2].map(n => addr(n));
 const PDEX = 10n ** 12n;
@@ -35,7 +38,7 @@ describe('planStakeCalls: one call per change, in the order bond or bondExtra, s
         assert.deepEqual(p.problems, []);
     });
     test('first stake with a chosen destination bonds with it; no separate setPayee', () => {
-        const p = planStakeCalls({ hasBond: false, amountPlanck: 150n * PDEX, targets: [A], payee: { kind: 'account', account: OTHER } });
+        const p = planStakeCalls({ hasBond: false, amountPlanck: 150n * PDEX, targets: [A], payee: { kind: 'account', account: OTHER }, isAddress: anyAddress });
         assert.deepEqual(kinds(p), ['bond', 'nominate']);
         assert.deepEqual(p.calls[0].args.payee, { kind: 'account', account: OTHER });
     });
@@ -100,8 +103,8 @@ describe('planStakeCalls: one call per change, in the order bond or bondExtra, s
         assert.deepEqual(p.calls, [{ kind: 'setPayee', args: { payee: { kind: 'stash' } } }]);
         assert.equal(p.primary, 'SC-52');
         assert.deepEqual(planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'stash' }, payee: 'stash' }).calls, []);
-        assert.deepEqual(planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'account', account: OTHER }, payee: { kind: 'account', account: OTHER } }).calls, []);
-        assert.deepEqual(kinds(planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'account', account: OTHER }, payee: { kind: 'account', account: ME } })), ['setPayee']);
+        assert.deepEqual(planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'account', account: OTHER }, payee: { kind: 'account', account: OTHER }, isAddress: anyAddress }).calls, []);
+        assert.deepEqual(kinds(planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'account', account: OTHER }, payee: { kind: 'account', account: ME }, isAddress: anyAddress })), ['setPayee']);
         assert.deepEqual(planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'staked' }, payee: 'current' }).calls, []);
     });
     test('combined: each pair and all three, in order', () => {
@@ -262,6 +265,7 @@ describe('the view preference: simple unless the store says advanced, never thro
 describe('copy', () => {
     test('the strings WP1 and WP2 use, as the spec writes them; no dashes, no exclamation marks', () => {
         // WP3 (the advanced view) adds SC-02, SC-40 to SC-43, SC-61 to SC-76, the SC-78 and SC-79 parts and SC-90 to SC-94.
+        // WP4 (states) adds SC-120, SC-121, SC-141, and SC-150 and SC-151 with their lines (s).
         assert.deepEqual(Object.keys(STAKE_COPY), ['SC-01', 'SC-02', 'SC-03', 'SC-03b', 'SC-03c', 'SC-04', 'SC-05', 'SC-10', 'SC-11', 'SC-11b', 'SC-12', 'SC-13',
             'SC-14', 'SC-14b', 'SC-14c', 'SC-14d', 'SC-14e', 'SC-20', 'SC-21', 'SC-21b', 'SC-22', 'SC-23', 'SC-24a', 'SC-24b', 'SC-25',
             'SC-30', 'SC-30b', 'SC-30c', 'SC-30d', 'SC-31', 'SC-32', 'SC-33', 'SC-35', 'SC-36', 'SC-37', 'SC-38', 'SC-39', 'SC-40', 'SC-41', 'SC-42', 'SC-43',
@@ -269,7 +273,7 @@ describe('copy', () => {
             'SC-69', 'SC-70', 'SC-71', 'SC-73', 'SC-74', 'SC-75', 'SC-76', 'SC-78a', 'SC-78b', 'SC-78c', 'SC-78d', 'SC-78e', 'SC-79a', 'SC-79b',
             'SC-80a', 'SC-80b', 'SC-80c', 'SC-80d', 'SC-80e', 'SC-90', 'SC-91', 'SC-92', 'SC-93', 'SC-94', 'SC-95',
             'SC-100', 'SC-101', 'SC-102', 'SC-104', 'SC-105', 'SC-106', 'SC-107', 'SC-108', 'SC-109', 'SC-110', 'SC-111', 'SC-112', 'SC-113', 'SC-114', 'SC-115',
-            'SC-122', 'SC-130', 'SC-131', 'SC-132', 'SC-133', 'SC-134', 'SC-140', 'SC-160', 'SC-161a', 'SC-161b', 'SC-163a', 'SC-163b', 'SC-163c',
+            'SC-120', 'SC-121', 'SC-122', 'SC-130', 'SC-131', 'SC-132', 'SC-133', 'SC-134', 'SC-140', 'SC-141', 'SC-150', 'SC-150s', 'SC-151', 'SC-151s', 'SC-160', 'SC-161a', 'SC-161b', 'SC-163a', 'SC-163b', 'SC-163c',
             'SC-164a', 'SC-164b', 'SC-164c', 'SC-164d', 'SC-164e', 'SC-164f']);
         assert.equal(stakeCopy('SC-32'), 'Chosen by past return, highest first, from validators that are active now, have at least 7 eras of reward history, accept new stake, take 10% commission or less with no recent raise, were not penalised in the last 84 eras, rarely miss blocks, and paid at least three quarters of the typical return. One per operator identity.');
         assert.equal(stakeCopy('SC-115', { need: '101.05', min: '100', have: '101.02' }), 'To stake you need at least 101.05 PDEX free: the smallest stake of 100 PDEX, 1 PDEX that must stay in the account, and the network fee. This account has 101.02 PDEX free.');
@@ -313,7 +317,7 @@ function recordingApi({ batchAll = true, bondArgs = 2 } = {}) {
 
 describe('buildStakeTx: the plan, built call for call (M6), atomic when more than one (F1)', () => {
     test('two or more calls go in utility.batchAll, never forceBatch, and equal the plan', () => {
-        const plan = planStakeCalls({ hasBond: true, amountPlanck: 3n * PDEX, currentTargets: [A], targets: [B, C], currentPayee: { kind: 'staked' }, payee: { kind: 'account', account: OTHER } });
+        const plan = planStakeCalls({ hasBond: true, amountPlanck: 3n * PDEX, currentTargets: [A], targets: [B, C], currentPayee: { kind: 'staked' }, payee: { kind: 'account', account: OTHER }, isAddress: anyAddress });
         const tx = buildStakeTx(recordingApi(), plan, { stash: ME });
         assert.equal(`${tx.section}.${tx.method}`, 'utility.batchAll');
         assert.deepEqual(tx.args[0], [
@@ -397,7 +401,7 @@ describe('the plan encodes against the real mainnet 394 metadata', () => {
         const nom = decode(buildStakeTx(api, planStakeCalls({ hasBond: true, currentTargets: [A], targets: [C, D] }), { stash: ME }));
         assert.equal(name(nom), 'staking.nominate');
         assert.deepEqual(nom.args[0].map(t => ss58(t)), [C, D]);
-        const pay = decode(buildStakeTx(api, planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'staked' }, payee: { kind: 'account', account: OTHER } }), { stash: ME }));
+        const pay = decode(buildStakeTx(api, planStakeCalls({ hasBond: true, currentTargets: [A], targets: [A], currentPayee: { kind: 'staked' }, payee: { kind: 'account', account: OTHER }, isAddress: anyAddress }), { stash: ME }));
         assert.equal(name(pay), 'staking.setPayee');
         assert.ok(pay.args[0].isAccount);
         assert.equal(ss58(pay.args[0].asAccount), OTHER);

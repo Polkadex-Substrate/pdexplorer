@@ -396,7 +396,8 @@ describe('finding 5: /api/wallet reports a failed ledger read and the controller
 });
 
 describe('finding 6: the rewards line fills {destination}', () => {
-    const line = (payee) => planStakeCalls({ hasBond: true, currentTargets: [V1], targets: [V1], currentPayee: { kind: 'staked' }, payee }).lines[0];
+    // isAddress: the card's check; with none a rewards account is refused (stake WP4, WP3 review item 2).
+    const line = (payee) => planStakeCalls({ hasBond: true, currentTargets: [V1], targets: [V1], currentPayee: { kind: 'staked' }, payee, isAddress: (a) => !!a }).lines[0];
     test('each destination reads as words or the address, never a literal placeholder', () => {
         const other = addr(99);
         const cases = [[{ kind: 'stash' }, 'Send rewards to this account'], [{ kind: 'account', account: other }, `Send rewards to ${other}`]];

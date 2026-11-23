@@ -98,7 +98,8 @@ describe('Q23, Q33, Q34: My Account', () => {
         assert.ok(SCRIPT.includes('<div class="list-header"><h2>Network staking</h2></div>'));
         assert.ok(!SCRIPT.includes('<h2>Staking Overview</h2>'));
         assert.ok(!SCRIPT.includes('<div class="wallet-stat"><span>Total Staked</span>'));
-        assert.ok(SCRIPT.includes('<div class="label">Total Staked</div>'), 'the summary card keeps the one Total Staked');
+        // stake WP4: the tile is drawn by lib/stake-refresh.js (stakedTileHtml), which renderWalletDashboard calls.
+        assert.ok(/<div class="label"[^>]*>Total Staked<\/div>/.test(readFileSync(new URL('../lib/stake-refresh.js', import.meta.url), 'utf8')) && SCRIPT.includes('stakedTileHtml(data'), 'the summary card keeps the one Total Staked');
     });
 });
 

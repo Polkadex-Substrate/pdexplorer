@@ -31,6 +31,8 @@ import { FEE_MARGIN } from '../lib/fee-preflight.js';
 import { pdexToPlanck, isPositiveNumberInput } from '../lib/wallet-safety.js';
 import { maxNominationsFrom } from '../lib/stake-picker-view.js';
 import { escapeHtml } from '../lib/html-escape.js';
+// WP4: the stake parts of the dashboard (absent before WP4: the dashboard then draws them inline).
+const stakeRefreshModule = await import('../lib/stake-refresh.js').then((m) => m, () => ({}));
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const addr = (n) => encodeAddress(new Uint8Array(32).fill(n), 88);
@@ -181,7 +183,7 @@ describe('c: a stake that could not be read is not 0', () => {
         const noop = () => '';
         const ctx = {
             console, Promise, Object, JSON, Array, Map, Set, String, Number, Math, Date, encodeURIComponent, setTimeout, clearTimeout,
-            window: win, document: doc, navigator: { clipboard: { writeText: async () => {} } }, ...stakePlan,
+            window: win, document: doc, navigator: { clipboard: { writeText: async () => {} } }, ...stakePlan, ...stakeRefreshModule,   // WP4: the stake parts of the dashboard
             getStoredWallet: () => ME, isSameAddress: (x, y) => x === y, currentWalletData: null, walletAprData: null, walletFetchGen: 0, walletRecentStore: null, VALIDATE_ON: false,
             stakingFormatPDEX: (v) => Number(v || 0).toFixed(4), stakingFormatNumber: (n) => String(n), stakingShortAddress: (x) => String(x).slice(0, 6) + '...', stakingEscapeHtml: escapeHtml,
             getStakeableBalance: () => 0, hasInjectedWalletNow: () => true, readWalletValidator: () => Promise.resolve(null),
@@ -190,7 +192,7 @@ describe('c: a stake that could not be read is not 0', () => {
         };
         for (const n of ['helpIcon', 'rewardHistoryLinkHtml', 'walletViewingSlotHtml', 'renderUsdSubscript', 'buildViewOnlyCallout', 'formatDuration', 'formatLocalDate',
             'makeTable', 'mountWalletRecentTx', 'fetchApiJson', 'bindViewOnlyCalloutHandlers', 'applyWalletActionBlock', 'scheduleWalletSigningRechecks',
-            'mountBalanceLocks', 'lockActionDeps', 'mountNominationStatus', 'renderWalletAdvancedSection', 'refreshWalletMultisigs', 'renderWalletAprCard',
+            'mountBalanceLocks', 'lockActionDeps', 'mountNominationStatus', 'mountWalletNominations', 'renderWalletAdvancedSection', 'refreshWalletMultisigs', 'renderWalletAprCard',
             'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash', 'bindWalletActionHandlers']) ctx[n] = noop;
         vm.createContext(ctx);
         vm.runInContext(bodyOf(SCRIPT, 'renderWalletDashboard'), ctx);
