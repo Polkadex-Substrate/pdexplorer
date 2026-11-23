@@ -395,12 +395,14 @@ describe('nothing disappears: the 23 capabilities of section 5.3, in Advanced', 
         const c = await card({ data: firstTimer() });
         c.doc.getElementById('stake-modal').style.display = 'none';
         c.doc.body.insertAdjacentHTML('beforeend', '<button id="wallet-act-stake">Stake</button>');
-        c.tab.ctx.walletEntryIntent = 'stake';
+        // walletEntryIntent is the tab's own top-level binding (test/helpers/wallet-world.js declares it with let), so it
+        // is set and read in the tab's scope, not as a property of the context object.
+        c.tab.fn("walletEntryIntent = 'stake'");
         c.tab.fn('maybeRunWalletEntryIntent')();
         await flush();
         assert.equal(c.doc.getElementById('stake-modal').style.display, 'flex');
         assert.equal(c.q('#stake-view-switch').getAttribute('aria-pressed'), 'true');
-        assert.equal(c.tab.ctx.walletEntryIntent, null);
+        assert.equal(c.tab.fn('walletEntryIntent'), null);
         c.close();
     });
     test('22. the fallback list while the snapshot is cold: the picker works without returns', async () => {
