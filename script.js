@@ -73,6 +73,7 @@ import { createPostAction } from './lib/post-action.js';
 import { createKnownResults } from './lib/known-results.js';
 import { effectsFor } from './lib/action-effects.js';
 import { caughtUp, pollDeadlineMs, samePayload } from './lib/freshness.js';
+import { rewardsSeries, renderKey, planChartUpdate, applySeries } from './lib/chart-update.js';
 import { createPayoutRefresh, payoutSignSet } from './lib/payout-refresh.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
@@ -7726,6 +7727,7 @@ function renderStakingRewards(data) {
     const unclaimedCount = (data.unclaimed || []).length;
 
     if (claimedCount === 0 && unclaimedCount === 0) {
+        if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }   // its canvas is about to go
         const note = data.unclaimedComputing
             ? 'Unpaid rewards are still being computed — this can take a moment.'
             : (index.backfillComplete
@@ -7749,6 +7751,9 @@ function renderStakingRewards(data) {
         return;
     }
 
+    const key = renderKey(data, stakingRewardFilter);
+    const keptWrap = resultsEl.querySelector('.staking-chart-wrap');
+    if (keptWrap && keptWrap.renderKey === key) return;   // the same page again (a poll with nothing new): paint nothing
     const rewards = getFilteredRewards(data, stakingRewardFilter);
     const fbtn = (key, label) => `<button class="reward-filter-btn${stakingRewardFilter === key ? ' active' : ''}" data-filter="${key}">${label}</button>`;
     const computingNote = data.unclaimedComputing
@@ -7795,6 +7800,10 @@ function renderStakingRewards(data) {
             </div>
         </div>
         <div id="staking-rewards-table-container"></div>`;
+    // Keep the chart's own wrap and canvas through the repaint so the bars update in place instead of redrawing.
+    const newWrap = resultsEl.querySelector('.staking-chart-wrap');
+    if (keptWrap && stakingRewardsChart && stakingRewardsChart.canvas.parentNode === keptWrap) newWrap.replaceWith(keptWrap);
+    resultsEl.querySelector('.staking-chart-wrap').renderKey = key;
 
     makeTable({
         container: document.getElementById('staking-rewards-table-container'),
@@ -7876,36 +7885,33 @@ function renderStakingRewards(data) {
 function renderStakingRewardsChart(data) {
     const canvas = document.getElementById('staking-rewards-chart');
     if (!canvas || typeof Chart === 'undefined') return;
+    const series = rewardsSeries(data);
+    if (!series) { if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; } return; }
+    const reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const plan = planChartUpdate(stakingRewardsChart && stakingRewardsChart.seriesDrawn, series, { reducedMotion, canvasKept: !!stakingRewardsChart && stakingRewardsChart.canvas === canvas });
+    if (plan.action === 'none') return;
+    if (plan.action === 'update') {
+        applySeries(stakingRewardsChart.data, series);
+        stakingRewardsChart.options.animation = plan.animation;
+        stakingRewardsChart.seriesDrawn = series;
+        stakingRewardsChart.update(plan.updateMode === 'none' ? 'none' : undefined);
+        return;
+    }
     if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
-
-    const claimedByEra = new Map();
-    const unclaimedByEra = new Map();
-    const eraSet = new Set();
-    const addTo = (map, era, amt) => {
-        const key = era == null ? 'Unknown' : era;
-        map.set(key, (map.get(key) || 0) + amt);
-        eraSet.add(key);
-    };
-    (data.claimed || []).forEach(r => addTo(claimedByEra, r.era, Number(r.amount) || 0));
-    (data.unclaimed || []).forEach(r => addTo(unclaimedByEra, r.era, Number(r.amount) || 0));
-
-    const eras = [...eraSet].filter(e => e !== 'Unknown').sort((a, b) => a - b);
-    if (eraSet.has('Unknown')) eras.push('Unknown');
-    if (eras.length === 0) return;
-    const labels = eras.map(e => e === 'Unknown' ? 'Unknown' : 'Era ' + e);
-
+    const [claimed, unpaid] = series.datasets;
     stakingRewardsChart = new Chart(canvas.getContext('2d'), {
         type: 'bar',
         data: {
-            labels: labels,
+            labels: series.labels,
             datasets: [
-                { label: 'Claimed', data: eras.map(e => claimedByEra.get(e) || 0), backgroundColor: 'rgba(0, 230, 118, 0.6)', borderColor: '#00E676', borderWidth: 1, borderRadius: 3 },
-                { label: 'Unpaid', data: eras.map(e => unclaimedByEra.get(e) || 0), backgroundColor: 'rgba(230, 0, 122, 0.55)', borderColor: '#E6007A', borderWidth: 1, borderRadius: 3 }
+                { label: 'Claimed', data: claimed.data, backgroundColor: 'rgba(0, 230, 118, 0.6)', borderColor: '#00E676', borderWidth: 1, borderRadius: 3 },
+                { label: 'Unpaid', data: unpaid.data, backgroundColor: 'rgba(230, 0, 122, 0.55)', borderColor: '#E6007A', borderWidth: 1, borderRadius: 3 }
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            animation: plan.animation,
             plugins: {
                 legend: { position: 'bottom', labels: { color: '#ccc', font: { size: 11 } } },
                 tooltip: { callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + Number(ctx.parsed.y).toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' PDEX' } }
@@ -7916,6 +7922,7 @@ function renderStakingRewardsChart(data) {
             }
         }
     });
+    stakingRewardsChart.seriesDrawn = series;
 }
 
 function downloadStakingRewardsCSV() {
