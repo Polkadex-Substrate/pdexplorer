@@ -10,6 +10,7 @@ import { readRepo, bodyOf } from './helpers/source.js';
 import * as chartUpdate from '../lib/chart-update.js';
 import { REFRESH_UI } from '../lib/refresh-ui.js';
 import { escapeHtml } from '../lib/html-escape.js';
+import { createLatest } from '../lib/wallet-aware.js';
 
 const SCRIPT = readRepo('script.js', import.meta.url);
 const line = (start) => { const i = SCRIPT.indexOf(start); assert.ok(i >= 0, 'not in script.js: ' + start); return SCRIPT.slice(i, SCRIPT.indexOf('\n', i)); };
@@ -24,7 +25,7 @@ function page({ reduced = false } = {}) {
     doc.body.innerHTML = '<div id="staking-rewards-results"></div>';
     win.HTMLCanvasElement.prototype.getContext = function () { return { canvas: this }; };
     win.matchMedia = (q) => ({ matches: reduced && /reduce/.test(q), media: q });
-    const log = { made: [], updates: [], destroys: 0, tables: 0 };
+    const log = { made: [], updates: [], destroys: 0, tables: 0, throwTable: 0, leaves: [] };
     class FakeChart {
         constructor(ctx, cfg) { this.canvas = ctx.canvas; this.config = cfg; this.data = cfg.data; this.options = cfg.options; log.made.push({ canvas: this.canvas, animation: cfg.options.animation, chart: this }); }
         update(mode) { log.updates.push({ mode, animation: this.options.animation, labels: [...this.data.labels], data: this.data.datasets.map(d => [...d.data]) }); }
@@ -34,14 +35,18 @@ function page({ reduced = false } = {}) {
         console, Promise, Object, JSON, Array, Map, Set, String, Number, Math, Date, encodeURIComponent,
         window: win, document: doc, Chart: FakeChart, ...chartUpdate, REFRESH_UI,
         stakingFormatPDEX: (v) => Number(v || 0).toFixed(4), stakingFormatNumber: (n) => String(n), stakingShortAddress: (x) => String(x).slice(0, 6), stakingEscapeHtml: escapeHtml,
+        createLatest, isValidPolkadexAddress: () => true, setTimeout: () => 0, fetch: (...a) => ctx.__fetch(...a), AbortController: win.AbortController || globalThis.AbortController,
+        stakingRewardsPlan: () => ({ mode: 'connect' }), renderStakingRewardsNote() {}, loadStakingIndexStatus() {}, stakingRewardsViewed: () => '',
+        walletSession: { onActiveAccountChange: () => () => {}, getActiveAccount: () => null }, onStakingRewardsWalletChange() {}, isSameAddress: () => false,
+        pageScope: { add: (f) => { log.leaves.push(f); }, leave: () => { log.leaves.splice(0).forEach(f => f()); } },
         formatLocalDateTime: () => 'now', downloadStakingRewardsCSV() {}, downloadStakingRewardsJSON() {}, downloadStakingRewardsTaxCSV() {},
-        makeTable: (o) => { log.tables++; o.container.innerHTML = '<table><tr><td>' + o.rows.length + '</td></tr></table>'; }
+        makeTable: (o) => { if (log.throwTable > 0) { log.throwTable--; throw new Error('table builder failed'); } log.tables++; o.container.innerHTML = '<table><tr><td>' + o.rows.length + '</td></tr></table>'; }
     };
     vm.createContext(ctx);
     vm.runInContext([
-        line('let stakingRewardsData = null;'), line('let stakingRewardsChart = null;'), line("let stakingRewardFilter = 'all';"),
-        bodyOf(SCRIPT, 'getFilteredRewards'), bodyOf(SCRIPT, 'renderStakingAprCard'), bodyOf(SCRIPT, 'renderStakingRewards'), bodyOf(SCRIPT, 'renderStakingRewardsChart'),
-        'globalThis.__s = { render: (d) => { stakingRewardsData = d; renderStakingRewards(d); }, setFilter: (f) => { stakingRewardFilter = f; }, chart: () => stakingRewardsChart };'
+        line('let stakingRewardsData = null;'), line('let stakingUnclaimedPolls = 0;'), line('const stakingRewardsLatest = createLatest();'), line('let stakingRewardsChart = null;'), line("let stakingRewardFilter = 'all';"),
+        bodyOf(SCRIPT, 'getFilteredRewards'), bodyOf(SCRIPT, 'renderStakingAprCard'), bodyOf(SCRIPT, 'renderStakingRewards'), bodyOf(SCRIPT, 'renderStakingRewardsChart'), 'async ' + bodyOf(SCRIPT, 'fetchStakingRewards'), bodyOf(SCRIPT, 'showStakingRewardsFor'), bodyOf(SCRIPT, 'initStakingRewardsPage'),
+        'globalThis.__s = { render: (d) => { stakingRewardsData = d; renderStakingRewards(d); }, setFilter: (f) => { stakingRewardFilter = f; }, chart: () => stakingRewardsChart, fetchRewards: (a, poll) => fetchStakingRewards(a, poll), show: (a) => showStakingRewardsFor(a), init: (a) => initStakingRewardsPage(a) };'
     ].join('\n'), ctx);
     const q = (s) => doc.querySelector(s);
     return { doc, ctx, log, q, s: ctx.__s };
@@ -133,5 +138,89 @@ describe('the staking-rewards bars (CEO report 22 Nov)', () => {
         p.s.render(mk(ME, []));
         assert.equal(p.log.destroys, 1);
         assert.ok(p.q('#staking-rewards-chart') === null, 'canvas still in the page');
+    });
+
+    // ---- review follow-ups (22 Nov) ----
+    const okFetch = (p, data) => { p.ctx.__fetch = async () => ({ ok: true, status: 200, json: async () => data }); };
+    const failFetch = (p) => { p.ctx.__fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: 'boom' }) }); };
+
+    test('GUARD: only unclaimedTotal changes: the cards repaint with the new total, the chart instance and canvas are untouched', () => {
+        const p = page();
+        p.s.render(mk(ME, eras(6)));
+        const canvas = p.q('#staking-rewards-chart'), chart = p.s.chart(), grid = p.q('.staking-summary-grid');
+        const next = mk(ME, eras(6)); next.summary.unclaimedTotal = 7;
+        p.s.render(next);
+        assert.ok(p.q('.staking-summary-grid') !== grid, 'cards were not repainted');
+        assert.ok(p.q('.staking-summary-grid').textContent.includes('7.0000 PDEX'), 'new unpaid total not shown');
+        assert.ok(p.q('#staking-rewards-chart') === canvas, 'canvas replaced');
+        assert.ok(p.s.chart() === chart, 'chart instance replaced');
+        assert.equal(p.log.made.length, 1); assert.equal(p.log.destroys, 0); assert.equal(p.log.updates.length, 0);
+    });
+
+    test('GUARD: unclaimedComputing goes true to false with equal rows: the notice is removed, the chart instance is kept', () => {
+        const p = page();
+        const a = mk(ME, eras(6)); a.unclaimedComputing = true;
+        p.s.render(a);
+        assert.ok(p.q('#staking-rewards-results').textContent.includes('computed in the background'), 'notice missing while computing');
+        const chart = p.s.chart(), canvas = p.q('#staking-rewards-chart');
+        p.s.render(mk(ME, eras(6)));
+        assert.ok(!p.q('#staking-rewards-results').textContent.includes('computed in the background'), 'notice still shown');
+        assert.ok(p.s.chart() === chart && p.q('#staking-rewards-chart') === canvas, 'chart not kept');
+        assert.equal(p.log.destroys, 0); assert.equal(p.log.made.length, 1);
+    });
+
+    test('leaving: a response that replaces the area with Loading releases the chart (nothing bound to a detached canvas)', async () => {
+        const p = page();
+        p.s.render(mk(ME, eras(6)));
+        okFetch(p, mk(OTHER, eras(2)));
+        const pending = p.s.fetchRewards(OTHER, false);
+        assert.equal(p.log.destroys, 1, 'chart not destroyed when the area was replaced by Loading');
+        await pending;
+    });
+
+    test('leaving: a fetch error that replaces the area leaves no chart behind, and a later render builds a fresh one', async () => {
+        const p = page();
+        p.s.render(mk(ME, eras(6)));
+        failFetch(p);
+        await p.s.fetchRewards(ME, false);
+        assert.ok(p.q('#staking-rewards-results').textContent.includes('Error'), 'error not shown');
+        assert.equal(p.log.destroys, 1); assert.equal(p.s.chart(), null, 'stored instance kept');
+        p.s.render(mk(ME, eras(6)));
+        assert.equal(p.log.made.length, 2, 'fresh chart on the next render');
+    });
+
+    test('leaving: a poll that errors does not replace the area, so the chart stays', async () => {
+        const p = page();
+        p.s.render(mk(ME, eras(6)));
+        failFetch(p);
+        await p.s.fetchRewards(ME, true);
+        assert.equal(p.log.destroys, 0); assert.ok(p.s.chart());
+    });
+
+    test('leaving: clearing the results (the wallet is not connected) releases the chart', () => {
+        const p = page();
+        p.s.render(mk(ME, eras(6)));
+        p.s.show('');
+        assert.equal(p.q('#staking-rewards-results').innerHTML, '');
+        assert.equal(p.log.destroys, 1); assert.equal(p.s.chart(), null);
+    });
+
+    test('leaving: the route leaving the staking-rewards page releases the chart', () => {
+        const p = page();
+        p.s.init('');
+        p.q('#staking-rewards-results').innerHTML = '';
+        p.s.render(mk(ME, eras(6)));
+        p.ctx.pageScope.leave();
+        assert.equal(p.log.destroys, 1, 'chart survived the route leaving'); assert.equal(p.s.chart(), null);
+    });
+
+    test('a render that throws half way is not remembered: the same data rendered again rebuilds the page', () => {
+        const p = page();
+        p.log.throwTable = 1;
+        assert.throws(() => p.s.render(mk(ME, eras(6))), /table builder failed/);
+        p.s.render(mk(ME, eras(6)));
+        assert.equal(p.log.tables, 1, 'second render skipped (half-built page left)');
+        assert.ok(p.q('#staking-rewards-table-container table'), 'table missing');
+        assert.equal(p.log.made.length, 1, 'chart missing');
     });
 });
