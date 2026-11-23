@@ -23,6 +23,12 @@ import { performanceForAll } from '../lib/stake-apr.js';
 import { apyFields, estimatedApy, APY_FIELD, MAX_APY_BASE } from '../lib/apy.js';
 
 const server = readRepo('server.js', import.meta.url);
+// One route handler: from its app.get line to the first line that closes it.
+function routeSrc(route) {
+    const start = server.indexOf(route);
+    assert.ok(start !== -1, `route not found: ${route}`);
+    return server.slice(start, server.indexOf('\n});\n', start) + 4);
+}
 const script = readRepo('script.js', import.meta.url);
 
 const dirs = [];
@@ -74,8 +80,7 @@ describe('/api/validators data path on a seeded database', () => {
     });
 
     test('the handler attaches it, and a failure there cannot cost the list', () => {
-        const start = server.indexOf("app.get('/api/validators',");
-        const handler = stripComments(server.slice(start, server.indexOf('app.get(', start + 10)));
+        const handler = stripComments(routeSrc("app.get('/api/validators',"));
         assert.match(handler, /withNominatorApy\(payload\.validators, nominatorApyInputs\(\)\.snapshot\)/,
             '/api/validators does not attach the stake-aware estimate');
         assert.match(handler, /try \{\s*payload\.validators = withNominatorApy/, 'the enrichment must sit in its own try block');
@@ -96,8 +101,7 @@ describe('/api/validator/:address data path on a seeded database', () => {
     });
 
     test('the handler attaches both, best-effort', () => {
-        const start = server.indexOf("app.get('/api/validator/:address',");
-        const handler = stripComments(server.slice(start, server.indexOf('app.get(', start + 10)));
+        const handler = stripComments(routeSrc("app.get('/api/validator/:address',"));
         assert.match(handler, /nominatorApyFields\(nominatorApyForAddress\(/, 'scorecard lacks the stake-aware estimate');
         assert.match(handler, /withPerEraNominatorApy\(history, nominatorApySummaries\(\), address/, 'history rows lack the per-era return');
     });
@@ -125,8 +129,9 @@ describe('the validator snapshot carries the network reward per active validator
 });
 
 describe('views', () => {
-    const scorecardFn = new Function('NOMINATOR_APY_FIELD', 'formatNominatorApy', 'nominatorApyCaption',
-        `${bodyOf(script, 'renderValidatorScorecard')}; return renderValidatorScorecard;`)(NOMINATOR_APY_FIELD, formatNominatorApy, nominatorApyCaption);
+    const stakingFormatPDEX = n => String(n);
+    const scorecardFn = new Function('NOMINATOR_APY_FIELD', 'formatNominatorApy', 'nominatorApyCaption', 'stakingFormatPDEX',
+        `${bodyOf(script, 'renderValidatorScorecard')}; return renderValidatorScorecard;`)(NOMINATOR_APY_FIELD, formatNominatorApy, nominatorApyCaption, stakingFormatPDEX);
     const base = { estimatedApy: estimatedApy(5), avgCommission: 5, minCommission: 5, maxCommission: 5, activeEras: 28, totalEras: 28, activeEraRate: 1, currentStake: 392_000, commissionSpikeCount: 0 };
 
     test('validator page scorecard shows the stake-aware number, not the commission-only one', () => {
@@ -139,7 +144,7 @@ describe('views', () => {
     test('validator page: no estimate renders the dash, never 0.00% or 21.94%', () => {
         const html = scorecardFn({ ...base, [NOMINATOR_APY_FIELD]: null, [NOMINATOR_APY_METHOD_FIELD]: null });
         const card = html.slice(html.indexOf('Est. APY'), html.indexOf('Est. APY') + 200);
-        assert.match(card, />—</);
+        assert.match(card, />\u2014</);
         assert.ok(!/0\.00%|21\.94%/.test(card), card);
     });
 
@@ -150,7 +155,7 @@ describe('views', () => {
         assert.match(col, /sort: compareNominatorApy/);
         assert.match(col, /directional: true/);
         assert.match(col, /formatNominatorApy\(row\[NOMINATOR_APY_FIELD\]\)/);
-        assert.match(col, /'<span style="color: var\(--text-secondary\);">—<\/span>'/, 'no estimate must render the dash, as before');
+        assert.match(col, /'<span style="color: var\(--text-secondary\);">\u2014<\/span>'/, 'no estimate must render the dash, as before');
         // makeTable hands a directional column the direction instead of reversing, so nulls stay last.
         assert.match(stripComments(bodyOf(script, 'makeTable')), /col\.directional \? \(a, b\) => cmp\(a, b, sortDir\) : cmp/);
         assert.equal(typeof compareNominatorApy, 'function');
@@ -158,7 +163,7 @@ describe('views', () => {
 
     test('validator page history table and chart use the per-era return', () => {
         const code = stripComments(script);
-        assert.match(code, /formatNominatorApy\(h\.nominatorApy\) \?\? '—'/);
+        assert.match(code, /formatNominatorApy\(h\.nominatorApy\) \?\? '\\u2014'/);
         assert.match(code, /chronHistory\.map\(h => h\.nominatorApy \?\? null\)/);
     });
 });
@@ -168,7 +173,7 @@ describe('views', () => {
 // exclude only the home page's network-average tile, which is not a
 // per-validator display.
 describe('guard: no per-validator display uses the commission-only figure', () => {
-    const COMMISSION_ONLY = /estimatedApy\(|\bAPY_FIELD\b|avg30DayApy|realApy|currentApy|scorecard\.estimatedApy\b|\bh\.apy\b|apyFields\(/;
+    const COMMISSION_ONLY = /estimatedApy\(|estimatedApyAtCurrentCommission|\bAPY_FIELD\b|avg30DayApy|realApy|currentApy|scorecard\.estimatedApy\b|\bh\.apy\b|apyFields\(/;
     function offenders(src, excludedFns) {
         let code = src;
         for (const name of excludedFns) code = code.replace(bodyOf(code, name), `/* excluded: ${name} */`);
@@ -187,9 +192,7 @@ describe('guard: no per-validator display uses the commission-only figure', () =
 
     test('server.js validator routes: neither serves it as the per-validator figure', () => {
         for (const route of ["app.get('/api/validators',", "app.get('/api/validator/:address',"]) {
-            const start = server.indexOf(route);
-            const handler = server.slice(start, server.indexOf('app.get(', start + 10));
-            const bad = offenders(handler, []);
+            const bad = offenders(routeSrc(route), []);
             assert.deepEqual(bad.map(b => b.line), [],
                 `${route} computes a per-validator APY from commission alone. Offending code:\n  ${bad.map(b => b.line).join('\n  ')}`);
         }
