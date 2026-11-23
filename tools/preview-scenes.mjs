@@ -63,6 +63,8 @@ import { ApiPromise } from '@polkadot/api';
 import { loadFixture } from '../test/helpers/extrinsic-builders.js';
 import { mockProvider } from '../test/helpers/mock-provider.js';
 import { FEE_MARGIN } from '../lib/fee-preflight.js';
+import { createStakeRefresh, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, stakeIntentNoteHtml } from '../lib/stake-refresh.js';
+import { classifyThrownError } from '../lib/tx-status.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -515,11 +517,11 @@ const stakeApi = () => (stakeApiP = stakeApiP || (async () => {
     const mock = mockProvider({ metadataHex: fx.metadata, specVersion: fx.specVersion, specName: fx.specName, transactionVersion: fx.transactionVersion });
     return ApiPromise.create({ provider: mock.provider, noInitWarn: true });
 })());
-async function stakeWorld({ data, list = slist(), full = true, payee = { kind: 'staked', account: '' }, typed = '', steps = null, view = 'simple', failed = false }) {
+async function stakeWorld({ data, list = slist(), full = true, payee = { kind: 'staked', account: '' }, typed = '', steps = null, view = 'simple', failed = false, dashboard = null, tracked = null }) {
     const window = new Window({ url: 'https://explorer.test/wallet' });
     const doc = window.document;
     doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
-    doc.querySelector('#wallet-dashboard').innerHTML = `<div class="list-container glass"><div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2></div></div>`;
+    doc.querySelector('#wallet-dashboard').innerHTML = dashboard || `<div class="list-container glass"><div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2></div></div>`;
     const html = rd('index.html');
     const modal = html.slice(html.indexOf('<div id="stake-modal"'), html.indexOf('<!-- Payout Rewards Modal -->')).replace('style="display: none;', 'style="display: flex;');
     doc.querySelector('.app-container').insertAdjacentHTML('beforeend', modal);
@@ -537,7 +539,7 @@ async function stakeWorld({ data, list = slist(), full = true, payee = { kind: '
         onAdd: (a) => { if (!selected.some(r => r.address === a)) { const v = list.find(x => x.address === a); selected.push({ address: a, name: v ? v.name : null }); card.markManual(); relist(); } },
         marks: () => card.marks() });
     selected = (data.staking.nominating || []).map(v => ({ address: v.address, name: v.name }));
-    card.open({ data });
+    card.open({ data, tracked });
     if (data.staking.totalStaked > 0) card.setPayee(payee);
     if (failed) {
         card.setSnapshot(new Error('down'));
@@ -607,9 +609,77 @@ function checkStakeScene(w, s, err) {
     if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
 }
 
+// WP4 (design 10.3, state rows 14 to 20): signing, failed, My Account after a stake (lib/stake-refresh.js drawing the
+// real tiles, button and list in place after a chain read at inclusion), the card reopened while that stake is
+// tracked (SC-141), /stake with no wallet (SC-120 above the real chooser) and a read-only account (SC-121). Around the
+// real parts, the dashboard is a fixture copy of renderWalletDashboard's markup with the same classes and ids.
+const STAKE4_PICKS = [1, 2, 3, 4, 5, 6, 7, 8];
+const stake4after = () => ({ address: ME, balance: { free: 954.53, reserved: 250, total: 1204.53, transferable: 953.53, transferableAllowDeath: 954.53 },
+    staking: { totalStaked: 250, activeStaked: 250, activeStakedPlanck: String(250n * PDEX), nominating: STAKE4_PICKS.map(n => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}` })), ledgerRead: 'ok', controller: ME },
+    network: STAKE_NET, freshness: { v: 1, chainHead: 4_210_370 } });
+const s4fmt = { pdex: (v) => Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }), esc: escapeHtml, short: shortAddr };
+function stake4dashboard(data, { readOnly = false } = {}) {
+    const btn = (id, icon, title, sub, extra = '') => `<button class="wallet-action-btn${extra}" id="${id}"><i class='bx ${icon}'></i><div><strong>${title}</strong><span>${sub}</span></div></button>`;
+    const bar = readOnly
+        ? `<div class="wallet-readonly-callout"><div class="wallet-readonly-head"><i class='bx bx-show'></i><div><strong>Read-only mode</strong><p>You're viewing this account in <strong>read-only</strong> mode. To send PDEX, stake, claim rewards, or unbond, connect a Substrate browser extension (Polkadot.js, Talisman, SubWallet) or open this page in a mobile wallet's in-app browser.</p></div></div>${stakeIntentNoteHtml('SC-121', escapeHtml)}</div>`
+        : `<div class="wallet-action-bar" id="wallet-action-bar">${btn('wallet-act-send', 'bx-paper-plane', 'Send PDEX', 'Transfer to any Polkadex address', ' primary')}${stakeButtonHtml(data.staking, escapeHtml)}`
+            + `${btn('wallet-act-payout', 'bx-gift', 'Pay out rewards', '0 unclaimed entries')}${btn('wallet-act-unstake', 'bx-minus-circle', 'Unstake', 'Begin the unbonding period')}${btn('wallet-act-identity', 'bx-id-card', 'Set identity', 'Display name, email, twitter')}</div>`;
+    return `<div class="list-container glass">
+        <div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2><div style="display:flex; gap:14px; align-items:center;"><button class="staking-download-btn">Switch wallet</button><button class="staking-download-btn">Disconnect</button></div></div>
+        <div style="padding: 12px 24px 0;"><a href="#" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${ME}</a></div>
+        <div class="staking-summary-grid"><div class="staking-summary-card"><div class="label">Total Balance</div><div class="value accent" id="wallet-total-value">${s4fmt.pdex(data.balance.total)} PDEX</div><div class="value-usd" data-pdex-amount="${data.balance.total}"></div></div>
+        ${stakedTileHtml(data, s4fmt)}<div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">0.0000 PDEX</div></div><div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards</div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">0.0000 PDEX</div></div></div>
+    </div>
+    <div id="wallet-actions-slot">${bar}</div>
+    <div class="wallet-grid"><div class="list-container glass"><div class="list-header"><h2>My Validators</h2><span id="wallet-my-validators-count" style="color:var(--text-secondary);font-size:0.78rem;">${(data.staking.nominating || []).length} nominated</span></div>
+        <div id="wallet-my-validators" style="padding: 8px 24px 20px;">${myValidatorsHtml(data.staking.nominating, s4fmt)}</div></div></div>`;
+}
+// My Account as a first-time staker, then the stake of 250 PDEX in block #4,210,377: the REAL stake refresh, told by a
+// core stand-in exactly as lib/post-action.js tells it (reload with reason inBlock), reads a fake chain and paints.
+async function stake4account({ readOnly = false, after = true } = {}) {
+    const window = new Window({ url: 'https://explorer.test/wallet' });
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    let data = { ...sfirst(), balance: { free: 1204.55, reserved: 0, total: 1204.55, transferable: 1203.55 }, freshness: { v: 1, chainHead: 4_210_370 } };
+    doc.querySelector('#wallet-dashboard').innerHTML = stake4dashboard(data, { readOnly });
+    let sub = null;
+    const later = stake4after();
+    const sr = createStakeRefresh({ doc, post: { subscribe: (d, o) => { sub = o; return () => {}; } }, data: () => data, setData: (d) => { data = d; },
+        read: async () => ({ block: 4_210_377, balance: later.balance, staking: { ...later.staking, nominating: later.staking.nominating.map(v => v.address) } }), fmt: s4fmt });
+    if (after) await sub.reload({ reason: 'inBlock', info: { key: 'staking.bondNominate' }, block: 4_210_377 });
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    return { window, doc, qa, q: (sel) => doc.querySelector(sel), visible: (x) => !!x && !x.closest('[hidden]'), d: { account: { status: 'connected', address: ME } }, data: () => data, sr };
+}
+const STAKE4_SCENES = [
+    { id: 'stake-signing', primary: 1, need: '#submit-stake-tx-btn[aria-busy="true"]', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { w.card.recheck(() => new Promise(() => {})); const b = w.q('#submit-stake-tx-btn'); b.setAttribute('aria-busy', 'true'); b.disabled = true; b.textContent = 'Signing\u2026'; } }) },
+    { id: 'stake-failed', primary: 1, need: '#stake-modal-error', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { const e = w.q('#stake-modal-error'); e.textContent = classifyThrownError(new Error('Cancelled')).text; e.style.display = 'block'; } }) },
+    { id: 'account-after-stake-reopened', primary: 1, need: '[data-sc="SC-141"]', build: async () => {
+        const a = await stake4account();
+        return stakeWorld({ data: a.data(), dashboard: a.q('#wallet-dashboard').innerHTML, tracked: { block: 4_210_377 }, typed: '' });
+    } }
+].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+const ACCOUNT4_SCENES = [
+    { id: 'account-after-stake', primary: 1, need: '#wallet-staked-value.is-value-changed', build: () => stake4account() },
+    { id: 'account-read-only-stake-intent', primary: 0, need: '.wallet-readonly-callout [data-sc="SC-121"]', build: () => stake4account({ readOnly: true, after: false }) }
+].map(s => ({ ...s, widths: [1280, 375] }));
+function checkAccount4Scene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    if (!w.doc.querySelector('#wallet-dashboard #wallet-staked-value')) err.push('no #wallet-staked-value in the wallet dashboard');
+    const n = w.qa('.wallet-action-btn.primary').filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+const NOWALLET4_SCENES = [
+    { id: 'stake-no-wallet', primary: 1, need: '[data-sc="SC-120"]', build: () => setup({ phone: true }, async (w) => { withMs(w); w.doc.getElementById('wallet-dashboard').insertAdjacentHTML('afterbegin', stakeIntentNoteHtml('SC-120', escapeHtml)); }) }
+];
+
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
-    stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' } };
+    stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' },
+    stake4: { scenes: STAKE4_SCENES, check: checkStakeScene, prefix: '' }, account4: { scenes: ACCOUNT4_SCENES, check: checkAccount4Scene, prefix: '' },
+    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;

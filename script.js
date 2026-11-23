@@ -72,7 +72,7 @@ import { trackSignedTx, recheckSignedTxs, WALLET_CHANGED_STALE } from './lib/tx-
 import { createPostAction } from './lib/post-action.js';
 import { createKnownResults } from './lib/known-results.js';
 import { effectsFor } from './lib/action-effects.js';
-import { caughtUp, pollDeadlineMs, samePayload } from './lib/freshness.js';
+import { caughtUp, pollDeadlineMs } from './lib/freshness.js';
 import { createPayoutRefresh, payoutSignSet } from './lib/payout-refresh.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
@@ -82,6 +82,7 @@ import { buildStakeTx, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, s
     stakeFormPlan, signerRoles, planProblemMessage } from './lib/stake-plan.js';
 import { payeeOf } from './lib/validator-manage.js';
 import { createStakeCard } from './lib/stake-card-view.js';
+import { createStakeRefresh, readStakeFigures, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, stakeIntentNoteHtml } from './lib/stake-refresh.js';
 import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -8472,7 +8473,8 @@ function maybeRunWalletEntryIntent() {
         return;
     }
     if (intent !== 'stake') return;
-    const btn = document.getElementById('wallet-act-stake');
+    const btn = document.getElementById('wallet-act-stake'), callout = document.querySelector && document.querySelector('.wallet-readonly-callout');
+    if (!btn && callout && !callout.querySelector('#stake-intent-note')) callout.insertAdjacentHTML('beforeend', stakeIntentNoteHtml('SC-121', stakingEscapeHtml));
     if (!btn || btn.disabled) return;
     openStakeModal();
 }
@@ -8531,6 +8533,7 @@ function initWalletPage(address) {
     updateSeoMeta('wallet', { canonicalPath: '/wallet', noindex: wantPicker });
     setRouteJsonLd(buildWalletConnectJsonLd());
     renderWalletConnectPanel(root);
+    if (walletEntryIntent === 'stake') root.insertAdjacentHTML('afterbegin', stakeIntentNoteHtml('SC-120', stakingEscapeHtml));   // /stake with no wallet
 
     // Fire-and-forget auto-pick, only when nothing is connected and the user has
     // not asked to choose or to disconnect. Throws are swallowed (user-rejected
@@ -8858,7 +8861,7 @@ async function fetchWalletDashboard(address, opts) {
         // Re-render with the live wallet payload and whichever of price/
         // rewards has already landed. Anything still in-flight will paint
         // into the rendered DOM via the targeted handlers below.
-        if (opts && opts.quiet && onScreen && samePayload(currentWalletData, latestWallet)) currentWalletData.freshness = latestWallet.freshness; else renderWalletDashboard(latestWallet, latestPrice, latestRewards, { live: true });
+        if (!(opts && opts.quiet && onScreen && stakeRefresh.adopt(latestWallet))) renderWalletDashboard(latestWallet, latestPrice, latestRewards, { live: true });   // in place when it can (lib/stake-refresh.js)
         writeWalletCache(address, { wallet: latestWallet, price: latestPrice, rewards: latestRewards });
         // Live data is on screen — safe to open a shortcut's modal now.
         maybeRunWalletEntryIntent();
@@ -8968,14 +8971,6 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     const network = data.network || {};
     const balance = data.balance || {};
 
-    const validatorsHtml = (staking.nominating && staking.nominating.length)
-        ? staking.nominating.map(v => `
-            <a href="/validator/${encodeURIComponent(v.address)}" class="wallet-validator-row item-link">
-                <span>${v.name && v.name !== 'Unknown' ? stakingEscapeHtml(v.name) : stakingShortAddress(v.address)}</span>
-                <i class='bx bx-chevron-right'></i>
-            </a>`).join('')
-        : '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 8px 0;">This wallet is not nominating any validators.</div>';
-
     // Recent rewards are a plain makeTable; recent transactions go through mountWalletRecentTx below, which tags
     // each row with a `direction` (so the column sorts and filters) and adds the Load 50 more bar.
     const recentClaimed = rewards.recentClaimed || [];
@@ -9001,7 +8996,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
             <div class="staking-summary-grid">
                 <div class="staking-summary-card">
                     <div class="label">Total Balance</div>
-                    <div class="value accent">${stakingFormatPDEX(balance.total)} PDEX</div>
+                    <div class="value accent" id="wallet-total-value">${stakingFormatPDEX(balance.total)} PDEX</div>
                     <!-- USD subscript. data-pdex-amount lets pollPriceTicker
                          refresh the figure live as the sidebar ticker polls,
                          so it doesn't drift stale while the user is on the
@@ -9010,7 +9005,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                          already cached). -->
                     <div class="value-usd" data-pdex-amount="${balance.total}">${renderUsdSubscript(balance.total, latestPrice && latestPrice.price)}</div>
                 </div>
-                <div class="staking-summary-card"><div class="label">Total Staked</div><div class="value">${staking.ledgerRead === 'failed' ? stakingEscapeHtml(stakeCopy('SC-109')) : stakingFormatPDEX(staking.totalStaked) + ' PDEX'}</div></div>
+                ${stakedTileHtml(data, { pdex: stakingFormatPDEX, esc: stakingEscapeHtml })}
                 <div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">${stakingFormatPDEX(rewards.claimedTotal)} PDEX</div></div>
                 ${payoutRefresh.tileHtml(data)}
             </div>
@@ -9024,10 +9019,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                     <i class='bx bx-paper-plane'></i>
                     <div><strong>Send PDEX</strong><span>Transfer to any Polkadex address</span></div>
                 </button>
-                <button class="wallet-action-btn" id="wallet-act-stake">
-                    <i class='bx bx-plus-circle'></i>
-                    <div><strong>Stake more</strong><span>Add bond &amp; choose validators</span></div>
-                </button>
+                ${stakeButtonHtml(staking, stakingEscapeHtml)}
                 ${payoutRefresh.buttonHtml(data)}
                 <button class="wallet-action-btn" id="wallet-act-unstake"${((staking.activeStaked || 0) > 0) ? '' : ' disabled title="No active bond to unstake."'}>
                     <i class='bx bx-minus-circle'></i>
@@ -9067,8 +9059,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
 
         <div class="wallet-grid">
             <div class="list-container glass">
-                <div class="list-header"><h2>My Validators</h2><span style="color:var(--text-secondary);font-size:0.78rem;">${(staking.nominating || []).length} nominated</span></div>
-                <div style="padding: 8px 24px 20px;">${validatorsHtml}</div>
+                <div class="list-header"><h2>My Validators</h2><span id="wallet-my-validators-count" style="color:var(--text-secondary);font-size:0.78rem;">${(staking.nominating || []).length} nominated</span></div>
+                <div id="wallet-my-validators" style="padding: 8px 24px 20px;">${myValidatorsHtml(staking.nominating, { esc: stakingEscapeHtml, short: stakingShortAddress })}</div>
             </div>
             <div class="list-container glass">
                 <div class="list-header"><h2>Recent Staking Rewards</h2><a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link is-inline" style="font-size:0.78rem;">View all</a></div>
@@ -9193,8 +9185,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
     mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps(), post: postAction, page: 'wallet',
         unstake: () => { const u = document.getElementById('wallet-act-unstake'); return !!(isOwnWallet && u && !u.disabled); }, openUnstake: openUnstakeModal });
-    mountNominationStatus(document.getElementById('wallet-nominations-slot'), data.address, { fetchJson: fetchApiJson, helpIcon,
-        canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), data.address), openPicker: (keep) => openStakeModal(keep) });
+    mountWalletNominations(data.address, isOwnWallet);
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
     // Design 5.1: a Validator card only for an account that validates or has session keys.
     if (VALIDATE_ON && isOwnWallet && globalApi) readWalletValidator(globalApi, data.address).then(v => { const s = document.getElementById('wallet-validator-slot'); if (s && v && isSameAddress(v.address, currentWalletData?.address)) s.innerHTML = walletValidatorCard(v, stakingEscapeHtml); });
@@ -9205,6 +9196,12 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     // populated by fetchWalletDashboard and tolerates a null payload
     // (renders an unavailable state).
     renderWalletAprCard();
+}
+
+// "Your validators" (lib/nomination-status-view.js); also re-read in place after a stake (lib/stake-refresh.js).
+function mountWalletNominations(address, isOwnWallet) {
+    mountNominationStatus(document.getElementById('wallet-nominations-slot'), address, { fetchJson: fetchApiJson, helpIcon,
+        canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), address), openPicker: (keep) => openStakeModal(keep) });
 }
 
 function refreshWalletMultisigs() {
@@ -9322,10 +9319,7 @@ function buildWalletActionBarMarkup(data) {
             <i class='bx bx-paper-plane'></i>
             <div><strong>Send PDEX</strong><span>Transfer to any Polkadex address</span></div>
         </button>
-        <button class="wallet-action-btn" id="wallet-act-stake">
-            <i class='bx bx-plus-circle'></i>
-            <div><strong>Stake more</strong><span>Add bond &amp; choose validators</span></div>
-        </button>
+        ${stakeButtonHtml(staking, stakingEscapeHtml)}
         ${payoutRefresh.buttonHtml(data)}
         <button class="wallet-action-btn" id="wallet-act-unstake"${active > 0 ? '' : ' disabled title="No active bond to unstake."'}>
             <i class='bx bx-minus-circle'></i>
@@ -9380,6 +9374,8 @@ let currentWalletData = null;
 const knownResults = createKnownResults({ key: 'pdex_known_results', storage: () => window.localStorage, same: isSameAddress, listen: (f) => window.addEventListener('storage', f), genesis: () => (globalApi && globalApi.genesisHash ? globalApi.genesisHash.toHex() : null) });
 const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e), caughtUp, deadlineMs: pollDeadlineMs });
 const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, post: postAction, data: () => currentWalletData, same: isSameAddress, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, short: stakingShortAddress, esc: stakingEscapeHtml }, refetch: (a) => refreshWalletDashboardFor(a, true) });
+// After a stake (lib/stake-refresh.js): the figures, the Stake button and the card follow a chain read at inclusion, in place.
+const stakeRefresh = createStakeRefresh({ doc: document, post: postAction, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, read: (a) => readStakeFigures(globalApi, a), same: isSameAddress, fmt: { pdex: stakingFormatPDEX, esc: stakingEscapeHtml, short: stakingShortAddress, usd: (n) => renderUsdSubscript(n) }, onData: (d, tracked) => { if (stakeCard) stakeCard.refreshed(d, tracked); }, nominations: (a) => mountWalletNominations(a, true), actions: { send: openSendModal, unstake: openUnstakeModal } });
 let validatorsCache = null;
 let validatorsCacheAt = 0;
 const VALIDATORS_CACHE_TTL = 60 * 1000;
@@ -9486,7 +9482,7 @@ async function openStakeModal(keep) {
     }
     renderStakeSelected();
     modal.style.display = 'flex';
-    const token = stakeCardView().open({ data, keep: Array.isArray(keep) ? keep : null });
+    const token = stakeCardView().open({ data, keep: Array.isArray(keep) ? keep : null, tracked: stakeRefresh.tracked(data.address) });
     if (data.staking && data.staking.totalStaked > 0) readStakePayee(data.address).then(p => stakeCardView().setPayee(p, token));
     await loadStakeChoice(token);
 }
@@ -9561,13 +9557,6 @@ function addStakeValidator(address) {
     clearStakeError();
     if (stakeCard) stakeCard.markManual();
 }
-function removeStakeValidator(address) {
-    stakeSelected.delete(address);
-    renderStakeSelected();
-    const searchEl = document.getElementById('stake-validator-search');
-    renderStakeValidatorList(searchEl ? searchEl.value : '');
-    if (stakeCard) stakeCard.markManual();
-}
 
 // "Your selection" (rows, count, past return, warnings) is drawn by the card (lib/stake-card-view.js).
 function renderStakeSelected() {
@@ -9577,11 +9566,12 @@ function renderStakeSelected() {
 async function submitStakeTx() {
     clearStakeError();
     // The card's own data (lib/stake-card-view.js press): changed under it, the card redraws and nothing is signed.
-    const { data, stop, message } = stakeCard ? stakeCard.press(currentWalletData) : { data: currentWalletData };
-    if (stop) return message ? showStakeError(message) : undefined;
     // The plan the card shows (stakeFormPlan), a call only for what changed; the card is held still while recheck waits, then plans it again (section 4.2).
-    const planNow = () => stakeFormPlan(data, { typed: (document.getElementById('stake-amount-input').value || '').trim(), targets: Array.from(stakeSelected.keys()),
+    const planFor = (d) => stakeFormPlan(d, { typed: (document.getElementById('stake-amount-input').value || '').trim(), targets: Array.from(stakeSelected.keys()),
         maxTargets: stakeMaxNominations(), same: isSameAddress, connected: getStoredWallet(), feeFloorPlanck: FEE_MARGIN, ...(stakeCard ? stakeCard.planOptions() : {}) });
+    const { data, stop, message } = stakeCard ? stakeCard.press(currentWalletData, planFor) : { data: currentWalletData };
+    if (stop) return message ? showStakeError(message) : undefined;
+    const planNow = () => planFor(data);
     const form = planNow(), plan = form.plan;
     if (form.message) return showStakeError(form.message);
     const held = stakeCard ? await stakeCard.recheck(loadValidatorsForPicker, form, planNow) : () => {};
@@ -9594,11 +9584,7 @@ async function submitStakeTx() {
         busyText: 'Signing…', onStage: held.stage,   // the card is also released when tracking ends (a silent wallet)
         idleText: stakeCopy(plan.primary),
         onError: (m) => { showStakeError(m); if (stakeCard) stakeCard.render(); },
-        onSuccess: () => {
-            const modal = document.getElementById('stake-modal');
-            if (modal) modal.style.display = 'none';
-            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
-        }
+        onSuccess: () => { const modal = document.getElementById('stake-modal'); if (modal) modal.style.display = 'none'; }   // the page follows in place (stakeRefresh)
     }).finally(held);
 }
 

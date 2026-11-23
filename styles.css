@@ -5587,8 +5587,8 @@ a.validate-secondary { text-decoration: none; }
    changed: neutral, never a hue ("changed" is not a role), one shot of 1200 ms, none with reduced motion. */
 .ui-chip.is-bare { height: auto; padding: 0; background: none; }
 #wallet-unpaid-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-#wallet-unpaid-label .ui-chip.is-bare { font-size: 0.72rem; }
-#wallet-unpaid-label .ui-chip.is-bare .bx { font-size: 14px; }
+#wallet-unpaid-label .ui-chip.is-bare, #wallet-staked-label .ui-chip.is-bare { font-size: 0.72rem; }
+#wallet-unpaid-label .ui-chip.is-bare .bx, #wallet-staked-label .ui-chip.is-bare .bx { font-size: 14px; }
 #wallet-payout-reorg { margin: 12px 24px 0; }
 #payout-behind-line { margin: 0 0 12px; }
 @keyframes post-action-wash { from { background-color: rgba(255, 255, 255, 0.08); } to { background-color: transparent; } }
@@ -5625,6 +5625,8 @@ a.validate-secondary { text-decoration: none; }
 .stake-view-switch .bx { font-size: 16px; color: var(--accent-violet-text); }
 .stake-view-switch[aria-pressed="true"] { border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
 .stake-intro { color: var(--text-secondary); margin: 0 0 16px; font-size: 0.88rem; }
+.stake-tracked:empty { display: none; }
+.stake-tracked .ui-panel { margin: 0 0 16px; }
 .stake-modal-body.is-simple .stake-amount-wrap input { min-height: 48px; box-sizing: border-box; }
 .stake-amount-wrap input[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .stake-amount-wrap input:disabled, .stake-max-btn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -5733,7 +5735,7 @@ a.validate-secondary { text-decoration: none; }
     .stake-modal-body.is-advanced .stake-advanced, .stake-modal-body.is-advanced .stake-pickers { display: contents; }
     .stake-modal-body.is-advanced .stake-title-row { order: 1; }
     .stake-modal-body.is-advanced .stake-intro { order: 2; }
-    .stake-modal-body.is-advanced .stake-adv-notes { order: 3; }
+    .stake-modal-body.is-advanced .stake-adv-notes, .stake-modal-body.is-advanced .stake-tracked { order: 3; }
     .stake-modal-body.is-advanced .stake-row { order: 4; }
     .stake-modal-body.is-advanced .stake-rewards { order: 5; }
     .stake-modal-body.is-advanced .stake-advanced > .stake-section-head { order: 6; }
