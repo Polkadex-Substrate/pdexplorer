@@ -73,6 +73,7 @@ import { trackSignedTx, recheckSignedTxs, WALLET_CHANGED_STALE } from './lib/tx-
 import { createPostAction } from './lib/post-action.js';
 import { createKnownResults } from './lib/known-results.js';
 import { effectsFor } from './lib/action-effects.js';
+import { caughtUp, pollDeadlineMs, samePayload } from './lib/freshness.js';
 import { createPayoutRefresh, payoutSignSet } from './lib/payout-refresh.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
@@ -8141,11 +8142,12 @@ let walletMenu = null;   // the header My Account menu, wired once at the bottom
 // Wallet routes are re-entered by their own navigation, so they are skipped.
 function isWalletRoute(r) { return /^(wallet|stake|staking)(\/|$)/.test(r || ''); }
 // A success callback's repaint: only while this address's dashboard is still the one on screen.
-function refreshWalletDashboardFor(address) {
+function refreshWalletDashboardFor(address, quiet = false) {   // quiet: an R2 poll, an unchanged payload is not re-rendered
     const r = readRouteFromLocation();
     if (!isSameAddress(getStoredWallet(), address) || !isWalletRoute(r)) return;
     if (r.startsWith('wallet/') && !isSameAddress(r.slice('wallet/'.length), address)) return;
-    fetchWalletDashboard(address, { keepPage: true });
+    const load = quiet ? fetchWalletDashboard(address, { keepPage: true, quiet: true }) : fetchWalletDashboard(address, { keepPage: true });
+    return load.then(r => r && r.painted);   // resolves to the server's freshness (R2 polls on it)
 }
 function onWalletChanged() {
     reconcileDiscussSession();              // one discussion sign-in, bound to the active wallet
@@ -8803,7 +8805,7 @@ async function fetchWalletDashboard(address, opts) {
         .catch(() => null);
 
     // Wallet payload — main render path.
-    walletPromise.then(result => {
+    const painted = walletPromise.then(result => {
         if (stale()) { stopLoading(); return; }
         if (!result.ok || (result.data && result.data.error)) {
             stopLoading();
@@ -8831,10 +8833,11 @@ async function fetchWalletDashboard(address, opts) {
         // Re-render with the live wallet payload and whichever of price/
         // rewards has already landed. Anything still in-flight will paint
         // into the rendered DOM via the targeted handlers below.
-        renderWalletDashboard(latestWallet, latestPrice, latestRewards, { live: true });
+        if (opts && opts.quiet && onScreen && samePayload(currentWalletData, latestWallet)) currentWalletData.freshness = latestWallet.freshness; else renderWalletDashboard(latestWallet, latestPrice, latestRewards, { live: true });
         writeWalletCache(address, { wallet: latestWallet, price: latestPrice, rewards: latestRewards });
         // Live data is on screen — safe to open a shortcut's modal now.
         maybeRunWalletEntryIntent();
+        return latestWallet.freshness || null;
     }).catch(err => {
         stopLoading();
         if (stale()) return;
@@ -8872,6 +8875,7 @@ async function fetchWalletDashboard(address, opts) {
             writeWalletCache(address, { wallet: latestWallet, price: latestPrice, rewards: latestRewards });
         }
     });
+    return { painted };   // not awaited by callers that only start the load; resolves to the payload's freshness
 }
 
 // Targeted repaint for just the PDEX price chart slot inside the wallet
@@ -9348,8 +9352,8 @@ function renderWalletPriceChart(history) {
 let currentWalletData = null;
 // Post-action refresh (lib/post-action.js): what a block proved, shown in place and kept across a reload and other tabs.
 const knownResults = createKnownResults({ key: 'pdex_known_results', storage: () => window.localStorage, same: isSameAddress, listen: (f) => window.addEventListener('storage', f), genesis: () => (globalApi && globalApi.genesisHash ? globalApi.genesisHash.toHex() : null) });
-const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e) });
-const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, post: postAction, data: () => currentWalletData, same: isSameAddress, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, short: stakingShortAddress, esc: stakingEscapeHtml } });
+const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e), caughtUp, deadlineMs: pollDeadlineMs });
+const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, post: postAction, data: () => currentWalletData, same: isSameAddress, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, short: stakingShortAddress, esc: stakingEscapeHtml }, refetch: (a) => refreshWalletDashboardFor(a, true) });
 let validatorsCache = null;
 let validatorsCacheAt = 0;
 const VALIDATORS_CACHE_TTL = 60 * 1000;
@@ -9695,7 +9699,6 @@ async function submitPayoutTx() {
         onSuccess: () => {
             const modal = document.getElementById('payout-modal');
             if (modal) modal.style.display = 'none';
-            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
     });
 }

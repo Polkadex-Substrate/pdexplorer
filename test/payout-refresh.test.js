@@ -327,3 +327,115 @@ describe('review minors: the May be behind tile and the mark', () => {
         assert.equal(marks[0].textContent.trim(), STRINGS.S14);
     });
 });
+
+// R2: the server says how far it has indexed (lib/freshness.js). The payout component re-reads /api/wallet on
+// each poll attempt (through the page's refetch, here a fake server), and what the server says decides when
+// the Checking holds end, when the proven-paid overlay ends, and when the page must say it may be behind.
+describe('R2: freshness and polling', () => {
+    const WALLET_DOMAINS = ['balance', 'staking.ledger', 'staking.nominations', 'rewards.unpaid', 'rewards.claimed', 'tx.recent'];
+    const fresh = (chain, extra = {}) => ({ v: 1, chainHead: 999, indexed: { chain, rewards: 999, tx: 999 }, since: { chain: 1, rewards: 1, tx: 1 },
+        kv: { council: null, democracy: null, treasury: null }, pending: [], intervalMs: { chain: 12_000, rewards: 60_000, tx: 30_000 }, ...extra });
+    // The page with the R2 core (caughtUp injected, timers recorded) and a server the test moves by hand.
+    async function polled({ listed = PAIRS, chain = 10 } = {}) {
+        const { caughtUp, pollDeadlineMs } = await import('../lib/freshness.js');
+        const now = clock();
+        const window = new Window();
+        const doc = window.document;
+        const known = createKnownResults({ storage: memStorage(), now });
+        const timers = [];
+        const core = createPostAction({ effects: effectsFor, known, now, log: () => {}, caughtUp, deadlineMs: pollDeadlineMs,
+            setTimer: (f, ms) => { const t = { f, at: now.t + ms, live: true }; timers.push(t); return t; }, clearTimer: (t) => { if (t) t.live = false; } });
+        const srv = { chain, listed, reads: [] };
+        const payload = () => ({ ...walletWith(srv.listed.map((p, i) => ({ ...p, amount: [1.5, 2.25, 3][PAIRS.indexOf(p)] ?? 1 }))), freshness: fresh(srv.chain) });
+        const state = { wallet: payload() };
+        const refetch = (address) => { srv.reads.push(address); state.wallet = payload(); return Promise.resolve(state.wallet.freshness); };
+        const pr = createPayoutRefresh({ doc, known, post: core, data: () => state.wallet, same: (a, b) => a === b, fmt, now, refetch });
+        doc.body.innerHTML = `<div id="wallet-dashboard"><div class="list-container glass" id="card"><div class="staking-summary-grid">${pr.tileHtml(state.wallet)}</div>
+            <div class="wallet-action-bar" id="wallet-action-bar">${pr.buttonHtml(state.wallet)}</div></div></div>
+            <div id="payout-modal" class="modal" style="display: none;"><div class="glass"><div class="payout-summary"><strong id="payout-count">--</strong><strong id="payout-total">--</strong></div>
+            <div id="payout-entries"></div><button id="submit-payout-tx-btn">Sign and pay out</button></div></div>`;
+        const q = (s) => doc.querySelector(s);
+        const step = async () => { const t = timers.filter(x => x.live).sort((a, b) => a.at - b.at)[0]; assert.ok(t, 'no poll armed'); t.live = false; now.t = Math.max(now.t, t.at); t.f(); await flush(); await flush(); };
+        const armed = () => timers.filter(x => x.live).length;
+        return { doc, q, known, core, pr, state, srv, now, step, armed, timers, WALLET_DOMAINS };
+    }
+    const mark = (p) => p.q('#wallet-unpaid-label .ui-chip');
+
+    test('a payout In block re-reads the wallet at once (no 2.5 s timer), then backs off until the server has the block', async () => {
+        const p = await polled();
+        await pay(p, PAIRS.slice(0, 2), forceBatch(paidItem(PAIRS[0]), paidItem(PAIRS[1])));
+        await flush();
+        assert.deepEqual(p.srv.reads, [ME], 'the first read is not at inclusion');
+        assert.equal(p.armed(), 1);
+        p.srv.chain = 42; p.srv.listed = [PAIRS[2]];
+        await p.step();
+        assert.equal(p.srv.reads.length, 2);
+        assert.equal(p.armed(), 0, 'still polling after the server caught up');
+    });
+    test('the overlay ends on catch-up: the server has the block and dropped the paid rows; no mark, state current', async () => {
+        const p = await polled();
+        await pay(p, PAIRS.slice(0, 2), forceBatch(paidItem(PAIRS[0]), paidItem(PAIRS[1])));
+        assert.equal(p.pr.model(p.state.wallet).state, 'known-result');
+        p.srv.chain = 42; p.srv.listed = [PAIRS[2]];
+        await p.step();
+        const m = p.pr.model(p.state.wallet);
+        assert.equal(m.state, 'current');
+        assert.equal(m.removedRows.length, 0);
+        assert.equal(mark(p), null);
+        assert.equal(p.q('#wallet-act-payout span').textContent, '1 unclaimed entry');
+    });
+    test('F7 lag: the server has the block and STILL lists a proven-paid row: never offered, never silent (S14 on the tile, S15 in the modal)', async () => {
+        const p = await polled();
+        await pay(p, PAIRS.slice(0, 2), forceBatch(paidItem(PAIRS[0]), paidItem(PAIRS[1])));
+        p.srv.chain = 42;                                   // caught up, but the list still has all three
+        await p.step();
+        const m = p.pr.model(p.state.wallet);
+        assert.deepEqual(m.signable.map(pairKey), [keyOf(PAIRS[2])], 'a proven-paid pair is offered again');
+        assert.equal(m.state, 'could-not-refresh');
+        assert.ok(mark(p) && mark(p).textContent.trim() === STRINGS.S14, 'the tile does not say May be behind');
+        assert.equal(p.q('#wallet-act-payout span').textContent, '1 unclaimed entry');
+        p.pr.modalLine(m);
+        assert.ok(p.q('#payout-modal .ui-panel.is-warn.is-line').textContent.includes(STRINGS.S15));
+        assert.ok(!/Paid in block/.test(p.q('#card').textContent), 'the page claims the lagging row was paid');
+        p.srv.listed = [PAIRS[2]];                          // the server drops them: the mark goes
+        p.core.notify({ account: ME, domains: ['rewards.unpaid'], block: 42, reason: 'inBlock' });
+        await flush(); await flush();
+        assert.equal(p.pr.model(p.state.wallet).state, 'current');
+        assert.equal(mark(p), null);
+    });
+    test('Checking ends as soon as the server answers at or beyond the inclusion block: a still-listed row is a normal unpaid row (S19)', async () => {
+        const p = await polled();
+        await pay(p, PAIRS, forceBatch(...PAIRS.map(otherPageItem)));
+        assert.equal(p.q('#wallet-act-payout span').textContent, 'Checking 3 entries');
+        p.srv.chain = 42;
+        await p.step();
+        const m = p.pr.model(p.state.wallet);
+        assert.equal(m.button, 'enabled');
+        assert.equal(m.payable.length, 3);
+        assert.equal(m.state, 'current', 'a row the server confirms unpaid is not "may be behind"');
+        assert.equal(p.q('#wallet-act-payout span').textContent, '3 unclaimed entries');
+        assert.equal(p.q('#wallet-act-payout').getAttribute('aria-disabled'), null);
+        assert.equal(mark(p), null);
+    });
+    test('could-not-refresh when polling gives up: the server never reaches the block in 180 s; proven rows stay out, the tile says S14', async () => {
+        const p = await polled();
+        await pay(p, PAIRS.slice(0, 2), forceBatch(paidItem(PAIRS[0]), paidItem(PAIRS[1])));
+        while (p.armed()) await p.step();
+        assert.ok(p.now.t - 5_000_000 >= 180_000);
+        const m = p.pr.model(p.state.wallet);
+        assert.equal(m.state, 'could-not-refresh');
+        assert.deepEqual(m.signable.map(pairKey), [keyOf(PAIRS[2])]);
+        assert.ok(mark(p) && mark(p).textContent.trim() === STRINGS.S14);
+    });
+    test('the component subscribes to every domain /api/wallet serves; only a poll attempt re-reads (a repaint does not)', async () => {
+        const p = await polled({ chain: 999 });
+        for (const d of p.WALLET_DOMAINS) {
+            p.core.notify({ account: ME, domains: [d], block: null, reason: 'recheck' });
+        }
+        await flush();
+        assert.deepEqual(p.srv.reads, [], 'a repaint re-read the server');
+        p.core.notify({ account: ME, domains: ['tx.recent'], block: 42, reason: 'inBlock' });
+        await flush();
+        assert.deepEqual(p.srv.reads, [ME], 'tx.recent is not served by this component');
+    });
+});

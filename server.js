@@ -40,6 +40,8 @@ import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, 
     lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
+import { buildFreshness, lowestTailFrom } from './lib/freshness.js';
+import { rewardNotesForBlock, storedRewardStash, REWARD_NOTES_MAX_PER_BLOCK } from './lib/reward-events.js';
 import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
 import { registerValidatorRoutes, createKeyCheckLimiter } from './lib/validator-status-api.js';
@@ -1260,6 +1262,86 @@ const identityInvalidator = createIdentityInvalidator({
 function noteIdentityEvents(records) {
     const accounts = identityEventAccounts(records);
     if (accounts.length) identityInvalidator.invalidate(accounts);
+}
+
+// R2 (design section 5, row rewards.unpaid): when the block scanner sees staking.Rewarded, the unclaimed
+// pair it pays leaves the cache at once, so the unpaid list catches up with the forward pass (about 12 s)
+// instead of the 60 s rewards scan plus the cache's 20 minute TTL. lib/reward-events.js attributes era and
+// validator exactly as scanBlockForRewards does (this file's parseRewardedEvent and extractPayoutInfo); a
+// reward it cannot pin to one pair marks the stash's cache stale instead of deleting a guess. Called beside
+// noteIdentityEvents and, like it, never throws: a failure here must never cost the block. Bounded per block.
+// Only the indexer process scans blocks, so only it writes here; every worker reads the same SQLite rows.
+function noteRewardEvents(records, extrinsics) {
+    try {
+        if (!records || !records.length) return;
+        const notes = rewardNotesForBlock(records, { parse: parseRewardedEvent, payoutInfo: (i) => extractPayoutInfo(extrinsics && extrinsics[i]),
+            normalize: normalizeAddress, max: REWARD_NOTES_MAX_PER_BLOCK });
+        if (notes.pairs.length || notes.stale.length) db.noteRewardedPairs(notes);
+        if (notes.truncated) console.warn(`[chain-index] a block holds more than ${notes.seen} staking rewards; the rest wait for the rewards scan`);
+    } catch (err) {
+        console.warn('[chain-index] reward note skipped for a block:', err && err.message ? err.message : err);
+    }
+}
+// The reorg repair: a pair deleted because a discarded fork paid it may still be owed on the canonical chain,
+// so every stash the fork rewarded is marked stale (recomputed from chain state on its next read). Read
+// before the fork rows are deleted; never throws. `reorged`, not `stale`: the fork may have deleted the
+// stash's last cached row, and the stale mark's EXISTS would then find nothing to mark (review finding 1).
+function noteReorgedRewards(n, canonicalHash) {
+    try {
+        const reorged = new Set();
+        for (const data of db.getForkRewardEventData(n, canonicalHash).slice(0, REWARD_NOTES_MAX_PER_BLOCK)) {
+            const stash = storedRewardStash(data);
+            if (!stash) continue;
+            try { reorged.add(normalizeAddress(stash)); } catch (_) { /* not an address: nothing to mark */ }
+        }
+        if (reorged.size) db.noteRewardedPairs({ pairs: [], stale: [], reorged: [...reorged] });
+    } catch (err) {
+        console.warn(`[reorg] block ${n}: rewarded stashes not marked stale:`, err && err.message ? err.message : err);
+    }
+}
+
+// The freshness field (lib/freshness.js) on the routes the post-action poll reads. A hole is the lowest
+// outstanding scan failure or skip-tail height inside the window. The head is read BEFORE a route's state
+// queries, so it is a lower bound of what the route read; a failed read is null (unknown), never an error.
+function lowestHoleFrom(indexer, from) {
+    const failure = db.getLowestScanFailureFrom(indexer, from);
+    const tail = lowestTailFrom(db.getKv(`skip:tail:${indexer}`), from);
+    if (failure === null) return tail;
+    return tail === null ? failure : Math.min(failure, tail);
+}
+// Every poll of every visitor reads the head, so it is memoised per worker for about a second (one RPC
+// serves all polls in that second, and concurrent polls share the read in flight) and bounded by a short
+// timeout: a node that does not answer gives null (unknown, never caught up) and the route still answers.
+// A memoised head is older than the route's state reads, so it is still a lower bound. Failures are not memoised.
+const FRESHNESS_HEAD_TIMEOUT_MS = 1500;
+const FRESHNESS_HEAD_MEMO_MS = 1000;
+const freshnessHeadMemo = { at: 0, value: null, inflight: null };
+async function freshnessHead() {
+    try {
+        if (!isRpcReady() || !globalApi) return null;
+        const m = freshnessHeadMemo;
+        if (m.value !== null && Date.now() - m.at < FRESHNESS_HEAD_MEMO_MS) return m.value;
+        if (!m.inflight) {
+            const startedAt = Date.now();
+            m.inflight = withTimeout(globalApi.rpc.chain.getHeader(), FRESHNESS_HEAD_TIMEOUT_MS, 'freshness head')
+                .then((h) => {
+                    const v = h && h.number ? h.number.toNumber() : null;
+                    if (Number.isFinite(v)) { m.value = v; m.at = startedAt; }
+                    return Number.isFinite(v) ? v : null;
+                }, () => null)
+                .finally(() => { m.inflight = null; });
+        }
+        return await m.inflight;
+    } catch (_) { return null; }
+}
+function freshnessNow({ chainHead = null, pending = [] } = {}) {
+    try {
+        return buildFreshness({ syncState: (name) => db.getSyncState(name), lowestHole: lowestHoleFrom, chainHead, pending,
+            intervalMs: { chain: CHAIN_INDEX_INTERVAL_MS, rewards: STAKING_REWARDS_INTERVAL_MS, tx: THIRTY_SECONDS } });
+    } catch (_) { return null; }
+}
+async function routeFreshness(pending = []) {
+    return freshnessNow({ chainHead: await freshnessHead(), pending });
 }
 
 // Audit F-114: the fallback was Date.now() — so a block whose timestamp.set
@@ -4564,7 +4646,7 @@ app.get('/api/account/:address/history', (req, res) => {
 });
 
 // Locked / transferable breakdown and why each lock exists (lib/balance-locks-api.js).
-registerBalanceLocksRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, isFresh: isFreshRequest, serverError });
+registerBalanceLocksRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, isFresh: isFreshRequest, serverError, freshness: routeFreshness });
 // A nominator's validators this era: active, waiting, offline, slashed (lib/nomination-status-api.js).
 registerStakingStatusRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), cacheShort, serverError,
     incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address) });
@@ -4606,6 +4688,7 @@ app.get('/api/staking-rewards/:address', async (req, res) => {
     catch (e) { return res.status(400).json({ error: 'Invalid Polkadex wallet address.' }); }
 
     try {
+        const freshHead = await freshnessHead();   // before the state queries (R2, lib/freshness.js)
         const claimed = db.getStakingRewards(address).map(r => ({
             era: r.era, amount: r.amount, validator: r.validator, block: r.block,
             blockHash: r.blockHash, eventIndex: r.eventIndex, timestamp: r.timestamp, status: 'claimed'
@@ -4680,6 +4763,8 @@ app.get('/api/staking-rewards/:address', async (req, res) => {
             aprAll: computeRealizedApr(claimed, bondedAmount, nowTs, null)
         } : { bondedAmount, apr30d: null, apr90d: null, aprAll: null };
 
+        // A post-action re-read (?fresh=1) must not be answered from a cache; normal traffic keeps its headers.
+        if (isFreshRequest(req.query)) res.set('Cache-Control', 'no-store');
         res.json({
             address,
             identity,
@@ -4705,7 +4790,8 @@ app.get('/api/staking-rewards/:address', async (req, res) => {
                 lastSync: syncState.lastSync || 0,
                 status: syncState.status || 'Initializing'
             },
-            status: syncState.status || 'Initializing'
+            status: syncState.status || 'Initializing',
+            freshness: freshnessNow({ chainHead: freshHead, pending: unclaimedFresh ? [] : ['rewards.unpaid'] })
         });
     } catch (err) {
         serverError(res, err, req.path);
@@ -5869,6 +5955,8 @@ function confirmActionForm(action, token, label) {
 // List proxies delegated TO the given account. Returns:
 //   { account, proxies: [{ delegate, proxyType, delay }], deposit }
 app.get('/api/proxies/:address', async (req, res) => {
+    // Re-read after a proxy change (design section 5): never from a browser or CDN copy.
+    res.set('Cache-Control', 'no-store');
     if (!requireRpc(res)) return;
     try {
         const raw = (req.params.address || '').trim();
@@ -5926,6 +6014,8 @@ app.get('/api/proxy-types', async (req, res) => {
 // Returns:
 //   { account, pending: [{ callHash, when:{height,index}, approvals[], deposit, depositor }] }
 app.get('/api/multisigs/:address', async (req, res) => {
+    // Re-read after an approval (design section 5): never from a browser or CDN copy.
+    res.set('Cache-Control', 'no-store');
     if (!requireRpc(res)) return;
     try {
         const raw = (req.params.address || '').trim();
@@ -6793,6 +6883,7 @@ app.get('/api/wallet/:address', async (req, res) => {
     catch (e) { return res.status(400).json({ error: 'Invalid Polkadex wallet address.' }); }
 
     try {
+        const freshHead = await freshnessHead();   // before the state queries: a lower bound of what they read
         const [accountInfo, identity, bondedOpt, nominatorsOpt, activeEraOpt, sessionValidators] = await Promise.all([
             globalApi.query.system.account(address),
             getIdentity(globalApi, address),
@@ -6969,6 +7060,10 @@ app.get('/api/wallet/:address', async (req, res) => {
                 bondingDurationEras: bondingDuration,
                 unbondingMs: eraDurationMs * bondingDuration
             },
+            // R2: how far the server has read the chain and indexed it (lib/freshness.js); additive. The unpaid
+            // list is pending while this stash's unclaimed cache is not fresh (being recomputed, or marked
+            // stale by the forward pass), so a page never takes it as caught up.
+            freshness: freshnessNow({ chainHead: freshHead, pending: unclaimedFresh ? [] : ['rewards.unpaid'] }),
             price: db.getLatestPrice()
         });
     } catch (err) {
@@ -8946,6 +9041,7 @@ async function scanSingleBlock(blockNumber) {
     // Author is best-effort — derived from the consensus digest via
     // derive.chain.getHeader, which does NOT decode events (safe on old blocks).
     noteIdentityEvents(allEvents);
+    noteRewardEvents(allEvents, extrinsics);
     let authorAddr = 'System';
     try {
         const h = await globalApi.derive.chain.getHeader(hash);
@@ -9105,15 +9201,19 @@ const CHAIN_GAP_COUNT_LIMIT = readPositiveInteger(process.env.CHAIN_GAP_COUNT_LI
 // Record what a scanChainRange pass could not complete.
 //
 // Two rules, both learned the hard way:
-//   * transientNumbers are NOT recorded at all. A node that was unreachable
+//   * transientNumbers never COUNT an attempt. A node that was unreachable
 //     tells us nothing about a block, so those attempts must be free
 //     (lib/rpc-errors.js — ten unlucky disconnects permanently retired three
-//     governance blocks in June).
+//     governance blocks in June). They are still QUEUED, at attempts = 0 and
+//     only if absent (deferTransientChainHeights): headSeen moves past them,
+//     and a height recorded nowhere was reported as indexed by the freshness
+//     field and the watermark although it was never scanned (R2 review).
 //   * the reason string is the ACTUAL error. requeueTransientScanFailures
 //     matches on last_error, so a constant like 'forward pass fetch failed'
 //     would leave a genuine transport casualty unrescuable forever.
 function recordChainScanFailures(result, passName) {
     if (!result) return;
+    deferTransientChainHeights(result.transientNumbers);
     const reasons = result.failureReasons instanceof Map ? result.failureReasons : new Map();
     for (const n of (result.failedNumbers || [])) {
         db.recordScanFailure('chain_index', n, `${passName}: ${reasons.get(n) || 'fetch failed'}`);
@@ -9121,6 +9221,26 @@ function recordChainScanFailures(result, passName) {
     for (const n of (result.incompleteNumbers || [])) {
         db.recordScanFailure('chain_index', n, `${passName}: events could not be decoded (F-006) — block stored, events pending`);
     }
+}
+
+// Queue the heights a pass could not fetch because the node was unavailable, as deferTransientScan does for
+// the rewards and transactions scanners: attempts = 0, only if absent, so the failure-queue pass retries them
+// and the watermark and freshness stop below the lowest one. Bounded like recordSkippedRange: at most
+// SKIP_RECORD_MAX rows in one go (the lowest heights, which are what pins the watermark); a remainder is owed
+// through the skip tail, which also pins freshness (lowestHoleFrom) and is drained a chunk per tick.
+function deferTransientChainHeights(numbers) {
+    const list = [...new Set((numbers || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+    if (!list.length) return 0;
+    const cap = Math.min(list.length, SKIP_RECORD_MAX);
+    for (let i = 0; i < cap; i++) db.queueScanFailureIfAbsent('chain_index', list[i], 'node unavailable, deferred (attempt not counted)');
+    if (list.length > cap) {
+        const key = 'skip:tail:chain_index';
+        const before = (db.getKv(key) || {}).ranges || [];
+        const after = addTail(before, { lo: list[cap], hi: list[list.length - 1] });
+        db.setKv(key, { ranges: after, updatedAt: Date.now() });
+        console.warn(`[chain_index] ${list.length} heights deferred (node unavailable); queued the lowest ${cap}, ${list[cap]}-${list[list.length - 1]} owed to the skip tail`);
+    }
+    return cap;
 }
 
 function recordSkippedRange(indexer, from, to, reason) {
@@ -9316,6 +9436,7 @@ async function repairReorgedBlock(n, canonicalHash, storedHash) {
     // Delete the fork's rows FIRST. Rescan inserts use OR IGNORE / OR REPLACE,
     // so inserting before deleting would leave orphan events beside canonical
     // ones — the audit's "second event set" failure.
+    noteReorgedRewards(n, canonicalHash);
     const del = db.deleteForkRows(n, canonicalHash);
 
     // The number→hash cache is the one cache keyed by NUMBER, so it is the one
@@ -10434,6 +10555,8 @@ async function recomputeUnclaimed(stash) {
     if (computingUnclaimed.has(stash) || !globalApi) return;
     computingUnclaimed.add(stash);
     try {
+        // Read the stash's forward-pass counter BEFORE any chain state (db.js beginUnclaimedRecompute).
+        const gen = db.beginUnclaimedRecompute(stash);
         const staking = globalApi.query && globalApi.query.staking;
         if (!staking || !staking.activeEra || !staking.erasValidatorReward) return;
         const activeOpt = await staking.activeEra();
@@ -10467,8 +10590,11 @@ async function recomputeUnclaimed(stash) {
             console.error(`Unclaimed rewards for ${stash}: every era's exposure read came back empty; not overwriting the stored list.`);
             return;
         }
-        db.replaceUnclaimed(stash, rows);
-        console.log(`Unclaimed rewards computed for ${stash}: ${rows.length} pending entries.`);
+        // Written, and stamped fresh, only if the forward pass did not touch this stash meanwhile; otherwise the
+        // cache is left stale (rewards.unpaid pending) and the next read recomputes.
+        const out = db.replaceUnclaimedIfUnchanged(stash, rows, gen);
+        if (out.written) console.log(`Unclaimed rewards computed for ${stash}: ${rows.length} pending entries.`);
+        else console.log(`Unclaimed rewards for ${stash}: a reward was indexed during the recompute; left stale for the next read.`);
     } catch (err) {
         console.warn(`Unclaimed rewards computation failed for ${stash}:`, err.message);
     } finally {
