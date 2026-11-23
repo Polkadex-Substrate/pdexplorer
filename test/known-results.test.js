@@ -162,3 +162,76 @@ describe('known results', () => {
         assert.equal(k.list(D, ME).length, 1);
     });
 });
+
+// Review follow-ups F4 and F7.
+describe('F4: a clock set back never stretches a bound', () => {
+    test('an entry saved "in the future" (the clock went back) is expired: no removal, no hold', () => {
+        const c = clock(10_000_000);
+        const k = createKnownResults({ storage: memStorage(), now: c });
+        k.add([entry('remove', 0), entry('hold', 1)]);
+        c.t -= 3_600_000;   // the clock is set back an hour
+        assert.deepEqual(k.list(D, ME), [], 'an entry outlives its bound by the size of the clock change');
+        const a = k.apply(D, ME, rows(), { keyOf: keyOfRow });
+        assert.equal(a.rows.length, 3, 'a row is hidden by an entry from the future');
+        assert.deepEqual([a.removed.length, a.held.length, a.expired.length], [0, 0, 0]);
+    });
+    test('a reorg marker from the future is not active', () => {
+        const c = clock(10_000_000);
+        const k = createKnownResults({ storage: memStorage(), now: c });
+        k.add([{ account: ME, domain: D, op: 'reorg', key: '0xa', value: 'staking.payout', txHash: '0xa' }]);
+        c.t -= 1;
+        assert.equal(k.apply(D, ME, rows(), { keyOf: keyOfRow }).reorg, null);
+    });
+});
+
+describe('F4: entries are scoped to the chain\'s genesis', () => {
+    test('an entry written on one network never applies on another on the same origin, and is pruned there', () => {
+        const s = memStorage();
+        const c = clock();
+        const a = createKnownResults({ storage: s, now: c, genesis: () => '0xg1' });
+        a.add([entry('remove', 0)]);
+        assert.equal(a.list(D, ME).length, 1);
+        const b = createKnownResults({ storage: s, now: c, genesis: () => '0xg2' });
+        assert.deepEqual(b.list(D, ME), [], 'an entry from another network applied');
+        assert.equal(b.apply(D, ME, rows(), { keyOf: keyOfRow }).rows.length, 3);
+        b.prune();
+        assert.deepEqual(JSON.parse(s.getItem('pdex_known_results')), [], 'the other network\'s entry was kept');
+    });
+    test('while the genesis is not known yet nothing applies, and nothing is pruned', () => {
+        const s = memStorage();
+        const c = clock();
+        createKnownResults({ storage: s, now: c, genesis: () => '0xg1' }).add([entry('remove', 0)]);
+        const g = { v: null };
+        const k = createKnownResults({ storage: s, now: c, genesis: () => g.v });
+        assert.deepEqual(k.list(D, ME), [], 'applied before the network is known');
+        k.prune();
+        assert.equal(JSON.parse(s.getItem('pdex_known_results')).length, 1, 'pruned before the network is known');
+        g.v = '0xg1';
+        assert.equal(k.list(D, ME).length, 1);
+        k.add([entry('hold', 1)]);
+        assert.ok(JSON.parse(s.getItem('pdex_known_results')).every(e => e.genesis === '0xg1'), 'an entry was stored without its genesis');
+    });
+    test('an entry stored without a genesis (written before this change) is ignored and pruned once the genesis is known', () => {
+        const s = memStorage();
+        const c = clock();
+        createKnownResults({ storage: s, now: c }).add([entry('remove', 0)]);
+        const k = createKnownResults({ storage: s, now: c, genesis: () => '0xg1' });
+        assert.deepEqual(k.list(D, ME), []);
+        k.prune();
+        assert.deepEqual(JSON.parse(s.getItem('pdex_known_results')), []);
+    });
+});
+
+describe('F7: aged entries are pruned on load', () => {
+    test('a store with an entry past maxAge is rewritten without it when created', () => {
+        const s = memStorage();
+        const c = clock();
+        createKnownResults({ storage: s, now: c }).add([entry('remove', 0)]);
+        c.t += 30_000;
+        createKnownResults({ storage: s, now: c }).add([entry('remove', 1)]);
+        c.t += 600_000 - 30_000;   // the first is now aged, the second is not
+        createKnownResults({ storage: s, now: c });
+        const left = JSON.parse(s.getItem('pdex_known_results'));
+        assert.deepEqual(left.map(e => e.key), [keyOf(PAIRS[1])], 'an aged entry stayed in storage until the next write');
+    });
+});

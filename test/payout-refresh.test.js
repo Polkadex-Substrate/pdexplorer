@@ -10,7 +10,7 @@ import { harness, flush, READY, IN1, IN2 } from './helpers/tx-harness.js';
 import { createPostAction } from '../lib/post-action.js';
 import { createKnownResults } from '../lib/known-results.js';
 import { effectsFor } from '../lib/action-effects.js';
-import { createPayoutRefresh, payoutModel, pairKey, PAYOUT_DOMAIN } from '../lib/payout-refresh.js';
+import { createPayoutRefresh, payoutModel, payoutSignSet, pairKey, PAYOUT_DOMAIN } from '../lib/payout-refresh.js';
 import { STRINGS } from '../lib/refresh-ui.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { ME, OTHER, PAIRS, keyOf, REGISTRY, paidItem, otherPageItem, skippedItem, forceBatch, walletWith } from './helpers/payout-events.js';
@@ -271,5 +271,59 @@ describe('markup and model', () => {
     });
     test('index.html carries the one shared live region', () => {
         assert.match(readRepo('index.html', import.meta.url), /<div id="post-action-live" class="sr-only" aria-live="polite" aria-atomic="true"><\/div>/);
+    });
+});
+
+// Review follow-up F2: what is signed is never more than the modal lists. Decision (one that cannot surprise
+// the user): sign the rows the modal SHOWS that are still signable, in the order shown. A row signable now
+// but not shown (a hold that ended while the modal was open) is never added; a shown row that is no longer
+// signable (proven paid since) is left out, so it cannot fail AlreadyClaimed and add fee.
+describe('F2: payoutSignSet signs only what the modal shows', () => {
+    const E = PAIRS.map((x, i) => ({ ...x, amount: i + 1 }));
+    const k = (i) => keyOf(PAIRS[i]);
+    const CASES = [
+        ['shown equals signable', [E[0], E[1]], [k(0), k(1)], [k(0), k(1)]],
+        ['a hold ended while open: signable has an extra row, not signed', [E[0], E[1], E[2]], [k(0), k(1)], [k(0), k(1)]],
+        ['a shown row was proven paid since: left out', [E[1]], [k(0), k(1)], [k(1)]],
+        ['nothing shown: nothing signed', [E[0], E[1]], [], []],
+        ['no shown list at all: nothing signed', [E[0]], null, []],
+        ['nothing signable: nothing signed', [], [k(0)], []],
+        ['the order is the order shown', [E[0], E[1], E[2]], [k(2), k(0)], [k(2), k(0)]],
+        ['a key shown twice is signed once', [E[0]], [k(0), k(0)], [k(0)]]
+    ];
+    for (const [name, signable, shown, want] of CASES) {
+        test(name, () => {
+            const got = payoutSignSet(signable, shown);
+            assert.deepEqual(got.map(pairKey), want);
+            assert.ok(got.length <= (shown || []).length, 'signed more than the modal lists');
+        });
+    }
+});
+
+describe('review minors: the May be behind tile and the mark', () => {
+    test('while S14 shows, the tile value is in --text-primary; back to --brand-primary when it goes', async () => {
+        const p = page();
+        await pay(p, PAIRS, forceBatch(...PAIRS.map(otherPageItem)));
+        p.now.t += p.known.holdMs;
+        p.pr.paint({ reason: 'deadline' });
+        const value = p.q('#wallet-unpaid-value');
+        assert.match(value.getAttribute('style'), /var\(--text-primary\)/, 'a figure that may be behind keeps the brand colour');
+        assert.match(p.pr.tileHtml(p.state.wallet), /id="wallet-unpaid-value" style="color:var\(--text-primary\);"/);
+        p.now.t += p.known.maxAgeMs;
+        p.pr.paint({ reason: 'resume' });
+        assert.match(value.getAttribute('style'), /var\(--brand-primary\)/);
+    });
+    test('a mark left with another role is swapped in place (setChip): role, icon and word together', async () => {
+        const p = page();
+        await pay(p, PAIRS, forceBatch(...PAIRS.map(otherPageItem)));
+        p.now.t += p.known.holdMs;
+        p.q('#wallet-unpaid-label').insertAdjacentHTML('beforeend', '<span class="ui-chip is-positive is-bare"><i class="bx bx-check" aria-hidden="true"></i>Old</span>');
+        p.pr.paint({ reason: 'deadline' });
+        const marks = p.q('#wallet-unpaid-label').querySelectorAll('.ui-chip');
+        assert.equal(marks.length, 1);
+        assert.ok(marks[0].classList.contains('is-wait') && !marks[0].classList.contains('is-positive'), 'the old role stayed');
+        assert.ok(marks[0].classList.contains('is-bare'));
+        assert.ok(marks[0].querySelector('.bx-error') && !marks[0].querySelector('.bx-check'));
+        assert.equal(marks[0].textContent.trim(), STRINGS.S14);
     });
 });

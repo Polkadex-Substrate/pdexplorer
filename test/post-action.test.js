@@ -4,7 +4,8 @@
 
 import { test, describe, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { harness, flush, ok, READY, IN1, IN2 } from './helpers/tx-harness.js';
+import { harness, flush, ok, READY, IN1, IN2, FIN2 } from './helpers/tx-harness.js';
+import { FINALITY_CAP_MS } from '../lib/tx-status.js';
 import { createPostAction } from '../lib/post-action.js';
 import { createKnownResults } from '../lib/known-results.js';
 import { effectsFor } from '../lib/action-effects.js';
@@ -198,5 +199,103 @@ describe('the hold deadline, without timers while hidden', () => {
         w.vis.on = true;
         w.core.resume();
         assert.equal(w.reloads.length, n + 1);
+    });
+});
+
+// Review follow-up F1: the bound is armed from the STORE (the earliest savedAt + holdMs of any hold or reorg
+// entry), on load, on resume() and on resent, and the earliest bound is kept, not the latest.
+describe('F1: the hold and reorg bounds are armed from the store', () => {
+    function clocked(opts = {}) {
+        const c = () => c.t; c.t = 5_000_000;
+        const shared = opts.storage || { m: new Map(), getItem(k) { return this.m.has(k) ? this.m.get(k) : null; }, setItem(k, v) { this.m.set(k, v); } };
+        const known = createKnownResults({ storage: shared, now: c });
+        const timers = [];
+        const vis = { on: true };
+        const make = () => createPostAction({ effects: effectsFor, known, now: c, visible: () => vis.on,
+            setTimer: (f, ms) => { const t = { f, ms, at: c.t + ms, live: true }; timers.push(t); return t; }, clearTimer: (t) => { if (t) t.live = false; }, log: () => {} });
+        const core = make();
+        const reloads = [];
+        core.subscribe(D, { account: () => ME, reload: (i) => { reloads.push(i); } });
+        const live = () => timers.filter(t => t.live);
+        return { c, shared, known, timers, vis, core, make, reloads, live };
+    }
+    async function payWith(w, hash, events) {
+        const h = harness({ action: PAYOUT, registry: REGISTRY, core: w.core, hash });
+        h.run.start(); await h.run.send(h.tx, ME, {}); await h.emit(READY); await h.emit(IN1, events); await flush();
+        return h;
+    }
+    const PARTIAL = forceBatch(paidItem(PAIRS[0]), skippedItem(), paidItem(PAIRS[2]));
+
+    test('a hold saved while the tab was hidden: resume() arms its bound, and the bound repaints', async () => {
+        const w = clocked();
+        w.vis.on = false;
+        await payWith(w, '0x' + '01'.repeat(32), PARTIAL);
+        assert.equal(w.timers.length, 0, 'a timer was armed while hidden');
+        w.c.t += 30_000;
+        w.vis.on = true;
+        w.core.resume();
+        assert.equal(w.live().length, 1, 'resume() armed no bound: "Checking" stays until some unrelated repaint');
+        assert.equal(w.live()[0].at, 5_000_000 + w.known.holdMs + 1);
+        w.c.t = w.live()[0].at;
+        w.live()[0].f();
+        assert.equal(w.reloads[w.reloads.length - 1].reason, 'deadline');
+    });
+    test('on load (a new core over a store that holds an entry) the bound is armed', async () => {
+        const w = clocked();
+        await payWith(w, '0x' + '02'.repeat(32), PARTIAL);
+        const timersBefore = w.timers.length;
+        w.c.t += 60_000;   // the reload, a minute later
+        w.make();
+        const fresh = w.timers.slice(timersBefore).filter(t => t.live);
+        assert.equal(fresh.length, 1, 'a reload within the hold arms no bound');
+        assert.equal(fresh[0].at, 5_000_000 + w.known.holdMs + 1);
+    });
+    test('resent (the block was replaced) arms the reorg marker\'s bound', async () => {
+        const w = clocked();
+        const h = await payWith(w, '0x' + '03'.repeat(32), forceBatch(...PAIRS.map(p => paidItem(p))));
+        assert.equal(w.live().length, 0);
+        w.c.t += 10_000;
+        await h.emit({ type: 'Retracted' }); await flush();
+        assert.equal(w.live().length, 1, '"Payout in progress" has no bound');
+        assert.equal(w.live()[0].at, 5_010_000 + w.known.holdMs + 1);
+    });
+    test('the EARLIEST bound is kept, and the next one is armed when it fires', async () => {
+        const w = clocked();
+        await payWith(w, '0x' + '04'.repeat(32), forceBatch(skippedItem(), paidItem(PAIRS[1]), paidItem(PAIRS[2])));
+        w.c.t += 60_000;
+        await payWith(w, '0x' + '05'.repeat(32), forceBatch(paidItem(PAIRS[0]), paidItem(PAIRS[1]), skippedItem()));
+        assert.equal(w.live().length, 1);
+        assert.equal(w.live()[0].at, 5_000_000 + w.known.holdMs + 1, 'the later bound replaced the earlier one');
+        w.c.t = w.live()[0].at;
+        w.live()[0].f();
+        assert.equal(w.live().length, 1, 'the second hold\'s bound was not armed');
+        assert.equal(w.live()[0].at, 5_060_000 + w.known.holdMs + 1);
+    });
+});
+
+// Review follow-up F5: how a reorg ends.
+describe('F5: the end of a replaced payout', () => {
+    test('Retracted, then the finality cap (waiting): the rows are held, not offered at once', async () => {
+        const w = world();
+        await sendPayout(w, async (h) => { await h.emit(IN1, ALL_PAID); await h.emit({ type: 'Retracted' }); await flush(); mock.timers.tick(FINALITY_CAP_MS); await flush(); });
+        assert.deepEqual(keys(w, 'remove'), [], 'claimed from the retracted block');
+        assert.deepEqual(keys(w, 'reorg'), [], 'the marker outlived the tracking');
+        assert.deepEqual(keys(w, 'hold'), PAIRS.map(keyOf).sort(), 'a payout that may still land was offered again');
+        assert.equal(w.timers.filter(t => t.live).length, 1, 'the hold has no bound');
+    });
+    test('Retracted, then Finalized with clean events and no second In block: recorded as an inclusion', async () => {
+        const w = world();
+        await sendPayout(w, async (h) => { await h.emit(IN1, ALL_PAID); await h.emit({ type: 'Retracted' }); await flush(); await h.emit(FIN2, ALL_PAID); });
+        assert.deepEqual(keys(w, 'remove'), PAIRS.map(keyOf).sort(), '"Payout in progress" stays although the payout is final');
+        assert.deepEqual(keys(w, 'reorg'), []);
+        assert.equal(w.known.list(D, ME)[0].block, 43);
+        assert.deepEqual(w.reloads.map(r => r.reason), ['inBlock', 'reorg', 'inBlock']);
+    });
+    test('Retracted, then Finalized whose events prove nothing for this account: the reorg marker is cleared all the same', async () => {
+        const w = world();
+        const NONE = forceBatch(...PAIRS.map(p => otherPageItem(p)));
+        await sendPayout(w, async (h) => { await h.emit(IN1, ALL_PAID); await h.emit({ type: 'Retracted' }); await flush(); await h.emit(FIN2, NONE); });
+        assert.deepEqual(keys(w, 'reorg'), [], '"Payout in progress" outlived a final block');
+        assert.deepEqual(keys(w, 'remove'), [], 'claimed without a Rewarded for this account');
     });
 });

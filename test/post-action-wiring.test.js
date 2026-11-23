@@ -31,7 +31,8 @@ describe('R1 wiring', () => {
     });
     test('submitPayoutTx signs only signable pairs and hands the batch pairs and the account to the effects', () => {
         const submit = body('async function submitPayoutTx(');
-        assert.match(submit, /const entries = payoutRefresh\.signable\(data\);/);
+        // F2: never more than the modal lists: the signable pairs intersected with the rows shown.
+        assert.match(submit, /const entries = payoutSignSet\(payoutRefresh\.signable\(data\), Array\.from\(document\.querySelectorAll\('#payout-entries \.payout-entry\[data-key\]'\)\)\.map\(r => r\.getAttribute\('data-key'\)\)\);/);
         assert.match(submit, /account: data\.address, pairs: batch\.map\(e => \(\{ era: e\.era, validator: e\.validator \}\)\)/);
         assert.ok(!/unpaidEntries/.test(submit), 'the submit reads the raw server list');
     });
@@ -47,8 +48,31 @@ describe('R1 wiring', () => {
     test('the page catches up on return to the tab', () => {
         assert.match(code, /visibilitychange', \(\) => \{ if \(document\.visibilityState === 'visible'\) postAction\.resume\(\); \}\);/);
     });
-    test('the cookie notice lists the new storage key', () => {
-        assert.match(readRepo('index.html', import.meta.url), /<code[^>]*>pdex_known_results<\/code>/);
+    test('the cookie notice lists the new storage key, in the reviewer\'s words', () => {
+        const html = readRepo('index.html', import.meta.url);
+        assert.match(html, /<code[^>]*>pdex_known_results<\/code>/);
+        const row = html.slice(html.indexOf('>pdex_known_results<'), html.indexOf('</tr>', html.indexOf('>pdex_known_results<')));
+        assert.ok(row.includes('<td style="padding: 10px 12px;">For a rewards payout you sent in the last 10 minutes: which reward entries (era and validator) it paid or is still checking, with your account address, the block number and the transaction hash.</td>'), 'the What column is not the reviewer text');
+        assert.ok(row.includes('<td style="padding: 10px 12px;">So a reward that is already paid is not offered to you again, after a reload or in another tab, while the explorer catches up with the chain. Expires after 10 minutes.</td>'), 'the Why column is not the reviewer text');
+    });
+    test('F4: the store is scoped to the connected chain\'s genesis; the link coming up prunes and repaints', () => {
+        assert.match(code, /createKnownResults\(\{[^\n]*genesis: \(\) => \(globalApi && globalApi\.genesisHash \? globalApi\.genesisHash\.toHex\(\) : null\)/);
+        assert.match(body('function adoptChainApi('), /knownResults\.prune\(\); postAction\.resume\(\);/);
+    });
+    test('F8: the reload after an action keeps the page (no saved-snapshot paint, no banner flash)', () => {
+        assert.match(body('function refreshWalletDashboardFor('), /fetchWalletDashboard\(address, \{ keepPage: true \}\);/);
+    });
+    test('F3: an aria-disabled action button looks and hovers like a disabled one', async () => {
+        const { parseRules } = await import('./helpers/css-rules.js');
+        const rules = parseRules(readRepo('styles.css', import.meta.url));
+        const grey = rules.find(r => r.selectors.includes('.wallet-action-btn:disabled'));
+        assert.ok(grey, 'no :disabled rule');
+        assert.ok(grey.selectors.includes('.wallet-action-btn[aria-disabled="true"]'), 'aria-disabled is not greyed');
+        assert.equal(grey.decls.opacity, '0.45');
+        assert.equal(grey.decls.cursor, 'not-allowed');
+        const hover = rules.filter(r => r.selectors.some(x => /^\.wallet-action-btn(\.primary)?:hover/.test(x)));
+        assert.ok(hover.length >= 2);
+        for (const r of hover) for (const x of r.selectors) assert.match(x, /:not\(\[aria-disabled="true"\]\)/, 'hover still lights an aria-disabled button: ' + x);
     });
     test('script.js stays under its ceiling and within the R1 budget (+19 over 14,713)', () => {
         const n = SCRIPT.split('\n').length;
