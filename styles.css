@@ -2754,11 +2754,13 @@ h1, h2, h3 { font-weight: 600; }
        truncating so labels stay on a single visual line at narrow widths. */
     min-width: 0;
 }
-.wallet-action-btn:hover:not(:disabled) {
+.wallet-action-btn:hover:not(:disabled):not([aria-disabled="true"]) {
     border-color: var(--border-hover);
     background: rgba(255, 255, 255, 0.06);
 }
-.wallet-action-btn:disabled {
+/* aria-disabled: a proven-done or checking button that keeps focus (payout refresh) looks disabled too. */
+.wallet-action-btn:disabled,
+.wallet-action-btn[aria-disabled="true"] {
     opacity: 0.45;
     cursor: not-allowed;
 }
@@ -2792,7 +2794,7 @@ h1, h2, h3 { font-weight: 600; }
     background: rgba(230, 0, 122, 0.08);
     border-color: rgba(230, 0, 122, 0.35);
 }
-.wallet-action-btn.primary:hover:not(:disabled) { background: rgba(230, 0, 122, 0.15); }
+.wallet-action-btn.primary:hover:not(:disabled):not([aria-disabled="true"]) { background: rgba(230, 0, 122, 0.15); }
 
 .modal-close-btn {
     position: absolute;

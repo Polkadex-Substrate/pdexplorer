@@ -545,7 +545,7 @@ describe('F-064 — live rows carry what the chain said, or null', () => {
 
 describe('F-068 — the wallet dashboard admits when it is not live', () => {
     const fn = scriptSrc.slice(
-        scriptSrc.indexOf('async function fetchWalletDashboard(address)'),
+        scriptSrc.indexOf('async function fetchWalletDashboard(address'),
         scriptSrc.indexOf('function repaintWalletPriceCard(')
     );
 

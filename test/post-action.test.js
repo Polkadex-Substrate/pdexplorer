@@ -219,8 +219,8 @@ describe('F1: the hold and reorg bounds are armed from the store', () => {
         const live = () => timers.filter(t => t.live);
         return { c, shared, known, timers, vis, core, make, reloads, live };
     }
-    async function payWith(w, hash, events) {
-        const h = harness({ action: PAYOUT, registry: REGISTRY, core: w.core, hash });
+    async function payWith(w, hash, events, action = PAYOUT) {
+        const h = harness({ action, registry: REGISTRY, core: w.core, hash });
         h.run.start(); await h.run.send(h.tx, ME, {}); await h.emit(READY); await h.emit(IN1, events); await flush();
         return h;
     }
@@ -263,11 +263,14 @@ describe('F1: the hold and reorg bounds are armed from the store', () => {
         const w = clocked();
         await payWith(w, '0x' + '04'.repeat(32), forceBatch(skippedItem(), paidItem(PAIRS[1]), paidItem(PAIRS[2])));
         w.c.t += 60_000;
-        await payWith(w, '0x' + '05'.repeat(32), forceBatch(paidItem(PAIRS[0]), paidItem(PAIRS[1]), skippedItem()));
+        // A second payout of the other two pairs a minute later: PAIRS[0] stays held from the first.
+        await payWith(w, '0x' + '05'.repeat(32), forceBatch(paidItem(PAIRS[1]), skippedItem()), { ...PAYOUT, params: { ...PAYOUT.params, k: 2, pairs: PAIRS.slice(1) } });
         assert.equal(w.live().length, 1);
         assert.equal(w.live()[0].at, 5_000_000 + w.known.holdMs + 1, 'the later bound replaced the earlier one');
-        w.c.t = w.live()[0].at;
-        w.live()[0].f();
+        const first = w.live()[0];
+        w.c.t = first.at;
+        first.live = false;   // it fired
+        first.f();
         assert.equal(w.live().length, 1, 'the second hold\'s bound was not armed');
         assert.equal(w.live()[0].at, 5_060_000 + w.known.holdMs + 1);
     });
