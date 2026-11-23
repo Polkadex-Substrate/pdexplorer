@@ -597,7 +597,7 @@ describe('A2 mountManageLink: the secondary button on the validator page', () =>
         assert.ok(el.querySelector('button'), 'the multisig button survives a failed proxy read');
         const c = pageDom();
         await mountManageLink(c.el, linkDeps({ readProxies: boom, account: { status: 'connected', address: CTRL } }));
-        assert.equal(c.el.querySelector('a').getAttribute('href'), '/validate/' + S1);
+        assert.equal(c.el.querySelector('a').getAttribute('href'), '/validate/' + S1 + '#validate-manage-title');
     });
     test('a newer mount wins over a slower earlier one (wallet changed while reading)', async () => {
         const { el } = pageDom();

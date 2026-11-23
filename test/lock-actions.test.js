@@ -255,8 +255,9 @@ describe('lockActions: the releases a snapshot allows', () => {
         assert.deepEqual(m.actions.orphan, { stash: ME, amount: s(60n * PDEX) });
         const r = m.items.find(i => i.id === 'staking ');
         assert.equal(r.status, 'orphan');
-        assert.match(r.unlock, /migrateCurrency/);
-        assert.match(r.unlock, /[Aa]ny account/);
+        assert.match(r.unlock, /Remove leftover staking lock/);   // Q10: the button name, no call name
+        assert.doesNotMatch(r.unlock, /migrateCurrency/);
+        assert.match(r.unlock, /Anyone can submit/);
         assert.match(r.unlock, /refunded/);
         assert.doesNotMatch(r.unlock, /preparing a fix/);
     });

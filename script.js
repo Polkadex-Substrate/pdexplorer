@@ -4315,7 +4315,7 @@ function buildWalletConnectJsonLd() {
                     {
                         '@type': 'HowToStep', 'position': 6,
                         'name': 'Sign in your wallet',
-                        'text': 'Click Sign & Send and approve the transaction in your wallet extension. The transfer is included on-chain within seconds.'
+                        'text': 'Click Sign and send and approve the transaction in your wallet extension. The transfer is included on-chain within seconds.'
                     }
                 ]
             },
@@ -8969,7 +8969,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     root.innerHTML = `
         <div class="list-container glass">
             <div class="list-header">
-                <h2><i class='bx bx-wallet'></i> ${identity ? stakingEscapeHtml(identity) : 'Wallet Dashboard'} ${helpIcon('switching-wallets', 'About the wallet dashboard')}</h2>
+                <h2><i class='bx bx-wallet'></i> ${identity ? stakingEscapeHtml(identity) : 'My Account'} ${helpIcon('switching-wallets', 'About the wallet dashboard')}</h2>
                 <div style="display:flex; gap:14px; align-items:center;">
                     ${rewardHistoryLinkHtml(data.address)}
                     <button id="wallet-switch-btn" class="staking-download-btn"${getStoredWallet() ? '' : ' hidden'}>Switch wallet</button>
@@ -8998,8 +8998,6 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
             </div>
         </div>
 
-        <div id="wallet-locks-slot"></div>
-        <div id="wallet-nominations-slot"></div>
         ${isOwnWallet ? `
         <div id="wallet-actions-slot">
             ${hasInjectedWalletNow() ? `
@@ -9026,6 +9024,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                 </button>
             </div>` : buildViewOnlyCallout()}
         </div>` : ''}
+        <div id="wallet-locks-slot"></div>
+        <div id="wallet-nominations-slot"></div>
 
         <div id="wallet-multisig-slot"></div>
         <div id="wallet-validator-slot"></div>
@@ -9038,9 +9038,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                 </div>
             </div>
             <div class="list-container glass">
-                <div class="list-header"><h2>Staking Overview</h2></div>
+                <div class="list-header"><h2>Network staking</h2></div>
                 <div class="wallet-stat-list">
-                    <div class="wallet-stat"><span>Total Staked</span><strong>${stakingFormatPDEX(staking.totalStaked)} PDEX</strong></div>
                     <div class="wallet-stat"><span>Minimum Stake</span><strong>${stakingFormatPDEX(network.minStake)} PDEX</strong></div>
                     <div class="wallet-stat"><span>Active Nominators</span><strong>${stakingFormatNumber(network.activeNominators)} / ${stakingFormatNumber(network.totalNominators)}</strong></div>
                     <div class="wallet-stat"><span>Active Validators</span><strong>${stakingFormatNumber(network.activeValidators)} / ${stakingFormatNumber(network.totalValidators)}</strong></div>
@@ -9617,7 +9616,7 @@ async function submitStakeTx() {
         action: { key: 'staking.bondNominate', params: { amount: hasAmount ? amtStr : null, n: targets.length, eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null } },
         button: document.getElementById('submit-stake-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Submit',
+        idleText: 'Sign and stake',
         onError: showStakeError,
         onSuccess: () => {
             const modal = document.getElementById('stake-modal');
@@ -9704,7 +9703,7 @@ async function submitPayoutTx() {
         action: { key: 'staking.payout', params: { k: batch.length, remaining: entries.length - batch.length } },
         button: document.getElementById('submit-payout-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Pay Out',
+        idleText: 'Sign and pay out',
         onError: fail,
         onSuccess: () => {
             const modal = document.getElementById('payout-modal');
@@ -9935,7 +9934,7 @@ async function submitUnstakeTx() {
             action: { key: 'staking.unbond', params: { amount: planckToPdexString(planckStr), full: true, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
             button: document.getElementById('submit-unstake-tx-btn'),
             busyText: 'Signing…',
-            idleText: 'Sign & Unstake',
+            idleText: 'Sign and unstake',
             onError: (err, m) => {
                 console.warn('[unstake] full-unbond fast-path errored:', err && (err.message || err));
                 fail(decodeUnstakeError((m && m.raw) || err, {
@@ -10006,7 +10005,7 @@ async function submitUnstakeTx() {
         action: { key: 'staking.unbond', params: { amount: amtStr, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
         button: document.getElementById('submit-unstake-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Unstake',
+        idleText: 'Sign and unstake',
         onError: (err, m) => fail(decodeUnstakeError((m && m.raw) || err, { active, amt, minBond }, err)),
         onSuccess: () => {
             const modal = document.getElementById('unstake-modal');
@@ -10663,7 +10662,7 @@ async function submitSendTx() {
         action: { key: 'balances.transfer', params: { amount: amtStr, to } },
         button: document.getElementById('submit-send-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Send',
+        idleText: 'Sign and send',
         onError: showSendError,
         onSuccess: () => {
             const modal = document.getElementById('send-modal');

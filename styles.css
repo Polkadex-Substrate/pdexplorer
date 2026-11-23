@@ -5519,3 +5519,8 @@ a.validate-secondary { text-decoration: none; }
 .validator-manage-link a.validate-secondary { text-decoration: none; }
 .validate-alerts-line { margin: 0; font-size: 0.9rem; line-height: 1.6; color: var(--text-primary); }
 .validate-alerts .validate-lookup-row input[type="email"] { flex: 1 1 220px; min-width: 0; }
+
+/* Phone tap targets (UX review Q35): 44 px for the validator and balance-breakdown buttons. */
+@media (max-width: 768px) {
+    .validate-secondary, .validate-text-btn, .lock-action-btn { min-height: 44px; }
+}

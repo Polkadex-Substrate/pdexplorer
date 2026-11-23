@@ -64,7 +64,7 @@ describe('classifyTarget: one validator, from the nominator\'s side', () => {
     test('chilled or no longer a validator: no Validators entry', () => {
         const r = classifyTarget(tgt(V1, { intent: false, elected: false, inSession: false }), ctx());
         assert.equal(r.state, 'not-validator');
-        assert.match(r.label, /[Cc]hilled|no longer/);
+        assert.equal(r.label, 'Stopped validating');
     });
     test('elected this era but chilled since: still active this era, flagged as leaving', () => {
         const r = classifyTarget(tgt(V1, { intent: false }), ctx());
@@ -359,7 +359,7 @@ describe('renderNominationStatus and mountNominationStatus', () => {
         assert.match(html, /Alpha &lt;b&gt;/);
         assert.ok(!html.includes('Alpha <b>'));
         assert.match(html, /[Ww]aiting/);
-        assert.match(html, /[Cc]hilled|no longer/);
+        assert.match(html, /Stopped validating/);
         assert.match(html, /\/help\/staking-status/);
     });
     test('visitors see the banner but no button', () => {
