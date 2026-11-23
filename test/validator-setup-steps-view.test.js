@@ -179,7 +179,8 @@ describe('the stepper states S0 to S10', () => {
         assert.deepEqual(rows.map(r => r.querySelector('code').textContent), ['session.setKeys', 'staking.bond', 'staking.validate']);
         assert.deepEqual(words(el), ['Ready to sign', 'Waiting', 'Waiting']);
         assert.equal(rows[0].getAttribute('aria-current'), 'step');
-        assert.equal(el.querySelectorAll('[aria-current="step"]').length, 2, 'the wizard progress step and the stepper row');
+        // WP3: plus the compact path's current step above the wizard.
+        assert.equal(el.querySelectorAll('[aria-current="step"]').length, 3, 'the path step, the wizard progress step and the stepper row');
         assert.equal(status(el), 'Nothing has been signed yet. Step 1 is next: Register 6 session keys. Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve.');
         assert.ok(el.querySelector('.validate-keys-table'), 'the keys table while setKeys is next');
         assert.match(el.textContent, /If you stop here: nothing has changed\./);

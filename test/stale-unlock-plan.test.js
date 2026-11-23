@@ -88,13 +88,13 @@ describe('a winning vote still under conviction is never in the batch', () => {
         assert.equal(d.lockAfter, s(10n * PDEX));
         assert.equal(d.unlock, true);
         // The row names what the batch leaves, #7's 10 PDEX, not the whole 40 PDEX lock.
-        assert.match(drawn.items.find(i => i.id === 'democrac').unlock, /^10 PDEX stays locked until block 2000 \([^)]*\); the rest can be unlocked now: press Remove votes and unlock \(/);
+        assert.match(drawn.items.find(i => i.id === 'democrac').unlock, /^10 PDEX stays locked until block 2000 \([^)]*\); the rest can be unlocked now: use Remove votes and unlock below\.$/);
     });
     test('an earlier lock over, #7 still running: Unlock alone, and the row says to press Unlock', () => {
         const m = describeAccountLocks(snap(direct([WON7], REFS, { until: 1200, amount: s(500n * PDEX) }), 1201, 500n * PDEX));
         assert.deepEqual(m.actions.democracy.remove, []);
         assert.equal(spec(m).label, 'Unlock');
-        assert.match(m.items.find(i => i.id === 'democrac').unlock, /^10 PDEX stays locked until block 2000 \([^)]*\); the rest can be unlocked now: press Unlock \(democracy\.unlock for your address\)\.$/);
+        assert.match(m.items.find(i => i.id === 'democrac').unlock, /^10 PDEX stays locked until block 2000 \([^)]*\); the rest can be unlocked now: use Unlock below\.$/);
     });
     test('beside a running earlier lock, the row lists both and says when each vote can go', () => {
         const m = describeAccountLocks(snap(direct([WON7], REFS, PRIOR_500), DRAWN_AT, 500n * PDEX));

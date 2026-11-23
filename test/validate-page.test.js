@@ -26,7 +26,7 @@ const API = { '/api/validator/params': PARAMS, [`/api/validator/${A}/status`]: S
 
 function page(scenario) {
     return new Promise((resolve, reject) => {
-        execFile(process.execPath, [RUNNER, JSON.stringify({ api: API, probe: [NAV, '#validate-root .validate-headline'], ...scenario })], { timeout: 60000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
+        execFile(process.execPath, [RUNNER, JSON.stringify({ api: API, probe: [NAV, '#validate-root .validate-headline', '#validate-root .validate-path'], ...scenario })], { timeout: 60000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
             const line = String(stdout).split('\n').find(l => l.startsWith('RESULT '));
             if (!line) return reject(new Error('the page did not report: ' + (err ? err.message : '') + '\n' + String(stderr).slice(-2000)));
             resolve(JSON.parse(line.slice(7)));
@@ -52,7 +52,10 @@ describe('flag on in this browser', () => {
         const r = await page({ path: 'validate?validate=1' });
         assert.equal(r.page, 'validate');
         assert.equal(r.probe[NAV].shown, 1);
-        assert.ok(r.fetched.includes('/api/validator/params'));
+        // Amended (spec 2026-11-21 section 3): the keys checker moved to /validate/keys, so the hub no longer
+        // reads the key layout; it shows the path strip instead.
+        assert.equal(r.probe['#validate-root .validate-path'].count, 1);
+        assert.ok(!r.fetched.includes('/api/validator/params'));
     });
     test('remembered (pdex_validate_enabled=1): /validate/<address> shows that stash', async () => {
         const r = await page({ path: 'validate/' + B, seed: { pdex_validate_enabled: '1' } });

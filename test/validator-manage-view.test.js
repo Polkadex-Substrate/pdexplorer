@@ -362,11 +362,26 @@ describe('the status page mounts the manage panel for the connected wallet only'
         await settle();
         assert.ok(el.querySelector('#validate-manage-slot .validate-manage'));
     });
+    test('M3: with #validate-manage-title in the URL the title is scrolled to once the panel is mounted, and only then', async () => {
+        for (const [hash, expected] of [['#validate-manage-title', 1], ['', 0], ['#other', 0]]) {
+            const { w, el } = dom();
+            w.location.hash = hash;
+            const calls = [];
+            w.HTMLElement.prototype.scrollIntoView = function (o) { calls.push({ id: this.id, o }); };
+            await mountValidatePage(el, pageDeps());
+            await settle();
+            assert.ok(el.querySelector('#validate-manage-slot .validate-manage'));
+            assert.equal(calls.length, expected, `hash "${hash}"`);
+            if (expected) { assert.equal(calls[0].id, 'validate-manage-title'); assert.deepEqual(calls[0].o, { block: 'start' }); }
+        }
+    });
     test('no wallet connected: no manage section', async () => {
         const { el } = dom();
         await mountValidatePage(el, pageDeps({ account: { status: 'disconnected' }, urlAddress: STASH }));
         await settle();
-        assert.equal(el.querySelector('#validate-manage-slot'), null);
+        // amended (fidelity review 22): the slot is a card of its own in .validate-cards; it stays empty.
+        assert.equal(el.querySelector('#validate-manage-slot .validate-manage'), null);
+        assert.equal(el.querySelector('#validate-manage-slot').innerHTML, '');
     });
 });
 

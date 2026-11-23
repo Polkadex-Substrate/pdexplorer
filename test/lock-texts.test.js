@@ -214,7 +214,7 @@ describe('the conviction line names only the prior lock', () => {
 describe('after a cancel the democracy row names only the prior lock', () => {
     test('the prior amount and its end; the rest unlocks now, with the Unlock button', () => {
         assert.equal(democracyRow(AFTER_CANCEL).unlock,
-            '10 PDEX stays locked until block 1014400 (about 2 days); the rest can be unlocked now: press Unlock (democracy.unlock for your address).');
+            '10 PDEX stays locked until block 1014400 (about 2 days); the rest can be unlocked now: use Unlock below.');
     });
     test('the row agrees with the button line next to it', () => {
         const h = renderBalanceLocks(describeAccountLocks(AFTER_CANCEL), { canSign: true });
@@ -223,7 +223,7 @@ describe('after a cancel the democracy row names only the prior lock', () => {
     });
     test('a prior holding the whole lock: its amount and end, then Unlock', () => {
         const all = { ...AFTER_CANCEL, democracy: { ...AFTER_CANCEL.democracy, prior: { until: BLOCK + 14400, amount: s(300n * PDEX) } } };
-        assert.equal(democracyRow(all).unlock, '300 PDEX stays locked until block 1014400 (about 2 days). After that, press Unlock (democracy.unlock for your address).');
+        assert.equal(democracyRow(all).unlock, '300 PDEX stays locked until block 1014400 (about 2 days). After that, use Unlock below.');
     });
 });
 

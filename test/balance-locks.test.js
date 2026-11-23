@@ -170,6 +170,9 @@ describe('the fee follows reducible_balance: a hold covers a lock (spec 393 Fung
         const m = describeAccountLocks(snap({ free: s(100n * PDEX), reserved: s(50n * PDEX), frozen: s(300n * PDEX),
             locks: [{ id: 'democrac', amount: s(300n * PDEX), reasons: 'All' }], holds: [{ id: 'Staking.Staking', amount: s(50n * PDEX) }],
             staking: { bonded: true, total: s(50n * PDEX), active: s(50n * PDEX), unlocking: '0' } }));
+        const staked = m.items.find(i => i.source === 'Staking (hold)');
+        assert.match(staked.unlock, /^Unstake from My Account, wait the unbonding period \(28 days\), then withdraw it here\./);   // Q9
+        assert.doesNotMatch(staked.unlock, /wallet dashboard|Withdraw unbonded/);
         assert.equal(m.balance.transferable, '0');
         assert.equal(m.balance.canPayFee, false);
         assert.equal(m.balance.feeTopUp, s(150n * PDEX + FEE_MARGIN));
@@ -359,8 +362,8 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         assert.doesNotMatch(r.reason, /\b39\d\b/, 'version-neutral: no spec number in user copy');
         // Since staking.migrateCurrency was confirmed permissionless for an
         // unbonded stash (pallet-staking 45.1.0), the row offers the fix.
-        assert.match(r.unlock, /Remove leftover staking lock/);
-        assert.match(r.unlock, /refunded/);
+        assert.equal(r.unlock, 'Use Remove leftover staking lock below. Anyone can submit it, and the fee is refunded when it succeeds. The PDEX still belongs to this account.');   // Q10
+        assert.doesNotMatch(r.unlock, /migrateCurrency/);
         assert.doesNotMatch(r.unlock, /preparing a fix/);
         assert.equal(r.link.href, `/help/${LOCK_HELP_SLUG}`);
         assert.equal(m.balance.transferable, s(P(619.9975)));
@@ -405,8 +408,8 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         const r = item(m, i => i.id === 'democrac');
         assert.match(r.source, /[Dd]emocracy/);
         assert.match(r.reason, /vote/);
-        assert.match(r.unlock, /democracy\.removeVote/);
-        assert.match(r.unlock, /democracy\.unlock/);
+        assert.match(r.unlock, /use Remove votes and unlock below/);   // Q7: the button name, no call names
+        assert.doesNotMatch(r.unlock, /democracy\./);
         assert.deepEqual(r.refs.map(x => x.index), [7]);
         assert.equal(r.refs[0].href, '/democracy/referendum/7');
     });
@@ -418,7 +421,8 @@ describe('describeAccountLocks: one row per lock, freeze, hold and deposit', () 
         const r = item(m, i => i.id === 'phrelect');
         assert.match(r.source, /[Cc]ouncil/);
         assert.match(r.reason, /3 candidates/);
-        assert.match(r.unlock, /removeVoter/);
+        assert.equal(r.unlock, 'Use Remove council vote below. The lock and the voting deposit are released at once.');
+        assert.doesNotMatch(r.unlock, /elections\./);   // Q11: no call name in the sentence
         const d = item(m, i => i.kind === 'deposit' && /voting deposit/i.test(i.source));
         assert.equal(d.amount, s(PDEX));
         assert.equal(m.unattributedReserved, '0');
@@ -544,21 +548,21 @@ describe('democracyLockPlan: when the democracy lock can come off', () => {
         assert.equal(p.mode, 'delegating');
         const m = describeAccountLocks(snap({ frozen: s(PDEX), locks: [{ id: 'democrac', amount: s(PDEX), reasons: 'All' }],
             democracy: { delegating: true, target: OTHER, conviction: 'Locked3x', balance: s(PDEX), prior: { until: 0, amount: '0' }, lockingPeriod: 216000 } }));
-        assert.match(item(m, i => i.id === 'democrac').unlock, /undelegate/);
+        assert.match(item(m, i => i.id === 'democrac').unlock, /Undelegate/);   // S9: the button name
     });
     test('no current block (system.number failed): no made-up "locked until" day count', () => {
         const m = describeAccountLocks(snap({ block: null, frozen: s(PDEX), locks: [{ id: 'democrac', amount: s(PDEX), reasons: 'All' }],
             democracy: { ...base, votes: [{ index: 1, aye: true, conviction: 'Locked1x', balance: s(PDEX) }], referenda: { 1: { finished: true, approved: true, end: 1000 } } } }));
         const r = item(m, i => i.id === 'democrac');
         assert.doesNotMatch(r.unlock, /days/);
-        assert.match(r.unlock, /democracy\.unlock/);
+        assert.match(r.unlock, /use Remove votes and unlock below/);   // Q7
     });
     test('only a prior lock, expired: just democracy.unlock, no "remove each vote"', () => {
         const m = describeAccountLocks(snap({ frozen: s(PDEX), locks: [{ id: 'democrac', amount: s(PDEX), reasons: 'All' }],
             democracy: { ...base, votes: [], prior: { until: 10, amount: s(PDEX) }, referenda: {} } }));
         const r = item(m, i => i.id === 'democrac');
-        assert.match(r.unlock, /democracy\.unlock/);
-        assert.doesNotMatch(r.unlock, /removeVote/);
+        assert.match(r.unlock, /use Unlock below/);   // Q8
+        assert.doesNotMatch(r.unlock, /removeVote|Remove votes/);
     });
     test('blocksToDays', () => {
         assert.equal(blocksToDays(7200, 12000), 1);

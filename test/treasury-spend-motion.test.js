@@ -246,6 +246,8 @@ describe('review, then sign', () => {
         assert.equal(w.get('review').style.display, 'block');
         assert.match(w.get('review').innerHTML, /council\.propose/);
         assert.match(w.get('review').innerHTML, /treasury\.spend/);
+        assert.match(w.get('review').innerHTML, /This motion runs:/);   // Q18
+        assert.doesNotMatch(w.get('review').innerHTML, /wrapping/);
         assert.equal(w.get('sign').disabled, false);
         await w.get('sign').fire(); await tick();
         assert.equal(w.submitted.length, 1);
@@ -440,14 +442,16 @@ describe('after inclusion', () => {
         assert.equal(tabled.title, 'Motion tabled');
         assert.match(tabled.body, /The spend of 1,500 PDEX to \S+ is approved if 3 of 5 council members vote Aye/);
         assert.deepEqual(tabled.links[0], { href: `/council/motion/${H2}`, label: 'Open the motion' });
-        assert.match(tabled.next, /treasury\.payout/);
+        assert.match(tabled.next, /anyone can pay out the spend under Treasury, Spends/);   // Q17
+        assert.doesNotMatch(tabled.next, /treasury\.payout/);
         const fallback = successCopy('council.propose', p, evaluateEvents([ev('council', 'Proposed')], null, {}));
         assert.equal(fallback.links[0].href, `/council/motion/${H1}`);
     });
     test('a threshold-1 motion that ran at once says the spend still needs a payout', () => {
         const ran = successCopy('council.propose', { amount: '1', beneficiary: BEN, threshold: 1, seats: 1, hash: H1 }, evaluateEvents([ev('council', 'MemberExecuted', ['0xabc', { isErr: false, isOk: true }])], null, {}));
         assert.equal(ran.title, 'Motion executed');
-        assert.match(ran.body, /treasury\.payout/);
+        assert.match(ran.body, /anyone can now pay it out under Treasury, Spends/);   // Q17
+        assert.doesNotMatch(ran.body, /treasury\.payout/);
     });
 });
 

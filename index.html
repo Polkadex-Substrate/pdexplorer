@@ -270,7 +270,7 @@
                     <span class="status-text">Polkadex Mainnet</span>
                 </div>
                 <div class="header-actions" style="display: flex; align-items: center; gap: 12px;">
-                    <a href="/donate" id="donate-btn" class="donate-btn" title="Support the Polkadex Explorer">
+                    <a href="/donate" id="donate-btn" class="donate-btn" title="Support the Polkadex Explorer" aria-label="Support the Polkadex Explorer">
                         <i class='bx bx-heart'></i>
                         <span>Donate</span>
                     </a>
@@ -625,7 +625,7 @@
                     <div class="council-withdraw-actions">
                         <button id="council-withdraw-retry" class="staking-download-btn" type="button">Refresh review</button>
                         <button id="cancel-council-withdraw" class="staking-download-btn" type="button">Cancel</button>
-                        <button id="council-withdraw-sign" class="staking-download-btn" type="button" disabled>Sign &amp; withdraw candidacy</button>
+                        <button id="council-withdraw-sign" class="staking-download-btn" type="button" disabled>Sign and withdraw candidacy</button>
                     </div>
                 </div>
             </div>
@@ -639,7 +639,7 @@
                         <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Active Wallet</label>
                         <div id="candidacy-active-wallet" style="padding: 12px 16px; background: rgba(0,0,0,0.3); border-radius: var(--radius-sm); border: 1px solid rgba(255,255,255,0.05); font-family: monospace;">--</div>
                     </div>
-                    <button id="submit-candidacy-tx-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast);">Sign & Submit Candidacy</button>
+                    <button id="submit-candidacy-tx-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast);">Sign and submit candidacy</button>
                 </div>
             </div>
 
@@ -689,7 +689,7 @@
                         <div style="color: var(--text-muted); font-size: 0.78rem; margin-top: 6px;">The full stake is locked across all candidates you vote for, weighted equally. Locked until you submit a new vote or call <code>removeVoter</code>. Voting locks overlap with staking — the larger lock wins, so you don't double-pay.</div>
                     </div>
 
-                    <button id="submit-vote-tx-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast); font-size: 0.95rem;">Sign &amp; Submit Vote</button>
+                    <button id="submit-vote-tx-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast); font-size: 0.95rem;">Sign and submit vote</button>
                 </div>
             </div>
 
@@ -705,7 +705,7 @@
                 <div class="glass" style="width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
                     <button type="button" id="treasury-spend-close" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <h3 id="treasury-spend-title" style="margin-bottom: 6px; font-size: 1.3rem;">Propose a spend <a href="/help/treasury" class="help-inline-icon" title="Learn about treasury spends" aria-label="Help: treasury spends"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 12px; font-size: 0.88rem;">Tables a council motion that runs <code>treasury.spend</code> once enough members vote Aye.</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 12px; font-size: 0.88rem;">Creates a council motion. The spend is approved once enough members vote Aye.</p>
                     <div class="stake-hint">Account: <span id="treasury-spend-account" style="font-family: monospace; overflow-wrap: anywhere;">--</span></div>
                     <p id="treasury-spend-effect" role="status" style="margin: 12px 0; color: var(--text-secondary); font-size: 0.88rem;"></p>
                     <div id="treasury-spend-connect"></div>
@@ -726,7 +726,7 @@
                     <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px;">
                         <button type="button" id="treasury-spend-edit" class="staking-download-btn" style="display: none;">Edit</button>
                         <button type="button" id="treasury-spend-check" class="staking-download-btn" disabled>Review motion</button>
-                        <button type="button" id="treasury-spend-sign" class="staking-download-btn" disabled>Sign &amp; table motion</button>
+                        <button type="button" id="treasury-spend-sign" class="staking-download-btn" disabled>Sign and table motion</button>
                     </div>
                 </div>
             </div>
@@ -803,7 +803,7 @@
 
                     <div id="referendum-vote-error" class="staking-error" style="display: none; margin-bottom: 14px;"></div>
 
-                    <button id="submit-referendum-vote-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast); font-family: inherit;">Sign &amp; Submit Vote</button>
+                    <button id="submit-referendum-vote-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast); font-family: inherit;">Sign and submit vote</button>
                 </div>
             </div>
 
@@ -855,7 +855,7 @@
                     </div>
 
                     <div id="stake-modal-error" class="staking-error" style="display: none; margin-top: 16px;"></div>
-                    <button id="submit-stake-tx-btn" class="modal-submit-btn">Sign &amp; Submit</button>
+                    <button id="submit-stake-tx-btn" class="modal-submit-btn">Sign and stake</button>
                 </div>
             </div>
 
@@ -874,7 +874,7 @@
                     <div id="payout-entries" class="payout-entries"></div>
 
                     <div id="payout-modal-error" class="staking-error" style="display: none; margin-top: 12px;"></div>
-                    <button id="submit-payout-tx-btn" class="modal-submit-btn">Sign &amp; Pay Out</button>
+                    <button id="submit-payout-tx-btn" class="modal-submit-btn">Sign and pay out</button>
                 </div>
             </div>
 
@@ -918,7 +918,7 @@
                     </label>
 
                     <div id="send-modal-error" class="staking-error" style="display: none; margin-top: 16px;"></div>
-                    <button id="submit-send-tx-btn" class="modal-submit-btn">Sign &amp; Send</button>
+                    <button id="submit-send-tx-btn" class="modal-submit-btn">Sign and send</button>
                 </div>
             </div>
 
@@ -926,8 +926,8 @@
             <div id="unstake-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
                 <div class="glass" style="width: 100%; max-width: 500px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
                     <button type="button" id="close-unstake-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Unstake (Unbond) <a href="/help/unstaking" class="help-inline-icon" title="Learn about unstaking" aria-label="Help: unstaking"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Begin unbonding the amount below. Funds stay locked for the unbonding period, then become withdrawable from your wallet extension.</p>
+                    <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Unstake <a href="/help/unstaking" class="help-inline-icon" title="Learn about unstaking" aria-label="Help: unstaking"><i class='bx bx-help-circle'></i></a></h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Start unbonding the amount below. It stays locked for the unbonding period, then you withdraw it here.</p>
 
                     <div class="stake-summary" id="unstake-summary" style="margin-bottom: 18px;">
                         <div><span>Active bond</span><strong id="unstake-active">--</strong></div>
@@ -945,7 +945,7 @@
                     </div>
                     <button type="button" id="submit-withdraw-tx-btn" class="wallet-action-btn" style="display:none;margin-bottom:14px;">Withdraw unbonded funds</button>
 
-                    <label class="stake-label">Amount to unbond (PDEX)</label>
+                    <label class="stake-label" for="unstake-amount-input">Amount to unstake (PDEX)</label>
                     <div class="stake-amount-wrap">
                         <input type="number" id="unstake-amount-input" data-input-kind="amount" placeholder="0.0" step="0.0001" min="0">
                         <button type="button" id="unstake-max-btn" class="stake-max-btn">Max</button>
@@ -953,7 +953,7 @@
 
                     <div id="unstake-modal-warning" class="validate-msg" role="status" hidden></div>
                     <div id="unstake-modal-error" class="staking-error" style="display: none; margin-top: 12px;"></div>
-                    <button id="submit-unstake-tx-btn" class="modal-submit-btn">Sign &amp; Unstake</button>
+                    <button id="submit-unstake-tx-btn" class="modal-submit-btn">Sign and unstake</button>
                 </div>
             </div>
 

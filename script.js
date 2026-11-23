@@ -84,7 +84,8 @@ import { mountNominationStatus } from './lib/nomination-status-view.js';
 import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
-import { mountValidatePage } from './lib/validator-status-view.js';
+import { mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE } from './lib/validator-status-view.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR } from './lib/ui-parts.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
@@ -3997,6 +3998,7 @@ function renderBrandPage() {
         textMuted:    v('--text-muted'),
         success:      v('--success'),
         error:        v('--error'),
+        warning:      v('--warning'),
         radiusSm:     v('--radius-sm'),
         radiusMd:     v('--radius-md'),
         radiusLg:     v('--radius-lg'),
@@ -4060,6 +4062,14 @@ function renderBrandPage() {
                 ${swatch('Success', tokens.success, true)}
                 ${swatch('Error',   tokens.error)}
             </div>
+
+            <h3>Colour roles</h3>
+            <p class="brand-note">Each colour means one thing and appears only where that thing is true. Colour sits on small parts (chips, tiles, markers, dots, edges), never on a whole row or card, and always comes with an icon and a word.</p>
+            <div class="brand-swatch-row">
+                <span class="brand-role"><span class="ui-tile is-brand is-sm" aria-hidden="true"><i class='bx bx-pointer'></i></span>Pink acts: the one primary action</span>
+                ${[['Violet', 'structures: steps, secondary actions', 'is-step', 'bx-layer'], ['Green', 'is good: active, done, safe', 'is-positive', 'bx-check'], ['Amber', 'is attention: waiting, caution', 'is-wait', 'bx-error'], ['Blue', 'is guidance: how to, why', 'is-info', 'bx-info-circle'], ['Red', 'is failure: failed, blocked', 'is-error', 'bx-error-circle']].map(([n, m, c, i]) => `<span class="ui-chip ${c}"><i class='bx ${i}' aria-hidden="true"></i>${n} ${m}</span>`).join('')}
+            </div>
+            <p class="brand-note">Amber ${tokens.warning} is the explorer's warning colour. Text uses <code>--accent-violet-text</code> and <code>--accent-blue-text</code>; raw violet and raw blue are fills and edges only.</p>
 
             <p class="brand-note">Use <strong>Primary</strong> for the most-important call to action on a screen
             (only one per view). <strong>Secondary</strong> highlights successful actions, growth, and confirmation.
@@ -4305,7 +4315,7 @@ function buildWalletConnectJsonLd() {
                     {
                         '@type': 'HowToStep', 'position': 6,
                         'name': 'Sign in your wallet',
-                        'text': 'Click Sign & Send and approve the transaction in your wallet extension. The transfer is included on-chain within seconds.'
+                        'text': 'Click Sign and send and approve the transaction in your wallet extension. The transfer is included on-chain within seconds.'
                     }
                 ]
             },
@@ -7404,13 +7414,19 @@ function onStakingRewardsWalletChange(change) {
 
 // /validate (the connected wallet, following it) and /validate/<address> (any stash): lib/validator-status-view.js.
 // /validate/node: the node guide (lib/validator-node-guide.js). ?node=NAME is the telemetry name, kept in the URL only.
+// /validate/keys: the session keys checker (lib/validator-status-view.js mountKeysPage), its own title.
 function initValidatePage(address) {
     const nodeName = new URLSearchParams(window.location.search).get('node') || '';
     const setNodeParam = (n) => { const u = new URL(window.location.href); u.searchParams.set('node', n); try { history.replaceState(history.state, '', u.pathname + u.search); } catch (e) { /* sandboxed */ } };
-    if (address === 'node') return mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam });
-    if (address === 'setup') return mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true));
-    const mount = (a) => mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
-        fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName });
+    // The page draws its own primary on most views: the header button follows (markHeaderOutline).
+    validatePageOpen = true;
+    pageScope.add(() => { validatePageOpen = false; markHeaderOutline(); });
+    const settleHeader = (p) => { markHeaderOutline(); Promise.resolve(p).then(markHeaderOutline, markHeaderOutline); return p; };
+    if (address === 'node') return settleHeader(mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam }));
+    if (address === 'setup') return settleHeader(mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true)));
+    if (address === 'keys') { updateSeoMeta('validate', { title: KEYS_PAGE_TITLE, canonicalPath: '/validate/keys' }); return settleHeader(mountKeysPage(document.getElementById('validate-root'), { getAccount: () => walletSession.getActiveAccount(), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml })); }
+    const mount = (a) => settleHeader(mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
+        fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName }));
     pageScope.add(walletSession.onActiveAccountChange((change) => {
         const viewed = readRouteFromLocation().slice('validate/'.length);
         const follow = viewFollowsWallet({ viewed, previous: change.previous, isSame: isSameAddress });
@@ -7422,7 +7438,7 @@ function initValidatePage(address) {
 
 // /validate/setup (lib/validator-setup-view.js): signs through submitSignedTx; remounted on a wallet change.
 function validateSetupDeps(watch) {
-    if (watch) pageScope.add(walletSession.onActiveAccountChange(() => mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(false))));
+    if (watch) pageScope.add(walletSession.onActiveAccountChange(() => { const p = mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(false)); markHeaderOutline(); Promise.resolve(p).then(markHeaderOutline, markHeaderOutline); }));
     return { account: walletSession.getActiveAccount(), getApi: () => globalApi, isMultisig: (a) => !!multisigStore.find(a), revision: () => walletSession.revision(),
         findMultisig: (a) => multisigStore.find(a), multisigReview: (o) => multisigUI.review(o),
         submit: (o) => submitSignedTx(o), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, isAddress: isSearchableAddress,
@@ -8168,10 +8184,21 @@ function refreshWalletPageTitle() {
     if (here.startsWith('wallet/')) updateSeoMeta('wallet', walletDashboardSeo(here.slice('wallet/'.length), getStoredWallet(), { isSame: isSameAddress, shortAddr: stakingShortAddress }));
 }
 
-// While the Connect wallet chooser is open its own lead row is the one primary (BRAND.md): the header button is an outline.
-function markWalletChooserOpen(open) {
+// One primary per view (BRAND.md), and the header button counts as one (fidelity review 4): with no wallet
+// connected, a page that draws its own primary (the chooser's lead row, a .validate-primary) turns the
+// header Connect Wallet into an outline. Re-read after every validate mount and on every wallet change.
+let walletChooserOpen = false;
+let validatePageOpen = false;
+function markHeaderOutline() {
     const btn = document.getElementById('connect-wallet-btn');
-    if (btn) btn.classList.toggle('is-outline', !!open && !walletSession.getActiveAccount().address);
+    if (!btn) return;
+    const root = validatePageOpen ? document.getElementById('validate-root') : null;
+    const pagePrimary = walletChooserOpen || !!(root && root.querySelector(PAGE_PRIMARY_SELECTOR));
+    btn.classList.toggle('is-outline', headerLook({ connected: !!walletSession.getActiveAccount().address, pagePrimary }) === 'outline');
+}
+function markWalletChooserOpen(open) {
+    walletChooserOpen = !!open;
+    markHeaderOutline();
 }
 
 // The header button, the My Account menu and the sidebar item. Drawn from the
@@ -8603,7 +8630,7 @@ function renderWalletLoading(root, address) {
                 <div class="wallet-loading-banner">
                     <div class="wallet-spinner"><i class='bx bx-wallet'></i></div>
                     <div class="wallet-loading-text">
-                        <div class="wallet-loading-title">Loading your wallet dashboard</div>
+                        <div class="wallet-loading-title">Loading your account</div>
                         <div class="wallet-loading-msg" id="wallet-loading-msg">${steps[0].msg}</div>
                         <div class="wallet-loading-steps" id="wallet-loading-steps">
                             ${steps.map((s, i) => stepPill(s, i, i === 0 ? 'active' : 'pending')).join('')}
@@ -8942,7 +8969,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     root.innerHTML = `
         <div class="list-container glass">
             <div class="list-header">
-                <h2><i class='bx bx-wallet'></i> ${identity ? stakingEscapeHtml(identity) : 'Wallet Dashboard'} ${helpIcon('switching-wallets', 'About the wallet dashboard')}</h2>
+                <h2><i class='bx bx-wallet'></i> ${identity ? stakingEscapeHtml(identity) : 'My Account'} ${helpIcon('switching-wallets', 'About the wallet dashboard')}</h2>
                 <div style="display:flex; gap:14px; align-items:center;">
                     ${rewardHistoryLinkHtml(data.address)}
                     <button id="wallet-switch-btn" class="staking-download-btn"${getStoredWallet() ? '' : ' hidden'}>Switch wallet</button>
@@ -8971,8 +8998,6 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
             </div>
         </div>
 
-        <div id="wallet-locks-slot"></div>
-        <div id="wallet-nominations-slot"></div>
         ${isOwnWallet ? `
         <div id="wallet-actions-slot">
             ${hasInjectedWalletNow() ? `
@@ -8999,6 +9024,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                 </button>
             </div>` : buildViewOnlyCallout()}
         </div>` : ''}
+        <div id="wallet-locks-slot"></div>
+        <div id="wallet-nominations-slot"></div>
 
         <div id="wallet-multisig-slot"></div>
         <div id="wallet-validator-slot"></div>
@@ -9011,9 +9038,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                 </div>
             </div>
             <div class="list-container glass">
-                <div class="list-header"><h2>Staking Overview</h2></div>
+                <div class="list-header"><h2>Network staking</h2></div>
                 <div class="wallet-stat-list">
-                    <div class="wallet-stat"><span>Total Staked</span><strong>${stakingFormatPDEX(staking.totalStaked)} PDEX</strong></div>
                     <div class="wallet-stat"><span>Minimum Stake</span><strong>${stakingFormatPDEX(network.minStake)} PDEX</strong></div>
                     <div class="wallet-stat"><span>Active Nominators</span><strong>${stakingFormatNumber(network.activeNominators)} / ${stakingFormatNumber(network.totalNominators)}</strong></div>
                     <div class="wallet-stat"><span>Active Validators</span><strong>${stakingFormatNumber(network.activeValidators)} / ${stakingFormatNumber(network.totalValidators)}</strong></div>
@@ -9590,7 +9616,7 @@ async function submitStakeTx() {
         action: { key: 'staking.bondNominate', params: { amount: hasAmount ? amtStr : null, n: targets.length, eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null } },
         button: document.getElementById('submit-stake-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Submit',
+        idleText: 'Sign and stake',
         onError: showStakeError,
         onSuccess: () => {
             const modal = document.getElementById('stake-modal');
@@ -9677,7 +9703,7 @@ async function submitPayoutTx() {
         action: { key: 'staking.payout', params: { k: batch.length, remaining: entries.length - batch.length } },
         button: document.getElementById('submit-payout-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Pay Out',
+        idleText: 'Sign and pay out',
         onError: fail,
         onSuccess: () => {
             const modal = document.getElementById('payout-modal');
@@ -9908,7 +9934,7 @@ async function submitUnstakeTx() {
             action: { key: 'staking.unbond', params: { amount: planckToPdexString(planckStr), full: true, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
             button: document.getElementById('submit-unstake-tx-btn'),
             busyText: 'Signing…',
-            idleText: 'Sign & Unstake',
+            idleText: 'Sign and unstake',
             onError: (err, m) => {
                 console.warn('[unstake] full-unbond fast-path errored:', err && (err.message || err));
                 fail(decodeUnstakeError((m && m.raw) || err, {
@@ -9979,7 +10005,7 @@ async function submitUnstakeTx() {
         action: { key: 'staking.unbond', params: { amount: amtStr, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
         button: document.getElementById('submit-unstake-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Unstake',
+        idleText: 'Sign and unstake',
         onError: (err, m) => fail(decodeUnstakeError((m && m.raw) || err, { active, amt, minBond }, err)),
         onSuccess: () => {
             const modal = document.getElementById('unstake-modal');
@@ -10636,7 +10662,7 @@ async function submitSendTx() {
         action: { key: 'balances.transfer', params: { amount: amtStr, to } },
         button: document.getElementById('submit-send-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Send',
+        idleText: 'Sign and send',
         onError: showSendError,
         onSuccess: () => {
             const modal = document.getElementById('send-modal');
@@ -11576,6 +11602,7 @@ const disconnectWalletBtn = document.getElementById('disconnect-wallet-btn');
 if (disconnectWalletBtn) disconnectWalletBtn.addEventListener('click', disconnectWallet);
 // Connect, switch, Disconnect, another tab, a phone session ending: every path announces it.
 walletSession.onActiveAccountChange(() => refreshConnectWalletButton());
+walletSession.onActiveAccountChange(() => markHeaderOutline());   // the outline rule reads the session too (fidelity review 4)
 walletSession.onActiveAccountChange(() => paintWalletViewingSlot());
 refreshConnectWalletButton();
 
@@ -12540,7 +12567,7 @@ async function submitCouncilCandidacy() {
         action: { key: 'elections.candidacy' },
         button: btn,
         busyText: 'Signing...',
-        idleText: 'Sign & Submit Candidacy',
+        idleText: 'Sign and submit candidacy',
         onSuccess: () => { if (candidacyModal) candidacyModal.style.display = 'none'; }
     });
 }
@@ -12578,7 +12605,7 @@ async function submitCouncilVote() {
         action: { key: 'elections.vote', params: { n: candidates.length, stake: stakeInput } },
         button: document.getElementById('submit-vote-tx-btn'),
         busyText: 'Signing...',
-        idleText: 'Sign & Submit Vote',
+        idleText: 'Sign and submit vote',
         onSuccess: () => { if (voteModal) voteModal.style.display = 'none'; }
     });
 }
@@ -13136,7 +13163,7 @@ async function submitReferendumVote() {
         action: { key: 'democracy.vote', params: { aye, ref: refIndex, amount: amtStr, conviction, lockPeriodDays: lockPeriodDays(globalApi) } },
         button: document.getElementById('submit-referendum-vote-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Submit Vote',
+        idleText: 'Sign and submit vote',
         onError: showErr,
         // The row shows the stage; In block asks for a fresh copy, and the
         // live feed has the new tally and your vote meanwhile.

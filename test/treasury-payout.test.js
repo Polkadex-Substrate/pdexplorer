@@ -123,8 +123,7 @@ describe('what a spend allows in the block a transaction would run in', () => {
         assert.equal(classifySpend(spend(), 999, { eta: (b) => `day of ${b}` }).note, 'Payable from block 1,000 (~day of 1000)');
     });
     test('the fee texts follow the dispatch Pays of each call', () => {
-        assert.match(PAYOUT_FEE_TEXT, /anyone can submit/i);
-        assert.match(PAYOUT_FEE_TEXT, /not refunded/);
+        assert.equal(PAYOUT_FEE_TEXT, 'Anyone can pay out an approved spend. The payer covers the network fee, and it is not refunded.');   // Q19
         assert.match(CHECK_FEE_TEXT, /anyone can submit/i);
         assert.match(CHECK_FEE_TEXT, /refunded/);
     });
@@ -638,8 +637,9 @@ describe('the Spends tab', () => {
         const w = spendsWorld();
         await w.ui.mount(w.el);
         assert.deepEqual(w.fetches, ['/api/treasury/spends']);
-        assert.match(w.el.innerHTML, /Anyone can submit/i);
+        assert.match(w.el.innerHTML, /Anyone can pay out an approved spend/);
         assert.match(w.el.innerHTML, /not refunded/);
+        assert.doesNotMatch(w.el.innerHTML, /Anyone can submit Check status/);   // Q20: the Check status note sits beside its button
         assert.match(w.table.innerHTML, /data-spend-action="payout"/);
     });
     test('Pay out signs treasury.payout(index) through submit, after re-reading the spend at signing', async () => {

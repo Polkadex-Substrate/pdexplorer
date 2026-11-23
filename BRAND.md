@@ -48,6 +48,29 @@ When the brand evolves, edit `styles.css` and this document together.
 
 **Usage rule.** Use Primary for the most-important call to action on a screen — only one per view. Secondary is for positive states (success badges, growth indicators), never for primary actions. Keep semantic colours for their semantic role; don't repaint a positive action red.
 
+### Colour roles (explorer)
+
+One product-wide table: **pink acts, violet structures, green is good, amber is attention, blue is guidance,
+red is failure.** Each hue appears wherever that meaning is present and nowhere else. Amber `#FFA500` is the
+warning colour (there is no true yellow). Colour sits on small full-strength parts (chip, tile up to 48 px, step
+marker, dot, 2 to 3 px edge, 1 px border), never as a fill on a whole row or card, and every coloured state also
+has an icon and a word.
+
+| Colour | Means | Text token on dark |
+| ------ | ----- | ------------------ |
+| Pink `#E6007A` and the gradient | the one primary action per view | none (pink is never small text) |
+| Violet `#6745D2` | structure: steps, "you are here", secondary actions | `--accent-violet-text` `#A48FE4` |
+| Green `#14F195` | good state: active, done, connected, safe | `--accent-green` |
+| Amber `#FFA500` | attention without failure: waiting, caution | `--accent-amber` |
+| Blue `#148FE8` | guidance: how-to, timing, "why" | `--accent-blue-text` `#4FABEE` |
+| Red `#FF4D4D` | failure or loss: failed, blocked, invalid | `--accent-red` |
+
+The full roles table (what each colour may appear as, and where it never appears) is in the design spec `2026-11-21-validate-redesign-and-colour-roles.md`, section 2.1.
+
+Tokens live in the `:root` block of `styles.css` (`--accent-*`, with `-tint`, `-line` and `-wash` variants, and
+`--warning`); the shared parts are the `ui-*` classes (`ui-chip`, `ui-tile`, `ui-step`, `ui-dot`, `ui-panel`,
+`ui-trust`, `ui-hairline`). The explorer is dark only; light values are not shipped.
+
 ## Typography
 
 Primary face is **Inter** (Google Fonts, weights `300/400/500/600/700`), loaded once in `index.html`:

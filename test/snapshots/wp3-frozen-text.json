@@ -1,0 +1,956 @@
+{
+ "tables": {
+  "steps.STEPWISE_ACTION": "validator.setupStep",
+  "steps.STEP_WORDS.waiting": "Waiting",
+  "steps.STEP_WORDS.ready": "Ready to sign",
+  "steps.STEP_WORDS.wallet": "Waiting for your wallet",
+  "steps.STEP_WORDS.sent": "Sent, waiting for a block",
+  "steps.STEP_WORDS.checking": "Checking the chain",
+  "steps.STEP_WORDS.done": "Done on chain",
+  "steps.STEP_WORDS.notSigned": "Not signed",
+  "steps.STEP_WORDS.failed": "Failed on chain",
+  "steps.STEP_WORDS.notConfirmed": "Not confirmed",
+  "steps.STEP_WORDS.blocked": "Blocked",
+  "steps.SW.entry": "Sign in separate steps",
+  "steps.SW.entryNote": "For a wallet or hardware device that cannot sign all the steps as one transaction. Each step is then its own transaction with its own fee.",
+  "steps.SW.afterAttempt": "If your wallet or device cannot sign this as one transaction, use Sign in separate steps below.",
+  "steps.SW.multisig": "Separate steps are not offered for a multisig stash, because each step would need its own round of approvals. The multisig signs the setup as one transaction.",
+  "steps.SW.resume(0)": "This setup was started earlier. undefined of its steps are left.",
+  "steps.SW.resume(1)": "This setup was started earlier. 1 of its steps are left.",
+  "steps.SW.resume(2)": "This setup was started earlier. 1 of its steps are left.",
+  "steps.SW.resume(3)": "This setup was started earlier. 2 of its steps are left.",
+  "steps.SW.resume(4)": "This setup was started earlier. 2 of its steps are left.",
+  "steps.SW.heading": "Sign in separate steps",
+  "steps.SW.stashLine(0)": "Stash: undefined. Every step is signed by this account.",
+  "steps.SW.stashLine(1)": "Stash: 1. Every step is signed by this account.",
+  "steps.SW.stashLine(2)": "Stash: 1. Every step is signed by this account.",
+  "steps.SW.stashLine(3)": "Stash: 2. Every step is signed by this account.",
+  "steps.SW.stashLine(4)": "Stash: 2. Every step is signed by this account.",
+  "steps.SW.intro(0)": "Your wallet will ask you once, for the step below. Estimated network fee: 0 PDEX.",
+  "steps.SW.intro(1)": "Your wallet will ask you once, for the step below. Estimated network fee: 0 PDEX.",
+  "steps.SW.intro(2)": "Your wallet will ask you once, for the step below. Estimated network fee: 0.000000000003 PDEX.",
+  "steps.SW.intro(3)": "Your wallet will ask you 2 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.000000000003 PDEX in total.",
+  "steps.SW.intro(4)": "Your wallet will ask you 2 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.000000000003 PDEX in total.",
+  "steps.SW.panelTitle": "This is not all-or-nothing",
+  "steps.SW.panelStay": "Steps you have signed stay on chain even if a later step fails or you stop.",
+  "steps.SW.panelKeys": "After the keys step alone, nothing is locked. Stopping there costs only that step's fee.",
+  "steps.SW.panelBond(0)": "After the bond step, 0 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes undefined.",
+  "steps.SW.panelBond(1)": "After the bond step, 0.000000000001 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes undefined.",
+  "steps.SW.panelBond(2)": "After the bond step, 0.000000000001 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 3.",
+  "steps.SW.panelBond(3)": "After the bond step, 0.000000000002 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 3.",
+  "steps.SW.panelBond(4)": "After the bond step, 0.000000000002 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 3.",
+  "steps.SW.panelReturn": "You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again.",
+  "steps.SW.sign(0)": "Sign step undefined of undefined",
+  "steps.SW.sign(1)": "Sign step 1 of undefined",
+  "steps.SW.sign(2)": "Sign step 1 of 3",
+  "steps.SW.sign(3)": "Sign step 2 of 3",
+  "steps.SW.sign(4)": "Sign step 2 of 3",
+  "steps.SW.back": "Back to the review",
+  "steps.SW.checkAgain": "Check again",
+  "steps.SW.addBond": "Add to the bond",
+  "steps.SW.addRest": "Add the rest first",
+  "steps.SW.ready(0)": "Nothing has been signed yet. Step 1 is next: undefined.",
+  "steps.SW.ready(1)": "Nothing has been signed yet. Step 1 is next: 1.",
+  "steps.SW.ready(2)": "Nothing has been signed yet. Step 1 is next: 1.",
+  "steps.SW.ready(3)": "Nothing has been signed yet. Step 1 is next: 2.",
+  "steps.SW.ready(4)": "Nothing has been signed yet. Step 1 is next: 2.",
+  "steps.SW.keysHint": "Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve.",
+  "steps.SW.nextAfter(0)": "Step undefined is confirmed in block #undefined. Step NaN is next: undefined.",
+  "steps.SW.nextAfter(1)": "Step 1 is confirmed in block #undefined. Step 2 is next: undefined.",
+  "steps.SW.nextAfter(2)": "Step 1 is confirmed in block #3. Step 2 is next: undefined.",
+  "steps.SW.nextAfter(3)": "Step 2 is confirmed in block #3. Step 3 is next: X.",
+  "steps.SW.nextAfterNoBlock(0)": "Step undefined is confirmed on chain. Step NaN is next: undefined.",
+  "steps.SW.nextAfterNoBlock(1)": "Step 1 is confirmed on chain. Step 2 is next: undefined.",
+  "steps.SW.nextAfterNoBlock(2)": "Step 1 is confirmed on chain. Step 2 is next: 3.",
+  "steps.SW.nextAfterNoBlock(3)": "Step 2 is confirmed on chain. Step 3 is next: 3.",
+  "steps.SW.checking(0)": "Step undefined is in a block. Checking the chain before the next step.",
+  "steps.SW.checking(1)": "Step 1 is in a block. Checking the chain before the next step.",
+  "steps.SW.checking(2)": "Step 1 is in a block. Checking the chain before the next step.",
+  "steps.SW.checking(3)": "Step 2 is in a block. Checking the chain before the next step.",
+  "steps.SW.checking(4)": "Step 2 is in a block. Checking the chain before the next step.",
+  "steps.SW.notSigned(0)": "Step undefined was not signed, so nothing changed and no fee was charged. Steps 1 to NaN stay on chain. Press the button when you are ready.",
+  "steps.SW.notSigned(1)": "Step 1 was not signed, so nothing changed and no fee was charged. Press the button when you are ready.",
+  "steps.SW.notSigned(2)": "Step 1 was not signed, so nothing changed and no fee was charged. Press the button when you are ready.",
+  "steps.SW.notSigned(3)": "Step 2 was not signed, so nothing changed and no fee was charged. Step 1 stays on chain. Press the button when you are ready.",
+  "steps.SW.failedOnChain(0)": "Step undefined was included but the chain refused it:  Its fee was charged and nothing else changed. Steps 1 to NaN stay on chain.",
+  "steps.SW.failedOnChain(1)": "Step 1 was included but the chain refused it:  Its fee was charged and nothing else changed.",
+  "steps.SW.failedOnChain(2)": "Step 1 was included but the chain refused it: 3 Its fee was charged and nothing else changed.",
+  "steps.SW.failedOnChain(3)": "Step 2 was included but the chain refused it: 3 Its fee was charged and nothing else changed. Step 1 stays on chain.",
+  "steps.SW.notConfirmed(0)": "The explorer could not confirm step undefined. It may still go through. Do not sign it again yet. Press Check again to read the chain.",
+  "steps.SW.notConfirmed(1)": "The explorer could not confirm step 1. It may still go through. Do not sign it again yet. Press Check again to read the chain.",
+  "steps.SW.notConfirmed(2)": "The explorer could not confirm step 1. It may still go through. Do not sign it again yet. Press Check again to read the chain.",
+  "steps.SW.notConfirmed(3)": "The explorer could not confirm step 2. It may still go through. Do not sign it again yet. Press Check again to read the chain.",
+  "steps.SW.notConfirmed(4)": "The explorer could not confirm step 2. It may still go through. Do not sign it again yet. Press Check again to read the chain.",
+  "steps.SW.stillNotOnChain": "Still not on chain. If it does not appear in about 15 minutes it was not included. Reload this page; the setup continues from the chain.",
+  "steps.SW.sentNotOnChain(0)": "Step undefined was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee.",
+  "steps.SW.sentNotOnChain(1)": "Step 1 was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee.",
+  "steps.SW.sentNotOnChain(2)": "Step 1 was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee.",
+  "steps.SW.sentNotOnChain(3)": "Step 2 was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee.",
+  "steps.SW.sentNotOnChain(4)": "Step 2 was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee.",
+  "steps.SW.pending": "Another transaction from this account is still waiting for a block. Nothing was signed. Wait for it to be included, then try again.",
+  "steps.SW.topUpUnconfirmed(0)": "Your top-up of 0 PDEX was sent but the explorer could not confirm it. It may still be included in a block, so this review leaves it out rather than send it twice. To check, reload this page in about 15 minutes: the Stash and bond step shows the bonded amount. If it has not gone up, the top-up was not included and you can add it again there.",
+  "steps.SW.topUpUnconfirmed(1)": "Your top-up of 0.000000000001 PDEX was sent but the explorer could not confirm it. It may still be included in a block, so this review leaves it out rather than send it twice. To check, reload this page in about 15 minutes: the Stash and bond step shows the bonded amount. If it has not gone up, the top-up was not included and you can add it again there.",
+  "steps.SW.topUpUnconfirmed(2)": "Your top-up of 0.000000000001 PDEX was sent but the explorer could not confirm it. It may still be included in a block, so this review leaves it out rather than send it twice. To check, reload this page in about 15 minutes: the Stash and bond step shows the bonded amount. If it has not gone up, the top-up was not included and you can add it again there.",
+  "steps.SW.topUpUnconfirmed(3)": "Your top-up of 0.000000000002 PDEX was sent but the explorer could not confirm it. It may still be included in a block, so this review leaves it out rather than send it twice. To check, reload this page in about 15 minutes: the Stash and bond step shows the bonded amount. If it has not gone up, the top-up was not included and you can add it again there.",
+  "steps.SW.topUpUnconfirmed(4)": "Your top-up of 0.000000000002 PDEX was sent but the explorer could not confirm it. It may still be included in a block, so this review leaves it out rather than send it twice. To check, reload this page in about 15 minutes: the Stash and bond step shows the bonded amount. If it has not gone up, the top-up was not included and you can add it again there.",
+  "steps.SW.sentUnconfirmed": "Your setup was sent but the explorer could not confirm it. It may still be included in a block. Do not sign it again yet. Reload this page in a minute; the setup continues from the chain.",
+  "steps.SW.notStarted": "The explorer could not start the signature, so nothing was signed and no fee was charged. Check that your wallet is unlocked and this account is selected, then press Sign and submit again.",
+  "steps.SW.notShown(0)": "Step undefined went through, but the chain does not show undefined for this stash yet. It can take a block.",
+  "steps.SW.notShown(1)": "Step 1 went through, but the chain does not show undefined for this stash yet. It can take a block.",
+  "steps.SW.notShown(2)": "Step 1 went through, but the chain does not show 3 for this stash yet. It can take a block.",
+  "steps.SW.notShown(3)": "Step 2 went through, but the chain does not show 3 for this stash yet. It can take a block.",
+  "steps.SW.notShown(4)": "Step 2 went through, but the chain does not show 3 for this stash yet. It can take a block.",
+  "steps.SW.shortCanContinue(0)": "Bonded 0 PDEX of the 0 PDEX you reviewed. The balance changed before the block. 0 PDEX is above the minimum of 0 PDEX, so you can sign the last step now or add the rest first.",
+  "steps.SW.shortCanContinue(1)": "Bonded 0.000000000001 PDEX of the 0 PDEX you reviewed. The balance changed before the block. 0 PDEX is above the minimum of 0 PDEX, so you can sign the last step now or add the rest first.",
+  "steps.SW.shortCanContinue(2)": "Bonded 0.000000000001 PDEX of the 0.000000000003 PDEX you reviewed. The balance changed before the block. 0 PDEX is above the minimum of 0 PDEX, so you can sign the last step now or add the rest first.",
+  "steps.SW.shortCanContinue(3)": "Bonded 0.000000000002 PDEX of the 0.000000000003 PDEX you reviewed. The balance changed before the block. 0 PDEX is above the minimum of 0 PDEX, so you can sign the last step now or add the rest first.",
+  "steps.SW.shortCanContinue(4)": "Bonded 0.000000000002 PDEX of the 0.000000000003 PDEX you reviewed. The balance changed before the block. 0 PDEX is above the minimum of 0.000000000004 PDEX, so you can sign the last step now or add the rest first.",
+  "steps.SW.shortBlocked(0)": "Bonded 0 PDEX of the 0 PDEX you reviewed. The balance changed before the block. Validating needs at least 0 PDEX bonded, so the last step would fail. Add at least 0 PDEX to the bond first.",
+  "steps.SW.shortBlocked(1)": "Bonded 0.000000000001 PDEX of the 0 PDEX you reviewed. The balance changed before the block. Validating needs at least 0 PDEX bonded, so the last step would fail. Add at least 0 PDEX to the bond first.",
+  "steps.SW.shortBlocked(2)": "Bonded 0.000000000001 PDEX of the 0.000000000003 PDEX you reviewed. The balance changed before the block. Validating needs at least 0 PDEX bonded, so the last step would fail. Add at least 0 PDEX to the bond first.",
+  "steps.SW.shortBlocked(3)": "Bonded 0.000000000002 PDEX of the 0.000000000003 PDEX you reviewed. The balance changed before the block. Validating needs at least 0 PDEX bonded, so the last step would fail. Add at least 0 PDEX to the bond first.",
+  "steps.SW.shortBlocked(4)": "Bonded 0.000000000002 PDEX of the 0.000000000003 PDEX you reviewed. The balance changed before the block. Validating needs at least 0 PDEX bonded, so the last step would fail. Add at least 0.000000000004 PDEX to the bond first.",
+  "steps.SW.feeShort(0)": "Step undefined cannot be paid for yet. undefined Then press Check again.",
+  "steps.SW.feeShort(1)": "Step 1 cannot be paid for yet. undefined Then press Check again.",
+  "steps.SW.feeShort(2)": "Step 1 cannot be paid for yet. 3 Then press Check again.",
+  "steps.SW.feeShort(3)": "Step 2 cannot be paid for yet. 3 Then press Check again. Your bond of 0 PDEX is not affected and stays bonded meanwhile.",
+  "steps.SW.feeShort(4)": "Step 2 cannot be paid for yet. 3 Then press Check again. Your bond of 0 PDEX is not affected and stays bonded meanwhile.",
+  "steps.SW.feesTooHigh(0)": "Signing in separate steps costs about 0 PDEX in network fees, so the most you can bond is 0 PDEX. Lower the amount or add PDEX to this stash.",
+  "steps.SW.feesTooHigh(1)": "Signing in separate steps costs about 0.000000000001 PDEX in network fees, so the most you can bond is 0 PDEX. Lower the amount or add PDEX to this stash.",
+  "steps.SW.feesTooHigh(2)": "Signing in separate steps costs about 0.000000000001 PDEX in network fees, so the most you can bond is 0.000000000003 PDEX. Lower the amount or add PDEX to this stash.",
+  "steps.SW.feesTooHigh(3)": "Signing in separate steps costs about 0.000000000002 PDEX in network fees, so the most you can bond is 0.000000000003 PDEX. Lower the amount or add PDEX to this stash.",
+  "steps.SW.feesTooHigh(4)": "Signing in separate steps costs about 0.000000000002 PDEX in network fees, so the most you can bond is 0.000000000003 PDEX. Lower the amount or add PDEX to this stash.",
+  "steps.SW.runtimeChanged(0)": "The network was upgraded while you were between steps (spec undefined, now undefined). Nothing was signed. Steps already confirmed stay on chain. Go back to the review so the remaining steps are checked against the new rules.",
+  "steps.SW.runtimeChanged(1)": "The network was upgraded while you were between steps (spec 1, now undefined). Nothing was signed. Steps already confirmed stay on chain. Go back to the review so the remaining steps are checked against the new rules.",
+  "steps.SW.runtimeChanged(2)": "The network was upgraded while you were between steps (spec 1, now 3). Nothing was signed. Steps already confirmed stay on chain. Go back to the review so the remaining steps are checked against the new rules.",
+  "steps.SW.runtimeChanged(3)": "The network was upgraded while you were between steps (spec 2, now 3). Nothing was signed. Steps already confirmed stay on chain. Go back to the review so the remaining steps are checked against the new rules.",
+  "steps.SW.runtimeChanged(4)": "The network was upgraded while you were between steps (spec 2, now 3). Nothing was signed. Steps already confirmed stay on chain. Go back to the review so the remaining steps are checked against the new rules.",
+  "steps.SW.keysDiffer": "The session keys registered to this stash are not the ones you reviewed. Nothing was signed. Go back to Session keys and choose which keys to use.",
+  "steps.SW.alreadyOnChain": "The chain already shows this step, so nothing was signed.",
+  "steps.SW.callDiffers": "This step no longer matches what you reviewed, so nothing was signed. Go back to the review.",
+  "steps.SW.walletChanged(0)": "Your wallet changed, so the setup in separate steps was stopped. Steps already confirmed stay on chain. Connect the stash undefined again to continue from where it stopped.",
+  "steps.SW.walletChanged(1)": "Your wallet changed, so the setup in separate steps was stopped. Steps already confirmed stay on chain. Connect the stash 1 again to continue from where it stopped.",
+  "steps.SW.walletChanged(2)": "Your wallet changed, so the setup in separate steps was stopped. Steps already confirmed stay on chain. Connect the stash 1 again to continue from where it stopped.",
+  "steps.SW.walletChanged(3)": "Your wallet changed, so the setup in separate steps was stopped. Steps already confirmed stay on chain. Connect the stash 2 again to continue from where it stopped.",
+  "steps.SW.walletChanged(4)": "Your wallet changed, so the setup in separate steps was stopped. Steps already confirmed stay on chain. Connect the stash 2 again to continue from where it stopped.",
+  "steps.SW.done(0)": "All undefined steps are confirmed. This stash is bonded, its keys are registered and it is asking to validate. You are now waiting for election.",
+  "steps.SW.done(1)": "All 1 steps are confirmed. This stash is bonded, its keys are registered and it is asking to validate. You are now waiting for election.",
+  "steps.SW.done(2)": "All 1 steps are confirmed. This stash is bonded, its keys are registered and it is asking to validate. You are now waiting for election.",
+  "steps.SW.done(3)": "All 2 steps are confirmed. This stash is bonded, its keys are registered and it is asking to validate. You are now waiting for election.",
+  "steps.SW.done(4)": "All 2 steps are confirmed. This stash is bonded, its keys are registered and it is asking to validate. You are now waiting for election.",
+  "steps.SW.doneShort(2)": "All 1 steps are confirmed. Bonded 0 PDEX of the 0 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash.",
+  "steps.SW.doneShort(3)": "All 2 steps are confirmed. Bonded 0 PDEX of the 0 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash.",
+  "steps.SW.doneShort(4)": "All 2 steps are confirmed. Bonded 0 PDEX of the 0 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash.",
+  "steps.SW.stopNothing": "If you stop here: nothing has changed.",
+  "steps.SW.stopKeys": "If you stop here: your keys stay registered to this stash and nothing is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first.",
+  "steps.SW.stopBonded(0)": "If you stop here: 0 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes undefined, then you withdraw it.",
+  "steps.SW.stopBonded(1)": "If you stop here: 0.000000000001 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes undefined, then you withdraw it.",
+  "steps.SW.stopBonded(2)": "If you stop here: 0.000000000001 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes 3, then you withdraw it.",
+  "steps.SW.stopBonded(3)": "If you stop here: 0.000000000002 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes 3, then you withdraw it.",
+  "steps.SW.stopBonded(4)": "If you stop here: 0.000000000002 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes 3, then you withdraw it.",
+  "steps.SW.stopNominating(0)": "If you stop here: your keys stay registered to this stash. Your bond of 0 PDEX is untouched and keeps nominating, and nothing new is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first.",
+  "steps.SW.stopNominating(1)": "If you stop here: your keys stay registered to this stash. Your bond of 0.000000000001 PDEX is untouched and keeps nominating, and nothing new is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first.",
+  "steps.SW.stopNominating(2)": "If you stop here: your keys stay registered to this stash. Your bond of 0.000000000001 PDEX is untouched and keeps nominating, and nothing new is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first.",
+  "steps.SW.stopNominating(3)": "If you stop here: your keys stay registered to this stash. Your bond of 0.000000000002 PDEX is untouched and keeps nominating, and nothing new is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first.",
+  "steps.SW.stopNominating(4)": "If you stop here: your keys stay registered to this stash. Your bond of 0.000000000002 PDEX is untouched and keeps nominating, and nothing new is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first.",
+  "steps.SW.stopNominatingToppedUp(0)": "If you stop here: your keys stay registered to this stash and your bond, now 0 PDEX with the 0 PDEX you added, keeps nominating. To get the added PDEX back, use Unstake on your wallet page: unbonding takes undefined, then you withdraw it.",
+  "steps.SW.stopNominatingToppedUp(1)": "If you stop here: your keys stay registered to this stash and your bond, now 0.000000000001 PDEX with the 0 PDEX you added, keeps nominating. To get the added PDEX back, use Unstake on your wallet page: unbonding takes undefined, then you withdraw it.",
+  "steps.SW.stopNominatingToppedUp(2)": "If you stop here: your keys stay registered to this stash and your bond, now 0.000000000001 PDEX with the 0.000000000003 PDEX you added, keeps nominating. To get the added PDEX back, use Unstake on your wallet page: unbonding takes undefined, then you withdraw it.",
+  "steps.SW.stopNominatingToppedUp(3)": "If you stop here: your keys stay registered to this stash and your bond, now 0.000000000002 PDEX with the 0.000000000003 PDEX you added, keeps nominating. To get the added PDEX back, use Unstake on your wallet page: unbonding takes X, then you withdraw it.",
+  "steps.SW.stopNominatingToppedUp(4)": "If you stop here: your keys stay registered to this stash and your bond, now 0.000000000002 PDEX with the 0.000000000003 PDEX you added, keeps nominating. To get the added PDEX back, use Unstake on your wallet page: unbonding takes X, then you withdraw it.",
+  "steps.SW.walletLink": "Open your wallet page",
+  "steps.SW.cardPending(0)": "Setting up your validator, step undefined of undefined",
+  "steps.SW.cardPending(1)": "Setting up your validator, step 1 of undefined",
+  "steps.SW.cardPending(2)": "Setting up your validator, step 1 of 3",
+  "steps.SW.cardPending(3)": "Setting up your validator, step 2 of 3",
+  "steps.SW.cardPending(4)": "Setting up your validator, step 2 of 3",
+  "steps.SW.help": "If your wallet or hardware device cannot sign the setup as one transaction, the review offers Sign in separate steps. The keys are registered first, then the bond, then the request to validate. Each is its own transaction with its own fee, and each stays on chain if a later one fails. A multisig stash and a proxy cannot use it.",
+  "setup.KEYS_CHANGED_TEXT": "The session keys registered to this stash are not the ones you reviewed. Nothing was signed. Go back to Session keys and choose which keys to use.",
+  "setup.SETUP_ACTION": "validator.setup",
+  "setup.SETUP_WARNINGS[0]": "Bonded PDEX takes 28 days to unbond.",
+  "setup.SETUP_WARNINGS[1]": "If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%.",
+  "setup.SETUP_WARNINGS[2]": "Two nodes running with the same keys are slashed. Never copy a keystore.",
+  "setup.SETUP_WARNINGS[3]": "Slashes also hit the people who nominate you.",
+  "setup.SLASH_ACK": "I understand that my bond can be slashed.",
+  "manage.BLOCKED_NOTE": "Blocking new nominations applies at once. Nominators who already nominate you stay.",
+  "manage.COMMISSION_NOTE": "Your nominators see this change. The explorer keeps a commission history for every validator.",
+  "manage.CONFIRM_100": "I want a 100% commission: my nominators earn nothing.",
+  "manage.FULL_COMMISSION_TEXT": "At 100% your nominators earn nothing and the explorer flags your validator to them. To stop new nominations instead, use Block new nominations.",
+  "manage.KIND_CALLS.commission[0]": "Staking",
+  "manage.KIND_CALLS.commission[1]": "validate",
+  "manage.KIND_CALLS.keys[0]": "Session",
+  "manage.KIND_CALLS.keys[1]": "set_keys",
+  "manage.KIND_CALLS.bondExtra[0]": "Staking",
+  "manage.KIND_CALLS.bondExtra[1]": "bond_extra",
+  "manage.KIND_CALLS.payee[0]": "Staking",
+  "manage.KIND_CALLS.payee[1]": "set_payee",
+  "manage.KIND_CALLS.chill[0]": "Staking",
+  "manage.KIND_CALLS.chill[1]": "chill",
+  "manage.KIND_CALLS.rebond[0]": "Staking",
+  "manage.KIND_CALLS.rebond[1]": "rebond",
+  "manage.MANAGE_ACTION": "validator.manage",
+  "manage.PAYEE_TIMING": "Applies at once, to every payout made from now on, including eras not paid out yet.",
+  "manage.PURGE_NOTE": "The explorer only registers new keys and never removes keys: removing them from an active validator drops it out of the validator set from the session after next.",
+  "manage.ROTATE_RULE": "Keep the old node running with the old keys until the dashboard says the new keys are in use. Then stop the old node. Never run both with the same keys.",
+  "manage.WATCHED_TEXT": "Connect the wallet that holds this account to make changes.",
+  "delegate.KEY_ROTATION_NEEDS_STASH": "Key rotation needs the stash on this runtime.",
+  "delegate.MULTISIG_CHANGE_WARNING": "Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold.",
+  "delegate.MULTISIG_FEE_NOTE": "The signer who approves pays the network fee, and the first approval reserves a refundable deposit from that signer. The multisig review shows both.",
+  "delegate.NOT_RECHECKED": "Not re-checked by the explorer; the chain decides.",
+  "delegate.PROXY_FEE_NOTE": "Your proxy account pays the network fee. The change is made for the stash.",
+  "delegate.PROXY_FILTER.NonTransfer.denyPallets[0]": "Balances",
+  "delegate.PROXY_FILTER.NonTransfer.denyPallets[1]": "Assets",
+  "delegate.PROXY_FILTER.NonTransfer.denyPallets[2]": "PoolAssets",
+  "delegate.PROXY_FILTER.NonTransfer.denyPallets[3]": "AssetConversion",
+  "delegate.PROXY_FILTER.NonTransfer.denyPallets[4]": "Recovery",
+  "delegate.PROXY_FILTER.NonTransfer.denyPallets[5]": "HyperFungibleToken",
+  "delegate.PROXY_FILTER.Governance.onlyPallets[0]": "Council",
+  "delegate.PROXY_FILTER.Governance.onlyPallets[1]": "TechnicalCommittee",
+  "delegate.PROXY_FILTER.Governance.onlyPallets[2]": "Elections",
+  "delegate.PROXY_FILTER.Governance.onlyPallets[3]": "Treasury",
+  "delegate.PROXY_FILTER.Staking.onlyPallets[0]": "Staking",
+  "delegate.PROXY_SOURCE.repo": "Polkadex-Substrate/polkadex-node",
+  "delegate.PROXY_SOURCE.branch": "mainnet",
+  "delegate.PROXY_SOURCE.file": "runtimes/mainnet/src/lib.rs",
+  "delegate.PROXY_SOURCE.lines": "803-862",
+  "delegate.PROXY_TYPES[0]": "Any",
+  "delegate.PROXY_TYPES[1]": "NonTransfer",
+  "delegate.PROXY_TYPES[2]": "Governance",
+  "delegate.PROXY_TYPES[3]": "Staking",
+  "delegate.STAKING_PROXY_LIMITS": "A Staking proxy cannot send your funds to another account. It can change where rewards are paid, stop you validating, and start unbonding your bond; unbonded PDEX stays in the stash. It cannot register session keys on this runtime: key rotation needs the stash.",
+  "view.SETUP_STEPS[0]": "Your node",
+  "view.SETUP_STEPS[1]": "Session keys",
+  "view.SETUP_STEPS[2]": "Stash and bond",
+  "view.SETUP_STEPS[3]": "Commission",
+  "view.SETUP_STEPS[4]": "Review"
+ },
+ "states": {
+  "wiz-restoring": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Checking for a connected wallet Checking for a connected wallet...",
+   "fields": [],
+   "actions": []
+  },
+  "wiz-no-wallet": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Connect your stash Connect the wallet that holds your stash to set up a validator. Connect wallet Read the node guide",
+   "fields": [],
+   "actions": []
+  },
+  "wiz-chain-down": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign The explorer cannot reach the chain right now. Your validator is not affected. Retry",
+   "fields": [],
+   "actions": [
+    "retry"
+   ]
+  },
+  "wiz-refusal": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign This account cannot run the setup This stash is controlled by espJjnZ6egpuVY3EHJtXurAJZVbKnADptCZ256V1PUhMHzbPa (an older setup). The explorer sets up validators signed by the stash itself. Connect that account to change commission or stop validating, or sign 'merge controller into stash' from the stash. Open validator status",
+   "fields": [],
+   "actions": []
+  },
+  "wiz-done-already": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign This stash already validates. It is bonded, its session keys are registered and it is asking to validate. Changes to commission, keys and bond come with the manage panel. Open validator status",
+   "fields": [],
+   "actions": []
+  },
+  "wiz-step1": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node The explorer takes your word for this step. My node is ready Show me how to set one up",
+   "fields": [
+    "validate-setup-node"
+   ],
+   "actions": [
+    "check-node",
+    "next"
+   ]
+  },
+  "wiz-step1-node-empty": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node Enter the node name first. The explorer takes your word for this step. My node is ready Show me how to set one up",
+   "fields": [
+    "validate-setup-node"
+   ],
+   "actions": [
+    "check-node",
+    "next"
+   ]
+  },
+  "wiz-step1-node-found": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node alpha-validator is reporting. Best block #7,999,998 (chain head #8,000,000), finalized #7,999,996, 12 peers, client 0.4.1, last seen 3 s ago. The explorer takes your word for this step. My node is ready Show me how to set one up",
+   "fields": [
+    "validate-setup-node"
+   ],
+   "actions": [
+    "check-node",
+    "next"
+   ]
+  },
+  "wiz-step2": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 2 of 5: Session keys Your node Session keys Stash and bond Commission Review Paste your node's session keys On your server, run author_rotateKeys against 127.0.0.1 and paste the line it prints. Never run it through a public RPC. The command to run on your server curl -s -H 'Content-Type: application/json' \\ -d '{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"author_rotateKeys\",\"params\":[]}' \\ http://127.0.0.1:9944 Session keys (0x, 388 characters) Clear The explorer cannot check that your node holds these keys. The node guide shows how to check that on the server. Back Use these keys",
+   "fields": [
+    "validate-setup-keys"
+   ],
+   "actions": [
+    "back",
+    "use-keys"
+   ]
+  },
+  "wiz-step2-invalid": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 2 of 5: Session keys Your node Session keys Stash and bond Commission Review Paste your node's session keys On your server, run author_rotateKeys against 127.0.0.1 and paste the line it prints. Never run it through a public RPC. The command to run on your server curl -s -H 'Content-Type: application/json' \\ -d '{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"author_rotateKeys\",\"params\":[]}' \\ http://127.0.0.1:9944 Session keys (0x, 388 characters) Clear This is 2 bytes. The live runtime (spec 394) expects 193. Run author_rotateKeys on a node that is fully synced. The explorer cannot check that your node holds these keys. The node guide shows how to check that on the server. Back Use these keys",
+   "fields": [
+    "validate-setup-keys"
+   ],
+   "actions": [
+    "back",
+    "use-keys"
+   ]
+  },
+  "wiz-step2-parsed": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 2 of 5: Session keys Your node Session keys Stash and bond Commission Review Paste your node's session keys On your server, run author_rotateKeys against 127.0.0.1 and paste the line it prints. Never run it through a public RPC. The command to run on your server curl -s -H 'Content-Type: application/json' \\ -d '{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"author_rotateKeys\",\"params\":[]}' \\ http://127.0.0.1:9944 Session keys (0x, 388 characters) Clear 6 keys, 193 bytes. Press Use these keys to check them against the chain. The explorer cannot check that your node holds these keys. The node guide shows how to check that on the server. Back Use these keys",
+   "fields": [
+    "validate-setup-keys"
+   ],
+   "actions": [
+    "back",
+    "use-keys"
+   ]
+  },
+  "wiz-step2-conflict": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 2 of 5: Session keys Your node Session keys Stash and bond Commission Review Paste your node's session keys On your server, run author_rotateKeys against 127.0.0.1 and paste the line it prints. Never run it through a public RPC. The command to run on your server curl -s -H 'Content-Type: application/json' \\ -d '{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"author_rotateKeys\",\"params\":[]}' \\ http://127.0.0.1:9944 Session keys (0x, 388 characters) Clear 0x11111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222333333333333333333333333333333333333333333333333333333333333333344444444444444444444444444444444444444444444444444444444444444445555555555555555555555555555555555555555555555555555555555555555026666666666666666666666666666666666666666666666666666666666666666 Key 5 (mixnet) is already registered to espEnkL91Zjvwekp8833LPyTFTnbNkz46ouXiXzZhhLyjb9Yi. The chain will reject these keys. If you copied a keystore from another node, stop: running two nodes with the same keys is slashed. Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Another account espEnkL91Zjvwekp8833LPyTFTnbNkz46ouXiXzZhhLyjb9Yi 6 beefy 02666666...66666666 Not registered The explorer cannot check that your node holds these keys. The node guide shows how to check that on the server. Back Use these keys",
+   "fields": [
+    "validate-setup-keys"
+   ],
+   "actions": [
+    "back",
+    "use-keys"
+   ]
+  },
+  "wiz-step2-mismatch": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 2 of 5: Session keys Your node Session keys Stash and bond Commission Review Paste your node's session keys This network's session key format is different from what this checker knows. Use your node's author_rotateKeys output and the chain's own validation. Key registration is switched off here; existing keys are not affected. Back",
+   "fields": [],
+   "actions": [
+    "back"
+   ]
+  },
+  "wiz-step2-keep": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 2 of 5: Session keys Your node Done Session keys Done on chain Stash and bond Commission Review Paste your node's session keys This stash already has session keys registered. Back Keep them Replace them",
+   "fields": [],
+   "actions": [
+    "back",
+    "keep-keys",
+    "replace-keys"
+   ]
+  },
+  "wiz-step2-replace": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 2 of 5: Session keys Your node Done Session keys Done on chain Stash and bond Commission Review Paste your node's session keys On your server, run author_rotateKeys against 127.0.0.1 and paste the line it prints. Never run it through a public RPC. The command to run on your server curl -s -H 'Content-Type: application/json' \\ -d '{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"author_rotateKeys\",\"params\":[]}' \\ http://127.0.0.1:9944 Session keys (0x, 388 characters) Clear The explorer cannot check that your node holds these keys. The node guide shows how to check that on the server. Back Use these keys",
+   "fields": [
+    "validate-setup-keys"
+   ],
+   "actions": [
+    "back",
+    "use-keys"
+   ]
+  },
+  "wiz-step3": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 999 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Amount to bond (PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Back Continue",
+   "fields": [
+    "validate-setup-bond",
+    "validate-setup-payee=staked",
+    "validate-setup-payee=stash",
+    "validate-setup-payee=account",
+    "validate-setup-payee-account"
+   ],
+   "actions": [
+    "max",
+    "back",
+    "next"
+   ]
+  },
+  "wiz-step3-error": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 999 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Amount to bond (PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Validating needs at least 100 PDEX bonded. Back Continue",
+   "fields": [
+    "validate-setup-bond",
+    "validate-setup-payee=staked",
+    "validate-setup-payee=stash",
+    "validate-setup-payee=account",
+    "validate-setup-payee-account"
+   ],
+   "actions": [
+    "max",
+    "back",
+    "next"
+   ]
+  },
+  "wiz-step3-payee": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 999 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Amount to bond (PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Enter a Polkadex address for the rewards account. Polkadex addresses start with e. Back Continue",
+   "fields": [
+    "validate-setup-bond",
+    "validate-setup-payee=staked",
+    "validate-setup-payee=stash",
+    "validate-setup-payee=account",
+    "validate-setup-payee-account"
+   ],
+   "actions": [
+    "max",
+    "back",
+    "next"
+   ]
+  },
+  "wiz-step3-bonded": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Done on chain Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 500 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Bonded: 500 PDEX. Add to bond (optional, PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Back Continue",
+   "fields": [
+    "validate-setup-extra"
+   ],
+   "actions": [
+    "max",
+    "back",
+    "next"
+   ]
+  },
+  "wiz-step4": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 4 of 5: Commission Your node Done Session keys Done on chain Stash and bond Done on chain Commission Review Set your commission Commission is the share of rewards you keep before the rest is split by stake between you and your nominators. Commission (%) Clear Minimum: 3%. Median of active validators: 5%. Back Continue",
+   "fields": [
+    "validate-setup-commission"
+   ],
+   "actions": [
+    "back",
+    "next"
+   ]
+  },
+  "wiz-step4-error": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 4 of 5: Commission Your node Done Session keys Done on chain Stash and bond Done on chain Commission Review Set your commission Commission is the share of rewards you keep before the rest is split by stake between you and your nominators. Commission (%) Clear Minimum: 3%. Median of active validators: 5%. The minimum commission on Polkadex is 3%. Back Continue",
+   "fields": [
+    "validate-setup-commission"
+   ],
+   "actions": [
+    "back",
+    "next"
+   ]
+  },
+  "wiz-step4-warn": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 4 of 5: Commission Your node Done Session keys Done on chain Stash and bond Done on chain Commission Review Set your commission Commission is the share of rewards you keep before the rest is split by stake between you and your nominators. Commission (%) Clear Minimum: 3%. Median of active validators: 5%. The median commission of active validators is 5%. Nominators sort by commission. Back Continue",
+   "fields": [
+    "validate-setup-commission"
+   ],
+   "actions": [
+    "back",
+    "next"
+   ]
+  },
+  "wiz-review": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez , which becomes the validator. Bond 500 PDEX, rewards: added to the bond staking.bond staking.bond Argument Value value BalanceOf 500 PDEX (500000000000000 planck) payee RewardDestination Staked Register 6 session keys session.setKeys session.setKeys Argument Value keys Keys grandpa : 0x1111…1111 Copy ; babe : 0x2222…2222 Copy ; imOnline : 0x3333…3333 Copy ; authorityDiscovery : 0x4444…4444 Copy ; mixnet : 0x5555…5555 Copy ; beefy : 0x0266666666666666… (33 bytes) proof Bytes 0x Ask to validate at 5% commission staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 5% ; blocked : No 500 PDEX meets the minimum but the lowest elected validator has 5,000 PDEX behind it. You will wait until your own bond plus nominations exceed that. Estimated network fee: 0.02 PDEX. One signature. If any step fails, none of them apply. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Bonded PDEX takes 28 days to unbond. If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%. Two nodes running with the same keys are slashed. Never copy a keystore. Slashes also hit the people who nominate you. I understand that my bond can be slashed. Back Sign and submit Sign in separate steps For a wallet or hardware device that cannot sign all the steps as one transaction. Each step is then its own transaction with its own fee.",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "back",
+    "sign",
+    "stepwise"
+   ]
+  },
+  "wiz-review-ack": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez , which becomes the validator. Bond 500 PDEX, rewards: added to the bond staking.bond staking.bond Argument Value value BalanceOf 500 PDEX (500000000000000 planck) payee RewardDestination Staked Register 6 session keys session.setKeys session.setKeys Argument Value keys Keys grandpa : 0x1111…1111 Copy ; babe : 0x2222…2222 Copy ; imOnline : 0x3333…3333 Copy ; authorityDiscovery : 0x4444…4444 Copy ; mixnet : 0x5555…5555 Copy ; beefy : 0x0266666666666666… (33 bytes) proof Bytes 0x Ask to validate at 5% commission staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 5% ; blocked : No 500 PDEX meets the minimum but the lowest elected validator has 5,000 PDEX behind it. You will wait until your own bond plus nominations exceed that. Estimated network fee: 0.02 PDEX. One signature. If any step fails, none of them apply. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Bonded PDEX takes 28 days to unbond. If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%. Two nodes running with the same keys are slashed. Never copy a keystore. Slashes also hit the people who nominate you. I understand that my bond can be slashed. Back Sign and submit Sign in separate steps For a wallet or hardware device that cannot sign all the steps as one transaction. Each step is then its own transaction with its own fee.",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "back",
+    "sign",
+    "stepwise"
+   ]
+  },
+  "wiz-review-payee": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez , which becomes the validator. Bond 500 PDEX, rewards: paid to espG76QT...mb4HaD staking.bond staking.bond Argument Value value BalanceOf 500 PDEX (500000000000000 planck) payee RewardDestination Account : espG76…4HaD Register 6 session keys session.setKeys session.setKeys Argument Value keys Keys grandpa : 0x1111…1111 Copy ; babe : 0x2222…2222 Copy ; imOnline : 0x3333…3333 Copy ; authorityDiscovery : 0x4444…4444 Copy ; mixnet : 0x5555…5555 Copy ; beefy : 0x0266666666666666… (33 bytes) proof Bytes 0x Ask to validate at 5% commission staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 5% ; blocked : No Rewards go to espG76QTZGmb8HBcqrKYCDNQMUPWBE4eMwTMqPVNvxTmb4HaD . 500 PDEX meets the minimum but the lowest elected validator has 5,000 PDEX behind it. You will wait until your own bond plus nominations exceed that. Estimated network fee: 0.02 PDEX. One signature. If any step fails, none of them apply. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Bonded PDEX takes 28 days to unbond. If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%. Two nodes running with the same keys are slashed. Never copy a keystore. Slashes also hit the people who nominate you. I understand that my bond can be slashed. Back Sign and submit Sign in separate steps For a wallet or hardware device that cannot sign all the steps as one transaction. Each step is then its own transaction with its own fee.",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "back",
+    "sign",
+    "stepwise"
+   ]
+  },
+  "wiz-review-resume": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Done Session keys Done on chain Stash and bond Done on chain Commission Review Review This setup was started earlier. 1 of its steps are left. Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez , which becomes the validator. Ask to validate at 5% commission staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 5% ; blocked : No 500 PDEX meets the minimum but the lowest elected validator has 5,000 PDEX behind it. You will wait until your own bond plus nominations exceed that. Estimated network fee: 0.01 PDEX. One signature. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Bonded PDEX takes 28 days to unbond. If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%. Two nodes running with the same keys are slashed. Never copy a keystore. Slashes also hit the people who nominate you. I understand that my bond can be slashed. Back Sign and submit Sign in separate steps For a wallet or hardware device that cannot sign all the steps as one transaction. Each step is then its own transaction with its own fee.",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "back",
+    "sign",
+    "stepwise"
+   ]
+  },
+  "wiz-review-multisig": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Signed by the multisig Validator stash esqUUPwD14kwnpuMW7NBohiFU93acoENr2dcoeHbsfv5sQiL4 , which becomes the validator. It needs 2 of 3 approvals from its signers, in the multisig review that opens next. The signer who approves pays the network fee, and the first approval reserves a refundable deposit from that signer. The multisig review shows both. Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold. Bond 500 PDEX, rewards: added to the bond staking.bond staking.bond Argument Value value BalanceOf 500 PDEX (500000000000000 planck) payee RewardDestination Staked Register 6 session keys session.setKeys session.setKeys Argument Value keys Keys grandpa : 0x1111…1111 Copy ; babe : 0x2222…2222 Copy ; imOnline : 0x3333…3333 Copy ; authorityDiscovery : 0x4444…4444 Copy ; mixnet : 0x5555…5555 Copy ; beefy : 0x0266666666666666… (33 bytes) proof Bytes 0x Ask to validate at 5% commission staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 5% ; blocked : No 500 PDEX meets the minimum but the lowest elected validator has 5,000 PDEX behind it. You will wait until your own bond plus nominations exceed that. Estimated network fee: 0.02 PDEX. One signature. If any step fails, none of them apply. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Bonded PDEX takes 28 days to unbond. If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%. Two nodes running with the same keys are slashed. Never copy a keystore. Slashes also hit the people who nominate you. I understand that my bond can be slashed. Back Sign and submit Separate steps are not offered for a multisig stash, because each step would need its own round of approvals. The multisig signs the setup as one transaction.",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "wiz-signing": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez , which becomes the validator. Bond 500 PDEX, rewards: added to the bond staking.bond staking.bond Argument Value value BalanceOf 500 PDEX (500000000000000 planck) payee RewardDestination Staked Register 6 session keys session.setKeys session.setKeys Argument Value keys Keys grandpa : 0x1111…1111 Copy ; babe : 0x2222…2222 Copy ; imOnline : 0x3333…3333 Copy ; authorityDiscovery : 0x4444…4444 Copy ; mixnet : 0x5555…5555 Copy ; beefy : 0x0266666666666666… (33 bytes) proof Bytes 0x Ask to validate at 5% commission staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 5% ; blocked : No 500 PDEX meets the minimum but the lowest elected validator has 5,000 PDEX behind it. You will wait until your own bond plus nominations exceed that. Estimated network fee: 0.02 PDEX. One signature. If any step fails, none of them apply. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Bonded PDEX takes 28 days to unbond. If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%. Two nodes running with the same keys are slashed. Never copy a keystore. Slashes also hit the people who nominate you. I understand that my bond can be slashed. Back Sign and submit Sign in separate steps For a wallet or hardware device that cannot sign all the steps as one transaction. Each step is then its own transaction with its own fee.",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "back",
+    "sign",
+    "stepwise"
+   ]
+  },
+  "wiz-sign-error": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez , which becomes the validator. Bond 500 PDEX, rewards: added to the bond staking.bond staking.bond Argument Value value BalanceOf 500 PDEX (500000000000000 planck) payee RewardDestination Staked Register 6 session keys session.setKeys session.setKeys Argument Value keys Keys grandpa : 0x1111…1111 Copy ; babe : 0x2222…2222 Copy ; imOnline : 0x3333…3333 Copy ; authorityDiscovery : 0x4444…4444 Copy ; mixnet : 0x5555…5555 Copy ; beefy : 0x0266666666666666… (33 bytes) proof Bytes 0x Ask to validate at 5% commission staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 5% ; blocked : No 500 PDEX meets the minimum but the lowest elected validator has 5,000 PDEX behind it. You will wait until your own bond plus nominations exceed that. Estimated network fee: 0.02 PDEX. One signature. If any step fails, none of them apply. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Bonded PDEX takes 28 days to unbond. If your node is offline for a whole session you earn nothing for it. If 22 or more of 200 validators are offline in the same session, everyone offline is slashed from 0.1% up to 7%. Two nodes running with the same keys are slashed. Never copy a keystore. Slashes also hit the people who nominate you. I understand that my bond can be slashed. Cancelled in the wallet. If your wallet or device cannot sign this as one transaction, use Sign in separate steps below. Back Sign and submit Sign in separate steps For a wallet or hardware device that cannot sign all the steps as one transaction. Each step is then its own transaction with its own fee.",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "back",
+    "sign",
+    "stepwise"
+   ]
+  },
+  "wiz-result-applied": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Submitted and confirmed in block #8. You are now waiting for election. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
+   "fields": [],
+   "actions": []
+  },
+  "wiz-result-short": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Submitted and confirmed in block #8. Bonded 420 PDEX of the 500 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
+   "fields": [],
+   "actions": []
+  },
+  "wiz-result-missing": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review The transaction went through, but the chain does not show the bond, these keys, the validator entry for this stash yet. It can take a block. Check again Open validator status",
+   "fields": [],
+   "actions": [
+    "recheck"
+   ]
+  },
+  "wiz-result-approval": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Approval recorded. The setup needs 2 of 3 approvals: the other signers approve it from their own wallets, and the last approval runs it. Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold. Open validator status",
+   "fields": [],
+   "actions": []
+  },
+  "steps-S0": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Ready to sign Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Nothing has been signed yet. Step 1 is next: Register 6 session keys. Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve. If you stop here: nothing has changed. I understand that my bond can be slashed. Sign step 1 of 3 Back to the review",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S0-ack": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Ready to sign Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Nothing has been signed yet. Step 1 is next: Register 6 session keys. Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve. If you stop here: nothing has changed. I understand that my bond can be slashed. Sign step 1 of 3 Back to the review",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S1": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Waiting for your wallet Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Step 1: Waiting for your wallet. If you stop here: nothing has changed. I understand that my bond can be slashed. Waiting for wallet Back to the review",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S2": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Sent, waiting for a block Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Step 1: Sent, waiting for a block. If you stop here: nothing has changed. I understand that my bond can be slashed. Waiting for wallet Back to the review",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S3": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Checking the chain Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Step 1 is in a block. Checking the chain before the next step. If you stop here: nothing has changed. Back to the review",
+   "fields": [],
+   "actions": [
+    "step-back"
+   ]
+  },
+  "steps-S4": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. Steps you have signed stay on chain even if a later step fails or you stop. Register 6 session keys session.setKeys Done on chain Bond 500 PDEX, rewards: added to the bond staking.bond Ready to sign Ask to validate at 5% commission staking.validate Waiting Step 1 is confirmed in block #42. Step 2 is next: Bond 500 PDEX, rewards: added to the bond. If you stop here: your keys stay registered to this stash and nothing is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first. Sign step 2 of 3 Back to the review",
+   "fields": [],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S4-bonded": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. Steps you have signed stay on chain even if a later step fails or you stop. Register 6 session keys session.setKeys Done on chain Bond 500 PDEX, rewards: added to the bond staking.bond Done on chain Ask to validate at 5% commission staking.validate Ready to sign Step 2 is confirmed in block #43. Step 3 is next: Ask to validate at 5% commission. If you stop here: 500 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes 28 days, then you withdraw it. Open your wallet page Sign step 3 of 3 Back to the review",
+   "fields": [],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S5": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Not signed Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Step 1 was not signed, so nothing changed and no fee was charged. Press the button when you are ready. Cancelled. If you stop here: nothing has changed. Sign step 1 of 3 Back to the review",
+   "fields": [],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S6": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Failed on chain Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Step 1 was included but the chain refused it: The keys are invalid. Its fee was charged and nothing else changed. If you stop here: nothing has changed. Sign step 1 of 3 Check again Back to the review",
+   "fields": [],
+   "actions": [
+    "step-sign",
+    "step-check",
+    "step-back"
+   ]
+  },
+  "steps-S6-blocked": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Failed on chain Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Key 5 (mixnet) is already registered to espEnkL91Zjvwekp8833LPyTFTnbNkz46ouXiXzZhhLyjb9Yi. The chain will reject these keys. If you copied a keystore from another node, stop: running two nodes with the same keys is slashed. Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Another account espEnkL91Zjvwekp8833LPyTFTnbNkz46ouXiXzZhhLyjb9Yi 6 beefy 02666666...66666666 Not registered Step 1 was included but the chain refused it: Refused. Its fee was charged and nothing else changed. Key 5 (mixnet) is already registered to espEnkL91Zjvwekp8833LPyTFTnbNkz46ouXiXzZhhLyjb9Yi. The chain will reject these keys. If you copied a keystore from another node, stop: running two nodes with the same keys is slashed. If you stop here: nothing has changed. Check again Back to the review",
+   "fields": [],
+   "actions": [
+    "step-check",
+    "step-back"
+   ]
+  },
+  "steps-S7": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Not confirmed Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered The explorer could not confirm step 1. It may still go through. Do not sign it again yet. Press Check again to read the chain. If you stop here: nothing has changed. Check again",
+   "fields": [],
+   "actions": [
+    "step-check"
+   ]
+  },
+  "steps-S7-repeat": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Ready to sign Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Each key and who it is registered to # Key First and last 8 Result 1 grandpa 11111111...11111111 Not registered 2 babe 22222222...22222222 Not registered 3 im_online 33333333...33333333 Not registered 4 authority_discovery 44444444...44444444 Not registered 5 mixnet 55555555...55555555 Not registered 6 beefy 02666666...66666666 Not registered Step 1 was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee. Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve. If you stop here: nothing has changed. I understand that my bond can be slashed. Sign step 1 of 3 Back to the review",
+   "fields": [
+    "validate-setup-ack"
+   ],
+   "actions": [
+    "step-sign",
+    "step-back"
+   ]
+  },
+  "steps-S8": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. This is not all-or-nothing Steps you have signed stay on chain even if a later step fails or you stop. After the keys step alone, nothing is locked. Stopping there costs only that step's fee. After the bond step, 500 PDEX is bonded and earns nothing until the last step is confirmed. Getting bonded PDEX back takes 28 days. You can close this page and come back. The explorer reads the chain and continues from the first step that is missing. You will enter the commission again. Register 6 session keys session.setKeys Blocked Bond 500 PDEX, rewards: added to the bond staking.bond Waiting Ask to validate at 5% commission staking.validate Waiting Step 1 went through, but the chain does not show these keys for this stash yet. It can take a block. If you stop here: nothing has changed. Check again Back to the review",
+   "fields": [],
+   "actions": [
+    "step-check",
+    "step-back"
+   ]
+  },
+  "steps-S8-add-bond": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. Steps you have signed stay on chain even if a later step fails or you stop. Register 6 session keys session.setKeys Done on chain Bond 500 PDEX, rewards: added to the bond staking.bond Done on chain Ask to validate at 5% commission staking.validate Blocked Bonded 80 PDEX of the 500 PDEX you reviewed. The balance changed before the block. Validating needs at least 100 PDEX bonded, so the last step would fail. Add at least 20 PDEX to the bond first. If you stop here: 80 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes 28 days, then you withdraw it. Open your wallet page Add to the bond Back to the review",
+   "fields": [],
+   "actions": [
+    "step-add-bond",
+    "step-back"
+   ]
+  },
+  "steps-S9": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. Steps you have signed stay on chain even if a later step fails or you stop. Register 6 session keys session.setKeys Done on chain Bond 500 PDEX, rewards: added to the bond staking.bond Done on chain Ask to validate at 5% commission staking.validate Ready to sign Bonded 400 PDEX of the 500 PDEX you reviewed. The balance changed before the block. 400 PDEX is above the minimum of 100 PDEX, so you can sign the last step now or add the rest first. If you stop here: 400 PDEX stays bonded and earns nothing. To finish, come back and sign the remaining step. To get it back, use Unstake on your wallet page: unbonding takes 28 days, then you withdraw it. Open your wallet page Sign step 3 of 3 Add the rest first",
+   "fields": [],
+   "actions": [
+    "step-sign",
+    "step-add-bond"
+   ]
+  },
+  "steps-S10": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. Steps you have signed stay on chain even if a later step fails or you stop. Register 6 session keys session.setKeys Done on chain Bond 500 PDEX, rewards: added to the bond staking.bond Done on chain Ask to validate at 5% commission staking.validate Done on chain All 3 steps are confirmed. This stash is bonded, its keys are registered and it is asking to validate. You are now waiting for election. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
+   "fields": [],
+   "actions": []
+  },
+  "steps-S10-short": {
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Sign in separate steps Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Every step is signed by this account. Your wallet will ask you 3 times, once for each step below. Each step is a separate transaction and pays its own network fee, about 0.06 PDEX in total. Steps you have signed stay on chain even if a later step fails or you stop. Register 6 session keys session.setKeys Done on chain Bond 500 PDEX, rewards: added to the bond staking.bond Done on chain Ask to validate at 5% commission staking.validate Done on chain All 3 steps are confirmed. Bonded 400 PDEX of the 500 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
+   "fields": [],
+   "actions": []
+  },
+  "man-idle": {
+   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Unbond or withdraw Identity and proxies Add a staking proxy",
+   "fields": [],
+   "actions": [
+    "commission",
+    "keys",
+    "bondExtra",
+    "payee",
+    "chill"
+   ]
+  },
+  "man-offline": {
+   "text": "Manage this validator Open the node checklist Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Unbond or withdraw Identity and proxies Add a staking proxy",
+   "fields": [],
+   "actions": [
+    "commission",
+    "keys",
+    "bondExtra",
+    "payee",
+    "chill"
+   ]
+  },
+  "man-unbonding": {
+   "text": "Manage this validator Bonded: 400 PDEX. Commission: 5%. Rewards: added to the bond. Unbonding: 100 PDEX. Change commission Rotate keys Bond more Change payee Stop validating Rebond Unbond or withdraw Identity and proxies Add a staking proxy",
+   "fields": [],
+   "actions": [
+    "commission",
+    "keys",
+    "bondExtra",
+    "payee",
+    "chill",
+    "rebond"
+   ]
+  },
+  "man-legacy": {
+   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating This stash is controlled by espJjnZ6egpuVY3EHJtXurAJZVbKnADptCZ256V1PUhMHzbPa (an older setup). Connect that account to change commission or stop validating, or sign 'merge controller into stash' from the stash. Unbond or withdraw Identity and proxies Add a staking proxy",
+   "fields": [],
+   "actions": [
+    "commission",
+    "keys",
+    "bondExtra",
+    "payee",
+    "chill"
+   ]
+  },
+  "man-chain-down": {
+   "text": "Manage this validator The explorer cannot reach the chain right now. Your validator is not affected. Retry",
+   "fields": [],
+   "actions": [
+    "retry"
+   ]
+  },
+  "man-disabled": {
+   "text": "Manage this validator This validator is disabled for the rest of this era after an offence. The Offences row above says what was reported. Changes can wait until the era ends.",
+   "fields": [],
+   "actions": []
+  },
+  "man-commission": {
+   "text": "Manage this validator Change commission Current commission: 5%. New commission (%) Clear Minimum: 3%. Median of active validators: 5%. Block new nominations Cancel Review",
+   "fields": [
+    "validate-manage-commission",
+    "validate-manage-blocked"
+   ],
+   "actions": [
+    "cancel",
+    "review"
+   ]
+  },
+  "man-commission-error": {
+   "text": "Manage this validator Change commission Current commission: 5%. New commission (%) Clear Minimum: 3%. Median of active validators: 5%. Block new nominations The minimum commission on Polkadex is 3%. The chain refuses a lower rate. Cancel Review",
+   "fields": [
+    "validate-manage-commission",
+    "validate-manage-blocked"
+   ],
+   "actions": [
+    "cancel",
+    "review"
+   ]
+  },
+  "man-commission-100": {
+   "text": "Manage this validator Change commission Current commission: 5%. New commission (%) Clear Minimum: 3%. Median of active validators: 5%. Block new nominations I want a 100% commission: my nominators earn nothing. At 100% your nominators earn nothing and the explorer flags your validator to them. To stop new nominations instead, use Block new nominations. Cancel Review",
+   "fields": [
+    "validate-manage-commission",
+    "validate-manage-blocked",
+    "validate-manage-confirm100"
+   ],
+   "actions": [
+    "cancel",
+    "review"
+   ]
+  },
+  "man-commission-review": {
+   "text": "Manage this validator Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Change commission from 5% to 25% staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 25% ; blocked : No The median commission of active validators is 5%. Nominators sort by commission. Applies from era 501, which starts in about 5 h. Rewards until then use the current rate. Your nominators see this change. The explorer keeps a commission history for every validator. Estimated network fee: 0.02 PDEX. Back Sign and submit",
+   "fields": [],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "man-keys": {
+   "text": "Manage this validator Rotate session keys On the server of the node that will validate, run author_rotateKeys against 127.0.0.1 and paste the line it prints. Never run it through a public RPC. The node guide has the command. New session keys (0x, 388 characters) Clear Cancel Check and review",
+   "fields": [
+    "validate-manage-keys"
+   ],
+   "actions": [
+    "cancel",
+    "review"
+   ]
+  },
+  "man-keys-conflict": {
+   "text": "Manage this validator Rotate session keys On the server of the node that will validate, run author_rotateKeys against 127.0.0.1 and paste the line it prints. Never run it through a public RPC. The node guide has the command. New session keys (0x, 388 characters) Clear 0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b27777777777777777777777777777777777777777777777777777777777777777c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d403e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5 Key 5 (mixnet) is already registered to espEnkL91Zjvwekp8833LPyTFTnbNkz46ouXiXzZhhLyjb9Yi. The chain will reject these keys. If you copied a keystore from another node, stop: running two nodes with the same keys is slashed. Each key and who it is registered to # Key First and last 8 Result 1 grandpa a1a1a1a1...a1a1a1a1 Not registered 2 babe b2b2b2b2...b2b2b2b2 Not registered 3 im_online 77777777...77777777 Not registered 4 authority_discovery c3c3c3c3...c3c3c3c3 Not registered 5 mixnet d4d4d4d4...d4d4d4d4 Another account espEnkL91Zjvwekp8833LPyTFTnbNkz46ouXiXzZhhLyjb9Yi 6 beefy 03e5e5e5...e5e5e5e5 Not registered Cancel Check and review",
+   "fields": [
+    "validate-manage-keys"
+   ],
+   "actions": [
+    "cancel",
+    "review"
+   ]
+  },
+  "man-keys-review": {
+   "text": "Manage this validator Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Register 6 new session keys session.setKeys session.setKeys Argument Value keys Keys grandpa : 0xa1a1…a1a1 Copy ; babe : 0xb2b2…b2b2 Copy ; imOnline : 0x7777…7777 Copy ; authorityDiscovery : 0xc3c3…c3c3 Copy ; mixnet : 0xd4d4…d4d4 Copy ; beefy : 0x03e5e5e5e5e5e5e5… (33 bytes) proof Bytes 0x The new keys are used from session 3002, in about 6 h. Until then the chain uses the keys registered now. Keep the old node running with the old keys until the dashboard says the new keys are in use. Then stop the old node. Never run both with the same keys. The explorer only registers new keys and never removes keys: removing them from an active validator drops it out of the validator set from the session after next. Estimated network fee: 0.02 PDEX. Back Sign and submit",
+   "fields": [],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "man-keys-mismatch": {
+   "text": "Manage this validator Rotate session keys This network's session key format is different from what this checker knows. Use your node's author_rotateKeys output and the chain's own validation. Key registration is switched off here; existing keys are not affected. Cancel",
+   "fields": [],
+   "actions": [
+    "cancel"
+   ]
+  },
+  "man-bond-more": {
+   "text": "Manage this validator Bond more Bonded: 500 PDEX. The most you can add now is 498.98 PDEX, keeping the network fee and 1 PDEX free for later fees. Amount to add (PDEX) Clear Max Cancel Review",
+   "fields": [
+    "validate-manage-amount"
+   ],
+   "actions": [
+    "max",
+    "cancel",
+    "review"
+   ]
+  },
+  "man-bond-more-error": {
+   "text": "Manage this validator Bond more Bonded: 500 PDEX. The most you can add now is 498.98 PDEX, keeping the network fee and 1 PDEX free for later fees. Amount to add (PDEX) Clear Max That is more than this account can bond. After the network fee and 1 PDEX kept free for later fees, the most is 498.98 PDEX. Cancel Review",
+   "fields": [
+    "validate-manage-amount"
+   ],
+   "actions": [
+    "max",
+    "cancel",
+    "review"
+   ]
+  },
+  "man-bond-more-review": {
+   "text": "Manage this validator Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Add 10 PDEX to the bond staking.bondExtra staking.bondExtra Argument Value maxAdditional BalanceOf 10 PDEX (10000000000000 planck) The added bond counts toward the election for the next era. Bonded PDEX takes 28 eras, about 28 d, to unbond. Estimated network fee: 0.02 PDEX. Back Sign and submit",
+   "fields": [],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "man-payee": {
+   "text": "Manage this validator Change payee Rewards now: added to the bond. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Cancel Review",
+   "fields": [
+    "validate-manage-payee=staked",
+    "validate-manage-payee=stash",
+    "validate-manage-payee=account",
+    "validate-manage-payee-account"
+   ],
+   "actions": [
+    "cancel",
+    "review"
+   ]
+  },
+  "man-payee-review": {
+   "text": "Manage this validator Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Pay rewards to espG76QT...mb4HaD staking.setPayee staking.setPayee Argument Value payee RewardDestination Account : espG76…4HaD Applies at once, to every payout made from now on, including eras not paid out yet. Estimated network fee: 0.02 PDEX. Back Sign and submit",
+   "fields": [],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "man-rebond": {
+   "text": "Manage this validator Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Rebond 50 PDEX staking.rebond staking.rebond Argument Value value BalanceOf 50 PDEX (50000000000000 planck) Rebonded PDEX stops unbonding and is bonded again at once. Estimated network fee: 0.02 PDEX. Back Sign and submit",
+   "fields": [],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "man-chill": {
+   "text": "Manage this validator Stop validating Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Stop validating staking.chill staking.chill You stay bonded and keep your session keys. You stop being a candidate from the next era. You remain responsible for this era: keep the node running until era 500 ends, in about 5 h. Your nominators keep their nominations; they earn nothing from you while you are not validating. Estimated network fee: 0.02 PDEX. Cancel Stop validating Unbond instead",
+   "fields": [],
+   "actions": [
+    "cancel",
+    "sign"
+   ]
+  },
+  "man-sign-error": {
+   "text": "Manage this validator Review Signed by the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Change commission from 5% to 25% staking.validate staking.validate Argument Value prefs ValidatorPrefs commission : 25% ; blocked : No The median commission of active validators is 5%. Nominators sort by commission. Applies from era 501, which starts in about 5 h. Rewards until then use the current rate. Your nominators see this change. The explorer keeps a commission history for every validator. Estimated network fee: 0.02 PDEX. Cancelled in the wallet. Back Sign and submit",
+   "fields": [],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "man-result-done": {
+   "text": "Manage this validator Done Submitted and confirmed in block #8,123,999. Commission is now 25%. Applies from era 501, which starts in about 5 h. Rewards until then use the current rate. Back to manage",
+   "fields": [],
+   "actions": [
+    "done"
+   ]
+  },
+  "man-result-waiting": {
+   "text": "Manage this validator Waiting for the chain The transaction went through, but the chain does not show the change for this stash yet. It can take a block. Check again Back to manage",
+   "fields": [],
+   "actions": [
+    "recheck",
+    "done"
+   ]
+  },
+  "man-proxy": {
+   "text": "Manage this validator You are connected as a Staking proxy of this stash. Changes you sign here are sent as proxy.proxy for the stash. Your proxy account pays the network fee. The change is made for the stash. Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Key rotation needs the stash on this runtime. A Staking proxy cannot register session keys. Connect the stash. Unbond or withdraw Identity and proxies",
+   "fields": [],
+   "actions": [
+    "commission",
+    "keys",
+    "bondExtra",
+    "payee",
+    "chill"
+   ]
+  },
+  "man-proxy-review": {
+   "text": "Manage this validator Review Signed by your proxy account espHRSUn6yoFJucRZac342mMTUzQyh9Ed51BxEzCADaZSXRp2 for the stash espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Change commission from 5% to 25% proxy.proxy > staking.validate proxy.proxy Argument Value real AccountIdLookupOf espCA4…ewez forceProxyType Option<ProxyType> Staking call RuntimeCall staking.validate Argument Value prefs ValidatorPrefs commission : 25% ; blocked : No The median commission of active validators is 5%. Nominators sort by commission. Applies from era 501, which starts in about 5 h. Rewards until then use the current rate. Your nominators see this change. The explorer keeps a commission history for every validator. Estimated network fee: 0.02 PDEX. Your proxy account pays the network fee. The change is made for the stash. Back Sign and submit",
+   "fields": [],
+   "actions": [
+    "back",
+    "sign"
+   ]
+  },
+  "man-proxy-delay": {
+   "text": "Manage this validator You are connected as a Staking proxy of this stash. Changes you sign here are sent as proxy.proxy for the stash. Your proxy account pays the network fee. The change is made for the stash. Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating This proxy has an announcement delay of 10 blocks: each call must be announced first and made after the delay. The explorer does not make announced proxy calls. Connect the stash to make this change. Key rotation needs the stash on this runtime. A Staking proxy cannot register session keys. Connect the stash. Unbond or withdraw Identity and proxies",
+   "fields": [],
+   "actions": [
+    "commission",
+    "keys",
+    "bondExtra",
+    "payee",
+    "chill"
+   ]
+  },
+  "man-ms-review": {
+   "text": "Manage this validator Stop validating Signed by the multisig Validator stash esqUUPwD14kwnpuMW7NBohiFU93acoENr2dcoeHbsfv5sQiL4 : it needs 2 of 3 approvals from its signers, in the multisig review that opens next. Stop validating staking.chill staking.chill You stay bonded and keep your session keys. You stop being a candidate from the next era. You remain responsible for this era: keep the node running until era 500 ends, in about 5 h. Your nominators keep their nominations; they earn nothing from you while you are not validating. The signer who approves pays the network fee, and the first approval reserves a refundable deposit from that signer. The multisig review shows both. Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold. Cancel Stop validating Unbond instead",
+   "fields": [],
+   "actions": [
+    "cancel",
+    "sign"
+   ]
+  },
+  "man-ms-approval": {
+   "text": "Manage this validator Approval recorded Your approval is recorded. This change needs 2 of 3 approvals: the other signers approve it from their own wallets, and the last approval runs it. Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold. Back to manage",
+   "fields": [],
+   "actions": [
+    "done"
+   ]
+  },
+  "man-ms-pending": {
+   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Unbond or withdraw Identity and proxies Pending validator changes Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold. Stop validating 1 of 2 approvals. Approved by espSds11...6QoHaj. Waiting for espRKWvh...JZLBWh or espTxD5L...tGGf5k. Started at block #900. Review and approve",
+   "fields": [],
+   "actions": [
+    "commission",
+    "keys",
+    "bondExtra",
+    "payee",
+    "chill",
+    "ms-approve"
+   ]
+  }
+ }
+}

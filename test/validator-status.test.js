@@ -27,7 +27,7 @@ import { encodeAddress } from '@polkadot/util-crypto';
 import { deriveHeadline, validatorStatusModel, formatPdex, perbillToPercent, aboutDuration, ctaFor } from '../lib/validator-status.js';
 import { readValidatorStatus, readValidatorParams, readKeyOwners, keysToMap } from '../lib/validator-status-chain.js';
 import { registerValidatorRoutes, VALIDATOR_PARAMS_ROUTE, VALIDATOR_STATUS_ROUTE, SESSION_KEYS_CHECK_ROUTE, createKeyCheckLimiter } from '../lib/validator-status-api.js';
-import { renderValidatorStatus, renderKeysChecker, mountValidatePage, VALIDATE_STATEMENT } from '../lib/validator-status-view.js';
+import { renderValidatorStatus, renderKeysPage, mountValidatePage, mountKeysPage, VALIDATE_STATEMENT } from '../lib/validator-status-view.js';
 import { validateEnabled, VALIDATE_FLAG_KEY } from '../lib/validate-gate.js';
 import { FEATURE_FLAGS } from '../lib/wallet-links.js';
 import { selfManagedRoute } from '../lib/wallet-aware.js';
@@ -75,10 +75,10 @@ describe('deriveHeadline: one headline state per validator', () => {
         ['not-bonded', { bonded: false, hasKeys: false, intent: false }, 'This account is not a validator stash.', 'Not a validator', 'neutral'],
         ['bonded-no-keys', { hasKeys: false }, 'Bonded. No session keys registered.', 'No keys', 'neutral'],
         ['keys-not-validating', { intent: false }, 'Keys registered. Not asking to validate.', 'Not validating', 'neutral'],
-        ['waiting', {}, 'Waiting. Not elected for era 500.', 'Waiting', 'neutral'],
-        ['elected-next', { inQueued: true }, 'Elected. Starts validating next session, in about 3 h 20 min.', 'Elected', 'neutral'],
+        ['waiting', {}, 'Waiting. Not elected for era 500.', 'Waiting', 'wait'],
+        ['elected-next', { inQueued: true }, 'Elected. Starts validating next session, in about 3 h 20 min.', 'Elected', 'positive'],
         ['active', { inSession: true, inQueued: true }, 'Active in era 500.', 'Active', 'positive'],
-        ['active-leaving', { inSession: true, intent: false }, 'Active until era 500 ends. Not standing for the next era.', 'Leaving', 'neutral'],
+        ['active-leaving', { inSession: true, intent: false }, 'Active until era 500 ends. Not standing for the next era.', 'Leaving', 'wait'],
         ['disabled', { inSession: true, disabled: true }, 'Disabled for the rest of this era after an offence.', 'Disabled', 'error']
     ];
     for (const [state, o, text, word, tone] of cases) {
@@ -95,8 +95,11 @@ describe('deriveHeadline: one headline state per validator', () => {
     test('a chilled validator still queued for the next session is elected-next, not keys-not-validating', () => {
         assert.equal(h({ inQueued: true, intent: false }).state, 'elected-next');
     });
-    test('green (positive) only for Active: every other pill is neutral or the error of Disabled', () => {
-        for (const [, o] of cases) { const r = h(o); if (r.pill.tone === 'positive') assert.equal(r.pill.word, 'Active'); }
+    // Rewritten for the colour roles (spec 2026-11-21 section 4, replacing "green only for Active"):
+    // green for Active and Elected, amber for Waiting and Leaving, red for Disabled, the rest neutral.
+    test('pill tones follow the roles: Active and Elected positive, Waiting and Leaving wait, Disabled error, the rest neutral', () => {
+        const want = { Active: 'positive', Elected: 'positive', Waiting: 'wait', Leaving: 'wait', Disabled: 'error', 'Not a validator': 'neutral', 'No keys': 'neutral', 'Not validating': 'neutral' };
+        for (const [, o] of cases) { const r = h(o); assert.equal(r.pill.tone, want[r.pill.word], r.pill.word); }
     });
 });
 
@@ -116,12 +119,12 @@ describe('validatorStatusModel: the rows under the headline', () => {
         assert.equal(row(model({ inSession: false, inQueued: false, queuedKeys: null, activeImOnlineKey: null }), 'keys').text, 'Registered. Used once this stash is elected.');
         assert.equal(row(model({ nextKeys: null, queuedKeys: null, inQueued: false, inSession: false }), 'keys').text, 'No session keys registered.');
     });
-    test('online this session: heartbeat (the one green row), blocks, nothing seen yet, nothing at all', () => {
+    test('online this session: heartbeat and blocks (green), nothing seen yet (amber), offline (red), nothing at all', () => {
         assert.deepEqual([row(model(), 'online').text, row(model(), 'online').tone], ['Heartbeat received.', 'positive']);
-        assert.deepEqual([row(model({ heartbeat: false, blocks: 4 }), 'online').text, row(model({ heartbeat: false, blocks: 4 }), 'online').tone], ['Authored 4 blocks this session.', 'neutral']);
+        assert.deepEqual([row(model({ heartbeat: false, blocks: 4 }), 'online').text, row(model({ heartbeat: false, blocks: 4 }), 'online').tone], ['Authored 4 blocks this session.', 'positive']);
         assert.equal(row(model({ heartbeat: false, blocks: 0, sessionProgress: 0.5 }), 'online').text, 'Nothing seen yet (normal before 85% of the session).');
         const off = row(model({ heartbeat: false, blocks: 0, sessionProgress: 0.9 }), 'online');
-        assert.deepEqual([off.text, off.word, off.tone], ['No heartbeat and no block this session.', 'Offline', 'neutral']);
+        assert.deepEqual([off.text, off.word, off.tone], ['No heartbeat and no block this session.', 'Offline', 'error']);
         assert.equal(row(model({ inSession: false }), 'online').text, 'Not in the active set this session.');
         assert.equal(row(model({ imOnline: false }), 'online').text, 'The explorer cannot tell: this runtime has no imOnline module.');
         assert.equal(row(model({ heartbeat: null, blocks: null }), 'online').text, 'Could not be read.');
@@ -187,12 +190,14 @@ describe('validatorStatusModel: the rows under the headline', () => {
         assert.equal(m.state, 'not-bonded');
         assert.deepEqual(m.rows.map(r => r.id), ['identity']);
     });
-    test('green appears only on the Active pill and the Heartbeat row, whatever the state', () => {
+    // Rewritten for the colour roles (spec 2026-11-21 section 4): green is live health only (Active, Elected,
+    // keys Match, Heartbeat received, Online); "Offences: None" and identity never turn green.
+    test('green appears only on live health, whatever the state', () => {
         const variants = [{}, { disabled: true }, { lastSlashEra: 490 }, { heartbeat: false, blocks: 3 }, { inSession: false }, { intent: false }, { bonded: false }];
         for (const v of variants) {
             const m = model(v);
-            for (const r of m.rows) if (r.tone === 'positive') assert.equal(r.id, 'online', JSON.stringify(v));
-            if (m.pill.tone === 'positive') assert.equal(m.pill.word, 'Active');
+            for (const r of m.rows) if (r.tone === 'positive') assert.ok((r.id === 'online' && ['Heartbeat received', 'Online'].includes(r.word)) || (r.id === 'keys' && r.word === 'Match'), JSON.stringify(v) + ' ' + r.id);
+            if (m.pill.tone === 'positive') assert.ok(['Active', 'Elected'].includes(m.pill.word));
         }
     });
     test('era and session countdown', () => {
@@ -599,18 +604,18 @@ function deps(over = {}) {
 }
 const primaries = (el) => el.querySelectorAll('.validate-primary').length;
 
-describe('renderValidatorStatus and renderKeysChecker', () => {
+describe('renderValidatorStatus and renderKeysPage', () => {
     test('headline, pill word (state is a word, not colour alone), every row with its label', () => {
         const html = renderValidatorStatus(model(), { esc: escapeHtml });
-        assert.match(html, /class="validate-pill is-positive"[^>]*>Active</);
+        assert.match(html, /class="validate-pill is-positive"[^>]*><i class="bx bx-check-circle" aria-hidden="true"><\/i>Active</);
         assert.match(html, /Active in era 500\./);
         for (const l of ['Keys', 'Online this session', 'Era points', 'Offences', 'Stake', 'Nominators', 'Commission', 'Identity', 'Access']) assert.ok(html.includes(`<dt>${l}</dt>`), l);
     });
     test('a row whose text opens with its word shows the word once (the badge)', () => {
         const html = renderValidatorStatus(model(), { esc: escapeHtml });
-        assert.match(html, /<span class="validate-word is-positive">Heartbeat received<\/span> <span class="validate-text"><\/span>/);
+        assert.match(html, /<span class="validate-word is-positive"><i class="bx bx-pulse" aria-hidden="true"><\/i>Heartbeat received<\/span> <span class="validate-text"><\/span>/);
         const w = renderValidatorStatus(model({ inSession: false, inQueued: false, queuedKeys: null, activeImOnlineKey: null }), { esc: escapeHtml });
-        assert.match(w, /<span class="validate-word is-neutral">Registered<\/span> <span class="validate-text">Used once this stash is elected\.<\/span>/);
+        assert.match(w, /<span class="validate-word is-neutral"><i class="bx bx-key" aria-hidden="true"><\/i>Registered<\/span> <span class="validate-text">Used once this stash is elected\.<\/span>/);
     });
     test('chain text is escaped', () => {
         const html = renderValidatorStatus(model({ identity: { name: 'Al<script>', judgements: [] } }), { esc: escapeHtml });
@@ -618,7 +623,7 @@ describe('renderValidatorStatus and renderKeysChecker', () => {
         assert.ok(!html.includes('Al<script>'));
     });
     test('the keys checker: the field, labelled, mono, no autocomplete or spellcheck, tied to its message, a polite live region', () => {
-        const html = renderKeysChecker({ params: params(), esc: escapeHtml });
+        const html = renderKeysPage({ params: params(), esc: escapeHtml });
         const { doc } = dom();
         doc.body.innerHTML = html;
         const ta = doc.querySelector('textarea#validate-keys-input');
@@ -628,16 +633,16 @@ describe('renderValidatorStatus and renderKeysChecker', () => {
         assert.equal(ta.getAttribute('spellcheck'), 'false');
         assert.equal(ta.getAttribute('aria-describedby'), 'validate-keys-msg');
         assert.equal(doc.getElementById('validate-keys-msg').getAttribute('aria-live'), 'polite');
-        assert.match(html, /Check session keys before you register them/);
+        assert.match(html, /<h2>Check session keys/);
         assert.match(html, /generated on your own node/);
         assert.ok(html.includes(VALIDATE_STATEMENT));
     });
     test('the 388 in the label comes from the live layout, not a constant', () => {
-        const html = renderKeysChecker({ params: params({ layout: { ok: true, bytes: 10, hexLength: 22 } }), esc: escapeHtml });
+        const html = renderKeysPage({ params: params({ layout: { ok: true, bytes: 10, hexLength: 22 } }), esc: escapeHtml });
         assert.match(html, /Session keys \(0x, 22 characters\)/);
     });
     test('layout mismatch: the copy and no form', () => {
-        const html = renderKeysChecker({ params: params({ specVersion: 394, layout: { ok: false, reason: '7 keys' } }), esc: escapeHtml });
+        const html = renderKeysPage({ params: params({ specVersion: 394, layout: { ok: false, reason: '7 keys' } }), esc: escapeHtml });
         assert.match(html, /session key format is different from what this checker knows\. Use your node&#39;s author_rotateKeys output and the chain&#39;s own validation\./);
         assert.doesNotMatch(html, /<textarea/);
     });
@@ -677,7 +682,7 @@ describe('the status view: live region, focus, table headers, retry on a row (re
     });
     test('the keys table: scope="col" on every column header, scope="row" on the key name', async () => {
         const { el, w } = dom(); const d = deps();
-        await mountValidatePage(el, d); await flush();
+        await mountKeysPage(el, d); await flush();
         el.querySelector('#validate-keys-input').value = BLOB;
         el.querySelector('#validate-keys-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
         await flush(20);
@@ -698,7 +703,8 @@ describe('the status view: live region, focus, table headers, retry on a row (re
             return real(u);
         };
         await mountValidatePage(el, d); await flush();
-        const btn = el.querySelector('.validate-rows [data-validate-action="retry"]');
+        // amended (fidelity review 14): the Retry sits on the tile only, not in "All details".
+        const btn = el.querySelector('.validate-tile [data-validate-action="retry"]');
         assert.ok(btn);
         assert.ok(!btn.classList.contains('validate-primary'));
         assert.equal(calls, 1);
@@ -712,7 +718,7 @@ describe('mountValidatePage: wallet-aware, read-only', () => {
         const { el } = dom(); const d = deps();
         await mountValidatePage(el, d); await flush();
         assert.ok(d.urls.includes(`/api/validator/${encodeURIComponent(STASH)}/status`));
-        assert.ok(d.urls.includes('/api/validator/params'));
+        assert.ok(!d.urls.includes('/api/validator/params'), 'the hub no longer reads the key layout: the checker has its own page');
         assert.equal(el.querySelector('.wallet-viewing-note'), null);
         assert.match(el.textContent, /Active in era 500\./);
         assert.equal(primaries(el), 0, 'nothing urgent: zero primary buttons is allowed, two is not');
@@ -776,18 +782,18 @@ describe('mountValidatePage: wallet-aware, read-only', () => {
         el.querySelector('#validate-lookup-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
         assert.deepEqual(went, ['validate/' + V2]);
     });
-    test('checker: a secret phrase is refused in the browser and never sent anywhere', async () => {
+    test('checker (/validate/keys): a secret phrase is refused in the browser and never sent anywhere', async () => {
         const { el, w } = dom(); const d = deps();
-        await mountValidatePage(el, d); await flush();
+        await mountKeysPage(el, d); await flush();
         el.querySelector('#validate-keys-input').value = 'bottom drive obey lake curtain smoke basket hold race lonely fit walk';
         el.querySelector('#validate-keys-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
         await flush();
         assert.ok(!d.urls.some(u => u.startsWith('/api/session-keys/check')));
         assert.match(el.querySelector('#validate-keys-msg').textContent, /That looks like a secret phrase/);
     });
-    test('checker: a valid line is checked for the viewed stash and the table shows each key with a text result', async () => {
-        const { el, w } = dom(); const d = deps({ urlAddress: V2 });
-        await mountValidatePage(el, d); await flush();
+    test('checker (/validate/keys): a valid line is checked for the connected wallet and the table shows each key with a text result', async () => {
+        const { el, w } = dom(); const d = deps({ getAccount: () => ({ status: 'connected', address: V2 }) });
+        await mountKeysPage(el, d); await flush();
         el.querySelector('#validate-keys-input').value = BLOB;
         el.querySelector('#validate-keys-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
         await flush(20);
@@ -799,7 +805,7 @@ describe('mountValidatePage: wallet-aware, read-only', () => {
         assert.match(rows[0].textContent, /Not registered/);
         assert.match(el.querySelector('#validate-keys-msg').textContent, /6 keys, 193 bytes, none registered to another account\./);
     });
-    test('checker: a conflict is announced with role="alert" and the address', async () => {
+    test('checker (/validate/keys): a conflict is announced with role="alert" and the address', async () => {
         const { el, w } = dom(); const d = deps();
         const real = d.fetchJson;
         d.fetchJson = async (u) => {
@@ -809,7 +815,7 @@ describe('mountValidatePage: wallet-aware, read-only', () => {
                 message: i === 0 ? `Key 1 (grandpa) is already registered to ${OTHER}. The chain will reject these keys. If you copied a keystore from another node, stop: running two nodes with the same keys is slashed.` : 'Not registered to any account.' }));
             return { ok: true, conflict: true, rows, bytes: 193, summary: rows[0].message };
         };
-        await mountValidatePage(el, d); await flush();
+        await mountKeysPage(el, d); await flush();
         el.querySelector('#validate-keys-input').value = BLOB;
         el.querySelector('#validate-keys-form').dispatchEvent(new w.Event('submit', { cancelable: true }));
         await flush(20);
@@ -902,17 +908,22 @@ describe('wiring: server, docs, shell, script, brand', () => {
             assert.doesNotMatch(src, /\b100 PDEX\b|100_000_000_000_000|\b250\b/, f);
         }
     });
-    test('brand: green only on the positive state classes; no green or red on any validate button or link', () => {
+    // Rewritten for the colour roles (spec 2026-11-21 sections 2.1 and 4, replacing "green only for Active and
+    // Heartbeat"): each role colour only where its meaning is; no green, amber, blue or red on an action.
+    test('brand: green only on positive and done classes, amber only on wait, warn and caution parts; no accent on any validate button or link', () => {
         const css = readRepo('styles.css', import.meta.url).replace(/\/\*[\s\S]*?\*\//g, '');
         const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] })).filter(r => /\.validate-/.test(r.sel));
         assert.ok(rules.length > 0, 'the validate styles exist');
-        const green = rules.filter(r => /--success|--brand-secondary|#14f195|#00e676/i.test(r.body)).map(r => r.sel);
-        assert.deepEqual(green.sort(), ['.validate-pill.is-positive', '.validate-word.is-positive'].sort());
-        const red = rules.filter(r => /--error|#ff4d4d/i.test(r.body)).map(r => r.sel);
-        for (const s of red) assert.doesNotMatch(s, /btn|button|primary|secondary|link|:hover|:focus/, s);
+        const green = rules.filter(r => /--success|--accent-green|--brand-secondary|#14f195|#00e676/i.test(r.body));
+        // WP3 (spec 5.1 and 5.4): "Done on chain" and the security checklist ticks are done states too.
+        for (const r of green) assert.match(r.sel, /is-positive|is-done|is-ok|\.ui-|\.validate-step-done|\.validate-checklist input/, r.sel);
+        const amber = rules.filter(r => /--accent-amber|--warning/.test(r.body));
+        for (const r of amber) assert.match(r.sel, /is-wait|is-warn|\.ui-/, r.sel);
+        const accent = rules.filter(r => /--error|--accent-(red|green|amber|blue)|#ff4d4d/i.test(r.body));
+        for (const r of accent) for (const s of r.sel.split(',')) if (!/\.ui-|is-(error|positive|wait|info|ok|done)|validate-msg|aria-invalid|validate-alert|validate-tile-chip/.test(s)) assert.doesNotMatch(s, /btn|button|primary|secondary|link|:hover|:focus/, s);
         for (const r of rules) assert.doesNotMatch(r.body, /#[0-9a-f]{3,8}\b(?![^;]*var\()/i, `new colour literal in ${r.sel}`);
         const view = stripComments(readRepo('lib/validator-status-view.js', import.meta.url));
-        assert.doesNotMatch(view, /style="[^"]*(--success|--brand-secondary|--error)/);
+        assert.doesNotMatch(view, /style="[^"]*(--success|--brand-secondary|--error|--accent-)/);
     });
 });
 
@@ -923,7 +934,7 @@ describe('wiring: server, docs, shell, script, brand', () => {
 describe('the validate page: Paste and Clear on its text boxes', () => {
     test('the lookup is kind address, the keys checker kind hex', () => {
         const { doc } = dom();
-        doc.body.innerHTML = renderKeysChecker({ params: params(), esc: escapeHtml });
+        doc.body.innerHTML = renderKeysPage({ params: params(), esc: escapeHtml });
         assert.equal(doc.querySelector('#validate-keys-input').getAttribute('data-input-kind'), 'hex');
         assert.equal(doc.querySelector('[data-validate-action="paste"]'), null, 'the bespoke Paste button is replaced by the shared one');
     });
@@ -932,13 +943,15 @@ describe('the validate page: Paste and Clear on its text boxes', () => {
         let release; const gate = new Promise(r => { release = r; });
         const d = deps(); const real = d.fetchJson;
         d.fetchJson = async (u) => { if (u === '/api/validator/params') await gate; return real(u); };
-        const p = mountValidatePage(el, d);
+        mountValidatePage(el, deps());
         const look = el.querySelector('#validate-lookup-input');
         assert.equal(look.getAttribute('data-input-kind'), 'address');
         assert.ok(look.closest('.ia-wrap'), 'lookup wrapped synchronously');
-        assert.ok(el.querySelector('#validate-keys-input').closest('.ia-wrap'), 'checker wrapped synchronously');
+        const { el: kel } = dom();
+        const p = mountKeysPage(kel, d);
+        assert.ok(kel.querySelector('#validate-keys-input').closest('.ia-wrap'), 'checker wrapped synchronously');
         release(); await p; await flush();
-        const ta = el.querySelector('#validate-keys-input');
+        const ta = kel.querySelector('#validate-keys-input');
         assert.ok(ta.closest('.ia-wrap.ia-wrap-ta'), 'the re-rendered checker is wrapped too');
         assert.ok(ta.closest('#validate-keys-form'), 'still inside its form, so Check keys reads it');
     });
