@@ -25,6 +25,9 @@ import { escapeHtml } from '../lib/html-escape.js';
 import { ME, V1, V2, V3, REGISTRY, paidItem, forceBatch, walletWith, keyOf } from './helpers/payout-events.js';
 // WP4: the dashboard's stake parts and the in-place stake refresh (absent before WP4: the dashboard then draws them inline).
 const stakeRefreshModule = await import('../lib/stake-refresh.js').then((m) => m, () => ({}));
+// R3: the dashboard's frame and sections (absent before R3: the dashboard then draws them inline).
+const sectionsModule = await import('../lib/wallet-sections.js').then((m) => m, () => ({}));
+const liftIf = (name) => (SCRIPT.includes(`function ${name}(`) ? bodyOf(SCRIPT, name) : '');
 
 const SCRIPT = readRepo('script.js', import.meta.url);
 const HTML = readRepo('index.html', import.meta.url);
@@ -59,7 +62,7 @@ function payoutPage({ extraSrc = [], ctxOver = {} } = {}) {
         multisigStore: { find: () => null }, multisigUI: { review: async () => {} },
         resolveWalletSigner: async () => ({ account: { address: ME }, signer: {} }),
         trackSignedTx, showTxStatus: (act, st, ev, err, ex) => buildTxModel(act, st, ev, err, ex),
-        createKnownResults, createPostAction, effectsFor, caughtUp, pollDeadlineMs, samePayload, ...payoutRefreshModule, ...stakeRefreshModule,
+        createKnownResults, createPostAction, effectsFor, caughtUp, pollDeadlineMs, samePayload, ...payoutRefreshModule, ...stakeRefreshModule, ...sectionsModule,
         batchTx: (_api, list) => { calls.built.push(list); return tx; },
         buildPayoutCall: (_api, validator, era) => ({ era, validator }),
         refreshWalletDashboardFor: (address) => { calls.refresh.push(address); },
@@ -80,6 +83,8 @@ function payoutPage({ extraSrc = [], ctxOver = {} } = {}) {
         'let currentWalletData = null, stakeCard = null;',
         line('const knownResults = createKnownResults('), line('const postAction = createPostAction('), line('const payoutRefresh = createPayoutRefresh('),
         SCRIPT.includes('const stakeRefresh = createStakeRefresh(') ? line('const stakeRefresh = createStakeRefresh(') : '',   // WP4: the page's stake refresh
+        SCRIPT.includes('const walletSections = createWalletSections(') ? line('const walletSections = createWalletSections(') : '',   // R3: the page's sections
+        liftIf('mountWalletRewardsTable'), liftIf('mountWalletTxTable'), liftIf('walletRefreshFailed'), liftIf('buildWalletActionBarMarkup'),
         line('const PAYOUT_BATCH_MAX = '),
         bodyOf(SCRIPT, 'renderWalletDashboard'), bodyOf(SCRIPT, 'bindWalletActionHandlers'), bodyOf(SCRIPT, 'openPayoutModal'),
         'async ' + bodyOf(SCRIPT, 'submitPayoutTx'), 'async ' + bodyOf(SCRIPT, 'submitSignedTx'),

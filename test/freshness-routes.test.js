@@ -174,6 +174,18 @@ describe('/api/proxies and /api/multisigs are no-store (design section 5)', () =
         assert.equal(m.statusCode, 200, JSON.stringify(m.body));
         assert.equal(m.headers['cache-control'], 'no-store');
     });
+    // R3: the proxy list polls on evidence (design section 5, proxies: caught up when chainHead >= the block), so the
+    // route says which head it read, read BEFORE the proxy state.
+    test('/api/proxies carries the freshness of its chain read (head read first)', async () => {
+        const w = world({ head: 1234 });
+        w.api.query.proxy.proxies = async () => { w.order.push('state'); return [[], num(0)]; };
+        const p = await w.call('/api/proxies/:address', { address: ME });
+        assert.equal(p.statusCode, 200, JSON.stringify(p.body));
+        assert.ok(p.body.freshness, 'no freshness on /api/proxies');
+        assert.equal(p.body.freshness.chainHead, 1234);
+        assert.deepEqual(w.order, ['head', 'state'], `the head was not read before the proxy state: ${w.order.join(',')}`);
+        assert.deepEqual(p.body.proxies, []);
+    });
 });
 
 describe('/api/account/:address/locks carries freshness (lib/balance-locks-api.js, real handler over express)', () => {

@@ -258,8 +258,12 @@ describe('a success callback repaints the dashboard only while it is still shown
     test('no success callback calls fetchWalletDashboard directly any more', () => {
         assert.doesNotMatch(CODE, /setTimeout\(\(\) => fetchWalletDashboard\(/);
         // R2: the payout's 2.5 s reload is replaced by evidence polling (lib/post-action.js); stake WP4: so is the stake's
-        // (lib/stake-refresh.js, in place); the other six go in R3.
-        assert.equal((CODE.match(/setTimeout\(\(\) => refreshWalletDashboardFor\(data\.address\), 2500\)/g) || []).length, 6);
+        // (lib/stake-refresh.js, in place); R3: the other six too (withdraw, unstake twice, set and clear identity, send):
+        // the post-action core re-reads the sections on evidence (lib/wallet-sections.js).
+        for (const f of ['submitWithdrawUnbonded', 'submitUnstakeTx', 'submitSetIdentity', 'submitClearIdentity', 'submitSendTx']) {
+            assert.doesNotMatch(bodyOf(CODE, f), /2500|setTimeout\(\(\) => refreshWalletDashboardFor/, `${f} still re-reads the dashboard on a fixed timer`);
+        }
+        assert.equal((CODE.match(/setTimeout\(\(\) => refreshWalletDashboardFor\(/g) || []).length, 0);
         assert.doesNotMatch(bodyOf(CODE, 'submitPayoutTx'), /2500/);
         assert.doesNotMatch(bodyOf(CODE, 'submitStakeTx'), /2500|setTimeout/);
         assert.match(CODE, /refresh: address => refreshWalletDashboardFor\(address\)/);

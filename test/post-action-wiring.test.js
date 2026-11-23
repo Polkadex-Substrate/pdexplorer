@@ -37,11 +37,15 @@ describe('R1 wiring', () => {
         assert.ok(!/unpaidEntries/.test(submit), 'the submit reads the raw server list');
     });
     test('the dashboard (live render and the saved snapshot paint) and the action-bar swap draw the tile and button from the module', () => {
+        // R3: the frame is drawn by lib/wallet-sections.js, whose summary takes the tile from the payout part (the
+        // walletSections line hands it payoutRefresh), and the one action bar copy takes the button from it.
         const render = body('function renderWalletDashboard(');
-        assert.match(render, /\$\{payoutRefresh\.tileHtml\(data\)\}/);
-        assert.match(render, /\$\{payoutRefresh\.buttonHtml\(data\)\}/);
+        assert.match(render, /walletSections\.frameHtml\(data, /);
+        assert.match(render, /buildWalletActionBarMarkup\(data\)/);
         assert.match(render, /payoutRefresh\.paint\(\{ reason: 'render' \}\);/);
-        assert.match(body('function buildWalletActionBarMarkup('), /\$\{payoutRefresh\.buttonHtml\(data\)\}/);
+        assert.match(code, /createWalletSections\(\{[^\n]*payout: payoutRefresh/);
+        assert.match(stripComments(readRepo('lib/wallet-sections.js', import.meta.url)), /payout\.tileHtml\(data\)/);
+        assert.match(body('function buildWalletActionBarMarkup('), /payoutButton: payoutRefresh\.buttonHtml\(data\)/);
         assert.ok(!/id="wallet-act-payout"/.test(code), 'a second copy of the payout button markup is left in script.js');
         assert.match(body('async function fetchWalletDashboard('), /renderWalletDashboard\(cached\.wallet/);
     });
