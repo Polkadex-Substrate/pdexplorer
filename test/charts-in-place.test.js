@@ -57,6 +57,7 @@ function world({ reduced = false } = {}) {
         lineOf('let democracyVoteChart = null;'), lineOf('let democracyTurnoutChart = null;'), lineOf('let democracyTurnoutPctChart = null;'),
         lineOf('const democracySlots = '), "let democracyData = null;", "let democracyTab = 'statistics';",
         lineOf('let analyticsChartHandles = {};'), lineOf('const analyticsSlots = {};'), 'let analyticsRangeDays = 30;',
+        lineOf('let routeGeneration = 0;'),
         fn('drawChart'), fn('releasePageCharts'),
         fn('renderPricePageChart'), fn('renderValidatorChart'), fn('fetchValidatorDetails', 'async '),
         fn('renderWalletPriceChart'), fn('repaintWalletPriceCard'),
@@ -65,9 +66,9 @@ function world({ reduced = false } = {}) {
         `globalThis.__s = {
             setPeriod: (d) => { pricePagePeriodDays = d; }, setWallet: (a) => { currentWalletData = a ? { address: a } : null; }, setRange: (d) => { analyticsRangeDays = d; },
             setDemocracy: (d) => { democracyData = d; }, price: (h) => renderPricePageChart(h), wallet: (p) => repaintWalletPriceCard(p),
-            dem: (d) => renderDemocracyCharts(d), validator: (a) => fetchValidatorDetails(a), pollDemocracy: () => fetchDemocracyData({ quiet: true }),
+            dem: (d) => renderDemocracyCharts(d), validator: (a) => fetchValidatorDetails(a), pollDemocracy: () => fetchDemocracyData({ quiet: true }), fetchDemocracy: () => fetchDemocracyData(),
             bar: (id, s) => drawAnalyticsBarChart(id, s, 'Transactions', '#e6007a'), line: (id, s) => drawAnalyticsLineChart(id, s, 'USD', '#f5a623'),
-            release: () => releasePageCharts()
+            release: () => releasePageCharts(), leave: () => { routeGeneration++; releasePageCharts(); }
         };`
     ].filter(Boolean).join('\n'), ctx);
     return { win, doc, ctx, log, live, s: ctx.__s };
@@ -184,6 +185,17 @@ for (const c of CHARTS) {
             w.log.made.slice(c.n).forEach(ch => assert.deepEqual(ch.options.animation, EASE));
         });
 
+        test('Back: after a route change released the charts, the same data brings every chart back on its canvas', async () => {
+            const w = await start();
+            await c.draw(w, data(0), c.subjects[0]);
+            w.s.leave();
+            assert.equal(w.live.size, 0, 'released on leaving');
+            await c.draw(w, data(0), c.subjects[0]);
+            assert.equal(w.live.size, c.n, 'live charts after coming back');
+            c.canvases(w).forEach(cv => assert.ok(cv && cv.isConnected && [...w.live].some(ch => ch.canvas === cv), 'a canvas with no chart drawn on it'));
+            assert.equal(w.log.collisions, 0);
+        });
+
         test('rule 6: leaving the page releases every chart', async () => {
             const w = await start();
             await c.draw(w, data(0), c.subjects[0]);
@@ -292,6 +304,36 @@ describe('in place: the democracy statistics follow a quiet poll', () => {
     });
 });
 
+describe('in place: a quiet democracy poll that lands after the user left builds nothing', () => {
+    const later = () => { let resolve; const p = new Promise(r => { resolve = r; }); return { p, resolve }; };
+    const open = () => {
+        const w = world();
+        w.doc.body.innerHTML = '<div id="democracy-content"><canvas id="dem-vote-chart"></canvas><canvas id="dem-turnout-chart"></canvas><canvas id="dem-turnoutpct-chart"></canvas></div>';
+        const d1 = { referenda: refs(4, 5), totalIssuance: 1000 };
+        w.s.setDemocracy(d1); w.s.dem(d1);
+        return w;
+    };
+    for (const quiet of [true, false]) test((quiet ? 'quiet' : 'full') + ' fetch started on Democracy, user leaves, response lands: no chart is built or kept', async () => {
+        const w = open(), gate = later();
+        w.ctx.__res = { ok: true, status: 200, body: { referenda: refs(4, 50), totalIssuance: 1000 } };
+        w.ctx.democracyView.fetchRest = async () => { await gate.p; return w.ctx.__res; };
+        const pending = quiet ? w.s.pollDemocracy() : w.s.fetchDemocracy();
+        w.s.leave();
+        const before = w.log.made.length;
+        gate.resolve();
+        await pending;
+        assert.equal(w.log.made.length, before, 'charts built after leaving');
+        assert.equal(w.live.size, 0, 'live charts in a section that is not on screen');
+        assert.equal(w.log.democracyRenders, 0, 'the page was redrawn after leaving');
+    });
+    test('the same poll with the user still on the page still updates the bars in place', async () => {
+        const w = open();
+        w.ctx.__res = { ok: true, status: 200, body: { referenda: refs(4, 50), totalIssuance: 1000 } };
+        await w.s.pollDemocracy();
+        assert.equal(w.log.updates.length, 3);
+    });
+});
+
 describe('in place: the route change releases the charts', () => {
     test('routeTo calls releasePageCharts, after the page scope is left', () => {
         const body = bodyOf(SCRIPT, 'routeTo');
@@ -359,6 +401,16 @@ describe('lib/chart-update.js paintChart: the one decision for every chart', () 
             assert.deepEqual(slot.chart.options.animation, reduced ? false : { duration: REFRESH_UI.collapseMs });
             assert.deepEqual(f.log.updates, [reduced ? 'none' : undefined]);
         }
+    });
+    test('an option that depends on the data (axis max) follows an update, and an option-only change is not "unchanged"', () => {
+        const f = fake(), slot = chartUpdate.newChartSlot(), canvas = f.canvas();
+        const build = (data, max) => (a) => ({ type: 'bar', data: { labels: ['L'], datasets: [{ label: 'A', data }] }, options: { animation: a, scales: { y: { max } } } });
+        paint(slot, canvas, 's', build([1], 10), f.C);
+        assert.equal(paint(slot, canvas, 's', build([5], 50), f.C), 'update');
+        assert.equal(slot.chart.options.scales.y.max, 50, 'axis max after new data');
+        assert.equal(paint(slot, canvas, 's', build([5], 80), f.C), 'update', 'same data, new option');
+        assert.equal(slot.chart.options.scales.y.max, 80, 'axis max after option-only change');
+        assert.equal(paint(slot, canvas, 's', build([5], 80), f.C), 'none');
     });
     test('releaseChart destroys once and empties the slot; releaseCharts takes a list', () => {
         const f = fake(), a = chartUpdate.newChartSlot(), b = chartUpdate.newChartSlot();
