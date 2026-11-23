@@ -69,6 +69,10 @@ import { createMultisigUI } from './lib/multisig-view.js';
 import { createCouncilCandidacyUI } from './lib/council-candidacy-view.js';
 import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx, recheckSignedTxs, WALLET_CHANGED_STALE } from './lib/tx-submit.js';
+import { createPostAction } from './lib/post-action.js';
+import { createKnownResults } from './lib/known-results.js';
+import { effectsFor } from './lib/action-effects.js';
+import { createPayoutRefresh, payoutSignSet } from './lib/payout-refresh.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
@@ -873,6 +877,7 @@ function adoptChainApi(api) {
     fetchNetworkStats(globalApi);
     subscribeNewBlocks(globalApi);
     runAssetFeeSelfCheck(api);
+    knownResults.prune(); postAction.resume();   // the store is scoped to this chain's genesis: drop others, repaint, arm
     if (councilPollTimer) startCouncilLive();   // the Council page opened before the node link was up
     if (democracyView.active()) democracyView.start();   // same for Democracy
     spendMotionUI.refresh();                              // and the Treasury page's spend action
@@ -8147,6 +8152,7 @@ const spendPayoutUI = createSpendPayoutUI({
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { followWalletElsewhere(); recheckSignedTxs(); } });
 window.addEventListener('pageshow', (e) => { if (e.persisted) followWalletElsewhere(); recheckSignedTxs(); });
 window.addEventListener('online', () => recheckSignedTxs());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') postAction.resume(); });
 let walletMenu = null;   // the header My Account menu, wired once at the bottom of this file
 
 // The connected address just changed (switch, disconnect, or another tab).
@@ -8159,7 +8165,7 @@ function refreshWalletDashboardFor(address) {
     const r = readRouteFromLocation();
     if (!isSameAddress(getStoredWallet(), address) || !isWalletRoute(r)) return;
     if (r.startsWith('wallet/') && !isSameAddress(r.slice('wallet/'.length), address)) return;
-    fetchWalletDashboard(address);
+    fetchWalletDashboard(address, { keepPage: true });
 }
 function onWalletChanged() {
     reconcileDiscussSession();              // one discussion sign-in, bound to the active wallet
@@ -8768,7 +8774,7 @@ function applyWalletActionBlock() {
 let walletFetchGen = 0;
 function invalidateWalletFetch() { walletFetchGen++; }
 
-async function fetchWalletDashboard(address) {
+async function fetchWalletDashboard(address, opts) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
     const gen = ++walletFetchGen;
@@ -8780,8 +8786,11 @@ async function fetchWalletDashboard(address) {
     // skeleton + animated "Building dashboard" message for the duration of
     // the slowest of three RPC-bound HTTP calls.
     const cached = readWalletCache(address);
-    let didPaintFromCache = false;
-    if (cached && cached.wallet) {
+    // A reload of the dashboard already on screen (after an action): the page stands in for the snapshot, so
+    // no snapshot repaint and no saved-snapshot banner flash; a failed reload still says so (F-068).
+    const onScreen = !!(opts && opts.keepPage) && currentWalletData && isSameAddress(currentWalletData.address, address) && !!root.querySelector('#wallet-action-bar');
+    let didPaintFromCache = !!onScreen;
+    if (!onScreen && cached && cached.wallet) {
         try {
             renderWalletDashboard(cached.wallet, cached.price || { history: [], configured: false }, cached.rewards || null, { live: false });
             didPaintFromCache = true;
@@ -8994,7 +9003,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                 </div>
                 <div class="staking-summary-card"><div class="label">Total Staked</div><div class="value">${stakingFormatPDEX(staking.totalStaked)} PDEX</div></div>
                 <div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">${stakingFormatPDEX(rewards.claimedTotal)} PDEX</div></div>
-                <div class="staking-summary-card"><div class="label">Unpaid Rewards</div><div class="value" style="color:var(--brand-primary);">${stakingFormatPDEX(rewards.unpaidTotal)} PDEX${rewards.unclaimedFresh ? '' : ' <span style="font-size:0.6rem;color:var(--text-muted);">computing…</span>'}</div></div>
+                ${payoutRefresh.tileHtml(data)}
             </div>
         </div>
 
@@ -9010,10 +9019,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                     <i class='bx bx-plus-circle'></i>
                     <div><strong>Stake more</strong><span>Add bond &amp; choose validators</span></div>
                 </button>
-                <button class="wallet-action-btn" id="wallet-act-payout"${(rewards.unpaidCount || 0) ? '' : ' disabled title="No unclaimed rewards to pay out."'}>
-                    <i class='bx bx-gift'></i>
-                    <div><strong>Pay out rewards</strong><span>${stakingFormatNumber(rewards.unpaidCount || 0)} unclaimed entr${(rewards.unpaidCount || 0) === 1 ? 'y' : 'ies'}</span></div>
-                </button>
+                ${payoutRefresh.buttonHtml(data)}
                 <button class="wallet-action-btn" id="wallet-act-unstake"${((staking.activeStaked || 0) > 0) ? '' : ' disabled title="No active bond to unstake."'}>
                     <i class='bx bx-minus-circle'></i>
                     <div><strong>Unstake</strong><span>Begin the unbonding period</span></div>
@@ -9078,6 +9084,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
             <div id="wallet-recent-tx-table"></div>
         </div>
         <div id="wallet-advanced-section"></div>`;
+    payoutRefresh.paint({ reason: 'render' });
 
     // Mount the two small tables. These are typically short snapshots
     // (top ~10 rows), but giving them the same filter/sort affordances as
@@ -9298,9 +9305,7 @@ function scheduleWalletSigningRechecks(data) {
 // renderWalletDashboard so layout/copy stays consistent.
 function buildWalletActionBarMarkup(data) {
     const staking = data.staking || {};
-    const rewards = data.rewards || {};
     const stakeable = getStakeableBalance(data);
-    const unpaid = rewards.unpaidCount || 0;
     const active = staking.activeStaked || 0;
     return `<div class="wallet-action-bar" id="wallet-action-bar">
         <button class="wallet-action-btn primary" id="wallet-act-send"${stakeable > 0 ? '' : ' disabled title="No transferable balance available."'}>
@@ -9311,10 +9316,7 @@ function buildWalletActionBarMarkup(data) {
             <i class='bx bx-plus-circle'></i>
             <div><strong>Stake more</strong><span>Add bond &amp; choose validators</span></div>
         </button>
-        <button class="wallet-action-btn" id="wallet-act-payout"${unpaid ? '' : ' disabled title="No unclaimed rewards to pay out."'}>
-            <i class='bx bx-gift'></i>
-            <div><strong>Pay out rewards</strong><span>${stakingFormatNumber(unpaid)} unclaimed entr${unpaid === 1 ? 'y' : 'ies'}</span></div>
-        </button>
+        ${payoutRefresh.buttonHtml(data)}
         <button class="wallet-action-btn" id="wallet-act-unstake"${active > 0 ? '' : ' disabled title="No active bond to unstake."'}>
             <i class='bx bx-minus-circle'></i>
             <div><strong>Unstake</strong><span>Begin the unbonding period</span></div>
@@ -9364,6 +9366,10 @@ function renderWalletPriceChart(history) {
 // `currentWalletData` is the most recently rendered wallet payload; it's the
 // data backing each modal so users see live numbers without an extra fetch.
 let currentWalletData = null;
+// Post-action refresh (lib/post-action.js): what a block proved, shown in place and kept across a reload and other tabs.
+const knownResults = createKnownResults({ key: 'pdex_known_results', storage: () => window.localStorage, same: isSameAddress, listen: (f) => window.addEventListener('storage', f), genesis: () => (globalApi && globalApi.genesisHash ? globalApi.genesisHash.toHex() : null) });
+const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e) });
+const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, post: postAction, data: () => currentWalletData, same: isSameAddress, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, short: stakingShortAddress, esc: stakingEscapeHtml } });
 let validatorsCache = null;
 let validatorsCacheAt = 0;
 const VALIDATORS_CACHE_TTL = 60 * 1000;
@@ -9649,8 +9655,10 @@ const PAYOUT_BATCH_MAX = 30;
 function openPayoutModal() {
     const data = currentWalletData;
     if (!data) return showTxNotice('Wallet data is not loaded yet.');
-    const entries = (data.rewards && data.rewards.unpaidEntries) || [];
-    const total = (data.rewards && data.rewards.unpaidTotal) || 0;
+    const m = payoutRefresh.model(data);   // known paid, held (Checking) and re-sent pairs are never listed to sign
+    if (m.button !== 'enabled' && m.button !== 'none') return payoutRefresh.paint({ reason: 'render' });
+    const entries = m.payable;
+    const total = m.payableTotal;
     document.getElementById('payout-count').textContent = stakingFormatNumber(entries.length);
     document.getElementById('payout-total').textContent = stakingFormatPDEX(total) + ' PDEX';
     const errEl = document.getElementById('payout-modal-error');
@@ -9661,10 +9669,7 @@ function openPayoutModal() {
         listEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:0.85rem;">No unclaimed rewards available to pay out. The indexer recomputes unpaid rewards in the background; try again in a minute.</div>';
         if (submitBtn) submitBtn.disabled = true;
     } else {
-        listEl.innerHTML = entries.map(e => `<div class="payout-entry">
-            <div><span class="payout-era">Era ${stakingFormatNumber(e.era)}</span> <a href="/validator/${encodeURIComponent(e.validator)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">${stakingShortAddress(e.validator)}</a></div>
-            <div class="payout-amt">${stakingFormatPDEX(e.amount)} PDEX</div>
-        </div>`).join('');
+        listEl.innerHTML = payoutRefresh.rowsHtml(entries);
         if (submitBtn) submitBtn.disabled = submitBtn.getAttribute('aria-busy') === 'true';   // not while a signature is pending
         // F-055 close test: "the claim UI shows 'first 30 of N'". Shown here,
         // on open, so the user sees it while reading the count — not after
@@ -9675,6 +9680,7 @@ function openPayoutModal() {
             errEl.textContent = `This claims the first ${PAYOUT_BATCH_MAX} of ${entries.length} entries — one transaction cannot safely carry more. Run Pay Out again afterwards for the rest.`;
         }
     }
+    payoutRefresh.modalLine(m);
     document.getElementById('payout-modal').style.display = 'flex';
 }
 
@@ -9684,7 +9690,8 @@ async function submitPayoutTx() {
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     const data = currentWalletData;
     if (!data) return fail('Wallet data is not loaded.');
-    const entries = (data.rewards && data.rewards.unpaidEntries) || [];
+    // F2: never more than the modal lists (lib/payout-refresh.js payoutSignSet).
+    const entries = payoutSignSet(payoutRefresh.signable(data), Array.from(document.querySelectorAll('#payout-entries .payout-entry[data-key]')).map(r => r.getAttribute('data-key')));
     if (!entries.length) return fail('Nothing to claim right now.');
     const batch = entries.slice(0, PAYOUT_BATCH_MAX);
     const truncated = entries.length > batch.length;
@@ -9700,7 +9707,7 @@ async function submitPayoutTx() {
     await submitSignedTx({
         buildTx: (api) => batchTx(api, batch.map(e => buildPayoutCall(api, e.validator, e.era))),
         label: 'Payout rewards' + (truncated ? ` (${batch.length} of ${entries.length})` : ''),
-        action: { key: 'staking.payout', params: { k: batch.length, remaining: entries.length - batch.length } },
+        action: { key: 'staking.payout', params: { k: batch.length, remaining: entries.length - batch.length, account: data.address, pairs: batch.map(e => ({ era: e.era, validator: e.validator })) } },
         button: document.getElementById('submit-payout-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign and pay out',
@@ -12696,7 +12703,8 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
     if (!stillValid()) return fail(WALLET_CHANGED_STALE);
     // verify: the action's own chain check, used only if the status updates
     // stop (see lib/tx-submit.js); every action also gets the nonce check.
-    const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: stage, show: showTxStatus, verify });
+    const seen = postAction.observe(action);
+    const run = trackSignedTx({ api: globalApi, action, button, idleText, onError, onSuccess, onStage: seen.stage(stage), show: seen.show(showTxStatus), verify });
     run.start();
     try {
         // `await` even though most builders are synchronous: F-056 needs one

@@ -6,6 +6,9 @@ import { readFileSync } from 'node:fs';
 import { bodyOf } from './helpers/source.js';
 import { makeProfile, openTab, fakeExtension, A, B, C } from './helpers/wallet-world.js';
 import { createMultisigStore, normalizeMultisig } from '../lib/multisig.js';
+import { createPostAction } from '../lib/post-action.js';
+import { createKnownResults } from '../lib/known-results.js';
+import { effectsFor } from '../lib/action-effects.js';
 
 const script = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const multisig = normalizeMultisig({ signers: [A, B, C], threshold: 2, name: 'Team wallet' });
@@ -17,6 +20,7 @@ function setup() {
     const reviewed = [], sent = [], errors = [];
     Object.assign(tab.ctx, {
         globalApi: {}, liveRuntimeError: () => null, multisigStore: store,
+        postAction: createPostAction({ effects: effectsFor, known: createKnownResults({ storage: null }) }),   // R1: submitSignedTx observes every submission (real core)
         multisigUI: { mountAccounts() {}, review: async request => reviewed.push(request) },
         showTxStatus: () => ({ stage: 'failed' }),
         trackSignedTx: () => ({ start() {}, buildFailed: e => errors.push(e.message), send: async (tx, address, signer) => sent.push({ tx, address, signer }) })

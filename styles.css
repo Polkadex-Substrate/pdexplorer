@@ -2754,11 +2754,13 @@ h1, h2, h3 { font-weight: 600; }
        truncating so labels stay on a single visual line at narrow widths. */
     min-width: 0;
 }
-.wallet-action-btn:hover:not(:disabled) {
+.wallet-action-btn:hover:not(:disabled):not([aria-disabled="true"]) {
     border-color: var(--border-hover);
     background: rgba(255, 255, 255, 0.06);
 }
-.wallet-action-btn:disabled {
+/* aria-disabled: a proven-done or checking button that keeps focus (payout refresh) looks disabled too. */
+.wallet-action-btn:disabled,
+.wallet-action-btn[aria-disabled="true"] {
     opacity: 0.45;
     cursor: not-allowed;
 }
@@ -2792,7 +2794,7 @@ h1, h2, h3 { font-weight: 600; }
     background: rgba(230, 0, 122, 0.08);
     border-color: rgba(230, 0, 122, 0.35);
 }
-.wallet-action-btn.primary:hover:not(:disabled) { background: rgba(230, 0, 122, 0.15); }
+.wallet-action-btn.primary:hover:not(:disabled):not([aria-disabled="true"]) { background: rgba(230, 0, 122, 0.15); }
 
 .modal-close-btn {
     position: absolute;
@@ -5527,3 +5529,16 @@ a.validate-secondary { text-decoration: none; }
 @media (max-width: 768px) {
     .validate-secondary, .validate-text-btn, .lock-action-btn { min-height: 44px; }
 }
+
+/* Post-action refresh (cto-team/plans/2026-11-22-post-action-refresh-ux.md, sections 2 and 6). A bare chip for places too
+   small for a chip: same icon, word and role text colour, no background. The wash marks a figure whose value just
+   changed: neutral, never a hue ("changed" is not a role), one shot of 1200 ms, none with reduced motion. */
+.ui-chip.is-bare { height: auto; padding: 0; background: none; }
+#wallet-unpaid-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#wallet-unpaid-label .ui-chip.is-bare { font-size: 0.72rem; }
+#wallet-unpaid-label .ui-chip.is-bare .bx { font-size: 14px; }
+#wallet-payout-reorg { margin: 12px 24px 0; }
+#payout-behind-line { margin: 0 0 12px; }
+@keyframes post-action-wash { from { background-color: rgba(255, 255, 255, 0.08); } to { background-color: transparent; } }
+.staking-summary-card .value.is-value-changed { animation: post-action-wash 1200ms ease-out 1; border-radius: var(--radius-sm); }
+@media (prefers-reduced-motion: reduce) { .staking-summary-card .value.is-value-changed { animation: none; } }

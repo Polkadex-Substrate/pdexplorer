@@ -25,6 +25,9 @@ import { buildTxModel, SIGNING_CAP_MS } from '../lib/tx-status.js';
 import { pickSigningAccount } from '../lib/wallet-session.js';
 import { bodyOf, stripComments } from './helpers/source.js';
 import { makeProfile, openTab, fakeExtension, addr } from './helpers/wallet-world.js';
+import { createPostAction } from '../lib/post-action.js';
+import { createKnownResults } from '../lib/known-results.js';
+import { effectsFor } from '../lib/action-effects.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const CODE = stripComments(SCRIPT);
@@ -159,6 +162,7 @@ function signingTab({ path = '/wallet/' + W1 } = {}) {
         globalApi: { registry: {}, tx: { identity: { clearIdentity: () => ({ id: 'clearIdentity' }) } } }, liveRuntimeError: () => null, isMobileDevice: () => false,
         multisigStore: { find: () => null },
         showTxStatus: (a, stage, ev, err) => { const m = { stage, text: typeof err === 'string' ? err : '' }; errors.push(m.text); return m; },
+        postAction: createPostAction({ effects: effectsFor, known: createKnownResults({ storage: null }) }),   // R1: submitSignedTx observes every submission (real core)
         trackSignedTx: () => ({ start() {}, buildFailed(e) { errors.push(e.message); }, send: async (tx, address, signer, opts) => { sends.push({ tx, address, opts }); } }),
         confirm: () => true, alert: () => {}
     });

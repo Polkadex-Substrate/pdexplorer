@@ -24,6 +24,9 @@ import { trackSignedTx } from '../lib/tx-submit.js';
 import { buildTxModel } from '../lib/tx-status.js';
 import { bodyOf } from './helpers/source.js';
 import { makeProfile, openTab, fakeExtension, addr } from './helpers/wallet-world.js';
+import { createPostAction } from '../lib/post-action.js';
+import { createKnownResults } from '../lib/known-results.js';
+import { effectsFor } from '../lib/action-effects.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const A = addr(1), B = addr(2);
@@ -65,6 +68,7 @@ function world() {
         globalApi: api, liveRuntimeError: () => null, isMobileDevice: () => false,
         multisigStore: { find: () => null },
         showTxStatus: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex),
+        postAction: createPostAction({ effects: effectsFor, known: createKnownResults({ storage: null }) }),   // R1: submitSignedTx observes every submission (real core)
         trackSignedTx,
         confirm: () => true, alert: () => {}
     });
