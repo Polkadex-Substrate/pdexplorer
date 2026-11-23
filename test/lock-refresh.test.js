@@ -621,3 +621,83 @@ describe('(review 4) a wallet error before signing: M11 in the row, through the 
         assert.ok(pg.el.querySelectorAll('.ui-action').length && Array.from(pg.el.querySelectorAll('.ui-action')).every(b => !b.hasAttribute('aria-disabled')), 'the actions are free again');
     });
 });
+
+// A result belongs to the panel and account that started the submission. After a wallet change the old account's
+// outcome (a failure, "not confirmed", a passed or failed chain check) is not painted in the new account's panel,
+// even in a row with the same key, and nothing is announced in its live region.
+describe('(review 2) a submission\'s result stays with the account that sent it', () => {
+    const MIG = '[data-lock-action="migrate-currency"]';
+    const LEFT = 'Leftover staking lock';
+    const live = (el) => text(el.querySelector('.lock-actions-msg'));
+    const ORPHAN_B = () => ({ ...ORPHAN(), address: OTHER });
+    // Account A presses the migrate action (the wallet is open); then the wallet switches to account B, whose panel
+    // has a row with the same key.
+    async function sent({ locksAfter = [], switchTo = true } = {}) {
+        const open = [];
+        const pg = await page({ models: [ORPHAN()], connected: OTHER, api: () => ({ query: { balances: { locks: async () => locksAfter } } }), submit: async (o) => { open.push(o); } });
+        await pg.press(MIG);
+        assert.equal(open.length, 1, 'the wallet is open for account A');
+        if (switchTo) {
+            pg.models.length = 0;
+            pg.models.push(ORPHAN_B());
+            await mountBalanceLocks(pg.el, OTHER, pg.opts);
+            await flush();
+            assert.ok(pg.row(LEFT), 'account B\'s panel has the same row');
+            assert.equal(text(pg.row(LEFT).querySelector('.lock-row-msg')), '', 'no message yet');
+        }
+        return { pg, o: open[0], live0: live(pg.el) };
+    }
+    const untouched = async (pg, live0) => {
+        await pg.clock.advance(5000);
+        const row = pg.row(LEFT);
+        assert.ok(row, 'B\'s row did not leave');
+        assert.equal(text(row.querySelector('.lock-row-msg')), '', 'no message in B\'s row');
+        assert.ok(!row.classList.contains('is-settled') && !row.classList.contains('is-leaving'), 'B\'s row did not settle');
+        assert.ok(!/Released in block/.test(text(row)), 'no Released chip');
+        assert.equal(live(pg.el), live0, 'B\'s live region is unchanged');
+    };
+    test('it fails after the switch: nothing in B\'s row', async () => {
+        const { pg, o, live0 } = await sent();
+        o.onError('Nope.');
+        await flush();
+        await untouched(pg, live0);
+    });
+    test('it is not confirmed after the switch: nothing in B\'s row', async () => {
+        const { pg, o, live0 } = await sent();
+        o.onStage('unconfirmed');
+        await flush();
+        await untouched(pg, live0);
+    });
+    test('it is included and the chain check passes after the switch: B\'s row does not settle and says nothing', async () => {
+        const { pg, o, live0 } = await sent();
+        await o.onSuccess();
+        await flush();
+        await untouched(pg, live0);
+    });
+    test('it is included and the chain check fails after the switch: nothing in B\'s row, B is not re-read for it', async () => {
+        const { pg, o, live0 } = await sent({ locksAfter: [{ id: 'staking ' }] });
+        const reads = pg.reads.length;
+        await o.onSuccess();
+        await flush();
+        await untouched(pg, live0);
+        assert.equal(pg.reads.length, reads, 'no re-read for the old account');
+    });
+    test('control: with no switch, the same outcomes still reach the row that started them', async () => {
+        const failed = await sent({ switchTo: false });
+        failed.o.onError('Nope.');
+        await flush();
+        assert.equal(text(failed.pg.row(LEFT).querySelector('.lock-row-msg')), 'Nope.', 'a failure shows in its row');
+        const waiting = await sent({ switchTo: false });
+        waiting.o.onStage('unconfirmed');
+        await flush();
+        assert.match(text(waiting.pg.row(LEFT).querySelector('.lock-row-msg')), /not confirmed yet/, 'not confirmed shows in its row');
+        const ok = await sent({ switchTo: false });
+        await ok.o.onSuccess();
+        await flush();
+        assert.equal(text(ok.pg.row(LEFT).querySelector('.lock-row-msg')), 'The leftover staking lock is gone. The PDEX it held is transferable again.', 'the passed check shows in its row');
+        const bad = await sent({ switchTo: false, locksAfter: [{ id: 'staking ' }] });
+        await bad.o.onSuccess();
+        await flush();
+        assert.ok(text(bad.pg.row(LEFT).querySelector('.lock-row-msg')), 'a failed check shows in its row');
+    });
+});
