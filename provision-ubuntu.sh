@@ -212,7 +212,7 @@ apt_quiet() {
     # needrestart (Ubuntu 22.04/24.04) would open a dialog and restart services:
     # list-only mode and suspend keep it quiet and leave the site running.
     DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
-        apt-get -qq -o=Dpkg::Use-Pty=0 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+        apt-get -qq -o=Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=120 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
 }
 
 # ---- Phase 1: OS hardening -------------------------------------------------
@@ -420,11 +420,25 @@ EOF
 }
 
 # ---- Phase 2: Docker -------------------------------------------------------
+# Is Docker installed? The same generous detection deploy.sh uses (tools/deploy-detect.sh: on PATH, a
+# binary in a fixed place, or the docker.service unit), so the two scripts never disagree. When this script
+# runs without the rest of the checkout (downloaded alone) the helper is absent and the plain PATH check is used.
+provision_docker_present() {
+    local here="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+    if [ -f "$here/tools/deploy-detect.sh" ]; then
+        # shellcheck disable=SC1091
+        . "$here/tools/deploy-detect.sh"
+        deploy_detect_docker
+        return
+    fi
+    command -v docker >/dev/null 2>&1
+}
+
 install_docker() {
     log "Phase 2/3: Docker"
 
-    if command -v docker >/dev/null 2>&1; then
-        ok "Docker already installed: $(docker --version)"
+    if provision_docker_present; then
+        ok "Docker already installed: $(docker --version 2>/dev/null || echo "${DOCKER_DETECT:-found}")"
     else
         log "Installing Docker CE + Compose plugin from the official apt repo"
         install -m 0755 -d /etc/apt/keyrings

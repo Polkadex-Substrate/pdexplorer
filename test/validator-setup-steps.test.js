@@ -491,7 +491,7 @@ describe('finding 3: a transaction that may be in flight', () => {
         const api = fakeApi();
         const plan = await C.buildStepwisePlan(api, reviewFor(await C.readSetupState(api, STASH)), { revision: 'r1', keyNames: NAMES });
         Object.assign(api.st, { nonce: 7, nextIndex: 8 });
-        await assert.rejects(C.buildCheckedSetupStepTx(api, plan, 'setKeys'), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed.' });
+        await assert.rejects(C.buildCheckedSetupStepTx(api, plan, 'setKeys'), { message: 'Another transaction from this account is still waiting for a block. Nothing was signed. Wait for it to be included, then try again.' });
         api.st.nextIndex = 7;
         await C.buildCheckedSetupStepTx(api, plan, 'setKeys');
     });
@@ -540,4 +540,61 @@ describe('finding 7: "If you stop here" reads the chain first (section 6)', () =
         const p2 = planOf(none);
         assert.equal(W.stopLine(p2, none, p2.steps, D).text, W.SW.stopNothing);
     });
+});
+
+// ── Revision 2026-11-21 of the spec: Fable's follow-up strings, verbatim ──
+describe('follow-up strings (spec revision 2026-11-21)', () => {
+    test('SW-59 pending, SW-41 keysHint, SW-46a, SW-46b, SW-06, SW-64, SW-65, SW-07', () => {
+        assert.equal(W.SW.pending, 'Another transaction from this account is still waiting for a block. Nothing was signed. Wait for it to be included, then try again.');
+        assert.equal(W.SW.keysHint, 'Your device may show the keys as six separate values over several screens. Compare the first and last characters of each with the keys table above before you approve.');
+        assert.equal(W.SW.stillNotOnChain, 'Still not on chain. If it does not appear in about 15 minutes it was not included. Reload this page; the setup continues from the chain.');
+        assert.equal(W.SW.sentNotOnChain(2), 'Step 2 was sent but is still not on chain. You can sign it again. If the first one is still waiting for a block, the explorer stops before your wallet opens and nothing is signed. A second copy cannot bond twice; at worst it costs one more fee.');
+        assert.equal(W.SW.topUpUnconfirmed(200n * PDEX), 'Your top-up of 200 PDEX was sent but the explorer could not confirm it. It may still be included in a block, so this review leaves it out rather than send it twice. To check, reload this page in about 15 minutes: the Stash and bond step shows the bonded amount. If it has not gone up, the top-up was not included and you can add it again there.');
+        assert.equal(W.SW.stopNominating(150n * PDEX), 'If you stop here: your keys stay registered to this stash. Your bond of 150 PDEX is untouched and keeps nominating, and nothing new is locked. Keys on an account that does not validate do nothing. If you later use this node with a different stash, generate new keys on the node first.');
+        assert.equal(W.SW.stopNominatingToppedUp(350n * PDEX, 200n * PDEX, '28 days'), 'If you stop here: your keys stay registered to this stash and your bond, now 350 PDEX with the 200 PDEX you added, keeps nominating. To get the added PDEX back, use Unstake on your wallet page: unbonding takes 28 days, then you withdraw it.');
+        assert.equal(W.SW.notStarted, 'The explorer could not start the signature, so nothing was signed and no fee was charged. Check that your wallet is unlocked and this account is selected, then press Sign and submit again.');
+    });
+});
+
+describe('item c: "If you stop here" for a nominating stash once a step is confirmed this visit', () => {
+    const D = '28 days';
+    const nominating = (active, o = {}) => bondedState(active, { nominations: 3, ...o });
+    test('nothing confirmed this visit: SW-60, which is true', () => {
+        const st = nominating(150n * PDEX);
+        const plan = planOf(st);
+        assert.deepEqual(plan.steps.map(s => s.kind), ['setKeys', 'validate']);
+        assert.deepEqual(W.stopLine(plan, st, plan.steps, D, {}), { text: W.SW.stopNothing });
+    });
+    test('keys confirmed this visit, no top-up: SW-64, no wallet link', () => {
+        const plan = planOf(nominating(150n * PDEX));
+        const now = nominating(150n * PDEX, { nextKeys: KEYS });
+        assert.deepEqual(W.stopLine(plan, now, [plan.steps[1]], D, { confirmedAny: true }), { text: W.SW.stopNominating(String(150n * PDEX)) });
+        assert.deepEqual(W.stopLine(plan, now, [plan.steps[1]], D, {}), { text: W.SW.stopNominating(String(150n * PDEX)) }, 'the chain shows the planned keys');
+    });
+    test('top-up confirmed this visit: SW-65 with the event amount, then the SW-63 link', () => {
+        const plan = planOf(nominating(150n * PDEX, { nextKeys: KEYS }), { keep: true, extra: 200n * PDEX });
+        assert.deepEqual(plan.steps.map(s => s.kind), ['bondExtra', 'validate']);
+        const now = nominating(350n * PDEX, { nextKeys: KEYS });
+        assert.deepEqual(W.stopLine(plan, now, [plan.steps[1]], D, { toppedUp: true, extra: String(199n * PDEX) }),
+            { text: W.SW.stopNominatingToppedUp(String(350n * PDEX), String(199n * PDEX), D), link: true });
+        assert.equal(W.stopLine(plan, now, [plan.steps[1]], D, { toppedUp: true }).text, W.SW.stopNominatingToppedUp(String(350n * PDEX), String(200n * PDEX), D), 'no event: the plan amount');
+    });
+});
+
+// Final review (2026-11-21): while this visit's top-up is sent and unconfirmed, the stop line makes no claim about the bond.
+describe('final review: no stop line while a top-up is sent and unconfirmed', () => {
+    const D = '28 days';
+    const nominating = (active, o = {}) => bondedState(active, { nominations: 3, ...o });
+    test('a nominating stash: no "untouched" and no "nothing has changed" while the top-up is unconfirmed', () => {
+        const plan = planOf(nominating(150n * PDEX), { keep: true, extra: 200n * PDEX });
+        const now = nominating(150n * PDEX, { nextKeys: KEYS });
+        assert.equal(W.stopLine(plan, now, plan.steps.slice(1), D, { confirmedAny: true, extraUnconfirmed: true }), null);
+        assert.equal(W.stopLine(plan, now, plan.steps.slice(1), D, { extraUnconfirmed: true }), null);
+        assert.deepEqual(W.stopLine(plan, now, plan.steps.slice(1), D, { confirmedAny: true }), { text: W.SW.stopNominating(String(150n * PDEX)) }, 'otherwise as before');
+    });
+});
+
+// Final review (2026-11-21): SW-08, one signature, sent but not confirmed because the submit threw after broadcast.
+test('SW-08 sentUnconfirmed, verbatim', () => {
+    assert.equal(W.SW.sentUnconfirmed, 'Your setup was sent but the explorer could not confirm it. It may still be included in a block. Do not sign it again yet. Reload this page in a minute; the setup continues from the chain.');
 });

@@ -343,6 +343,18 @@ for (const fixture of FIXTURES) {
                 assert.equal(keys.args[1].toHex(), '0x', 'empty proof');
                 assert.equal(constant(registry, 'Session', 'KeyDeposit').toString(), '0', 'Session.KeyDeposit on this runtime');
             });
+            test('one-signature setup with ONE step left: the bare call, never a utility.batchAll of one (spec section 9, finding 2)', () => {
+                for (const [step, name, n] of [[{ kind: 'validate', commission: 50_000_000 }, 'staking.validate', 1], [{ kind: 'setKeys', keysHex: BLOB }, 'session.setKeys', 2],
+                    [{ kind: 'bondExtra', value: '5' }, 'staking.bondExtra', 1], [{ kind: 'bond', value: '1000000000000', payee: { kind: 'staked' } }, 'staking.bond', 2]]) {
+                    const tx = buildSetupTx(api, [step]);
+                    const c = decode(tx);
+                    assert.equal(`${c.section}.${c.method}`, name);
+                    assert.equal(c.args.length, n, name);
+                    assert.equal(tx.method.toHex(), c.toHex(), `${name} re-encodes identically`);
+                    assert.equal(tx.method.toHex(), buildSetupStepCall(api, step).method.toHex(), `${name}: the same bytes as the separate-steps call`);
+                }
+                assert.equal(decode(buildSetupTx(api, [{ kind: 'setKeys', keysHex: BLOB }, { kind: 'validate', commission: 50_000_000 }])).method, 'batchAll', 'two steps stay one batch');
+            });
             test('removed calls stay removed: treasury approveProposal / rejectProposal, balances.transfer', () => {
                 assert.equal(ex.treasury.approveProposal, undefined);
                 assert.equal(ex.treasury.rejectProposal, undefined);

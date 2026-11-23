@@ -694,3 +694,35 @@ describe('validatorCallGuard round 2: pass-through cases and a visible note when
         assert.match(fs.readFileSync(new URL('../script.js', import.meta.url), 'utf8'), /callNote: \(api, call, m\) => validatorCallNote\(api, call, m\.address\)/);
     });
 });
+
+// Final review (2026-11-21): a multisig setup with one step left proposes a bare staking.validate. For a stash
+// that is not validating yet it starts validating; "Change commission" is only for a stash already validating.
+describe('final review: a lone staking.validate on a stash not validating yet', () => {
+    const c = (tx) => registry.createType('Call', tx.toHex());
+    test('describeValidatorCall: "Start validating at X commission" when not validating, "Change commission to X" otherwise', () => {
+        const v = c(ex.staking.validate({ commission: 50_000_000, blocked: false }));
+        assert.equal(D.describeValidatorCall(v, { validating: false }), 'Start validating at 5% commission');
+        assert.equal(D.describeValidatorCall(v, { validating: true }), 'Change commission to 5%');
+        assert.equal(D.describeValidatorCall(v), 'Change commission to 5%', 'unknown: as before');
+        assert.equal(D.describeValidatorCall(c(ex.staking.validate({ commission: 70_000_000, blocked: true })), { validating: false }), 'Start validating at 7% commission, new nominations blocked');
+        assert.equal(D.describeValidatorCall(c(ex.staking.chill()), { validating: false }), 'Stop validating');
+    });
+    test('readPendingValidatorOps reads Staking.Validators for the multisig stash', async () => {
+        const m = normalizeMultisig({ signers: [SA, SB, SC], threshold: 2, name: 'Validator stash' });
+        const validate = ex.staking.validate({ commission: 50_000_000, blocked: false });
+        const hash = blake2AsHex(registry.createType('Call', validate.toHex()).toU8a());
+        const pending = [[{ args: [{ toString: () => m.address }, { toHex: () => hash }] }, opt({ when: { height: num(900), index: num(2) }, approvals: [SB], depositor: SB, deposit: num(1) })]];
+        const api = chainApi({ pending });
+        const sizes = [];
+        api.query.staking.validators.size = async (a) => { sizes.push(String(a)); return num(0); };
+        const v = await DC.readPendingValidatorOps(api, m, { recover: async () => validate.toHex(), isSame });
+        assert.deepEqual(sizes, [m.address]);
+        assert.equal(v.ops[0].label, 'Start validating at 5% commission');
+        api.query.staking.validators.size = async () => num(5);
+        const w = await DC.readPendingValidatorOps(api, m, { recover: async () => validate.toHex(), isSame });
+        assert.equal(w.ops[0].label, 'Change commission to 5%');
+        api.query.staking.validators.size = async () => { throw new Error('rpc down'); };
+        const x = await DC.readPendingValidatorOps(api, m, { recover: async () => validate.toHex(), isSame });
+        assert.equal(x.ops[0].label, 'Change commission to 5%', 'a failed read keeps the label of today');
+    });
+});

@@ -82,15 +82,16 @@ describe('B1: the real per-recipient limiter in email.js, with a fake transport'
         follow(a, S1);
         const posted = [];
         const realFetch = globalThis.fetch;
-        globalThis.fetch = async (url, init) => {
-            const body = JSON.parse(init.body);
-            posted.push({ to: body.To, tag: body.Tag });
-            return { ok: true, status: 200, text: async () => JSON.stringify({ MessageID: `m${posted.length}` }) };
-        };
         const h = rig([obs(), obs({ disabled: true, lastSlashEra: 10 })], sendEmail);
-        // The limiter runs on the test's clock, so its 10 s window is moved by hand, not waited for.
-        _setEmailClockForTests(() => h.clock.t);
+        // Patched only inside the try: whatever fails after this point, the finally puts both back.
         try {
+            globalThis.fetch = async (url, init) => {
+                const body = JSON.parse(init.body);
+                posted.push({ to: body.To, tag: body.Tag });
+                return { ok: true, status: 200, text: async () => JSON.stringify({ MessageID: `m${posted.length}` }) };
+            };
+            // The limiter runs on the test's clock, so its 10 s window is moved by hand, not waited for.
+            _setEmailClockForTests(() => h.clock.t);
             await quiet(async () => {
                 await h.tick();                       // baseline
                 h.clock.t += 5 * MIN;

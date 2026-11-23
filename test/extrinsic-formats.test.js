@@ -79,8 +79,12 @@ describe('scripts/fetch-metadata.mjs wiring', () => {
         assert.match(src, /opt\('blocks'/);
         assert.match(src, /seenFormats=/);
         assert.match(src, /v5MissingMessage/);
-        assert.match(src, /sampleLabel\(/);
-        assert.match(src, /'v5-bare': 0/);
         assert.match(src, /process\.exit\(1\)/);
+        // the walk itself moved to lib/walk-blocks.js (tested with a fake call in test/walk-blocks.test.js)
+        assert.match(src, /walkBackSamples\(/);
+        const walk = stripComments(readFileSync(new URL('../lib/walk-blocks.js', import.meta.url), 'utf8'));
+        assert.match(walk, /from '\.\/extrinsic-formats\.js'/);
+        assert.match(walk, /sampleLabel\(/);
+        assert.match(walk, /'v5-bare': 0/);
     });
 });

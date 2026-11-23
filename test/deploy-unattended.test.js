@@ -337,3 +337,101 @@ describe('guard: nothing in the deploy path can wait for a keyboard', () => {
         assert.deepEqual(findOffences('# read -p "in a comment"\n'), []);
     });
 });
+
+// ---- Sprint 9 follow-ups ----------------------------------------------------
+// Pull one shell function out of a script, so a test can run it with stub commands.
+function extractFn(file, name) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const m = src.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm'));
+    assert.ok(m, `${file}: function ${name} not found`);
+    return m[0];
+}
+
+describe('s9 follow-ups: deploy.sh', () => {
+    test('the script directory is resolved once; later paths use DEPLOY_SCRIPT_DIR, never $(dirname "$0") after a cd', () => {
+        const code = stripComments(fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8'), { line: '#', block: false });
+        const uses = code.split('\n').filter(l => /dirname "\$0"/.test(l));
+        assert.equal(uses.length, 1, uses.join('\n'));
+        assert.match(uses[0], /^DEPLOY_SCRIPT_DIR=/);
+        assert.match(code, /bash "\$DEPLOY_SCRIPT_DIR\/tools\/fix-cert-perms\.sh"/);
+    });
+
+    test('a missing tools/deploy-detect.sh stops the deploy with the exact remedy', () => {
+        const d = sandbox();
+        const lone = path.join(d, 'copy');
+        fs.mkdirSync(lone);
+        fs.copyFileSync(path.join(ROOT, 'deploy.sh'), path.join(lone, 'deploy.sh'));
+        const r = spawnSync('/bin/bash', [path.join(lone, 'deploy.sh')], {
+            encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
+            env: { PATH: `${path.join(d, 'bin')}:/usr/bin:/bin` },
+        });
+        const out = r.stdout + r.stderr;
+        assert.equal(r.status, 1, out);
+        assert.match(out, /deploy-detect\.sh is missing/);
+        assert.match(out, /run (it|deploy\.sh) from the (git )?checkout/i, out);
+        assert.match(out, /git pull/, out);
+        assert.ok(!/Detected OS/.test(out), 'stops before any work');
+    });
+
+    test('the apt wrapper waits for a dpkg lock instead of failing at once (behaviour, with stub sudo and apt-get)', () => {
+        const d = sandbox();
+        const log = path.join(d, 'apt-args');
+        stub(d, 'sudo', 'exec "$@"');
+        stub(d, 'apt-get', `printf '%s\\n' "$@" > "${log}"`);
+        const fn = extractFn('deploy.sh', 'apt_noninteractive');
+        const r = spawnSync('/bin/bash', ['-c', `${fn}\napt_noninteractive -y install foo`], {
+            encoding: 'utf8', timeout: 15000, env: { PATH: `${path.join(d, 'bin')}:/usr/bin:/bin` },
+        });
+        assert.equal(r.status, 0, r.stderr);
+        const args = fs.readFileSync(log, 'utf8').split('\n');
+        const i = args.indexOf('DPkg::Lock::Timeout=120');
+        assert.ok(i > 0 && args[i - 1] === '-o', args.join(' '));
+        assert.deepEqual(args.slice(-3, -1), ['install', 'foo']);
+    });
+});
+
+describe('s9 follow-ups: provision-ubuntu.sh', () => {
+    test('its apt wrapper has the same lock timeout (behaviour)', () => {
+        const d = sandbox();
+        const log = path.join(d, 'apt-args');
+        stub(d, 'apt-get', `printf '%s\\n' "$@" > "${log}"`);
+        const fn = extractFn('provision-ubuntu.sh', 'apt_quiet');
+        const r = spawnSync('/bin/bash', ['-c', `${fn}\napt_quiet -y install foo`], {
+            encoding: 'utf8', timeout: 15000, env: { PATH: `${path.join(d, 'bin')}:/usr/bin:/bin` },
+        });
+        assert.equal(r.status, 0, r.stderr);
+        assert.ok(fs.readFileSync(log, 'utf8').split('\n').includes('DPkg::Lock::Timeout=120'));
+    });
+
+    // The Docker check uses the same detection as deploy.sh when the checkout's helper is there.
+    const present = (d, scriptDir, extraEnv = {}) => {
+        const fn = extractFn('provision-ubuntu.sh', 'provision_docker_present');
+        const r = spawnSync('/bin/bash', ['-c', `SCRIPT_DIR="${scriptDir}"\n${fn}\nif provision_docker_present; then echo present; else echo absent; fi`], {
+            encoding: 'utf8', timeout: 15000,
+            env: { PATH: path.join(d, 'bin'), DETECT_ROOT: path.join(d, 'root'), ...extraEnv },
+        });
+        return (r.stdout || '').trim() + (r.stderr ? ` [${r.stderr.trim()}]` : '');
+    };
+    test('docker found only by its unit file or binary path (not on PATH) counts as installed, as in deploy.sh', () => {
+        const d = sandbox();
+        fs.mkdirSync(path.join(d, 'root/usr/bin'), { recursive: true });
+        fs.writeFileSync(path.join(d, 'root/usr/bin/docker'), '');
+        assert.equal(present(d, ROOT), 'present');
+    });
+    test('nothing found: absent', () => {
+        assert.equal(present(sandbox(), ROOT), 'absent');
+    });
+    test('without tools/deploy-detect.sh the old check is the fallback (on PATH: present, not on PATH: absent)', () => {
+        const d = sandbox();
+        const empty = path.join(d, 'empty'); fs.mkdirSync(empty);
+        assert.equal(present(d, empty), 'absent');
+        stub(d, 'docker', 'exit 0');
+        assert.equal(present(d, empty), 'present');
+    });
+    test('install_docker decides with that helper, not a bare command -v', () => {
+        const body = extractFn('provision-ubuntu.sh', 'install_docker');
+        const code = stripComments(body, { line: '#', block: false });
+        assert.match(code, /if provision_docker_present/);
+        assert.ok(!/if command -v docker/.test(code));
+    });
+});
