@@ -147,14 +147,7 @@ const TABLE = [
     ['democracy.removeVote', {}, ['locks', 'democracy', 'balance'], 'events', []],
     ['democracy.undelegate', {}, ['locks', 'democracy', 'balance'], 'events', []],
     ['elections.removeVoter', {}, ['locks', 'council.elections'], 'events', []],
-    ['elections.candidacy', {}, ['council.elections', 'balance'], 'predicate', []],
     ['elections.vote', {}, ['council.elections', 'locks'], 'predicate', []],
-    ['elections.withdraw', {}, ['council.elections', 'balance'], 'events', []],
-    ['council.vote', {}, ['council.motions'], 'live', []],
-    ['council.close', {}, ['council.motions', 'treasury.overview', 'democracy'], 'live', []],
-    ['council.propose', {}, ['council.motions'], 'events', []],
-    ['treasury.payout', {}, ['treasury.spends', 'treasury.overview'], 'events', []],
-    ['treasury.checkStatus', {}, ['treasury.spends', 'treasury.overview'], 'events', []],
     ['validator.setup', { stash: OTHER }, ['validator.status', 'staking.ledger', 'balance'], 'predicate', ['nextEra']],
     ['validator.setupStep', { stash: OTHER }, ['validator.status', 'staking.ledger', 'balance'], 'predicate', ['nextEra']],
     ['validator.manage', { stash: OTHER }, ['validator.status', 'staking.ledger'], 'predicate', ['nextEra']]
@@ -185,10 +178,6 @@ describe('every other action key', () => {
         const eff = effectsFor({ key: 'balances.transfer', params: { to: OTHER }, stage: 'inBlock', events: [success()], blockNumber: 9, txHash: '0x1', signer: ME, outcome: OK });
         assert.deepEqual(eff.changes.map(c => c.account).sort(), [ME, OTHER].sort());
     });
-    test('treasury actions are public: no account', () => {
-        const eff = effectsFor({ key: 'treasury.payout', params: {}, stage: 'inBlock', events: [success()], blockNumber: 9, txHash: '0x1', signer: ME, outcome: OK });
-        assert.deepEqual(eff.changes.map(c => c.account), [null]);
-    });
     test('multisig: a first approval changes only the pending list; an executed call adds the inner key\'s domains', () => {
         const ms = 'multisig-address';
         const first = effectsFor({ key: 'multisig.transaction', params: { multisig: ms, inner: { key: 'balances.transfer', params: { to: OTHER } } }, stage: 'inBlock', events: [success()], blockNumber: 9, txHash: '0x1', signer: ME, outcome: { ok: true, executed: null, approvalRecorded: true } });
@@ -205,5 +194,95 @@ describe('every other action key', () => {
         for (const d of DOMAINS) assert.ok(SOURCE[d], `${d} has no source`);
         for (const [k, e] of Object.entries(EFFECTS)) for (const d of e.domains) assert.ok(DOMAINS.includes(d), `${k}: ${d}`);
         assert.equal(SOURCE['rewards.unpaid'], 'indexed.chain');
+    });
+});
+
+// R4: governance and treasury (audit rows 10 to 19). The rows that name events (10, 11, 14, 15, 16, 17) claim
+// nothing without them; the elections rows carry the proven role (12 from a clean inclusion, held back by the
+// page until the chain predicate agrees; 14 from Renounced). Every governance row acts only at an inclusion the
+// page saw (inBlock): never on failure and never on an unconfirmed end (UX section 0, line 1).
+describe('R4: governance and treasury rows 10 to 19', () => {
+    const ev = (section, method, data = []) => ({ event: { section, method, data } });
+    const fx = (key, events, { params = {}, stage = 'inBlock', signer = ME } = {}) => effectsFor({ key, params, stage, events, blockNumber: 42, txHash: '0x42', signer,
+        outcome: evaluateEvents(events, REGISTRY, { actionKey: key, params }) });
+    const HASH = '0x' + 'ab'.repeat(32);
+    const voted = (who = ME, section = 'council') => ev(section, 'Voted', [who, HASH, true, 1, 0]);
+    const closed = (section = 'council') => [ev(section, 'Closed', [HASH, 3, 0]), ev(section, 'Approved', [HASH]), ev(section, 'Executed', [HASH, { isErr: false, isOk: true }])];
+    const domainsOf = (eff) => eff.changes.map(c => [c.account, c.domains]);
+
+    test('the technical committee has its own motions domain, served by its own snapshot', () => {
+        assert.ok(DOMAINS.includes('technicalCommittee.motions'));
+        assert.equal(SOURCE['technicalCommittee.motions'], 'kv.technicalCommittee');
+        assert.deepEqual(EFFECTS['council.vote'].domains, ['council.motions', 'technicalCommittee.motions']);
+    });
+    test('10 council.vote: the Voted event of this account; the body picks the snapshot; no known result', () => {
+        const eff = fx('council.vote', [voted(), success()], { params: { aye: true, idx: 3, body: 'council' } });
+        assert.deepEqual(domainsOf(eff), [[ME, ['council.motions']]]);
+        assert.deepEqual(eff.known, []);
+        const tc = fx('council.vote', [voted(ME, 'technicalCommittee'), success()], { params: { aye: true, idx: 3, body: 'technical committee' } });
+        assert.deepEqual(domainsOf(tc), [[ME, ['technicalCommittee.motions']]]);
+        assert.equal(fx('council.vote', [success()], { params: { body: 'council' } }), null, 'no Voted event: nothing is claimed or re-read');
+        assert.equal(fx('council.vote', [voted(OTHER), success()], { params: { body: 'council' } }), null, 'another account voted');
+    });
+    test('11 council.close: Closed proves it; the motion card, the treasury overview and democracy follow', () => {
+        const eff = fx('council.close', [...closed(), success()], { params: { idx: 3, method: 'spend', body: 'council' } });
+        assert.deepEqual(domainsOf(eff), [[ME, ['council.motions', 'treasury.overview', 'democracy']]]);
+        const tc = fx('council.close', [...closed('technicalCommittee'), success()], { params: { idx: 3, body: 'technical committee' } });
+        assert.deepEqual(domainsOf(tc), [[ME, ['technicalCommittee.motions', 'treasury.overview', 'democracy']]]);
+        assert.equal(fx('council.close', [success()], { params: { body: 'council' } }), null);
+    });
+    test('12 elections.candidacy: a clean inclusion records the role, to be shown once the chain predicate agrees', () => {
+        const eff = fx('elections.candidacy', [ev('balances', 'Reserved', [ME, '1000']), success()]);
+        assert.deepEqual(domainsOf(eff), [[ME, ['council.elections', 'balance']]]);
+        assert.deepEqual(eff.known, [{ account: ME, domain: 'council.elections', op: 'set', key: 'role', value: { role: 'Candidate' } }]);
+        assert.equal(EFFECTS['elections.candidacy'].evidence, 'predicate');
+    });
+    test('13 elections.vote: re-read only; nothing on the page draws the council vote from the server', () => {
+        const eff = fx('elections.vote', [success()], { params: { n: 2, stake: '10' } });
+        assert.deepEqual(domainsOf(eff), [[ME, ['council.elections', 'locks']]]);
+        assert.deepEqual(eff.known, []);
+    });
+    test('14 elections.withdraw: Renounced for this account proves the role is gone, and from which list', () => {
+        for (const [section, role] of [['elections', 'RunnerUp'], ['phragmenElection', 'Candidate'], ['electionsPhragmen', 'Member']]) {
+            const eff = fx('elections.withdraw', [ev(section, 'Renounced', [ME]), success()], { params: { role } });
+            assert.deepEqual(domainsOf(eff), [[ME, ['council.elections', 'balance']]], section);
+            assert.deepEqual(eff.known, [{ account: ME, domain: 'council.elections', op: 'set', key: 'role', value: { role: null, from: role } }], section);
+        }
+        assert.equal(fx('elections.withdraw', [success()], { params: { role: 'Member' } }), null, 'no Renounced: no claim');
+        assert.equal(fx('elections.withdraw', [ev('elections', 'Renounced', [OTHER]), success()], { params: { role: 'Member' } }), null, 'someone else renounced');
+    });
+    test('15 council.propose: Proposed proves the new motion', () => {
+        const eff = fx('council.propose', [ev('council', 'Proposed', [ME, 4, HASH, 2]), success()], { params: {} });
+        assert.deepEqual(domainsOf(eff), [[ME, ['council.motions']]]);
+        assert.equal(fx('council.propose', [success()]), null);
+    });
+    test('16 and 17 treasury: public; Paid or SpendProcessed for THIS spend index, nothing else', () => {
+        const paid = fx('treasury.payout', [ev('treasury', 'Paid', [7, 1]), success()], { params: { index: 7 } });
+        assert.deepEqual(domainsOf(paid), [[null, ['treasury.spends', 'treasury.overview']]]);
+        assert.deepEqual(paid.known, []);
+        const cleared = fx('treasury.checkStatus', [ev('treasury', 'SpendProcessed', [7]), success()], { params: { index: 7 } });
+        assert.deepEqual(domainsOf(cleared), [[null, ['treasury.spends', 'treasury.overview']]]);
+        assert.equal(fx('treasury.payout', [ev('treasury', 'Paid', [8, 1]), success()], { params: { index: 7 } }), null, 'another spend was paid');
+        assert.equal(fx('treasury.payout', [ev('treasury', 'PaymentFailed', [7, 1]), success()], { params: { index: 7 } }), null, 'the payment failed: the pot did not move');
+        assert.equal(fx('treasury.checkStatus', [success()], { params: { index: 7 } }), null);
+    });
+    test('18 and 19 democracy: the clean inclusion re-reads; the live feed and the stage chip stay the evidence', () => {
+        for (const key of ['democracy.vote', 'democracy.second']) {
+            const eff = fx(key, [success()], { params: { index: 5 } });
+            assert.deepEqual(domainsOf(eff), [[ME, ['democracy', 'locks']]], key);
+        }
+    });
+    test('never on failure, and never on an unconfirmed end: rows 10 to 19 act only at an inclusion seen in block', () => {
+        const cases = [['council.vote', [voted(), success()], { body: 'council' }], ['council.close', [...closed(), success()], { body: 'council' }],
+            ['elections.candidacy', [success()], {}], ['elections.vote', [success()], {}], ['elections.withdraw', [ev('elections', 'Renounced', [ME]), success()], { role: 'Candidate' }],
+            ['council.propose', [ev('council', 'Proposed', [ME, 4, HASH, 2]), success()], {}], ['treasury.payout', [ev('treasury', 'Paid', [7, 1]), success()], { index: 7 }],
+            ['treasury.checkStatus', [ev('treasury', 'SpendProcessed', [7]), success()], { index: 7 }], ['democracy.vote', [success()], {}], ['democracy.second', [success()], {}]];
+        const failedExtrinsic = ev('system', 'ExtrinsicFailed', [{ isModule: true, asModule: { index: 9, error: 14 } }]);
+        for (const [key, events, params] of cases) {
+            assert.ok(fx(key, events, { params }), key + ' gives nothing even when proven');
+            assert.equal(fx(key, events, { params, stage: 'unconfirmed' }), null, key + ' acted on an unconfirmed end');
+            assert.equal(fx(key, [...events.slice(0, -1), failedExtrinsic], { params }), null, key + ' acted on a failed extrinsic');
+            for (const stage of ['failed', 'cancelled', 'waiting', 'processed', 'unverified']) assert.equal(fx(key, events, { params, stage }), null, `${key} at ${stage}`);
+        }
     });
 });
