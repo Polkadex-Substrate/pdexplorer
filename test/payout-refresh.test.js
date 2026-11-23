@@ -2,7 +2,7 @@
 // Unpaid Rewards tile, the Pay Out button and the payout modal, painted IN PLACE from what the block
 // proved, end to end through the real tracker, the real core and a happy-dom page.
 
-import { test, describe } from 'node:test';
+import { test, describe, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 import { readRepo } from './helpers/source.js';
@@ -14,6 +14,10 @@ import { createPayoutRefresh, payoutModel, pairKey, PAYOUT_DOMAIN } from '../lib
 import { STRINGS } from '../lib/refresh-ui.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { ME, OTHER, PAIRS, keyOf, REGISTRY, paidItem, otherPageItem, skippedItem, forceBatch, walletWith } from './helpers/payout-events.js';
+
+// The trackers arm real caps (90 s, 120 s); fake them so the file ends when its tests do.
+beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+afterEach(() => mock.timers.reset());
 
 const fmt = { pdex: (v) => Number(v || 0).toFixed(4), number: (n) => String(n), short: (a) => String(a).slice(0, 6) + '...', esc: escapeHtml };
 function memStorage() { const m = new Map(); return { m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); } }; }

@@ -50,7 +50,7 @@ function copyOffenders(table) {
     for (const [id, text] of Object.entries(table)) {
         if (/reload the page/i.test(text)) out.push(`${id} says "reload the page": "${text}"`);
         if (text.includes('!')) out.push(`${id} has an exclamation mark: "${text}"`);
-        if (/[–—]/.test(text)) out.push(`${id} has an em or en dash: "${text}"`);
+        if (/[\u2013\u2014]/.test(text)) out.push(`${id} has an em or en dash: "${text}"`);
     }
     return out;
 }
@@ -68,7 +68,7 @@ describe('refresh-ui: timings and copy', () => {
         assert.deepEqual(copyOffenders(STRINGS), [], copyOffenders(STRINGS).join('\n'));
     });
     test('the copy guard fails on a broken copy and names the string', () => {
-        const broken = { ...STRINGS, S11: 'Could not refresh! Reload the page — now.' };
+        const broken = { ...STRINGS, S11: 'Could not refresh! Reload the page \u2014 now.' };
         const msg = copyOffenders(broken);
         assert.equal(msg.length, 3);
         assert.match(msg.join('\n'), /S11 says "reload the page"/);

@@ -2,13 +2,17 @@
 // real tracker, no overlay on any failure stage, reorg withdrawal and re-inclusion, account scoping on
 // a wallet switch, and the hold deadline without timers while the tab is hidden.
 
-import { test, describe } from 'node:test';
+import { test, describe, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { harness, flush, ok, READY, IN1, IN2 } from './helpers/tx-harness.js';
 import { createPostAction } from '../lib/post-action.js';
 import { createKnownResults } from '../lib/known-results.js';
 import { effectsFor } from '../lib/action-effects.js';
 import { ME, OTHER, PAIRS, keyOf, REGISTRY, paidItem, otherPageItem, skippedItem, forceBatch } from './helpers/payout-events.js';
+
+// The trackers arm real caps (90 s, 120 s); fake them so the file ends when its tests do.
+beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+afterEach(() => mock.timers.reset());
 
 const D = 'rewards.unpaid';
 const PAYOUT = { id: 'p1', key: 'staking.payout', params: { k: 3, remaining: 0, account: ME, pairs: PAIRS } };

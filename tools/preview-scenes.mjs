@@ -14,6 +14,7 @@
 // and a sample of each shared ui-* part, from the same stylesheet.
 //
 // Later work packages add their scenes to the WORK_PACKAGES table below (a scene is { id, primary, build }; a
+// package may name its own file prefix, as R1 does: r1-<scene>-<width>.html; a
 // package may bring its own page guard as `check`). WP2: the Validate hub, the dashboard and /validate/keys.
 // WP3: the setup wizard, the separate steps, the manage panel (in its own card) and the node guide, driven
 // through test/helpers/wp3-world.js; a scene may name an element to scroll to (`scroll`), set on load.
@@ -44,6 +45,10 @@ import { escapeHtml } from '../lib/html-escape.js';
 import { headerLook, PAGE_PRIMARY_SELECTOR } from '../lib/ui-parts.js';
 import { fakeManageApi } from '../test/helpers/manage-fake-chain.js';
 import { buildState } from '../test/helpers/wp3-world.js';
+import { createKnownResults } from '../lib/known-results.js';
+import { createPostAction } from '../lib/post-action.js';
+import { effectsFor } from '../lib/action-effects.js';
+import { createPayoutRefresh } from '../lib/payout-refresh.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -307,8 +312,55 @@ function checkHeader(w, s, wp, err) {
     if (drawn !== look) err.push(`the header is drawn ${drawn}, the page rule says ${look}`);
 }
 
+// ── R1, post-action refresh (cto-team/plans/2026-11-22-post-action-refresh-ux.md, section 7): the wallet card's
+// Unpaid Rewards tile and Pay Out button after a payout. The tile and the button are the REAL markup of
+// lib/payout-refresh.js with the REAL known-results store applied; the rest of the card is a fixture copy of
+// script.js renderWalletDashboard (it is not importable), with the same classes. Five unpaid entries.
+const R1_ENTRIES = [501, 502, 503, 504, 505].map((era, i) => ({ era, validator: vaddr(40 + i), amount: [2.4689, 2.4689, 2.4512, 2.4423, 2.4401][i] }));
+const R1_KEY = (e) => `${e.era}:${e.validator}`;
+const r1fmt = { pdex: (v) => Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }), number: (n) => Number(n).toLocaleString('en-US'), short: (a) => shortAddr(a), esc: escapeHtml };
+function r1world({ known = [], ageMs = 0, server = R1_ENTRIES } = {}) {
+    const window = new Window();
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    const clock = () => clock.t;
+    clock.t = 10_000_000;
+    const store = createKnownResults({ storage: null, now: clock });
+    store.add(known.map(k => ({ account: ME, domain: 'rewards.unpaid', op: k.op, key: R1_KEY(R1_ENTRIES[k.i]), block: 4_210_377, txHash: '0x' + '12'.repeat(32) })));
+    clock.t += ageMs;
+    const core = createPostAction({ effects: effectsFor, known: store, now: clock });
+    const wallet = { address: ME, rewards: { claimedTotal: 41.2, unpaidTotal: server.reduce((t, e) => t + e.amount, 0), unpaidCount: server.length, unclaimedFresh: true, unpaidEntries: server } };
+    const pr = createPayoutRefresh({ doc, known: store, post: core, data: () => wallet, fmt: r1fmt, now: clock });
+    const tile = (label, value, cls = '') => `<div class="staking-summary-card"><div class="label">${label}</div><div class="value${cls}">${value}</div></div>`;
+    const btn = (id, icon, title, sub, primary = '') => `<button class="wallet-action-btn${primary}" id="${id}"><i class='bx ${icon}'></i><div><strong>${title}</strong><span>${sub}</span></div></button>`;
+    doc.querySelector('#wallet-dashboard').innerHTML = `<div class="list-container glass">
+        <div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2><div style="display:flex; gap:14px; align-items:center;"><button class="staking-download-btn">Switch wallet</button><button class="staking-download-btn">Disconnect</button></div></div>
+        <div style="padding: 12px 24px 0;"><a href="#" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${ME}</a></div>
+        <div class="staking-summary-grid">${tile('Total Balance', '1,204.5521 PDEX', ' accent')}${tile('Total Staked', '1,150.0000 PDEX')}${tile('Claimed Rewards', '41.2000 PDEX')}${pr.tileHtml(wallet)}</div>
+        <div id="wallet-actions-slot"><div class="wallet-action-bar" id="wallet-action-bar">${btn('wallet-act-send', 'bx-paper-plane', 'Send PDEX', 'Transfer to any Polkadex address', ' primary')}${btn('wallet-act-stake', 'bx-plus-circle', 'Stake more', 'Add bond &amp; choose validators')}${pr.buttonHtml(wallet)}${btn('wallet-act-unstake', 'bx-minus-circle', 'Unstake', 'Begin the unbonding period')}${btn('wallet-act-identity', 'bx-id-card', 'Set identity', 'Display name, email, twitter')}</div></div>
+    </div>`;
+    pr.paint({ reason: 'render' });   // as renderWalletDashboard does after its innerHTML
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const visible = (el) => !!el && !el.closest('[hidden]');
+    return { window, doc, qa, visible, q: (sel) => doc.querySelector(sel), d: { account: { status: 'connected', address: ME } } };
+}
+const R1_SCENES = [
+    { id: 'rewards-before', primary: 1, need: '#wallet-act-payout:not([aria-disabled])', build: async () => r1world() },
+    { id: 'rewards-just-paid', primary: 1, need: '#wallet-act-payout[aria-disabled="true"]', build: async () => r1world({ known: [0, 1, 2, 3, 4].map(i => ({ op: 'remove', i })) }) },
+    { id: 'rewards-checking', primary: 1, need: '#wallet-act-payout[aria-describedby="wallet-payout-why"]', build: async () => r1world({ known: [{ op: 'remove', i: 0 }, { op: 'remove', i: 1 }, { op: 'remove', i: 2 }, { op: 'hold', i: 3 }, { op: 'hold', i: 4 }] }) },
+    { id: 'rewards-could-not-refresh', primary: 1, need: '#wallet-unpaid-label .ui-chip.is-wait.is-bare', build: async () => r1world({ known: [{ op: 'remove', i: 0 }, { op: 'remove', i: 1 }, { op: 'remove', i: 2 }, { op: 'hold', i: 3 }, { op: 'hold', i: 4 }], ageMs: 181_000 }) },
+    { id: 'rewards-one-minute-later', primary: 1, need: '#wallet-act-payout[disabled]', build: async () => r1world({ known: [0, 1, 2, 3, 4].map(i => ({ op: 'remove', i })), ageMs: 60_000, server: [] }) }
+];
+function checkR1Scene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    if (!w.doc.querySelector('.page-section[data-page="wallet"] #wallet-dashboard #wallet-unpaid-tile')) err.push('no #wallet-unpaid-tile in the wallet dashboard');
+    const n = w.qa('.wallet-action-btn.primary').filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+
 // ── work packages: later rounds add theirs here ──
-const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene } };
+const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
@@ -421,6 +473,7 @@ async function guardSelfTest() {
     const wizScene = WP3_SCENES[0];
     await expectFail('wp3: two primaries', () => renderScene({ ...wizScene, build: async () => { const w = await wizScene.build(); w.q('[data-setup-action="check-node"]').classList.add('validate-primary'); return w; } }, checkWp3Scene), /2 primary actions visible/);
     await expectFail('wp3: header solid on a connected wizard', () => renderScene(wizScene, checkWp3Scene, { paint: false }), /the header is drawn solid, the page rule says connected/);
+    await expectFail('r1: payout tile missing', () => renderScene({ ...R1_SCENES[0], build: async () => { const w = await R1_SCENES[0].build(); w.q('#wallet-unpaid-tile').remove(); return w; } }, checkR1Scene), /no #wallet-unpaid-tile/);
     await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);
 }
 
@@ -429,7 +482,7 @@ async function main() {
     if (args.includes('--selftest')) { await guardSelfTest(); return 0; }
     const out = arg('--out');
     if (!out) { console.error('usage: node --experimental-sqlite tools/preview-scenes.mjs --out <dir> [--wp 1] [--scene <id>] [--selftest]'); return 2; }
-    const wps = arg('--wp') ? [Number(arg('--wp'))] : Object.keys(WORK_PACKAGES).map(Number);
+    const wps = arg('--wp') ? [arg('--wp')] : Object.keys(WORK_PACKAGES);
     const only = arg('--scene');
     const files = [];
     for (const n of wps) {
@@ -438,7 +491,7 @@ async function main() {
         for (const s of wp.scenes) {
             if (only && s.id !== only) continue;
             const inner = await renderScene(s, wp.check);
-            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`wp${n}-${s.id}-${width}.html`, html]); }
+            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`${wp.prefix || 'wp' + n}-${s.id}-${width}.html`, html]); }
         }
         if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); files.push([`wp${n}-palette.html`, html]); }
     }
