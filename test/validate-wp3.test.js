@@ -109,7 +109,7 @@ describe('WP3 5.1: the setup wizard', () => {
         assert.ok(path, 'the compact path strip');
         const cur = path.querySelector('[aria-current="step"]');
         assert.match(txt(cur), /Set up/);
-        assert.deepEqual(qa(path, 'a.validate-path-link').map(a => a.getAttribute('href')), ['/validate/node', '/validate/setup']);
+        assert.deepEqual(qa(path, 'a.validate-path-link').map(a => a.getAttribute('href')), ['/validate/node']);   // M1: Set up is the current page, no self-link
         assert.ok(card.querySelector('.list-header + .validate-path, .list-header ~ .validate-path'), 'the path sits above the body');
     });
     test('the step list: markers from the position; current solid violet, done green with a check and "Done on chain", later muted', async () => {
