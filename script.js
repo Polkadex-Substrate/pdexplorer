@@ -4583,7 +4583,11 @@ function drawChart(slot, canvas, subject, build) {
     const reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);   // read at paint time
     return paintChart(slot, canvas, subject, build, { Chart, reducedMotion });
 }
-function releasePageCharts() { releaseCharts([pricePageSlot, validatorChartSlot, walletPriceSlot, ...Object.values(democracySlots), ...Object.values(analyticsSlots)]); }
+function releasePageCharts() {
+    const vbox = document.getElementById('validator-details-container');
+    if (vbox) { vbox.shownFor = vbox.shownKey = null; }   // its canvas has no chart now: the next visit must paint, not skip
+    releaseCharts([pricePageSlot, validatorChartSlot, walletPriceSlot, ...Object.values(democracySlots), ...Object.values(analyticsSlots)]);
+}
 
 // Bumped on every route change, so async work started for one page can tell it is no longer on screen.
 let routeGeneration = 0;
@@ -11113,6 +11117,7 @@ async function fetchDemocracyData(opts = {}) {
     const root = document.getElementById('democracy-content');
     if (!root) return;
     const quiet = !!(opts.quiet && democracyData);
+    const generation = routeGeneration;   // a response that lands after the user left paints nothing
     if (!quiet) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading democracy data...</div>';
     try {
         const res = await democracyView.fetchRest(opts.fresh);
@@ -11123,6 +11128,7 @@ async function fetchDemocracyData(opts = {}) {
         const data = await parseJsonResponse(res);
         if (!res.ok || data.error) throw new Error(data.error || ('Request failed (' + res.status + ')'));
         democracyData = data;
+        if (generation !== routeGeneration) return;
         if (quiet) { democracyView.update(); if (democracyTab === 'statistics') renderDemocracyCharts(democracyView.data() || democracyData); return; }   // the bars follow the tallies
         renderDemocracy();
     } catch (e) {
