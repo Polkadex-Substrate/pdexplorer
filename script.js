@@ -9453,9 +9453,9 @@ function getStakeableBalance(data) {
 
 // --- Stake / Nominate modal ---
 // Max: transferable (which already keeps the 1 PDEX existential deposit) less
-// the 0.2 PDEX fee reserve, exact in planck. Writes the field only on a press.
+// the 0.2 PDEX fee reserve, exact in planck, of the account the card shows.
 function fillStakeMax() {
-    const data = currentWalletData;
+    const data = stakeCard ? stakeCard.data() : currentWalletData;
     if (!data) return;
     const amtInput = document.getElementById('stake-amount-input');
     if (amtInput) amtInput.value = planckToPdexText(stakeMaxPlanck({ transferablePlanck: transferablePlanckOf(data.balance), feeReservePlanck: STAKE_FEE_RESERVE_PLANCK }));
@@ -9602,7 +9602,9 @@ function renderStakeSelected() {
 
 async function submitStakeTx() {
     clearStakeError();
-    const data = currentWalletData;
+    // The card's own data (lib/stake-card-view.js press): changed under it, the card redraws and nothing is signed.
+    const { data, stop, message } = stakeCard ? stakeCard.press(currentWalletData) : { data: currentWalletData };
+    if (stop) return message ? showStakeError(message) : undefined;
     // The plan the card shows (lib/stake-plan.js stakeFormPlan): a call only for what changed.
     const form = stakeFormPlan(data, { typed: (document.getElementById('stake-amount-input').value || '').trim(), targets: Array.from(stakeSelected.keys()),
         maxTargets: stakeMaxNominations(), same: isSameAddress, connected: getStoredWallet(), feeFloorPlanck: FEE_MARGIN });
