@@ -8959,6 +8959,7 @@ function paintWalletViewingSlot() {
 function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
+    data = stakeRefresh.overlay(data);   // a chain read newer than this copy keeps its stake figures (lib/stake-refresh.js)
     currentWalletData = data;
     // Stash the staking-rewards payload so the APR card's period pills
     // can recompute against the cached claimed array without re-fetching
