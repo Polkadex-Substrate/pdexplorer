@@ -9617,7 +9617,7 @@ async function submitStakeTx() {
         label: 'Stake & nominate',
         action: { key: 'staking.bondNominate', params: stakeResultParams(plan, { eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null }) },
         button: document.getElementById('submit-stake-tx-btn'),
-        busyText: 'Signing…',
+        busyText: 'Signing…', onStage: held.stage,   // the card is also released when tracking ends (a silent wallet)
         idleText: stakeCopy(plan.primary),
         onError: (m) => { showStakeError(m); if (stakeCard) stakeCard.render(); },
         onSuccess: () => {
