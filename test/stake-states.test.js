@@ -608,6 +608,135 @@ describe('Opus review 2026-11-23: only the stake\'s own reorg or failure withdra
     }
 });
 
+// ── the Lead's ruling of 2026-11-23: while the bonded state is uncertain, the Stake card signs nothing ──
+// A withdrawal (or the core giving up) whose chain read failed leaves the page unable to tell bonded from unbonded:
+// bond would fail AlreadyBonded for a fee on a bonded account, bondExtra NotStash on an unbonded one. The card refuses
+// with SC-109, as for a failed ledger read, and Unstake stays closed with its title, until a successful chain or server
+// read settles the bonded state; then it plans as usual.
+const NO_BOND = 'No active bond to unstake.';
+const hideCard = (c) => { c.q('#stake-modal').style.display = 'none'; };
+const chip = (c) => text(c.q('#wallet-staked-label .ui-chip'));
+async function refusesWhileUncertain(c, typed = '25', { mark = true } = {}) {
+    const sent = c.sent.length;
+    if (mark) assert.equal(text(c.q('#wallet-staked-label .ui-chip.is-wait.is-bare')), 'May be behind', 'Total Staked is not marked while the bonded state is uncertain');
+    assert.equal(c.dash.unstakeBtn().disabled, true, 'Unstake is open while the bonded state is uncertain');
+    assert.equal(c.dash.unstakeBtn().getAttribute('title'), NO_BOND, 'Unstake does not keep its existing title');
+    c.dash.stakeBtn().click();
+    await flush();
+    assert.equal(c.open(), true, 'the My Account button opens the card');
+    await c.type(typed);
+    assert.equal(c.sc('SC-109'), SC['SC-109'], 'the card does not refuse with SC-109 while the bonded state is uncertain');
+    assert.equal(c.q('#submit-stake-tx-btn').disabled, true, 'the primary is active while the bonded state is uncertain');
+    await c.submit();
+    assert.deepEqual(c.sent.length > sent ? callsOf(c, c.sent.length - 1) : [], [], 'the press signed while the bonded state is uncertain');
+    hideCard(c);
+}
+async function addMoreAt45() {
+    const c = await stakeAt42();
+    assert.deepEqual(await plansOnReopen(c, '50'), ['staking.bondExtra']);
+    c.chain.more(50, 45);
+    await c.job().inBlock(45);
+    assert.equal(text(c.dash.staked()), '200.0000 PDEX', 'the addition drawn');
+    assert.equal(c.dash.unstakeBtn().disabled, false);
+    return c;
+}
+describe('the Lead\'s ruling 2026-11-23: an uncertain bonded state signs nothing (SC-109) until a read settles it', () => {
+    for (const [what, stage] of [['reorged', 'resent'], ['failed after its block', 'failed']]) {
+        test(`a first stake ${what} with a failing chain read: the figures stay marked, Unstake closes, the card shows SC-109 and the press signs nothing`, async () => {
+            const c = await stakeAt42();
+            c.chain.st.fail = true;
+            await c.job().stage(stage);
+            assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the last chain figures stay');
+            await refusesWhileUncertain(c, '150');
+            await refusesWhileUncertain(c, '25');
+            c.close();
+        });
+        test(`an addition ${what} with a failing chain read: Total Staked is marked, Unstake closes, the card shows SC-109 and the press signs nothing`, async () => {
+            const c = await addMoreAt45();
+            c.chain.st.fail = true;
+            await c.job().stage(stage);
+            await refusesWhileUncertain(c, '25');
+            await refusesWhileUncertain(c, '150');
+            c.close();
+        });
+    }
+    test('the core gives up on the first stake\'s read (could-not-refresh): Total Staked is marked, the card shows SC-109 and signs nothing', async () => {
+        const c = await card({ data: firstTimer(), flow: true });
+        await c.type('150');
+        await c.submit();
+        c.chain.stake(41);
+        await c.job().inBlock(42);
+        c.chain.st.fail = true;
+        await c.clock.run();
+        assert.equal(text(c.dash.staked()), '0.0000 PDEX', 'a failed read changes nothing');
+        await refusesWhileUncertain(c, '150');
+        c.chain.st.fail = false;
+        // A server copy older than the stake's block settles nothing: in place, or drawn in full.
+        assert.equal(c.refresh().adopt(serverAt(41)), true, 'a copy older than the block, equal but for the freshness, is taken in place');
+        await refusesWhileUncertain(c, '150');
+        c.tab.ctx.renderWalletDashboard(serverAt(41, { identity: 'Somebody' }), { history: [], configured: false }, null);
+        await refusesWhileUncertain(c, '150', { mark: false });
+        c.pending().resolve(serverAfter(firstTimer()));
+        await flush();
+        assert.equal(chip(c), null, 'the server\'s copy settled it: no mark');
+        assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra'], 'after the server\'s bonded copy');
+        c.close();
+    });
+    test('settled by a later chain read showing it bonded (the stake back in a block): the mark goes, Unstake opens, the card plans bondExtra', async () => {
+        const c = await stakeAt42();
+        c.chain.st.fail = true;
+        await c.job().stage('resent');
+        await refusesWhileUncertain(c);
+        c.chain.st.fail = false;
+        c.chain.stake(44);
+        await c.job().inBlock(44);
+        assert.equal(chip(c), null, 'a successful chain read settled it: no mark');
+        assert.equal(c.dash.unstakeBtn().disabled, false, 'Unstake opens with the bond the chain read');
+        assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra']);
+        c.close();
+    });
+    test('settled by a later server copy showing it bonded: the card plans bondExtra and Unstake opens', async () => {
+        const c = await addMoreAt45();
+        c.chain.st.fail = true;
+        await c.job().stage('resent');
+        await refusesWhileUncertain(c);
+        c.chain.st.fail = false;
+        c.pending().resolve({ ...serverAfter(firstTimer()), freshness: { ...firstTimer().freshness, chainHead: 50 } });
+        await flush();
+        assert.equal(chip(c), null, 'the server\'s copy settled it: no mark');
+        assert.equal(c.dash.unstakeBtn().disabled, false);
+        assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra']);
+        c.close();
+    });
+    test('settled by a later chain read showing it unbonded (a re-read after processed): the card plans bond and nominate, Unstake stays closed', async () => {
+        const c = await stakeAt42();
+        c.chain.st.fail = true;
+        await c.job().stage('resent');
+        await refusesWhileUncertain(c);
+        c.chain.st.fail = false;
+        c.chain.unstake();
+        await c.job().stage('processed');
+        assert.equal(text(c.dash.staked()), '0.0000 PDEX', 'the chain read is drawn');
+        assert.equal(chip(c), null, 'a successful chain read settled it: no mark');
+        assert.equal(c.dash.unstakeBtn().disabled, true);
+        assert.deepEqual(await plansOnReopen(c, '150'), ['staking.bond', 'staking.nominate']);
+        c.close();
+    });
+    test('settled by a later server copy showing it unbonded: the card plans bond and nominate', async () => {
+        const c = await stakeAt42();
+        c.chain.st.fail = true;
+        await c.job().stage('failed');
+        await refusesWhileUncertain(c);
+        c.pending().resolve(serverAt(50));
+        await flush();
+        assert.equal(text(c.dash.staked()), '0.0000 PDEX', 'the server\'s copy is drawn');
+        assert.equal(chip(c), null, 'the server\'s copy settled it: no mark');
+        assert.equal(c.dash.unstakeBtn().disabled, true);
+        assert.deepEqual(await plansOnReopen(c, '150'), ['staking.bond', 'staking.nominate']);
+        c.close();
+    });
+});
+
 // ── My Account's labels, /stake with no wallet, /stake read-only ──
 describe('My Account by stake, and the /stake shortcut where the card cannot open (section 6 rows 14, 15; SC-120, SC-121, SC-150, SC-151)', () => {
     test('the Stake button: SC-150 with no stake, SC-151 with one (both the dashboard and the action bar a session restores)', async () => {
