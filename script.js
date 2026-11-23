@@ -7385,7 +7385,7 @@ function initStakingRewardsPage(address) {
     const errEl = document.getElementById('staking-rewards-error');
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     pageScope.add(walletSession.onActiveAccountChange(onStakingRewardsWalletChange));
-    pageScope.add(() => stakingRewardsLatest.cancel());
+    pageScope.add(() => { stakingRewardsLatest.cancel(); if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; } });
     showStakingRewardsFor(address || '');
 }
 function renderStakingRewardsNote(plan) {
@@ -7402,7 +7402,7 @@ function showStakingRewardsFor(urlAddress) {
     const input = document.getElementById('staking-address-input');
     const resultsEl = document.getElementById('staking-rewards-results');
     if (plan.mode !== 'view') {
-        stakingRewardsLatest.cancel(); stakingRewardsData = null;
+        stakingRewardsLatest.cancel(); stakingRewardsData = null; if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
         if (input) input.value = '';
         if (resultsEl) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; }
         return;
@@ -7486,6 +7486,8 @@ async function fetchStakingRewards(address, isPoll) {
     if (!isPoll) {
         stakingRewardFilter = 'all';
         stakingUnclaimedPolls = 0;
+        // The area is replaced: a chart left alive would sit on a detached canvas.
+        if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
         resultsEl.style.display = 'block';
         resultsEl.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-secondary);">Loading staking rewards…</div>';
     }
@@ -7505,7 +7507,7 @@ async function fetchStakingRewards(address, isPoll) {
     } catch (e) {
         if (!req.isCurrent()) return;
         if (!isPoll) {
-            stakingRewardsData = null;
+            stakingRewardsData = null; if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
             resultsEl.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
         }
     }
@@ -7803,7 +7805,6 @@ function renderStakingRewards(data) {
     // Keep the chart's own wrap and canvas through the repaint so the bars update in place instead of redrawing.
     const newWrap = resultsEl.querySelector('.staking-chart-wrap');
     if (keptWrap && stakingRewardsChart && stakingRewardsChart.canvas.parentNode === keptWrap) newWrap.replaceWith(keptWrap);
-    resultsEl.querySelector('.staking-chart-wrap').renderKey = key;
 
     makeTable({
         container: document.getElementById('staking-rewards-table-container'),
@@ -7880,6 +7881,7 @@ function renderStakingRewards(data) {
     // filter bar instead.
 
     renderStakingRewardsChart(data);
+    resultsEl.querySelector('.staking-chart-wrap').renderKey = key;   // only a completed render is remembered
 }
 
 function renderStakingRewardsChart(data) {
