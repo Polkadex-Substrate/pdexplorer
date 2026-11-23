@@ -373,17 +373,22 @@ const LP = (x) => BigInt(Math.round(x * 1e4)) * 10n ** 8n;
 const LNOW = Date.UTC(2026, 10, 22, 12, 0, 0);
 const LDAY = 86400000;
 const llock = (id, amount) => ({ id, amount: ls(amount), reasons: 'All' });
-const lbond = (total, chunks, over = {}) => ({ bonded: true, total: ls(total), active: ls(total), unlocking: '0', chunks, currentEra: 120, activeEra: 120, activeEraStart: LNOW, spans: 0, controller: ME, stash: ME, ...over });
+// A ledger as the chain keeps it: total = active + every unlocking chunk.
+const lbond = (total, chunks, over = {}) => ({ bonded: true, total: ls(total), active: ls(total - chunks.reduce((a, c) => a + BigInt(c.value), 0n)), unlocking: '0', chunks,
+    currentEra: 120, activeEra: 120, activeEraStart: LNOW, spans: 0, controller: ME, stash: ME, ...over });
 function lsnap(over = {}) {
     return { address: ME, now: LNOW, free: ls(20_000n * LPDEX), reserved: '0', frozen: '0', ed: ls(LPDEX), block: 1_000_000, blockMs: 12000, bondingDays: 28, eraMs: LDAY,
         locks: [], freezes: [], holds: [], reserves: [], staking: { bonded: false, total: '0', active: '0', unlocking: '0', chunks: [], currentEra: null, activeEra: null, activeEraStart: null, spans: 0, controller: null, stash: null },
         democracy: null, elections: null, identity: null, proxy: null, pallets: { vesting: false, ormlVesting: false }, ...over };
 }
 const lmodel = (over, head = 41) => ({ address: ME, ...describeAccountLocks(lsnap(over)), freshness: { v: 1, chainHead: head } });
-const LSTAKE = { holds: [{ id: 'Staking.Staking', amount: ls(5_000n * LPDEX) }], staking: lbond(5_000n * LPDEX, [{ value: ls(LP(280.0586)), era: 144 }]) };
-const L_CEO = (head) => lmodel({ ...LSTAKE, reserved: ls(5_000n * LPDEX + LP(13.59)), frozen: ls(15_000n * LPDEX), locks: [llock('phrelect', 15_000n * LPDEX)],
+// The CEO's account as his screenshot shows it: a staking hold and ledger total of 17,348.0818 PDEX, active 17,068.0232,
+// one chunk of 280.0586 PDEX unlocking at era 1907 (about 2026-12-16); a 15,000 PDEX council vote and its 13.59 PDEX deposit.
+const LHOLD = LP(17348.0818);
+const LSTAKE = { holds: [{ id: 'Staking.Staking', amount: ls(LHOLD) }], staking: lbond(LHOLD, [{ value: ls(LP(280.0586)), era: 1907 }], { currentEra: 1883, activeEra: 1883 }) };
+const L_CEO = (head) => lmodel({ ...LSTAKE, reserved: ls(LHOLD + LP(13.59)), frozen: ls(15_000n * LPDEX), locks: [llock('phrelect', 15_000n * LPDEX)],
     elections: { voter: { votes: 5, stake: ls(15_000n * LPDEX), deposit: ls(LP(13.59)) }, candidacy: null } }, head);
-const L_CEO_AFTER = () => lmodel({ ...LSTAKE, reserved: ls(5_000n * LPDEX) }, 42);
+const L_CEO_AFTER = () => lmodel({ ...LSTAKE, reserved: ls(LHOLD) }, 42);
 const L_DEM = (dem, lockAmount, over = {}) => lmodel({ locks: [llock('democrac', lockAmount)], frozen: ls(lockAmount), democracy: { delegating: false, lockingPeriod: 216000, prior: { until: 0, amount: '0' }, ...dem }, ...over });
 const L_VOTE = (index, aye, conviction, amount) => ({ index, aye, conviction, balance: ls(amount) });
 const L_ORPHAN = (head) => lmodel({ locks: [llock('staking ', 60n * LPDEX)], frozen: ls(60n * LPDEX) }, head);
@@ -440,7 +445,8 @@ async function locksWorld(models, { connected = ME, page = 'wallet', steps = nul
     if (steps) await steps(w);
     return w;
 }
-const lpress = async (w, sel, confirm = true) => { w.q(sel).click(); await tick(5); const yes = confirm && w.q('.lock-confirm .ui-action'); if (yes) { yes.click(); await tick(5); } };
+// A deliberate confirm: a second after the press that opened the strip (a quicker one is the same gesture and ignored).
+const lpress = async (w, sel, confirm = true) => { w.q(sel).click(); await tick(5); const yes = confirm && w.q('.lock-confirm .ui-action'); if (yes) { await w.tickTo(1000); yes.click(); await tick(5); } };
 const LOCKS_SCENES = [
     ...Object.entries(L_SCENES_DATA).map(([id, models]) => ({ id, primary: 0, connected: ME, build: () => locksWorld(models) })),
     { id: 'first-load', primary: 0, connected: ME, need: '.lock-skeleton', build: () => locksWorld([L_CEO()], { pending: true }) },

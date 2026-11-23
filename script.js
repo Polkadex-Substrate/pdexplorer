@@ -12683,8 +12683,9 @@ async function resolveWalletSigner(fail, signingAccount = null) {
 async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, onMultisigEnd, verify, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet(), expectedRevision = null }) {
     const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
     const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
+    // Every fail() here is before anything was signed or sent: the model says so (wallet.notSigned).
     const fail = (m) => {
-        const model = onError ? { stage: 'failed', text: m } : showTxStatus(action, 'failed', null, m);
+        const model = onError ? { stage: 'failed', key: 'wallet.notSigned', text: m } : showTxStatus(action, 'failed', null, m);
         stage(model.stage, model);
         if (onError) onError(m, model);
     };
