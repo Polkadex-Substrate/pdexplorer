@@ -26,7 +26,7 @@ import { Window } from 'happy-dom';
 import { encodeAddress } from '@polkadot/util-crypto';
 import { deriveHeadline, validatorStatusModel, formatPdex, perbillToPercent, aboutDuration, ctaFor } from '../lib/validator-status.js';
 import { readValidatorStatus, readValidatorParams, readKeyOwners, keysToMap } from '../lib/validator-status-chain.js';
-import { registerValidatorRoutes, VALIDATOR_PARAMS_ROUTE, VALIDATOR_STATUS_ROUTE, SESSION_KEYS_CHECK_ROUTE, createKeyCheckLimiter } from '../lib/validator-status-api.js';
+import { registerValidatorRoutes, VALIDATOR_PARAMS_ROUTE, VALIDATOR_STATUS_ROUTE, SESSION_KEYS_CHECK_ROUTE, createKeyCheckLimiter, FRESH_REUSE_MS } from '../lib/validator-status-api.js';
 import { renderValidatorStatus, renderKeysPage, mountValidatePage, mountKeysPage, VALIDATE_STATEMENT } from '../lib/validator-status-view.js';
 import { validateEnabled, VALIDATE_FLAG_KEY } from '../lib/validate-gate.js';
 import { FEATURE_FLAGS } from '../lib/wallet-links.js';
@@ -524,6 +524,88 @@ describe('the routes', () => {
         api.query.staking.bonded = async () => { throw new Error('rpc blip'); };
         try { assert.equal((await get(`/api/validator/${a}/status`)).status, 500); } finally { api.query.staking.bonded = real; }
         assert.equal((await get(`/api/validator/${a}/status`)).status, 200);
+    });
+    // R5 (post-action refresh design, section 5 "validator.status"): ?fresh=1 bypasses the 30 s memo for that
+    // stash, and every status body says which head it was read at (freshness.chainHead, read BEFORE the state).
+    const withHead = async (n, fn) => {
+        const saved = api.rpc;
+        api.rpc = { chain: { getHeader: async () => { api.reads.push('head'); if (n instanceof Error) throw n; return { number: num(n) }; } } };
+        try { return await fn(); } finally { api.rpc = saved; }
+    };
+    test('status (R5): the body carries freshness.chainHead, the node head read before the state', async () => {
+        clock += 31_000;
+        await withHead(4242, async () => {
+            const from = api.reads.length;
+            const r = await get(`/api/validator/${addr(83)}/status`);
+            assert.equal(r.status, 200);
+            assert.equal(r.body.freshness.chainHead, 4242);
+            const reads = api.reads.slice(from);
+            assert.ok(reads.indexOf('head') >= 0 && reads.indexOf('head') < reads.indexOf('bonded'), 'the head is read before the state: ' + reads.join(','));
+        });
+    });
+    test('status (R5): the head advances while the state is being read: freshness.chainHead is the head read BEFORE the state (the lower one), never a newer head', async () => {
+        clock += 31_000;
+        let height = 500;
+        const savedRpc = api.rpc;
+        api.rpc = { chain: { getHeader: async () => ({ number: num(height) }) } };
+        // The chain moves on at the FIRST state read of any kind (a head read started alongside the state, or after it, sees the newer block).
+        const restore = [];
+        for (const pallet of Object.values(api.query)) {
+            for (const k of Object.keys(pallet)) {
+                const orig = pallet[k];
+                if (typeof orig !== 'function') continue;
+                pallet[k] = Object.assign(function (...a) { height += 7; return orig.apply(this, a); }, orig);
+                restore.push(() => { pallet[k] = orig; });
+            }
+        }
+        try {
+            const r = await get(`/api/validator/${addr(87)}/status`);
+            assert.equal(r.status, 200);
+            assert.ok(height > 500, 'the fake chain did advance while the state was read');
+            assert.equal(r.body.freshness.chainHead, 500, 'chainHead must be the head read before the state (500), not a head read with or after it (' + r.body.freshness.chainHead + ')');
+        } finally { restore.forEach(f => f()); api.rpc = savedRpc; }
+    });
+    test('status (R5): ?fresh=1 bypasses the 30 s memo, answers no-store, and refills the memo for the next plain read', async () => {
+        const a = addr(84);
+        await withHead(100, () => get(`/api/validator/${a}/status`));
+        const bonded = () => api.reads.filter(x => x === 'bonded').length;
+        const before = bonded();
+        clock += FRESH_REUSE_MS + 1;
+        const f = await withHead(101, () => get(`/api/validator/${a}/status?fresh=1`));
+        assert.equal(f.status, 200);
+        assert.equal(f.cache, 'no-store');
+        assert.equal(f.body.freshness.chainHead, 101);
+        assert.equal(bonded() - before, 1, 'the node was read again inside the 30 s');
+        const plain = await withHead(102, () => get(`/api/validator/${a}/status`));
+        assert.equal(plain.cache, SHORT);
+        assert.equal(plain.body.freshness.chainHead, 101, 'the fresh read refilled the memo');
+        assert.equal(bonded() - before, 1);
+    });
+    test('status (R5): a fresh read within FRESH_REUSE_MS of the last read is served from it (one node read per stash per burst)', async () => {
+        const a = addr(85);
+        await withHead(200, () => get(`/api/validator/${a}/status?fresh=1`));
+        const before = api.reads.filter(x => x === 'bonded').length;
+        clock += Math.max(1, FRESH_REUSE_MS - 1);
+        const r = await withHead(201, () => get(`/api/validator/${a}/status?fresh=1`));
+        assert.equal(r.body.freshness.chainHead, 200, 'its own head says how fresh it is');
+        assert.equal(r.cache, 'no-store');
+        assert.equal(api.reads.filter(x => x === 'bonded').length - before, 0);
+    });
+    test('status (R5): a head that cannot be read gives chainHead null (never caught up); the status still answers', async () => {
+        clock += 31_000;
+        const r = await withHead(new Error('head gone'), () => get(`/api/validator/${addr(86)}/status?fresh=1`));
+        assert.equal(r.status, 200);
+        assert.equal(r.body.freshness.chainHead, null);
+        assert.equal(r.body.address, addr(86));
+    });
+    test('status (R5): fresh reads are rate limited per IP like every status read; nothing is read from the node', async () => {
+        statusAllow = false;
+        const before = api.reads.length;
+        try {
+            const r = await get(`/api/validator/${addr(87)}/status?fresh=1`);
+            assert.equal(r.status, 429);
+            assert.equal(api.reads.length, before);
+        } finally { statusAllow = true; }
     });
     test('check: 200 no-store; each key with its result; the babe key registered to another account is a conflict', async () => {
         const r = await get(`/api/session-keys/check?keys=${BLOB}&for=${STASH}`);

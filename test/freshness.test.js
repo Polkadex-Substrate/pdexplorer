@@ -7,7 +7,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildFreshness, caughtUp, pollDeadlineMs, samePayload, lowestTailFrom, SOURCE as FRESH_SOURCE,
+import { buildFreshness, caughtUp, pollDeadlineMs, samePayload, lowestTailFrom, kvMark, SOURCE as FRESH_SOURCE,
     FRESHNESS_WINDOW_BLOCKS, POLL_BACKOFF_MS, POLL_DEADLINE_MS } from '../lib/freshness.js';
 import { SOURCE } from '../lib/action-effects.js';
 
@@ -21,7 +21,7 @@ describe('buildFreshness: from the sync watermarks', () => {
         const f = build({ states: { chain_index: { headSeen: 990, latestScannedBlock: 990 }, staking_rewards: { headSeen: 960, latestScannedBlock: 960 }, transactions: { latestScannedBlock: 975 } } });
         assert.equal(f.chainHead, 1000);
         assert.deepEqual(f.indexed, { chain: 990, rewards: 960, tx: 975 });
-        assert.deepEqual(f.kv, { council: null, democracy: null, treasury: null }, 'R4 adds the governance snapshots; unknown until then');
+        assert.deepEqual(f.kv, { council: null, democracy: null, treasury: null, technicalCommittee: null }, 'no governance snapshot given: unknown');
         assert.deepEqual(f.pending, []);
         assert.equal(f.v, 1);
     });
@@ -150,5 +150,33 @@ describe('one source table', () => {
     test('lib/action-effects.js SOURCE is the freshness SOURCE (caughtUp and the effects table cannot drift)', () => {
         assert.equal(SOURCE, FRESH_SOURCE);
         assert.equal(Object.isFrozen(FRESH_SOURCE), true);
+    });
+});
+
+// R4: the governance snapshots. Each sync records `atBlock` (the node's head read BEFORE its queries) in its
+// KV snapshot; a route exposes it as freshness.kv.X. A route that also serves the governance history index
+// (council and technical committee motion history, treasury proposal history) is only as fresh as the lower
+// of the snapshot and that index's verified watermark: kvMark(atBlock, historyMark).
+describe('R4: governance snapshots in freshness', () => {
+    test('buildFreshness takes the snapshot marks; anything not a positive block is unknown', () => {
+        const f = buildFreshness({ syncState: () => null, kv: { council: 70, democracy: '71', treasury: 0, technicalCommittee: 72.9 } });
+        assert.deepEqual(f.kv, { council: 70, democracy: 71, treasury: null, technicalCommittee: 72 });
+        assert.equal(f.chainHead, null);
+        assert.deepEqual(f.indexed, { chain: null, rewards: null, tx: null });
+        for (const bad of [null, undefined, -1, NaN, 'x', true]) assert.equal(buildFreshness({ syncState: () => null, kv: { council: bad } }).kv.council, null, String(bad));
+    });
+    test('kvMark: the lower of the snapshot and the history index; either unknown is unknown', () => {
+        assert.equal(kvMark(100, 90), 90);
+        assert.equal(kvMark(80, 90), 80);
+        assert.equal(kvMark(100, null), null);
+        assert.equal(kvMark(undefined, 90), null, 'a snapshot written before R4 has no atBlock');
+        assert.equal(kvMark(0, 90), null);
+    });
+    test('the technical committee motions are caught up by their own snapshot only', () => {
+        const f = { kv: { council: 50, technicalCommittee: 40 } };
+        assert.equal(caughtUp('technicalCommittee.motions', f, 40), true);
+        assert.equal(caughtUp('technicalCommittee.motions', f, 41), false);
+        assert.equal(caughtUp('council.motions', f, 50), true);
+        assert.equal(pollDeadlineMs('technicalCommittee.motions', f), 180_000);
     });
 });

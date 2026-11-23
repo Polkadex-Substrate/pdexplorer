@@ -22,6 +22,7 @@ import * as db from '../db.js';
 import { rewardNotesForBlock, storedRewardStash, REWARD_NOTES_MAX_PER_BLOCK } from '../lib/reward-events.js';
 import { isAttributableBatch } from '../lib/reward-attribution.js';
 import { claimedRewardKey } from '../lib/reward-dedup.js';
+import { govCallsOf } from '../lib/gov-refresh.js';
 import { readRepo, bodyOf } from './helpers/source.js';
 import { ME, OTHER, V1, V2, V3 } from './helpers/payout-events.js';
 
@@ -202,7 +203,7 @@ function forwardPass({ failNotes = false, cap = REWARD_NOTES_MAX_PER_BLOCK } = {
     const blocks = new Map();
     const ctx = {
         console: { warn: () => {}, log: () => {}, error: () => {} }, Number, String, Array, Set, Map, Math, Date, JSON, Promise,
-        isAttributableBatch, rewardNotesForBlock, storedRewardStash, encodeAddress, decodeAddress, chainSS58: 88, REWARD_NOTES_MAX_PER_BLOCK: cap,
+        isAttributableBatch, rewardNotesForBlock, storedRewardStash, encodeAddress, decodeAddress, chainSS58: 88, REWARD_NOTES_MAX_PER_BLOCK: cap, govCallsOf,
         balanceToPDEX: (v) => Number(String(v)) / 1e12,
         db: failNotes ? { ...db, noteRewardedPairs: () => { throw new Error('database is locked'); } } : db,
         isRpcReady: () => true, isRpcUnavailableError: () => false, EVENTS_STRICT: true,
@@ -251,6 +252,16 @@ describe('the forward pass (server.js scanSingleBlock) notes rewards', () => {
         await f.scanSingleBlock(1001);
         assert.equal(cached(at88(ME)).length, 3);
         assert.equal(db.getUnclaimedComputedAt(at88(ME)), 0);
+    });
+    // R4: the same pass hands back the block's signed governance calls (a candidacy or a council vote emits no
+    // event), read from the extrinsics it already decoded; the forward pass starts the governance syncs with them.
+    test('R4: a block with a signed elections call hands it back for the governance refresh; others give none', async () => {
+        const f = forwardPass();
+        f.blocks.set(1003, { hash: '0x' + (1003).toString(16).padStart(64, '0'), events: [], extrinsics: [TIMESTAMP_EXT, ext({ section: 'elections', method: 'submitCandidacy', args: [str(0)] })] });
+        const out = await f.scanSingleBlock(1003);
+        assert.deepEqual(JSON.parse(JSON.stringify(out.calls ?? null)), [{ section: 'elections', method: 'submitCandidacy' }]);
+        f.blocks.set(1004, payoutBlock(1004, [], payoutCall(V1, 501)));
+        assert.deepEqual(JSON.parse(JSON.stringify((await f.scanSingleBlock(1004)).calls ?? null)), []);
     });
     test('a throw inside the reward note never stops the block: it is still returned whole for indexing', async () => {
         seed();
