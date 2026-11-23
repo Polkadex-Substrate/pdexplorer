@@ -16,6 +16,7 @@
 // Later work packages add their scenes to the WORK_PACKAGES table below (a scene is { id, primary, build }; a
 // package may name its own file prefix, as R1 does: r1-<scene>-<width>.html; a
 // package may bring its own page guard as `check`). WP2: the Validate hub, the dashboard and /validate/keys.
+// locks: the Balance breakdown redesign (locks-<scene>-<width>.html), no primary in any scene.
 // WP3: the setup wizard, the separate steps, the manage panel (in its own card) and the node guide, driven
 // through test/helpers/wp3-world.js; a scene may name an element to scroll to (`scroll`), set on load.
 //
@@ -49,6 +50,9 @@ import { createKnownResults } from '../lib/known-results.js';
 import { createPostAction } from '../lib/post-action.js';
 import { effectsFor } from '../lib/action-effects.js';
 import { createPayoutRefresh } from '../lib/payout-refresh.js';
+import { describeAccountLocks } from '../lib/balance-locks.js';
+import { mountBalanceLocks } from '../lib/balance-locks-view.js';
+import { caughtUp, pollDeadlineMs } from '../lib/freshness.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -359,8 +363,120 @@ function checkR1Scene(w, s, err) {
     if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
 }
 
+// ── Locked balances (cto-team/plans/2026-11-22-locked-balances-redesign.md, section 7): the Balance breakdown on
+// My Account, drawn by the REAL lib/balance-locks-view.js from REAL model snapshots (lib/balance-locks.js
+// describeAccountLocks), with the REAL post-action core where a scene needs an action. Own account, header
+// connected (a looked-up or no-wallet scene says so). No scene shows a primary (spec 2.3).
+const LPDEX = 10n ** 12n;
+const ls = (v) => v.toString();
+const LP = (x) => BigInt(Math.round(x * 1e4)) * 10n ** 8n;
+const LNOW = Date.UTC(2026, 10, 22, 12, 0, 0);
+const LDAY = 86400000;
+const llock = (id, amount) => ({ id, amount: ls(amount), reasons: 'All' });
+const lbond = (total, chunks, over = {}) => ({ bonded: true, total: ls(total), active: ls(total), unlocking: '0', chunks, currentEra: 120, activeEra: 120, activeEraStart: LNOW, spans: 0, controller: ME, stash: ME, ...over });
+function lsnap(over = {}) {
+    return { address: ME, now: LNOW, free: ls(20_000n * LPDEX), reserved: '0', frozen: '0', ed: ls(LPDEX), block: 1_000_000, blockMs: 12000, bondingDays: 28, eraMs: LDAY,
+        locks: [], freezes: [], holds: [], reserves: [], staking: { bonded: false, total: '0', active: '0', unlocking: '0', chunks: [], currentEra: null, activeEra: null, activeEraStart: null, spans: 0, controller: null, stash: null },
+        democracy: null, elections: null, identity: null, proxy: null, pallets: { vesting: false, ormlVesting: false }, ...over };
+}
+const lmodel = (over, head = 41) => ({ address: ME, ...describeAccountLocks(lsnap(over)), freshness: { v: 1, chainHead: head } });
+const LSTAKE = { holds: [{ id: 'Staking.Staking', amount: ls(5_000n * LPDEX) }], staking: lbond(5_000n * LPDEX, [{ value: ls(LP(280.0586)), era: 144 }]) };
+const L_CEO = (head) => lmodel({ ...LSTAKE, reserved: ls(5_000n * LPDEX + LP(13.59)), frozen: ls(15_000n * LPDEX), locks: [llock('phrelect', 15_000n * LPDEX)],
+    elections: { voter: { votes: 5, stake: ls(15_000n * LPDEX), deposit: ls(LP(13.59)) }, candidacy: null } }, head);
+const L_CEO_AFTER = () => lmodel({ ...LSTAKE, reserved: ls(5_000n * LPDEX) }, 42);
+const L_DEM = (dem, lockAmount, over = {}) => lmodel({ locks: [llock('democrac', lockAmount)], frozen: ls(lockAmount), democracy: { delegating: false, lockingPeriod: 216000, prior: { until: 0, amount: '0' }, ...dem }, ...over });
+const L_VOTE = (index, aye, conviction, amount) => ({ index, aye, conviction, balance: ls(amount) });
+const L_ORPHAN = (head) => lmodel({ locks: [llock('staking ', 60n * LPDEX)], frozen: ls(60n * LPDEX) }, head);
+const L_READY = (over = {}) => lmodel({ holds: [{ id: 'Staking.Staking', amount: ls(1_000n * LPDEX) }], reserved: ls(1_000n * LPDEX),
+    staking: lbond(1_000n * LPDEX, [{ value: ls(150n * LPDEX), era: 110 }, { value: ls(LP(280.0586)), era: 144 }], over) });
+const L_SCENES_DATA = {
+    'ceo-case': [L_CEO()],
+    'ready-withdraw': [L_READY()],
+    'democracy-unlock-now': [L_DEM({ votes: [L_VOTE(4, false, 'None', 400n * LPDEX)], referenda: { 4: { finished: true, approved: true, end: 900_000 } } }, 400n * LPDEX)],
+    'democracy-mixed': [L_DEM({ prior: { until: 1_000_000 + 7200 * 3, amount: ls(300n * LPDEX) }, votes: [L_VOTE(7, true, 'Locked2x', 120n * LPDEX), L_VOTE(9, true, 'None', 200n * LPDEX)],
+        referenda: { 7: { finished: true, approved: true, end: 950_000 }, 9: { ongoing: true, end: 1_000_000 + 7200 * 5 } } }, 300n * LPDEX)],
+    'democracy-tidy': [L_DEM({ prior: { until: 1_000_000 + 7200 * 9, amount: ls(400n * LPDEX) }, votes: [L_VOTE(4, false, 'None', 100n * LPDEX)], referenda: { 4: { finished: true, approved: true, end: 900_000 } } }, 400n * LPDEX)],
+    delegating: [L_DEM({ delegating: true, target: THEM, conviction: 'Locked2x', balance: ls(250n * LPDEX) }, 250n * LPDEX)],
+    'leftover-lock': [L_ORPHAN()],
+    'old-and-unknown': [lmodel({ locks: [llock('ormlvest', 12n * LPDEX), llock('vesting ', 5n * LPDEX), llock('zzzzzzzz', 3n * LPDEX)], frozen: ls(12n * LPDEX), freezes: [{ id: 'X', amount: ls(LPDEX) }] })],
+    'deposits-all': [lmodel({ reserved: ls(20n * LPDEX), holds: ['Preimage.Preimage', 'Council.ProposalSubmission', 'TechnicalCommittee.ProposalSubmission', 'Session.Keys', 'DelegatedStaking.StakingDelegation', 'SafeMode.EnterOrExtend', 'X.Y'].map(id => ({ id, amount: ls(LPDEX) })),
+        reserves: [{ id: 'abcdefgh', amount: ls(LPDEX) }], identity: { deposit: ls(LPDEX), subsDeposit: ls(2n * LPDEX), subs: 2 }, proxy: { deposit: ls(LPDEX), count: 1, announcementDeposit: ls(LPDEX) },
+        elections: { voter: null, candidacy: { role: 'Member', deposit: ls(LPDEX) } } })],
+    vesting: [lmodel({ locks: [llock('vesting ', 500n * LPDEX)], frozen: ls(500n * LPDEX), pallets: { vesting: true } })],
+    empty: [lmodel({})],
+    'fee-blocked': [lmodel({ free: ls(100n * LPDEX), reserved: ls(50n * LPDEX), frozen: ls(300n * LPDEX), locks: [llock('democrac', 300n * LPDEX)], holds: [{ id: 'Staking.Staking', amount: ls(50n * LPDEX) }],
+        staking: lbond(50n * LPDEX, []) })]
+};
+// A world: the wallet page, the panel mounted with a manual clock and the real core; steps act on it.
+async function locksWorld(models, { connected = ME, page = 'wallet', steps = null, api = () => ({}), submit = null, pending = false } = {}) {
+    const window = new Window({ url: 'https://explorer.test/wallet' });
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    doc.querySelector('#wallet-dashboard').innerHTML = '<div id="wallet-locks-slot"></div>';
+    const el = doc.querySelector('#wallet-locks-slot');
+    let t = 0, seq = 0;
+    const timers = new Map();
+    const clock = { now: () => t, set: (f, ms) => { const id = ++seq; timers.set(id, { at: t + Math.max(0, Number(ms) || 0), f }); return id; }, clear: (id) => timers.delete(id) };
+    const tickTo = async (ms) => { const end = t + ms; for (;;) { const d = [...timers.entries()].filter(([, x]) => x.at <= end).sort((a, b) => a[1].at - b[1].at)[0]; if (!d) break; timers.delete(d[0]); t = d[1].at; d[1].f(); await tick(5); } t = end; };
+    const queue = models.slice();
+    const fetchJson = async () => { if (pending) return new Promise(() => {}); const m = queue.length > 1 ? queue.shift() : queue[0]; if (m instanceof Error) throw m; return m; };
+    const known = createKnownResults({ storage: null, now: clock.now });
+    const post = createPostAction({ effects: effectsFor, known, same: (a, b) => a === b, now: clock.now, setTimer: clock.set, clearTimer: clock.clear, caughtUp, deadlineMs: pollDeadlineMs });
+    const jobs = [];
+    const fakeSubmit = submit || (async (o) => {
+        const seen = post.observe({ key: o.action.key, params: o.action.params });
+        const show = seen.show((a, st) => ({ stage: st, outcome: { ok: true } }));
+        const stage = seen.stage(o.onStage);
+        jobs.push({ o, inBlock: async (block) => { show({}, 'inBlock', [{ event: { section: 'system', method: 'ExtrinsicSuccess', data: [] } }], null, { blockNumber: block, txHash: '0x' + 'ab'.repeat(32), address: connected }); stage('inBlock', { stage: 'inBlock', outcome: { ok: true } }); await o.onSuccess(); await tick(5); } });
+    });
+    const opts = { fetchJson, helpIcon, page, post, unstake: () => page === 'wallet' && connected === ME, openUnstake: () => {},
+        now: clock.now, setTimer: clock.set, clearTimer: clock.clear, reducedMotion: () => false,
+        actions: { submit: fakeSubmit, connected: () => connected, isSame: (a, b) => a === b, api } };
+    const mounting = mountBalanceLocks(el, ME, opts);
+    if (!pending) await mounting;
+    await tick(5);
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const w = { window, doc, el, qa, remount: () => mountBalanceLocks(el, ME, opts), visible: (x) => !!x && !x.closest('[hidden]'), q: (sel) => doc.querySelector(sel), jobs, tickTo, d: { account: connected ? { status: 'connected', address: connected } : { status: 'none' } } };
+    if (steps) await steps(w);
+    return w;
+}
+const lpress = async (w, sel, confirm = true) => { w.q(sel).click(); await tick(5); const yes = confirm && w.q('.lock-confirm .ui-action'); if (yes) { yes.click(); await tick(5); } };
+const LOCKS_SCENES = [
+    ...Object.entries(L_SCENES_DATA).map(([id, models]) => ({ id, primary: 0, connected: ME, build: () => locksWorld(models) })),
+    { id: 'first-load', primary: 0, connected: ME, need: '.lock-skeleton', build: () => locksWorld([L_CEO()], { pending: true }) },
+    { id: 'read-failed', primary: 0, connected: ME, need: '.lock-failed', build: () => locksWorld([new Error('down')]) },
+    { id: 'looked-up', primary: 0, connected: THEM, need: '.lock-connect', build: () => locksWorld([L_CEO()], { connected: THEM, page: 'account' }) },
+    { id: 'no-wallet', primary: 0, need: '.lock-connect', build: () => locksWorld([L_ORPHAN()], { connected: null, page: 'account' }) },
+    { id: 'controller-differs', primary: 0, connected: ME, need: '.lock-connect', build: () => locksWorld([L_READY({ controller: THEM })]) },
+    { id: 'confirm-open', primary: 0, connected: ME, need: '.lock-confirm', build: () => locksWorld([L_CEO()], { steps: async (w) => { w.q('[data-lock-action="elections-remove"]').click(); await tick(5); } }) },
+    { id: 'busy', primary: 0, connected: ME, need: '.ui-action[aria-busy="true"]', build: () => locksWorld([L_CEO()], { submit: () => new Promise(() => {}), steps: (w) => lpress(w, '[data-lock-action="elections-remove"]') }) },
+    { id: 'settled', primary: 0, connected: ME, need: '.lock-row.is-settled', build: () => locksWorld([L_CEO(), L_CEO_AFTER()], { steps: async (w) => { await lpress(w, '[data-lock-action="elections-remove"]'); await w.jobs[0].inBlock(42); } }) },
+    { id: 'changed-in-place', primary: 0, connected: ME, need: '.lock-row-msg.is-positive', build: () => locksWorld([L_DEM({ votes: [L_VOTE(4, false, 'None', 400n * LPDEX), L_VOTE(7, true, 'Locked2x', 120n * LPDEX)], referenda: { 4: { finished: true, approved: true, end: 900_000 }, 7: { finished: true, approved: true, end: 950_000 } } }, 400n * LPDEX),
+        L_DEM({ votes: [L_VOTE(7, true, 'Locked2x', 120n * LPDEX)], referenda: { 7: { finished: true, approved: true, end: 950_000 } } }, 120n * LPDEX, {}), ], { steps: async (w) => { await lpress(w, '[data-lock-action="democracy-unlock"]'); await w.jobs[0].inBlock(42); } }) },
+    { id: 'checking', primary: 0, connected: ME, need: '.ui-chip.is-bare', build: () => locksWorld([L_ORPHAN(), lmodel({}, 42)], { api: () => ({ query: { balances: { locks: () => new Promise(() => {}) } } }), steps: async (w) => { await lpress(w, '[data-lock-action="migrate-currency"]'); w.jobs[0].inBlock(42); await tick(10); } }) },
+    { id: 'failed', primary: 0, connected: ME, need: '.lock-row-msg[role="alert"]', build: () => locksWorld([L_CEO()], { submit: async (o) => { o.onError('The transaction failed on chain: you have no council vote to remove.'); }, steps: (w) => lpress(w, '[data-lock-action="elections-remove"]') }) },
+    { id: 'not-confirmed', primary: 0, connected: ME, need: '.lock-row-msg.is-wait', build: () => locksWorld([L_ORPHAN()], { submit: async (o) => { o.onStage('unconfirmed'); }, steps: (w) => lpress(w, '[data-lock-action="migrate-currency"]') }) },
+    { id: 'could-not-refresh', primary: 0, connected: ME, need: '.lock-behind', build: () => locksWorld([L_CEO(), new Error('down')], { steps: async (w) => { await w.remount(); await tick(5); } }) }
+].map(s => ({ ...s, widths: [1280, 375] }));
+// The scene guard (spec 7): the panel is there, no primary, no table, no chain id outside Details, every button an
+// action button (whose 44 px is the stylesheet's, test/lock-rows.test.js), and the scene's own element.
+const LOCK_CHAIN_ID = /phrelect|Staking\.Staking|democrac\b|withdrawUnbonded|removeVoter|migrateCurrency|ormlvest|zzzzzzzz|Preimage\.Preimage|\.ProposalSubmission/;
+function checkLocksScene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    const panel = w.doc.querySelector('.page-section[data-page="wallet"] #wallet-locks-slot section.balance-locks');
+    if (!panel) { err.push('no Balance breakdown panel'); return; }
+    const n = w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (panel.querySelector('table, [role="table"]')) err.push('a table in the panel');
+    const shown = panel.cloneNode(true);
+    for (const d of shown.querySelectorAll('details')) d.remove();
+    if (LOCK_CHAIN_ID.test(shown.textContent)) err.push(`a chain id outside Details: ${shown.textContent.match(LOCK_CHAIN_ID)[0]}`);
+    for (const b of panel.querySelectorAll('button')) if (!b.classList.contains('ui-action') && !b.classList.contains('validate-secondary') && !b.classList.contains('validate-text-btn')) err.push(`a button that is not an action button: ${b.className}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+
 // ── work packages: later rounds add theirs here ──
-const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' } };
+const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
@@ -474,6 +590,9 @@ async function guardSelfTest() {
     await expectFail('wp3: two primaries', () => renderScene({ ...wizScene, build: async () => { const w = await wizScene.build(); w.q('[data-setup-action="check-node"]').classList.add('validate-primary'); return w; } }, checkWp3Scene), /2 primary actions visible/);
     await expectFail('wp3: header solid on a connected wizard', () => renderScene(wizScene, checkWp3Scene, { paint: false }), /the header is drawn solid, the page rule says connected/);
     await expectFail('r1: payout tile missing', () => renderScene({ ...R1_SCENES[0], build: async () => { const w = await R1_SCENES[0].build(); w.q('#wallet-unpaid-tile').remove(); return w; } }, checkR1Scene), /no #wallet-unpaid-tile/);
+    const lockScene = LOCKS_SCENES[0];
+    await expectFail('locks: a primary in the panel', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.ui-action').classList.add('validate-primary'); return w; } }, checkLocksScene), /1 primary actions visible/);
+    await expectFail('locks: a chain id outside Details', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.lock-line').textContent = 'phrelect'; return w; } }, checkLocksScene), /a chain id outside Details: phrelect/);
     await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);
 }
 
