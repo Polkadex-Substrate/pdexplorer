@@ -223,7 +223,7 @@ describe('the view preference: simple unless the store says advanced, never thro
 describe('copy', () => {
     test('the strings WP1 uses, as the spec writes them; no dashes, no exclamation marks', () => {
         assert.deepEqual(Object.keys(STAKE_COPY), ['SC-05', 'SC-50', 'SC-51', 'SC-52', 'SC-53', 'SC-55a', 'SC-55b', 'SC-80a', 'SC-80b', 'SC-80c', 'SC-80d', 'SC-80e',
-            'SC-100', 'SC-101', 'SC-102', 'SC-104', 'SC-105', 'SC-106', 'SC-107', 'SC-108']);
+            'SC-100', 'SC-101', 'SC-102', 'SC-104', 'SC-105', 'SC-106', 'SC-107', 'SC-108', 'SC-131', 'SC-134']);
         assert.equal(stakeCopy('SC-05', { reserve: '0.2' }), 'Max leaves 1 PDEX that must stay in the account and 0.2 PDEX for network fees.');
         assert.equal(stakeCopy('SC-50'), 'Sign and stake');
         for (const t of Object.values(STAKE_COPY)) assert.ok(!/[\u2013\u2014!]/.test(t), t);
