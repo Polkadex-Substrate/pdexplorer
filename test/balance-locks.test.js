@@ -861,7 +861,8 @@ describe('wiring: server, docs, help, both pages', () => {
     });
     test('both pages mount the panel', () => {
         assert.match(script, /import \{ mountBalanceLocks \} from '\.\/lib\/balance-locks-view\.js'/);
-        assert.match(script, /id="wallet-locks-slot"/);
+        // R3: My Account's frame (and its slot) is drawn by lib/wallet-sections.js
+        assert.match(readRepo('lib/wallet-sections.js', import.meta.url), /id="wallet-locks-slot"/);
         assert.match(script, /id="account-locks-slot"/);
         assert.equal((script.match(/mountBalanceLocks\(/g) || []).length, 2);
     });

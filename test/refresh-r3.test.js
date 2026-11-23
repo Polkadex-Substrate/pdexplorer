@@ -370,6 +370,7 @@ describe('R3: each wallet action repaints only what changed, in place', () => {
         const p = walletPage();
         await p.render();
         const seen = p.observe();
+        const fields = [p.q('#proxy-add-delegate'), p.q('#proxy-add-type'), p.q('#proxy-add-delay')];
         p.q('#proxy-add-delegate').value = V2;
         p.q('#proxy-add-type').value = 'Staking';
         p.q('#proxy-add-delay').value = '7';
@@ -385,7 +386,9 @@ describe('R3: each wallet action repaints only what changed, in place', () => {
         assert.equal(p.q('#proxy-add-type').value, 'Staking');
         assert.equal(p.q('#proxy-add-delay').value, '7', 'a field that was not cleared before is cleared now');
         assert.equal(p.polling(), false);
-        assert.deepEqual(await seen(), ['proxies']);
+        // the form's own Add proxy button goes busy and back (the tracker); its fields are the same nodes, never repainted
+        assert.deepEqual(await seen(), ['proxies', 'proxyForm']);
+        assert.ok(fields.every((f, i) => f === [p.q('#proxy-add-delegate'), p.q('#proxy-add-type'), p.q('#proxy-add-delay')][i]), 'the add-proxy form was repainted');
         no2500(p);
     });
 });

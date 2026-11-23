@@ -195,7 +195,7 @@ describe('c: a stake that could not be read is not 0', () => {
         for (const n of ['helpIcon', 'rewardHistoryLinkHtml', 'walletViewingSlotHtml', 'renderUsdSubscript', 'buildViewOnlyCallout', 'formatDuration', 'formatLocalDate',
             'makeTable', 'mountWalletRecentTx', 'fetchApiJson', 'bindViewOnlyCalloutHandlers', 'applyWalletActionBlock', 'scheduleWalletSigningRechecks',
             'mountBalanceLocks', 'lockActionDeps', 'mountNominationStatus', 'mountWalletNominations', 'renderWalletAdvancedSection', 'refreshWalletMultisigs', 'renderWalletAprCard',
-            'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash', 'bindWalletActionHandlers', 'mountWalletRewardsTable', 'mountWalletTxTable']) ctx[n] = noop;
+            'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash', 'bindWalletActionHandlers', 'mountWalletRewardsTable', 'mountWalletTxTable', 'buildWalletActionBarMarkup']) ctx[n] = noop;
         // R3: the frame comes from the wallet sections (the real module, over this page; nothing else of it runs here).
         if (sectionsModule.createWalletSections) ctx.walletSections = sectionsModule.createWalletSections({ doc, win, post: { subscribe: () => () => {} }, known: { list: () => [] },
             data: () => null, setData() {}, payout: ctx.payoutRefresh, stake: ctx.stakeRefresh, multisigName: () => null,
