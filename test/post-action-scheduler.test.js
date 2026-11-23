@@ -173,6 +173,22 @@ describe('visibility', () => {
         assert.equal(polls(w).length, 2, 'resume did not run the due attempt');
         assert.equal(w.live().length, 1, 'not re-armed after resume');
     });
+    test('hidden at inclusion (a phone in the wallet app): the component still repaints from the store at once, as in R1; the server read waits for resume', async () => {
+        const w = world();
+        w.vis.on = false;
+        w.core.notify({ account: ME, domains: ['rewards.unpaid'], block: 40, reason: 'inBlock', info: { removed: 3 } });
+        await settle();
+        assert.equal(polls(w).length, 0, 'read the server while hidden');
+        const plain = w.reloads.filter(r => !r.poll);
+        assert.equal(plain.length, 1, 'the proven result was not painted while hidden');
+        assert.equal(plain[0].reason, 'inBlock');
+        assert.deepEqual(plain[0].info, { removed: 3 });
+        assert.equal(w.live().length, 0);
+        w.vis.on = true;
+        w.core.resume();
+        await settle();
+        assert.equal(polls(w).length, 1, 'resume did not read the server');
+    });
     test('hidden past the deadline: the attempt on return runs before giving up, and a caught-up answer wins', async () => {
         const w = world();
         await include(w, 40, ['rewards.unpaid']);
