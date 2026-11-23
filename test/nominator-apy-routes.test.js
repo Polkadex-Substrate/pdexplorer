@@ -48,22 +48,27 @@ function seed() {
     const summaries = [];
     for (let e = 72; e < 100; e++) {
         const validators = { V1: { points: 1000, stake: 34_500, commission: 5 }, V2: { points: 1000, stake: 392_000, commission: 5 } };
-        const s = { era: e, reward: 2 * R, totalPoints: 2000, validators };
+        // V3: a tiny newcomer, elected in the last 3 eras only.
+        if (e >= 97) validators.V3 = { points: 1000, stake: 1_000, commission: 5 };
+        const n = Object.keys(validators).length;
+        const s = { era: e, reward: n * R, totalPoints: 1000 * n, validators };
         db.upsertEraRewardSummary(s);
         summaries.push(s);
     }
-    const perf = performanceForAll(summaries, ['V1', 'V2'], { activeEra: ACTIVE_ERA, erasPerYear: EPY });
+    const perf = performanceForAll(summaries, ['V1', 'V2', 'V3'], { activeEra: ACTIVE_ERA, erasPerYear: EPY });
     db.setKv('validator_choice', {
         activeEra: ACTIVE_ERA, erasPerYear: EPY, rewardPerValidator: rewardPerActiveValidator(summaries, { activeEra: ACTIVE_ERA }),
         validators: [
             { address: 'V1', commission: 5, totalStake: 34_500, perf: perf.V1 },
-            { address: 'V2', commission: 5, totalStake: 392_000, perf: perf.V2 }
+            { address: 'V2', commission: 5, totalStake: 392_000, perf: perf.V2 },
+            { address: 'V3', commission: 5, totalStake: 1_000, perf: perf.V3 }
         ]
     });
     db.replaceValidators([
         { address: 'V1', name: 'one', totalStake: 34_500, commission: 5, ...apyFields(5) },
-        { address: 'V2', name: 'two', totalStake: 392_000, commission: 5, ...apyFields(5) }
-    ], { totalCount: 2, lastSync: Date.now(), status: 'Synced' });
+        { address: 'V2', name: 'two', totalStake: 392_000, commission: 5, ...apyFields(5) },
+        { address: 'V3', name: 'three', totalStake: 1_000, commission: 5, ...apyFields(5) }
+    ], { totalCount: 3, lastSync: Date.now(), status: 'Synced' });
     return h;
 }
 
@@ -77,6 +82,17 @@ describe('/api/validators data path on a seeded database', () => {
         assert.equal(by.V2[NOMINATOR_APY_METHOD_FIELD], METHOD_PAST_ERAS);
         assert.equal(by.V1[APY_FIELD], estimatedApy(5));
         assert.equal(by.V2[APY_FIELD], estimatedApy(5), 'estimatedApyAtCurrentCommission is still the commission-only ceiling');
+    });
+
+    test('a validator with 3 eras: null (not 0, not missing), method, eras, in the served JSON', () => {
+        seed();
+        const out = withNominatorApy(db.getValidators().validators, db.getKv('validator_choice'));
+        const v3 = JSON.parse(JSON.stringify(out.find(r => r.address === 'V3')));
+        assert.ok(Object.prototype.hasOwnProperty.call(v3, 'estimatedNominatorApy'), 'field missing from the JSON');
+        assert.strictEqual(v3.estimatedNominatorApy, null);
+        assert.strictEqual(v3.estimatedNominatorApyMethod, 'not-enough-history');
+        assert.strictEqual(v3.estimatedNominatorApyEras, 3);
+        assert.equal(v3[APY_FIELD], estimatedApy(5), 'the commission-only ceiling is unchanged');
     });
 
     test('the handler attaches it, and a failure there cannot cost the list', () => {
@@ -98,6 +114,18 @@ describe('/api/validator/:address data path on a seeded database', () => {
         const history = withPerEraNominatorApy([{ era: 99, commission: 5, stake: 392_000, apy: estimatedApy(5) }], db.getEraRewardSummaries(0), 'V2', snap.erasPerYear);
         assert.ok(Math.abs(history[0].nominatorApy - 1.930549) < 1e-5);
         assert.equal(history[0].apy, estimatedApy(5));
+    });
+
+    test('a validator with 3 eras: scorecard is null with the method and 3 eras; per-era values stay', () => {
+        seed();
+        const snap = db.getKv('validator_choice');
+        const sc = JSON.parse(JSON.stringify(nominatorApyFields(nominatorApyForAddress(snap, 'V3'))));
+        assert.strictEqual(sc.estimatedNominatorApy, null);
+        assert.strictEqual(sc.estimatedNominatorApyMethod, 'not-enough-history');
+        assert.strictEqual(sc.estimatedNominatorApyEras, 3);
+        const hist = withPerEraNominatorApy([{ era: 99, commission: 5, stake: 1_000 }, { era: 90, commission: 5, stake: 1_000 }], db.getEraRewardSummaries(0), 'V3', snap.erasPerYear);
+        assert.ok(Number.isFinite(hist[0].nominatorApy), 'a measured era keeps its value');
+        assert.equal(hist[1].nominatorApy, null, 'an era it was not elected in has none');
     });
 
     test('the handler attaches both, best-effort', () => {
@@ -148,6 +176,25 @@ describe('views', () => {
         assert.ok(!/0\.00%|21\.94%/.test(card), card);
     });
 
+    test('validator page: 3 eras shows the dash and the caption "not enough data yet"', () => {
+        const html = scorecardFn({ ...base, [NOMINATOR_APY_FIELD]: null, [NOMINATOR_APY_METHOD_FIELD]: 'not-enough-history', estimatedNominatorApyEras: 3 });
+        const card = html.slice(html.indexOf('Est. APY'), html.indexOf('Est. APY') + 500);
+        assert.match(card, />\u2014</);
+        assert.match(card, /not enough data yet/);
+        assert.ok(!/from current stake/.test(html));
+    });
+
+    test('validators list: a no-estimate row renders the dash and sorts last in both directions', () => {
+        const rows = [
+            { address: 'n', [NOMINATOR_APY_FIELD]: null },
+            { address: 'hi', [NOMINATOR_APY_FIELD]: 20 },
+            { address: 'lo', [NOMINATOR_APY_FIELD]: 1.9 }
+        ];
+        assert.deepEqual(rows.slice().sort((a, b) => compareNominatorApy(a, b, 'asc')).map(r => r.address), ['lo', 'hi', 'n']);
+        assert.deepEqual(rows.slice().sort((a, b) => compareNominatorApy(a, b, 'desc')).map(r => r.address), ['hi', 'lo', 'n']);
+        assert.strictEqual(formatNominatorApy(rows[0][NOMINATOR_APY_FIELD]), null);
+    });
+
     test('validators list column renders and sorts the stake-aware field', () => {
         const code = stripComments(script);
         const col = code.slice(code.indexOf('key: NOMINATOR_APY_FIELD'), code.indexOf('key: NOMINATOR_APY_FIELD') + 600);
@@ -195,6 +242,30 @@ describe('guard: no per-validator display uses the commission-only figure', () =
             const bad = offenders(routeSrc(route), []);
             assert.deepEqual(bad.map(b => b.line), [],
                 `${route} computes a per-validator APY from commission alone. Offending code:\n  ${bad.map(b => b.line).join('\n  ')}`);
+        }
+    });
+});
+
+describe('text: no mention of a current-stake estimate; shares say estimated APY', () => {
+    const read = f => fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+    test('help text', () => {
+        const help = read('lib/help-topics.js');
+        assert.ok(!/current stake and commission instead/.test(help));
+        assert.ok(help.includes('A validator with fewer than 7 eras of history shows no estimate yet.'));
+    });
+    test('API docs and README', () => {
+        for (const f of ['lib/api-reference.js', 'README.md', 'lib/nominator-apy.js']) {
+            const t = read(f);
+            assert.ok(!/current-stake|from current stake/.test(t), `${f} still describes the current-stake estimate`);
+        }
+        assert.ok(read('lib/api-reference.js').includes('not-enough-history'));
+        assert.ok(read('README.md').includes('not-enough-history'));
+    });
+    test('OG text', () => {
+        for (const f of ['lib/og-images.js', 'tools/og/sections.json']) {
+            const t = read(f);
+            assert.ok(!/real APY/.test(f === 'lib/og-images.js' ? t : t), `${f} still says real APY`);
+            assert.ok(t.includes('Commission, stake, estimated APY and slash history for every validator.'), f);
         }
     });
 });

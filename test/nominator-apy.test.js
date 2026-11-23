@@ -15,8 +15,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    NOMINATOR_APY_FIELD, NOMINATOR_APY_METHOD_FIELD, METHOD_PAST_ERAS, METHOD_CURRENT_STAKE,
-    rewardPerActiveValidator, currentStakeApy, nominatorApy, nominatorApyForAddress, withNominatorApy,
+    NOMINATOR_APY_FIELD, NOMINATOR_APY_METHOD_FIELD, METHOD_PAST_ERAS,
+    rewardPerActiveValidator, nominatorApy, nominatorApyForAddress, withNominatorApy,
     perEraNominatorApy, withPerEraNominatorApy, compareNominatorApy, formatNominatorApy, nominatorApyCaption
 } from '../lib/nominator-apy.js';
 import { performanceForAll, DEFAULT_APR_WINDOW } from '../lib/stake-apr.js';
@@ -72,10 +72,8 @@ describe('the reporter\'s numbers', () => {
         close(r.value, 21.9355, 1e-4, 'average validator in plain numbers');
     });
 
-    test('the fallback (current stake) agrees with the past-eras figure when nothing changed', () => {
+    test('the network reward per active validator is the one the snapshot stores', () => {
         close(rpv, PER_VALIDATOR_REWARD, 1e-12, 'reward per active validator');
-        close(currentStakeApy({ rewardPerValidator: rpv, commission: 5, totalStake: BIG_STAKE, erasPerYear: ERAS_PER_YEAR }),
-            MAX_APY_BASE * 0.95 * AVG_STAKE / BIG_STAKE, 1e-9, 'fallback for the big validator');
     });
 });
 
@@ -86,7 +84,6 @@ describe('commission', () => {
         const h = nominatorApy({ perf: perfOf(sums, 'H') });
         assert.equal(h.value, 0);
         assert.equal(h.method, METHOD_PAST_ERAS);
-        assert.equal(currentStakeApy({ rewardPerValidator: 10, commission: 100, totalStake: 1000 }), 0);
     });
 
     test('commission that changes across eras uses each era\'s own commission', () => {
@@ -95,26 +92,24 @@ describe('commission', () => {
         close(nominatorApy({ perf: perfOf(sums, 'C') }).value, estimatedApy(5), 1e-9, 'changing commission');
     });
 
-    test('an unusable commission gives no fallback estimate, never the full rate', () => {
+    test('an unusable commission with no history gives no estimate, never the full rate', () => {
         for (const c of [null, undefined, '', 'x', -1, 101, NaN, true, []]) {
-            assert.equal(currentStakeApy({ rewardPerValidator: 20, commission: c, totalStake: AVG_STAKE }), null, `commission ${String(c)}`);
+            const r = nominatorApy({ perf: undefined, commission: c, totalStake: AVG_STAKE, rewardPerValidator: 20 });
+            assert.equal(r.value, null, `commission ${String(c)}`);
         }
     });
 });
 
 describe('stake', () => {
-    test('zero, negative or unknown stake: null, and nominatorApy says "no estimate"', () => {
+    test('zero, negative or unknown stake with no history: no estimate', () => {
         for (const s of [0, -5, null, undefined, '', NaN]) {
-            assert.equal(currentStakeApy({ rewardPerValidator: 20, commission: 5, totalStake: s }), null, `stake ${String(s)}`);
+            assert.equal(nominatorApy({ perf: undefined, commission: 5, totalStake: s, rewardPerValidator: 20 }).value, null, `stake ${String(s)}`);
         }
         const r = nominatorApy({ perf: { status: 'none', apr: null }, commission: 5, totalStake: 0, rewardPerValidator: 20 });
-        assert.deepEqual(r, { value: null, method: null, eras: 0 });
+        assert.deepEqual(r, { value: null, method: 'not-enough-history', eras: 0 });
     });
 
     test('huge stake and reward: finite, positive, no overflow', () => {
-        const v = currentStakeApy({ rewardPerValidator: 1e24, commission: 5, totalStake: 1e30, erasPerYear: ERAS_PER_YEAR });
-        assert.ok(Number.isFinite(v) && v > 0, String(v));
-        close(v, 1e24 * 0.95 / 1e30 * ERAS_PER_YEAR * 100, 1e-18, 'huge');
         const sums = summaries(() => ({ W: { stake: 1e30, commission: 5 } }));
         const p = nominatorApy({ perf: perfOf(sums, 'W') });
         assert.ok(Number.isFinite(p.value) && p.value > 0 && p.value < 1e-20, String(p.value));
@@ -123,35 +118,53 @@ describe('stake', () => {
     test('monotonic: for the same commission, more stake never gives a higher estimate', () => {
         const stakes = [1, 10, 1000, AVG_STAKE, 50_000, BIG_STAKE, 1e7, 1e12, 1e30];
         let prevPast = Infinity;
-        let prevNow = Infinity;
         for (const s of stakes) {
             const past = nominatorApy({ perf: perfOf(summaries(() => ({ M: { stake: s, commission: 5 } })), 'M') }).value;
-            const now = currentStakeApy({ rewardPerValidator: PER_VALIDATOR_REWARD, commission: 5, totalStake: s, erasPerYear: ERAS_PER_YEAR });
             assert.ok(past <= prevPast, `past eras: stake ${s} gave ${past}, more than ${prevPast} for less stake`);
-            assert.ok(now <= prevNow, `current stake: stake ${s} gave ${now}, more than ${prevNow} for less stake`);
             prevPast = past;
-            prevNow = now;
         }
     });
 });
 
 describe('history coverage', () => {
-    test('one era of history is too few: falls back to the current-stake formula', () => {
-        const sums = WINDOW_ERAS.map(e => era(e, e === ACTIVE_ERA - 1 ? { N: { stake: 100_000, commission: 10 } } : {}));
-        const perf = perfOf(sums, 'N');
-        assert.equal(perf.status, 'new');
-        const rpv = rewardPerActiveValidator(sums, { activeEra: ACTIVE_ERA });
-        const r = nominatorApy({ perf, commission: 10, totalStake: 100_000, rewardPerValidator: rpv, erasPerYear: ERAS_PER_YEAR });
-        assert.equal(r.method, METHOD_CURRENT_STAKE);
-        close(r.value, rpv * 0.9 / 100_000 * ERAS_PER_YEAR * 100, 1e-9, 'one-era fallback');
+    // The window is 28 eras, so 7 is the least that counts (minErasFor).
+    function eraCountPerf(n) {
+        const sums = WINDOW_ERAS.map(e => era(e, e >= ACTIVE_ERA - n ? { N: { stake: 1_000, commission: 10 } } : {}));
+        return perfOf(sums, 'N');
+    }
+    function viaPerf(n) {
+        return nominatorApy({ perf: eraCountPerf(n), commission: 10, totalStake: 1_000, rewardPerValidator: PER_VALIDATOR_REWARD, erasPerYear: ERAS_PER_YEAR });
+    }
+
+    test('6 eras of history: no number, the method says why, the era count is kept', () => {
+        assert.equal(eraCountPerf(6).status, 'new');
+        assert.deepEqual(viaPerf(6), { value: null, method: 'not-enough-history', eras: 6 });
     });
 
-    test('no history at all (waiting or new): fallback, or null without a network reward', () => {
-        const r = nominatorApy({ perf: undefined, commission: 10, totalStake: 100_000, rewardPerValidator: PER_VALIDATOR_REWARD, erasPerYear: ERAS_PER_YEAR });
-        assert.equal(r.method, METHOD_CURRENT_STAKE);
-        close(r.value, PER_VALIDATOR_REWARD * 0.9 / 100_000 * ERAS_PER_YEAR * 100, 1e-9, 'no-history fallback');
-        assert.equal(nominatorApy({ perf: undefined, commission: 10, totalStake: 100_000 }).value, null);
+    test('7 eras of history: a number from past eras', () => {
+        const r = viaPerf(7);
+        assert.equal(r.method, METHOD_PAST_ERAS);
+        assert.equal(r.eras, 7);
+        assert.ok(Number.isFinite(r.value) && r.value > 0, String(r.value));
+    });
+
+    test('a tiny new validator (1,000 staked, 3 eras) gets no number, not the 757% fallback', () => {
+        const r = viaPerf(3);
+        assert.equal(r.value, null);
+        assert.equal(r.method, 'not-enough-history');
+        assert.equal(r.eras, 3);
+    });
+
+    test('no history at all (waiting or new): no number, whatever the network reward', () => {
+        const r = nominatorApy({ perf: undefined, commission: 10, totalStake: 1_000, rewardPerValidator: PER_VALIDATOR_REWARD, erasPerYear: ERAS_PER_YEAR });
+        assert.deepEqual(r, { value: null, method: 'not-enough-history', eras: 0 });
         assert.equal(rewardPerActiveValidator([], { activeEra: ACTIVE_ERA }), null);
+    });
+
+    test('currentStakeApy is gone from the module', async () => {
+        const mod = await import('../lib/nominator-apy.js');
+        assert.equal(mod.currentStakeApy, undefined);
+        assert.equal(mod.METHOD_CURRENT_STAKE, undefined);
     });
 
     test('active in only some eras: out-of-set eras after the first election pay nothing', () => {
@@ -193,9 +206,10 @@ describe('list and page enrichment from the stake-picker snapshot', () => {
         close(by.BIG[NOMINATOR_APY_FIELD], MAX_APY_BASE * 0.95 * AVG_STAKE / BIG_STAKE, 1e-9, 'BIG');
         close(by.F1[NOMINATOR_APY_FIELD], estimatedApy(5), 1e-9, 'F1');
         assert.equal(by.BIG[NOMINATOR_APY_METHOD_FIELD], METHOD_PAST_ERAS);
-        // Not in the snapshot: the current-stake formula with the row's own values.
-        assert.equal(by.NEWCOMER[NOMINATOR_APY_METHOD_FIELD], METHOD_CURRENT_STAKE);
-        close(by.NEWCOMER[NOMINATOR_APY_FIELD], PER_VALIDATOR_REWARD * 0.98 / 50_000 * ERAS_PER_YEAR * 100, 1e-9, 'NEWCOMER');
+        // Not in the snapshot: no history, so no number (the old fallback gave a made-up one).
+        assert.equal(by.NEWCOMER[NOMINATOR_APY_METHOD_FIELD], 'not-enough-history');
+        assert.equal(by.NEWCOMER[NOMINATOR_APY_FIELD], null);
+        assert.equal(by.NEWCOMER.estimatedNominatorApyEras, 0);
         for (const r of out) assert.equal(r.estimatedApyAtCurrentCommission, estimatedApy(r.commission), 'old field keeps its old meaning');
         assert.equal(rows[0][NOMINATOR_APY_FIELD], undefined, 'input rows are not mutated');
     });
@@ -203,7 +217,7 @@ describe('list and page enrichment from the stake-picker snapshot', () => {
     test('no snapshot yet (fresh deploy): every row says "no estimate", none falls back to commission only', () => {
         for (const r of withNominatorApy(rows, null)) {
             assert.equal(r[NOMINATOR_APY_FIELD], null);
-            assert.equal(r[NOMINATOR_APY_METHOD_FIELD], null);
+            assert.equal(r[NOMINATOR_APY_METHOD_FIELD], 'not-enough-history');
         }
     });
 
@@ -243,8 +257,7 @@ describe('display text', () => {
     test('the caption says where the number came from', () => {
         assert.equal(nominatorApyCaption({ [NOMINATOR_APY_FIELD]: 2, [NOMINATOR_APY_METHOD_FIELD]: METHOD_PAST_ERAS, estimatedNominatorApyEras: 28 }),
             'past 28 eras, after commission, per PDEX staked');
-        assert.equal(nominatorApyCaption({ [NOMINATOR_APY_FIELD]: 2, [NOMINATOR_APY_METHOD_FIELD]: METHOD_CURRENT_STAKE }),
-            'from current stake and commission');
+        assert.equal(nominatorApyCaption({ [NOMINATOR_APY_FIELD]: null, [NOMINATOR_APY_METHOD_FIELD]: 'not-enough-history', estimatedNominatorApyEras: 3 }), 'not enough data yet');
         assert.equal(nominatorApyCaption({ [NOMINATOR_APY_FIELD]: null }), 'not enough data yet');
         assert.equal(nominatorApyCaption(null), 'not enough data yet');
     });
