@@ -11249,8 +11249,8 @@ async function fetchDemocracyData(opts = {}) {
         const data = await parseJsonResponse(res);
         if (!res.ok || data.error) throw new Error(data.error || ('Request failed (' + res.status + ')'));
         democracyData = data;
-        if (quiet) return democracyView.update();
-        renderDemocracy();
+        if (quiet) democracyView.update(); else renderDemocracy();
+        return data.freshness;
     } catch (e) {
         if (quiet) return console.warn('[democracy] refresh failed:', e && e.message);
         root.innerHTML = `
@@ -11680,8 +11680,8 @@ async function fetchCouncilData(opts) {
     try {
         const response = await freshFetch('/api/council', opts);
         // Survive HTML error pages from nginx/Cloudflare with a clean message
-        // instead of "Unexpected token '<'".
-        const data = await parseJsonResponse(response);
+        // instead of "Unexpected token '<'". The proven council role of an action goes on top (R4).
+        const data = govRefresh.overlay('council', await parseJsonResponse(response));
         if (data.error) throw new Error(data.error);
         if (data.pallet) councilPalletName = data.pallet;
         councilData = data;
@@ -11744,6 +11744,7 @@ async function fetchCouncilData(opts) {
         renderList(runnersUp, 'council-runnersup-list');
         renderList(candidates, 'council-candidates-list');
         renderCouncilMotions(data);
+        return data.freshness;
     } catch (err) {
         console.error('Failed to fetch council data', err);
         const failMsg = '<tr><td colspan="2" style="text-align:center; padding:20px; color: var(--error);">Failed to load council data.</td></tr>';
@@ -11783,6 +11784,7 @@ async function fetchTechnicalCommitteeData(opts) {
             }).join('') : '<tr><td style="text-align:center;padding:20px;">No members</td></tr>';
         }
         renderCollectiveMotions(COLLECTIVE_VIEWS.technicalCommittee, data);
+        return data.freshness;
     } catch (err) {
         console.error('Failed to fetch technical committee data', err);
         if (list) list.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--error);">Failed to load the technical committee.</td></tr>';
@@ -12155,8 +12157,7 @@ function councilMotionVote(hash, index, approve, collectiveKey = 'council') {
         },
         label: `${view.label} motion #${idx} ${approve ? 'aye' : 'nay'} vote`,
         action: { key: 'council.vote', params: { aye: approve, idx, body: view.label.toLowerCase() } },
-        onStage: fanStage(motionStage(view, hash, approve ? 'aye' : 'nay'), govDetailPage.stage(view.key + ':' + hash, approve ? 'aye' : 'nay')),
-        onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
+        onStage: fanStage(motionStage(view, hash, approve ? 'aye' : 'nay'), govDetailPage.stage(view.key + ':' + hash, approve ? 'aye' : 'nay'))
     });
 }
 
@@ -12194,9 +12195,8 @@ function councilMotionClose(hash, index, collectiveKey = 'council') {
     return submitSignedTx({
         buildTx: (api) => api.tx[pallet].close(hash, idx, weightBound, motion.lengthBound || 0),
         label: `${view.label} motion #${idx} close`,
-        action: { key: 'council.close', params: { idx, method: motion.method } },
-        onStage: fanStage(motionStage(view, hash, 'close'), govDetailPage.stage(view.key + ':' + hash, 'close')),
-        onSuccess: () => setTimeout(() => view.refresh({ fresh: true }), 6000)
+        action: { key: 'council.close', params: { idx, method: motion.method, body: view.label.toLowerCase() } },
+        onStage: fanStage(motionStage(view, hash, 'close'), govDetailPage.stage(view.key + ':' + hash, 'close'))
     });
 }
 
@@ -12309,7 +12309,7 @@ async function openCouncilVoteModal() {
         // a blip on this particular query.
         const councilPromise = fetch('/api/council', { cache: 'no-store' }).then(r => {
             if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
+            return r.json().then(d => govRefresh.overlay('council', d));
         });
         const votingPromise = (connectedAddress && globalApi && globalApi.query && globalApi.query[councilPalletName] && globalApi.query[councilPalletName].voting)
             ? globalApi.query[councilPalletName].voting(connectedAddress).then(v => v).catch(() => null)
@@ -12730,21 +12730,26 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
 let treasuryData = null;
 let treasuryTab = 'overview';
 
-async function fetchTreasuryData() {
-    treasuryTab = 'overview';
+// o.fresh: the post-action poll (R4): ?fresh=1, the tab the user is on is kept, no loading paint, and the
+// Spends tab (its table, sort and focus) is never redrawn; its overview is drawn when the tab is opened.
+async function fetchTreasuryData(o = {}) {
+    if (!o.fresh) treasuryTab = 'overview';
     const root = document.getElementById('treasury-content');
     if (!root) return;
-    root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading treasury data…</div>';
+    if (!o.fresh) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading treasury data…</div>';
     try {
-        const res = await fetch('/api/treasury');
+        const res = await (o.fresh ? fetch('/api/treasury?fresh=1', { cache: 'no-store' }) : fetch('/api/treasury'));
         const data = await parseJsonResponse(res);
         if (!res.ok || data.error) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+        const same = o.fresh && samePayload(treasuryData, data);
         treasuryData = data;
+        if (o.fresh) { if (!same && treasuryTab !== 'spends') renderTreasury(); return data.freshness; }
         renderTreasury();
         // Deep-link: if we arrived from /calendar with ?proposal=N, open the
         // matching treasury proposal modal now that data is loaded.
         tryOpenFromQueryString('treasury');
     } catch (e) {
+        if (o.fresh) return null;   // a poll that failed leaves the page as it is
         root.innerHTML = `
             <div class="list-container glass" style="padding:40px;text-align:center;">
                 <h3 style="color:var(--error);margin-bottom:8px;">Couldn't load treasury data</h3>
