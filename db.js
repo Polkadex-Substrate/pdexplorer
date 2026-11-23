@@ -1989,6 +1989,15 @@ export function getUnclaimedComputedAt(stash) {
     return typeof v === 'number' ? v : 0;
 }
 
+// R2 stubs (red commit): implemented in the green commit.
+export const UNCLAIMED_PAIR_DELETE_SQL = 'SELECT 1';
+export const UNCLAIMED_STALE_SQL = 'SELECT 1';
+export const FORK_REWARD_EVENTS_SQL = 'SELECT 1';
+export const LOWEST_SCAN_FAILURE_FROM_SQL = 'SELECT 1';
+export function noteRewardedPairs() { return { deleted: 0, marked: 0 }; }
+export function getForkRewardEventData() { return []; }
+export function getLowestScanFailureFrom() { return null; }
+
 // --- price history ---
 // Multi-provider: each row carries a `source` tag ('cmc' | 'ascendex' |
 // 'coingecko-backfill' | ...) so /api/price-latest can expose the most-recent

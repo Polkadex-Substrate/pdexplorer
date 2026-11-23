@@ -107,6 +107,28 @@ describe('payout evidence', () => {
     });
 });
 
+// R2, review follow-up F6: a held row keeps WHY it is held. The UX spec has one wording for both (S2, S3, and
+// S15 after the deadline), so the reason changes no string; it is stored for the copy and the diagnostics.
+describe('F6: the hold reason', () => {
+    const reasons = (eff) => Object.fromEntries(eff.known.map(k => [k.key, k.op === 'hold' ? k.value : (k.value === null ? 'proven' : k.value)]));
+    test('an item that completed without a Rewarded for this account: noReward; a failed item: itemFailed; a proven row: no value', () => {
+        const eff = payout(forceBatch(paidItem(PAIRS[0]), otherPageItem(PAIRS[1]), skippedItem()));
+        assert.deepEqual(reasons(eff), { [keyOf(PAIRS[0])]: 'proven', [keyOf(PAIRS[1])]: 'noReward', [keyOf(PAIRS[2])]: 'itemFailed' });
+    });
+    test('a single call that succeeded without a Rewarded for this account: noReward', () => {
+        const eff = payout([payoutStarted(501, V1), rewarded(V1), rewarded(OTHER), feePaid(), success()], { pairs: [PAIRS[0]] });
+        assert.deepEqual(reasons(eff), { [keyOf(PAIRS[0])]: 'noReward' });
+    });
+    test('a batch that cannot be attributed: unattributable for every row', () => {
+        const events = [...paidItem(PAIRS[0]), itemCompleted(), ...paidItem(PAIRS[1]), ...paidItem(PAIRS[2]), feePaid(), success()];
+        assert.deepEqual(Object.values(reasons(payout(events))), ['unattributable', 'unattributable', 'unattributable']);
+    });
+    test('a failed item with another error than AlreadyClaimed is itemFailed as well', () => {
+        const eff = payout(forceBatch(paidItem(PAIRS[0]), [itemFailed({ isModule: true, asModule: {} })], paidItem(PAIRS[2])));
+        assert.equal(reasons(eff)[keyOf(PAIRS[1])], 'itemFailed');
+    });
+});
+
 // Every other action key: domains and evidence, no known results in R1.
 const OK = { ok: true, tone: 'ok' };
 const TABLE = [

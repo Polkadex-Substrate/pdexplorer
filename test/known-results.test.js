@@ -52,8 +52,13 @@ describe('known results', () => {
         now.t += 420_000;
         a = k.apply(D, ME, rows(), { keyOf: keyOfRow });
         assert.equal(a.removed.length, 0, 'remove outlived 10 min');
-        assert.equal(a.expired.length, 0);
+        // R2 (F7): a proven-paid row the server STILL lists when its overlay ends comes back marked as possibly
+        // behind (expired), never silently; the hold is gone at 10 min as before.
+        assert.deepEqual(a.expired.map(e => e.key), [keyOf(PAIRS[0])]);
         assert.deepEqual(k.list(D, ME), []);
+        now.t += 600_000;
+        a = k.apply(D, ME, rows(), { keyOf: keyOfRow });
+        assert.equal(a.expired.length, 0, 'the lapsed remove outlived its second bound');
     });
     test('withdraw by txHash removes every entry of that transaction, and only those', () => {
         const k = createKnownResults({ storage: memStorage(), now: clock() });
@@ -229,9 +234,91 @@ describe('F7: aged entries are pruned on load', () => {
         createKnownResults({ storage: s, now: c }).add([entry('remove', 0)]);
         c.t += 30_000;
         createKnownResults({ storage: s, now: c }).add([entry('remove', 1)]);
-        c.t += 600_000 - 30_000;   // the first is now aged, the second is not
+        // R2 (F7): a remove is kept one more maxAge after it stops applying (it marks a row the server still
+        // lists as possibly behind), so it is aged at 2 x maxAge.
+        c.t += 1_200_000 - 30_000;   // the first is now aged, the second is not
         createKnownResults({ storage: s, now: c });
         const left = JSON.parse(s.getItem('pdex_known_results'));
         assert.deepEqual(left.map(e => e.key), [keyOf(PAIRS[1])], 'an aged entry stayed in storage until the next write');
+    });
+    test('a hold past maxAge is pruned on load at maxAge (only removes get the lapse)', () => {
+        const s = memStorage();
+        const c = clock();
+        createKnownResults({ storage: s, now: c }).add([entry('hold', 0)]);
+        c.t += 600_000;
+        createKnownResults({ storage: s, now: c });
+        assert.deepEqual(JSON.parse(s.getItem('pdex_known_results')), []);
+    });
+});
+
+// R2: with the server's freshness, the store knows when the server has caught up with an entry's block.
+describe('R2: apply with freshness', () => {
+    // A stand-in for lib/freshness.js caughtUp, so this file tests the store alone.
+    const caughtUp = (domain, f, block) => !!f && Number.isFinite(f.at) && block != null && f.at >= block;
+    const at = (n) => ({ at: n });
+    test('a hold ends as soon as the server answers at or beyond its block: listed, it is a normal row again (S19)', () => {
+        const k = createKnownResults({ storage: memStorage(), now: clock() });
+        k.add([entry('hold', 1, { block: 77 })]);
+        let a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(76), caughtUp });
+        assert.deepEqual(a.held.map(e => e.key), [keyOf(PAIRS[1])], 'ended before the server reached the block');
+        a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(77), caughtUp });
+        assert.deepEqual(a.held, []);
+        assert.deepEqual(a.expired, [], 'a caught-up hold is not "may be behind"');
+        assert.equal(a.rows.length, 3, 'the row is offered again');
+        assert.deepEqual(a.ended.map(e => e.key), [keyOf(PAIRS[1])]);
+    });
+    test('a caught-up hold the server no longer lists is simply gone', () => {
+        const k = createKnownResults({ storage: memStorage(), now: clock() });
+        k.add([entry('hold', 1, { block: 77 })]);
+        const a = k.apply(D, ME, rows().filter((_, i) => i !== 1), { keyOf: keyOfRow, freshness: at(80), caughtUp });
+        assert.deepEqual(a.held, []);
+        assert.deepEqual(a.expired, []);
+        assert.equal(a.rows.length, 2);
+    });
+    test('a hold without a block (re-sent after a reorg) is not ended by freshness', () => {
+        const k = createKnownResults({ storage: memStorage(), now: clock() });
+        k.add([entry('hold', 1, { block: null })]);
+        const a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(1e9), caughtUp });
+        assert.deepEqual(a.held.map(e => e.key), [keyOf(PAIRS[1])]);
+    });
+    test('F7: the server caught up and STILL lists a proven-paid row: it stays out of the list and is reported lagging', () => {
+        const k = createKnownResults({ storage: memStorage(), now: clock() });
+        k.add([entry('remove', 0, { block: 77 })]);
+        let a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(70), caughtUp });
+        assert.deepEqual(a.lagging, [], 'not caught up yet: plain known result');
+        assert.equal(a.removed.length, 1);
+        a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(77), caughtUp });
+        assert.deepEqual(a.lagging.map(e => e.key), [keyOf(PAIRS[0])]);
+        assert.ok(!a.rows.some(r => keyOfRow(r) === keyOf(PAIRS[0])), 'a proven-paid row was offered again');
+    });
+    test('the overlay ends when the server has caught up and no longer lists the row: nothing applied, nothing lagging', () => {
+        const k = createKnownResults({ storage: memStorage(), now: clock() });
+        k.add([entry('remove', 0, { block: 77 })]);
+        const a = k.apply(D, ME, rows().slice(1), { keyOf: keyOfRow, freshness: at(78), caughtUp });
+        assert.deepEqual(a.removed, []);
+        assert.deepEqual(a.lagging, []);
+        assert.deepEqual(a.late, []);
+    });
+    test('late: an entry whose block the server has not reached within lateMs (the poll deadline)', () => {
+        const now = clock();
+        const k = createKnownResults({ storage: memStorage(), now });
+        k.add([entry('remove', 0, { block: 77 }), entry('hold', 1, { block: 77 })]);
+        let a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(70), caughtUp, lateMs: 180_000 });
+        assert.deepEqual(a.late, []);
+        now.t += 180_000;
+        a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(70), caughtUp, lateMs: 180_000 });
+        assert.deepEqual(a.late.map(e => e.key).sort(), [keyOf(PAIRS[0]), keyOf(PAIRS[1])].sort());
+        a = k.apply(D, ME, rows(), { keyOf: keyOfRow, freshness: at(77), caughtUp, lateMs: 180_000 });
+        assert.deepEqual(a.late, [], 'the server answered: not late any more');
+    });
+    test('no freshness (an older server, or a page before R2): exactly the R1 answer', () => {
+        const now = clock();
+        const k = createKnownResults({ storage: memStorage(), now });
+        k.add([entry('remove', 0, { block: 77 }), entry('hold', 1, { block: 77 })]);
+        const a = k.apply(D, ME, rows(), { keyOf: keyOfRow });
+        assert.equal(a.removed.length, 1);
+        assert.equal(a.held.length, 1);
+        assert.deepEqual(a.lagging, []);
+        assert.deepEqual(a.late, []);
     });
 });

@@ -1261,6 +1261,14 @@ function noteIdentityEvents(records) {
     if (accounts.length) identityInvalidator.invalidate(accounts);
 }
 
+// R2 stubs (red commit): implemented and wired in the green commit.
+function noteRewardEvents() { }
+function noteReorgedRewards() { }
+function lowestHoleFrom() { return null; }
+async function freshnessHead() { return null; }
+async function routeFreshness() { return null; }
+function freshnessNow() { return null; }
+
 // Audit F-114: the fallback was Date.now() — so a block whose timestamp.set
 // extrinsic couldn't be read got stamped with the moment the INDEXER looked at
 // it. During the historical backfill that means a 2022 block dated today,

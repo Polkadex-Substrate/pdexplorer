@@ -19,6 +19,7 @@ import { buildTxModel } from '../lib/tx-status.js';
 import { createPostAction } from '../lib/post-action.js';
 import { createKnownResults } from '../lib/known-results.js';
 import { effectsFor } from '../lib/action-effects.js';
+import { caughtUp, pollDeadlineMs, samePayload } from '../lib/freshness.js';
 import * as payoutRefreshModule from '../lib/payout-refresh.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { ME, V1, V2, V3, REGISTRY, paidItem, forceBatch, walletWith, keyOf } from './helpers/payout-events.js';
@@ -30,7 +31,7 @@ const flush = async () => { for (let i = 0; i < 12; i++) await new Promise(r => 
 const line = (start) => { const i = SCRIPT.indexOf(start); assert.ok(i >= 0, 'not in script.js: ' + start); return SCRIPT.slice(i, SCRIPT.indexOf('\n', i)); };
 
 // The page the functions run on: the wallet root and the payout modal exactly as index.html has it.
-function payoutPage() {
+function payoutPage({ extraSrc = [], ctxOver = {} } = {}) {
     const win = new Window({ url: 'https://explorer.test/wallet', settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
     const doc = win.document;
     const a = HTML.indexOf('<div id="payout-modal"');
@@ -56,7 +57,7 @@ function payoutPage() {
         multisigStore: { find: () => null }, multisigUI: { review: async () => {} },
         resolveWalletSigner: async () => ({ account: { address: ME }, signer: {} }),
         trackSignedTx, showTxStatus: (act, st, ev, err, ex) => buildTxModel(act, st, ev, err, ex),
-        createKnownResults, createPostAction, effectsFor, ...payoutRefreshModule,
+        createKnownResults, createPostAction, effectsFor, caughtUp, pollDeadlineMs, samePayload, ...payoutRefreshModule,
         batchTx: (_api, list) => { calls.built.push(list); return tx; },
         buildPayoutCall: (_api, validator, era) => ({ era, validator }),
         refreshWalletDashboardFor: (address) => { calls.refresh.push(address); },
@@ -67,10 +68,11 @@ function payoutPage() {
         walletAprData: null, walletFetchGen: 0, walletRecentStore: null, VALIDATE_ON: false,
         openSendModal() {}, openStakeModal() {}, openUnstakeModal() {}, openIdentityModal() {}, openWalletPicker() {}, disconnectWallet() {}
     };
+    Object.assign(ctx, ctxOver);
     for (const n of ['helpIcon', 'rewardHistoryLinkHtml', 'walletViewingSlotHtml', 'renderUsdSubscript', 'buildViewOnlyCallout', 'formatDuration', 'formatLocalDate',
         'makeTable', 'mountWalletRecentTx', 'fetchApiJson', 'bindViewOnlyCalloutHandlers', 'applyWalletActionBlock', 'scheduleWalletSigningRechecks',
         'mountBalanceLocks', 'lockActionDeps', 'mountNominationStatus', 'renderWalletAdvancedSection', 'refreshWalletMultisigs', 'renderWalletAprCard',
-        'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash']) ctx[n] = noop;
+        'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash']) if (!(n in ctxOver)) ctx[n] = noop;
     vm.createContext(ctx);
     const src = [
         'let currentWalletData = null;',
@@ -78,6 +80,7 @@ function payoutPage() {
         line('const PAYOUT_BATCH_MAX = '),
         bodyOf(SCRIPT, 'renderWalletDashboard'), bodyOf(SCRIPT, 'bindWalletActionHandlers'), bodyOf(SCRIPT, 'openPayoutModal'),
         'async ' + bodyOf(SCRIPT, 'submitPayoutTx'), 'async ' + bodyOf(SCRIPT, 'submitSignedTx'),
+        ...extraSrc,
         'globalThis.__glue = { knownResults, postAction, payoutRefresh, data: () => currentWalletData };'
     ].join('\n');
     vm.runInContext(src, ctx);
@@ -117,7 +120,9 @@ describe('the payout glue in script.js, executed', () => {
         assert.equal(p.q('#payout-modal').style.display, 'none', 'the modal stayed open after the payout was in a block');
         assert.equal(btn().querySelector('span').textContent, '1 unclaimed entry', 'the button still offers the paid entries');
         assert.equal(p.q('#wallet-unpaid-value').textContent.trim(), (1.30).toFixed(4) + ' PDEX', 'the tile still counts the paid entries');
-        assert.ok(p.timers.some(t => t.ms === 2500), 'the dashboard reload after the payout is gone');
+        // R2: the fixed 2.5 s dashboard reload is gone; the core re-reads at inclusion and polls on evidence.
+        assert.ok(!p.timers.some(t => t.ms === 2500), 'the 2.5 s dashboard reload after the payout is still armed');
+        assert.deepEqual(p.calls.refresh, [ME], 'the inclusion did not re-read the dashboard at once');
         assert.equal(p.glue.knownResults.list('rewards.unpaid', ME).filter(e => e.op === 'remove').length, 30);
 
         btn().click();
@@ -180,5 +185,98 @@ describe('F8: the reload after an action keeps the page', () => {
         const w = fetchWorld({ dashboardShown: false });
         await w.ctx.fetchWalletDashboard(ME, { keepPage: true });
         assert.deepEqual(w.log.renders, ['cache']);
+    });
+});
+
+// R2, end to end with NO 2.5 s timer: the real refreshWalletDashboardFor and fetchWalletDashboard are lifted too,
+// and a fake server answers /api/wallet with a freshness field the test moves. The poll re-reads at inclusion,
+// backs off, and stops when the server has indexed the inclusion block.
+describe('R2: the payout flow polls the server on evidence', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+    afterEach(() => mock.timers.reset());
+    const entries = [{ era: 501, validator: V1, amount: 1.5 }, { era: 501, validator: V2, amount: 2.25 }, { era: 502, validator: V3, amount: 3 }];
+    function world() {
+        const srv = { chain: 10, listed: entries.slice(), walletReads: 0 };
+        const body = () => ({ ...dashboard(walletWith(srv.listed)), freshness: { v: 1, chainHead: 999, indexed: { chain: srv.chain, rewards: 999, tx: 999 },
+            since: { chain: 1, rewards: 1, tx: 1 }, kv: { council: null, democracy: null, treasury: null }, pending: [], intervalMs: { chain: 12000, rewards: 60000, tx: 30000 } } });
+        const fetch = async (url) => {
+            if (url.startsWith('/api/wallet/')) { srv.walletReads++; const b = body(); return { ok: true, status: 200, json: async () => b }; }
+            if (url.startsWith('/api/price-history')) return { ok: true, status: 200, json: async () => ({ history: [], configured: false }) };
+            return { ok: true, status: 200, json: async () => null };
+        };
+        const p = payoutPage({
+            extraSrc: [bodyOf(SCRIPT, 'isWalletRoute'), bodyOf(SCRIPT, 'refreshWalletDashboardFor'), 'async ' + bodyOf(SCRIPT, 'fetchWalletDashboard')],
+            ctxOver: { fetch, readRouteFromLocation: () => 'wallet', readWalletCache: () => null, renderWalletLoading: () => () => {},
+                clearWalletStaleBanner() {}, clearWalletActionBlock() {}, writeWalletCache() {}, maybeRunWalletEntryIntent() {}, repaintWalletPriceCard() {},
+                renderWalletAprCard() {}, showWalletStaleBanner() {}, disableWalletActions() {}, walletAprData: null }
+        });
+        return { p, srv };
+    }
+    const pollTimers = (p) => p.timers.filter(t => t.live && t.ms !== p.glue.knownResults.holdMs + 1);
+    const runNext = async (p) => { const t = pollTimers(p).sort((a, b) => a.ms - b.ms)[0]; assert.ok(t, 'no poll armed'); t.live = false; t.f(); await flush(); await flush(); return t; };
+
+    test('pay two of three: re-read at inclusion, poll at 2 s while the server lags, stop when it has the block; no 2.5 s timer', async () => {
+        const { p, srv } = world();
+        await p.ctx.fetchWalletDashboard(ME);
+        await flush();
+        assert.equal(p.q('#wallet-act-payout span').textContent, '3 unclaimed entries');
+        p.q('#wallet-act-payout').click();
+        const rows = p.rows();
+        assert.equal(rows.length, 3);
+        p.q('#payout-entries .payout-entry[data-key="' + keyOf(entries[2]) + '"]').remove();   // the user pays two
+        await p.ctx.submitPayoutTx();
+        await flush();
+        await p.emit({ type: 'Ready' });
+        const before = srv.walletReads;
+        await p.emit({ type: 'InBlock', asInBlock: '0xb1' }, forceBatch(paidItem(entries[0]), paidItem(entries[1])));
+        await flush(); await flush();
+        assert.equal(srv.walletReads, before + 1, 'the inclusion did not re-read /api/wallet');
+        assert.ok(!p.timers.some(t => t.ms === 2500), 'the fixed 2.5 s reload is back');
+        assert.equal(p.q('#wallet-act-payout span').textContent, '1 unclaimed entry', 'the overlay did not survive the re-render');
+        assert.equal(pollTimers(p).length, 1);
+        assert.equal(pollTimers(p)[0].ms, 2000);
+        await runNext(p);
+        assert.equal(srv.walletReads, before + 2);
+        assert.equal(pollTimers(p)[0].ms, 4000);
+        srv.chain = 42; srv.listed = [entries[2]];
+        await runNext(p);
+        assert.equal(srv.walletReads, before + 3);
+        assert.equal(pollTimers(p).length, 0, 'still polling after the server caught up');
+        const m = p.glue.payoutRefresh.model(p.glue.data());
+        assert.equal(m.state, 'current');
+        assert.equal(p.q('#wallet-act-payout span').textContent, '1 unclaimed entry');
+    });
+    test('lag: the server has the block but still lists both paid pairs: they are not offered, the tile says May be behind', async () => {
+        const { p, srv } = world();
+        await p.ctx.fetchWalletDashboard(ME);
+        await flush();
+        p.q('#wallet-act-payout').click();
+        p.q('#payout-entries .payout-entry[data-key="' + keyOf(entries[2]) + '"]').remove();
+        await p.ctx.submitPayoutTx();
+        await flush();
+        await p.emit({ type: 'Ready' });
+        srv.chain = 42;
+        await p.emit({ type: 'InBlock', asInBlock: '0xb1' }, forceBatch(paidItem(entries[0]), paidItem(entries[1])));
+        await flush(); await flush();
+        assert.equal(pollTimers(p).length, 0, 'caught up at the first read');
+        assert.equal(p.q('#wallet-act-payout span').textContent, '1 unclaimed entry', 'a proven-paid pair is offered again');
+        const chip = p.q('#wallet-unpaid-label .ui-chip');
+        assert.ok(chip && chip.textContent.trim() === 'May be behind', 'the lag is silent');
+        p.q('#wallet-act-payout').click();
+        assert.deepEqual(p.rows(), [keyOf(entries[2])]);
+        assert.ok(p.q('#payout-behind-line'), 'the modal does not open with S15');
+    });
+    test('an identical payload is not re-rendered: the dashboard node survives a poll that changed only freshness', async () => {
+        const { p, srv } = world();
+        await p.ctx.fetchWalletDashboard(ME);
+        await flush();
+        const bar = p.q('#wallet-action-bar');
+        await p.ctx.refreshWalletDashboardFor(ME);
+        await flush();
+        assert.equal(p.q('#wallet-action-bar'), bar, 'a poll with nothing new remounted the dashboard');
+        srv.chain = 77;
+        const f = await p.ctx.refreshWalletDashboardFor(ME);
+        assert.equal(f && f.indexed.chain, 77, 'the refresh does not hand the freshness back to the core');
+        assert.equal(p.glue.data().freshness.indexed.chain, 77, 'the page kept an old freshness for the same payload');
     });
 });
