@@ -75,7 +75,9 @@ describe('Q6, Q16, Q21, Q22: static copy in index.html', () => {
         for (const t of ['Sign and table motion', 'Sign and stake', 'Sign and pay out', 'Sign and send', 'Sign and unstake']) assert.match(INDEX, new RegExp('>' + t + '<'), t);
         const code = stripComments(SCRIPT);
         for (const old of ["'Sign & Submit'", "'Sign & Pay Out'", "'Sign & Unstake'", "'Sign & Send'"]) assert.ok(!code.includes('idleText: ' + old), old);
-        for (const t of ['Sign and stake', 'Sign and pay out', 'Sign and unstake', 'Sign and send']) assert.ok(code.includes(`idleText: '${t}'`), t);
+        for (const t of ['Sign and pay out', 'Sign and unstake', 'Sign and send']) assert.ok(code.includes(`idleText: '${t}'`), t);
+        // The stake card's button reads its plan (SC-50 "Sign and stake" to SC-53), so it resets to that label.
+        assert.ok(code.includes('idleText: stakeCopy(plan.primary)'), 'the stake button resets to the plan\'s label');
         assert.ok(!stripComments(read('lib/treasury-spend-view.js')).includes('Sign & table motion'));
         assert.ok(read('lib/treasury-spend-view.js').includes("idleText: 'Sign and table motion'"));
     });

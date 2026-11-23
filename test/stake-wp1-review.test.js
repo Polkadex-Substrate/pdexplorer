@@ -101,7 +101,7 @@ async function world({ data, selected = [], typed = '', unstakeTyped = '', fullU
     doc.getElementById('unstake-amount-input').value = unstakeTyped;
     const sent = [], built = [], reviews = [];
     Object.assign(tab.ctx, stakePlan, {
-        FEE_MARGIN, pdexToPlanck, isPositiveNumberInput, maxNominationsFrom, validatorsCache: { meta: { maxNominations: 16 } }, stakeQuotaWarned: false,
+        FEE_MARGIN, pdexToPlanck, isPositiveNumberInput, maxNominationsFrom, validatorsCache: { meta: { maxNominations: 16 } }, stakeQuotaWarned: false, stakeCard: null,
         stakingFormatPDEX: (n) => Number(n || 0).toFixed(4), formatDuration: () => '1 day', parseFloat, Math, Number,
         planckToPdexString: (p) => String(p), decodeUnstakeError: (raw) => String((raw && raw.message) || raw), refreshWalletDashboardFor: () => {},
         unstakeFullUnbondIntent: !!fullUnbond, unstakeMaxPlanck: fullUnbond,
@@ -211,7 +211,7 @@ describe('finding 3: the success card says what was signed', () => {
         const w = await world({ data: staker({}, { totalStaked: 0, activeStaked: 0, nominating: [] }), selected: [V1, V2], typed: '150' });
         await w.fn('submitStakeTx')();
         await flush();
-        assert.equal(result(w).body, '150 PDEX bonded and 2 validators nominated.');
+        assert.equal(result(w).body, '150 PDEX staked with 2 validators.', 'SC-130');
         w.close();
     });
     test('validators only (bare nominate): no amount', async () => {
@@ -219,7 +219,7 @@ describe('finding 3: the success card says what was signed', () => {
         await w.fn('submitStakeTx')();
         await flush();
         assert.equal(name(decode(w.sent[0].tx)), 'staking.nominate');
-        assert.equal(result(w).body, '3 validators nominated.');
+        assert.equal(result(w).body, 'Your validators were updated: 3 chosen.', 'SC-132');
         w.close();
     });
     test('add and change validators: both', async () => {
@@ -227,7 +227,7 @@ describe('finding 3: the success card says what was signed', () => {
         await w.fn('submitStakeTx')();
         await flush();
         assert.deepEqual(decode(w.sent[0].tx).args[0].map(name), ['staking.bondExtra', 'staking.nominate']);
-        assert.equal(result(w).body, '5 PDEX bonded and 2 validators nominated.');
+        assert.equal(result(w).body, '5 PDEX staked with 2 validators.', 'SC-130');
         w.close();
     });
 });
@@ -280,16 +280,16 @@ describe('finding 5: an unknown stake plans nothing; a different controller is r
             const p = planStakeCalls({ hasBond: null, amountPlanck, targets: [V1] });
             assert.deepEqual(p.calls, [], 'bond would fail AlreadyBonded on a staked account, for a fee');
             assert.deepEqual(p.problems, ['bonded-unknown']);
-            assert.equal(planProblemMessage(p), 'Wallet data is not loaded.');
+            assert.equal(planProblemMessage(p), 'Your account is still loading. Try again in a moment.', 'SC-109');
             assert.throws(() => buildStakeTx(api, p));
         }
     });
-    test('the modal: a failed ledger read signs nothing and shows the existing message', async () => {
+    test('the modal: a failed ledger read signs nothing and shows SC-109', async () => {
         const w = await world({ data: staker({}, { totalStaked: 0, activeStaked: 0, nominating: [], ledgerRead: 'failed' }), selected: [V1], typed: '150' });
         await w.fn('submitStakeTx')();
         await flush();
         assert.equal(w.sent.length + w.built.length + w.reviews.length, 0, 'a bond was built for an account whose stake is unknown');
-        assert.equal(w.errorOf('stake-modal-error'), 'Wallet data is not loaded.');
+        assert.equal(w.errorOf('stake-modal-error'), 'Your account is still loading. Try again in a moment.', 'SC-109');
         w.close();
     });
     test('the modal: a stash whose controller is another account is refused before signing nominate (existing controller message)', async () => {

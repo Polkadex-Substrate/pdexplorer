@@ -254,7 +254,8 @@ describe('cross-file promises', () => {
     // buildStakeTx builds that plan (test/stake-modal-plan.test.js runs it).
     test('signing: submitStakeTx plans the Selected box and builds that plan through submitSignedTx', () => {
         const body = bodyOf(script, 'submitStakeTx');
-        assert.match(body, /planStakeCalls\(/);
+        // WP2: through stakeFormPlan, the function the simple view renders its review from (one source, M6).
+        assert.match(body, /stakeFormPlan\(/);
         assert.match(body, /buildTx: \(api\) => buildStakeTx\(api, plan, /);
         assert.match(body, /await submitSignedTx\(\{/);
         assert.match(body, /Array\.from\(stakeSelected\.keys\(\)\)/);

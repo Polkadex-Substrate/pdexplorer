@@ -221,9 +221,18 @@ describe('the view preference: simple unless the store says advanced, never thro
 });
 
 describe('copy', () => {
-    test('the strings WP1 uses, as the spec writes them; no dashes, no exclamation marks', () => {
-        assert.deepEqual(Object.keys(STAKE_COPY), ['SC-05', 'SC-50', 'SC-51', 'SC-52', 'SC-53', 'SC-55a', 'SC-55b', 'SC-80a', 'SC-80b', 'SC-80c', 'SC-80d', 'SC-80e',
-            'SC-100', 'SC-101', 'SC-102', 'SC-104', 'SC-105', 'SC-106', 'SC-107', 'SC-108', 'SC-131', 'SC-134']);
+    test('the strings WP1 and WP2 use, as the spec writes them; no dashes, no exclamation marks', () => {
+        assert.deepEqual(Object.keys(STAKE_COPY), ['SC-01', 'SC-03', 'SC-03b', 'SC-03c', 'SC-04', 'SC-05', 'SC-10', 'SC-11', 'SC-11b', 'SC-12', 'SC-13',
+            'SC-14', 'SC-14b', 'SC-14c', 'SC-14d', 'SC-14e', 'SC-20', 'SC-21', 'SC-21b', 'SC-22', 'SC-23', 'SC-24a', 'SC-24b', 'SC-25',
+            'SC-30', 'SC-30b', 'SC-30c', 'SC-30d', 'SC-31', 'SC-32', 'SC-33', 'SC-35', 'SC-36', 'SC-37', 'SC-38', 'SC-39',
+            'SC-50', 'SC-51', 'SC-52', 'SC-53', 'SC-55a', 'SC-55b', 'SC-60', 'SC-60t', 'SC-78b', 'SC-80a', 'SC-80b', 'SC-80c', 'SC-80d', 'SC-80e', 'SC-95',
+            'SC-100', 'SC-101', 'SC-102', 'SC-104', 'SC-105', 'SC-106', 'SC-107', 'SC-108', 'SC-109', 'SC-110', 'SC-111', 'SC-112', 'SC-113', 'SC-114', 'SC-115',
+            'SC-122', 'SC-130', 'SC-131', 'SC-132', 'SC-133', 'SC-134', 'SC-140', 'SC-160', 'SC-161a', 'SC-161b', 'SC-163a', 'SC-163b', 'SC-163c',
+            'SC-164a', 'SC-164b', 'SC-164c', 'SC-164d', 'SC-164e', 'SC-164f']);
+        assert.equal(stakeCopy('SC-32'), 'Chosen by past return, highest first, from validators that are active now, have at least 7 eras of reward history, accept new stake, take 10% commission or less with no recent raise, were not penalised in the last 84 eras, rarely miss blocks, and paid at least three quarters of the typical return. One per operator identity.');
+        assert.equal(stakeCopy('SC-115', { need: '101.05', min: '100', have: '101.02' }), 'To stake you need at least 101.05 PDEX free: the smallest stake of 100 PDEX, 1 PDEX that must stay in the account, and the network fee. This account has 101.02 PDEX free.');
+        assert.deepEqual(['SC-164a', 'SC-164b', 'SC-164c', 'SC-164d', 'SC-164e', 'SC-164f'].map(k => STAKE_COPY[k]),
+            ['not active this era', '100% commission', 'not accepting stake', 'no reward history', 'low return', 'penalised recently'], 'in the order of UNHEALTHY');
         assert.equal(stakeCopy('SC-05', { reserve: '0.2' }), 'Max leaves 1 PDEX that must stay in the account and 0.2 PDEX for network fees.');
         assert.equal(stakeCopy('SC-50'), 'Sign and stake');
         for (const t of Object.values(STAKE_COPY)) assert.ok(!/[\u2013\u2014!]/.test(t), t);

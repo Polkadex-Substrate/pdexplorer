@@ -67,7 +67,7 @@ async function modal({ data, selected = [], typed = '', multisig = null, connect
     doc.getElementById('stake-amount-input').value = typed;
     const sent = [], built = [], reviews = [];
     Object.assign(tab.ctx, stakePlan, {
-        FEE_MARGIN, pdexToPlanck, maxNominationsFrom, validatorsCache: { meta: { maxNominations: 16 } }, stakeQuotaWarned: false,
+        FEE_MARGIN, pdexToPlanck, maxNominationsFrom, validatorsCache: { meta: { maxNominations: 16 } }, stakeQuotaWarned: false, stakeCard: null,
         stakingFormatPDEX: (n) => Number(n || 0).toFixed(4), formatDuration: () => '1 day', parseFloat, Math, Number,
         currentWalletData: data, stakeSelected: new Map(selected.map(a => [a, { address: a, name: null }])),
         globalApi: api, liveRuntimeError: () => null,
@@ -204,11 +204,11 @@ describe('amounts in planck; the typed amount is never rewritten (F2, M3, M4)', 
 });
 
 describe('who can sign from the card', () => {
-    test('a looked-up account that is not the connected wallet is refused with today\'s message; nothing is built (no proxy path)', async () => {
+    test('a looked-up account that is not the connected wallet is refused with SC-110; nothing is built (no proxy path)', async () => {
         const m = await modal({ data: staker({ address: SOMEONE }), selected: [V1, V3], typed: '5', connected: ME });
         await m.fn('submitStakeTx')();
         await flush();
-        assert.equal(m.errorText(), 'Connect this wallet to perform staking actions.');
+        assert.equal(m.errorText(), 'Connect this account\'s wallet to stake from it.');
         assert.equal(m.sent.length + m.reviews.length + m.built.length, 0);
         m.close();
     });
@@ -216,7 +216,7 @@ describe('who can sign from the card', () => {
 
 describe('the commission-only estimate never reaches the stake card (M10)', () => {
     test('no stake card file imports lib/apy.js or names its fields; the modal code path does not either', () => {
-        const files = ['lib/stake-pick.js', 'lib/stake-plan.js', 'lib/stake-filters.js', 'lib/stake-apr.js', 'lib/stake-picker-view.js', 'lib/stake-choice-sync.js'];
+        const files = ['lib/stake-pick.js', 'lib/stake-plan.js', 'lib/stake-card-view.js', 'lib/stake-filters.js', 'lib/stake-apr.js', 'lib/stake-picker-view.js', 'lib/stake-choice-sync.js'];
         const BAD = /apy\.js|estimatedApy|APY_FIELD|apyFields|realApy|currentApy|avg30DayApy/;
         for (const f of files) {
             const code = stripComments(readFileSync(new URL('../' + f, import.meta.url), 'utf8'));
