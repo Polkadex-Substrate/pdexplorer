@@ -156,6 +156,13 @@ describe('b: the success card says what the plan signed, never "null"', () => {
         const add = body(planStakeCalls({ hasBond: true, amountPlanck: 5n * PDEX, currentTargets: [V1], targets: [V1] }));
         assert.equal(add.body, '5 PDEX added to your stake. Your validators are unchanged.');
     });
+    test('adding PDEX and replacing validators: SC-131\'s first sentence and SC-132, not the first-stake SC-130 (WP2 review, item 4)', () => {
+        const plan = planStakeCalls({ hasBond: true, amountPlanck: 5n * PDEX, currentTargets: [V1, V2], targets: [V1, addr(23)] });
+        assert.deepEqual(plan.calls.map(c => c.kind), ['bondExtra', 'nominate']);
+        const r = body(plan);
+        assert.equal(r.body, '5 PDEX added to your stake. Your validators were updated: 2 chosen.');
+        assert.equal(r.next, 'It starts earning from the next era (eras last 24 hours). Claim rewards with Pay Out on My Account.');
+    });
 });
 
 describe('c: a stake that could not be read is not 0', () => {

@@ -31,6 +31,7 @@ import { FEE_MARGIN } from '../lib/fee-preflight.js';
 import { pdexToPlanck } from '../lib/wallet-safety.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from '../lib/stake-picker-view.js';
 import { payeeOf } from '../lib/validator-manage.js';
+import { ERROR_COPY } from '../lib/tx-status.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const HTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -90,7 +91,8 @@ const staker = (nominating = [1, 2], stakingOver = {}) => ({ address: ME, balanc
 
 // One open Stake card. snapshots: what loadValidatorsForPicker returns, call by call (an Error throws;
 // the last one repeats). payee: what the chain read of Staking.Payee gives ('failed' for a read error).
-async function card({ data, snapshots, payee = { kind: 'staked', account: '' }, keep, connected = ME, storage = null, multisig = null }) {
+// hold: do not wait for the first list load (a pending promise in snapshots keeps the card loading).
+async function card({ data, snapshots, payee = { kind: 'staked', account: '' }, keep, connected = ME, storage = null, multisig = null, hold = false }) {
     const ext = fakeExtension('polkadot-js', [{ address: ME, name: 'One' }]);
     const profile = makeProfile({ extensions: [ext] });
     profile.local.setItem('pdex_wallet_address', connected);
@@ -112,6 +114,7 @@ async function card({ data, snapshots, payee = { kind: 'staked', account: '' }, 
             loads++;
             const next = queue.length > 1 ? queue.shift() : queue[0];
             if (next instanceof Error) throw next;
+            if (next && typeof next.then === 'function') return next;
             tab.ctx.validatorsCache = next;
             return next;
         },
@@ -125,7 +128,8 @@ async function card({ data, snapshots, payee = { kind: 'staked', account: '' }, 
         trackSignedTx: (o) => ({ start() {}, buildFailed(e) { built.push(e); }, send: async (tx, who) => { sent.push({ tx, who, action: o.action }); } })
     });
     vm.runInContext(LIFT.map(lift).join(''), tab.ctx);
-    await tab.fn('openStakeModal')(keep);
+    const opening = tab.fn('openStakeModal')(keep);
+    if (!hold) await opening;
     await flush();
     const q = (s) => doc.querySelector('#stake-modal ' + s);
     const qa = (s) => Array.from(doc.querySelectorAll('#stake-modal ' + s));
@@ -593,6 +597,132 @@ describe('the rewards setting is read from the chain (section 3.3)', () => {
         assert.deepEqual(await run(some({ isStaked: false, isStash: false, isController: false, isAccount: true, asAccount: SOMEONE })), { kind: 'account', account: SOMEONE });
         assert.equal(await run(async () => ({ isSome: false })), 'failed');
         assert.equal(await run(async () => { throw new Error('node gone'); }), 'failed');
+    });
+});
+
+// ── WP2 review fixes (Opus review of 77fcf6f, FIX FIRST): what is signed is what the card shows ──
+const planLines = (c) => c.qa('.stake-plan-lines li').map(li => li.textContent.trim());
+const nothingSent = (c) => c.sent.length + c.built.length + c.reviews.length;
+const SC39 = 'The validator list changed while this was open. Check the new choice, then sign.';
+const SC122 = 'Validators cannot be chosen right now, so there is nothing to sign yet.';
+
+describe('the press plans from the data the card was drawn from (WP2 review, item 1; sections 4.2, 9: M2, M6)', () => {
+    // After the first stake went through: the eight picks nominated, 150 PDEX staked, less to spend.
+    const stakedNow = () => ({ ...staker([1, 2, 3, 4, 5, 6, 7, 8], { totalStaked: 150, activeStaked: 150 }), balance: { free: 501, transferable: 350 } });
+    test('a first stake on screen, then the account refreshes to show a stake: nothing is signed, the card is drawn again on the new data with SC-39', async () => {
+        const c = await card({ data: firstTimer() });
+        await c.type('150');
+        assert.deepEqual(planLines(c), ['Stake 150 PDEX', 'Choose 8 validators']);
+        assert.equal(c.primary().textContent.trim(), 'Sign and stake');
+        c.tab.ctx.currentWalletData = stakedNow();
+        await c.submit();
+        assert.equal(nothingSent(c), 0, 'the press signed from data the card never showed (bondExtra alone under a card showing bond and nominate)');
+        assert.equal(c.sc('SC-39'), SC39);
+        assert.equal(c.q('details.stake-validators')?.open, true, 'the card opens on what it now shows');
+        assert.equal(c.sc('SC-03b'), 'Amount to add (PDEX)');
+        assert.equal(c.sc('SC-30c'), 'Your 8 validators stay as they are');
+        assert.equal(c.sc('SC-11b'), 'You add 150 PDEX to the 150 PDEX you have staked.');
+        assert.deepEqual(planLines(c), ['Add 150 PDEX to your stake'], 'the review is redrawn on the new data');
+        assert.equal(c.input().value, '150', 'the amount is never rewritten (M4)');
+        await c.submit();
+        assert.deepEqual(signedCalls(c).map(name), ['staking.bondExtra'], 'the next press signs what the card now shows');
+        assert.equal(signedCalls(c)[0].args[0].toBigInt(), 150n * PDEX);
+        c.close();
+    });
+    test('validators changed elsewhere while the card is open: adding PDEX signs nothing, the card shows the new set; the next press signs bondExtra alone', async () => {
+        const c = await card({ data: staker([1, 2]) });
+        await c.type('5');
+        assert.deepEqual(planLines(c), ['Add 5 PDEX to your stake']);
+        c.tab.ctx.currentWalletData = staker([3, 4]);
+        await c.submit();
+        assert.equal(nothingSent(c), 0, 'nominate with the old list would silently undo the change made elsewhere');
+        assert.equal(c.sc('SC-39'), SC39);
+        assert.equal(c.sc('SC-30c'), 'Your 2 validators stay as they are');
+        assert.deepEqual(listed(c), [V(3), V(4)], 'the card lists the validators the account has now');
+        assert.deepEqual(planLines(c), ['Add 5 PDEX to your stake']);
+        assert.equal(c.input().value, '5');
+        await c.submit();
+        assert.deepEqual(signedCalls(c).map(name), ['staking.bondExtra'], 'the validators are not re-sent');
+        c.close();
+    });
+    test('Max writes the figure the card states, from the data it was drawn from', async () => {
+        const c = await card({ data: firstTimer() });
+        assert.equal(c.sc('SC-04'), 'You can stake up to 499.8 PDEX.');
+        c.tab.ctx.currentWalletData = firstTimer({ free: 301, transferable: 300 });
+        await c.click('#stake-max-btn');
+        assert.equal(c.input().value, '499.8', 'Max read the refreshed account, not the one the card shows');
+        c.close();
+    });
+    test('a refresh that changes nothing the plan reads does not stop the press', async () => {
+        const c = await card({ data: firstTimer() });
+        await c.type('150');
+        c.tab.ctx.currentWalletData = JSON.parse(JSON.stringify(firstTimer()));
+        await c.submit();
+        assert.equal(c.sc('SC-39'), '');
+        assert.deepEqual(signedCalls(c).map(name), ['staking.bond', 'staking.nominate']);
+        c.close();
+    });
+});
+
+describe('a plan that changes validators is signed only with its review on screen (WP2 review, item 2; M2, M8)', () => {
+    const lists = [
+        ['failed', async () => [new Error('down')], false],
+        ['not built yet', async () => [await snapshotOf(fullList(), { full: false })], false],
+        ['loading', async () => [new Promise(() => {})], true]
+    ];
+    for (const [label, snaps, hold] of lists) {
+        test(`"Change validators" keeping 1 of 3 while the list is ${label}: no review, so the primary is inactive with SC-122 and nothing is signed`, async () => {
+            const c = await card({ data: staker([1, 2, 3]), snapshots: await snaps(), keep: [V(1)], hold });
+            assert.equal(c.q('.stake-call-details'), null, 'no Call details on screen');
+            assert.equal(c.primary().disabled, true, `the primary is active (${c.primary().textContent.trim()}) with no review on screen`);
+            assert.equal(c.sc('SC-122'), SC122);
+            await c.submit();
+            assert.equal(nothingSent(c), 0, 'nominate with the kept validator was signed unseen');
+            await c.type('5');
+            assert.equal(c.primary().disabled, true, 'adding PDEX with the change still needs the review');
+            assert.equal(c.sc('SC-122'), SC122);
+            await c.submit();
+            assert.equal(nothingSent(c), 0);
+            c.close();
+        });
+    }
+});
+
+describe('an account that is only a controller signs nothing from the simple card (WP2 review, item 3; M2, M8)', () => {
+    test('no SC-140, no automatic choice, the existing NotStash message under an inactive primary; nothing signed, with or without an amount', async () => {
+        const c = await card({ data: staker([], { controller: null }) });
+        assert.equal(c.sc('SC-140'), '', 'SC-140 is false here: the stash\'s validators are kept under the stash');
+        assert.equal(c.sc('SC-30'), '', 'an automatic choice would replace the stash\'s validators, never shown');
+        assert.equal(c.primary().disabled, true);
+        const why = c.doc.getElementById('stake-primary-reason');
+        assert.equal(why.hidden ? '' : why.textContent, ERROR_COPY['staking.NotStash']);
+        await c.submit();
+        assert.equal(nothingSent(c), 0, 'nominate from the controller replaced the stash\'s validators');
+        assert.equal(c.errorText(), ERROR_COPY['staking.NotStash']);
+        await c.type('5');
+        assert.equal(c.primary().disabled, true);
+        await c.submit();
+        assert.equal(nothingSent(c), 0);
+        c.close();
+    });
+});
+
+describe('the gradient primary is set only while the card is open (WP2 review, item 6; section 8)', () => {
+    test('closing the card takes it off; a late render on the closed card does not put it back; opening again does', async () => {
+        const c = await card({ data: firstTimer() });
+        const modal = c.doc.getElementById('stake-modal');
+        assert.equal(c.primary().classList.contains('validate-primary'), true);
+        // Every way the page closes the card (close button, backdrop, Escape, a transaction handed over) hides it so.
+        modal.style.display = 'none';
+        await flush();
+        assert.equal(c.primary().classList.contains('validate-primary'), false, 'a closed card still carries the gradient primary');
+        c.tab.ctx.stakeCard.render();
+        await flush();
+        assert.equal(c.primary().classList.contains('validate-primary'), false, 'a render after closing put it back');
+        await c.tab.fn('openStakeModal')();
+        await flush();
+        assert.equal(c.primary().classList.contains('validate-primary'), true);
+        c.close();
     });
 });
 

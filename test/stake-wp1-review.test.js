@@ -227,7 +227,9 @@ describe('finding 3: the success card says what was signed', () => {
         await w.fn('submitStakeTx')();
         await flush();
         assert.deepEqual(decode(w.sent[0].tx).args[0].map(name), ['staking.bondExtra', 'staking.nominate']);
-        assert.equal(result(w).body, '5 PDEX staked with 2 validators.', 'SC-130');
+        // WP2 review, item 4: SC-130 is the first stake only; adding PDEX with new validators is SC-131's
+        // first sentence and SC-132.
+        assert.equal(result(w).body, '5 PDEX added to your stake. Your validators were updated: 2 chosen.', 'SC-131 first sentence and SC-132');
         w.close();
     });
 });
