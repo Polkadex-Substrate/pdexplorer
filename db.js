@@ -1989,14 +1989,44 @@ export function getUnclaimedComputedAt(stash) {
     return typeof v === 'number' ? v : 0;
 }
 
-// R2 stubs (red commit): implemented in the green commit.
-export const UNCLAIMED_PAIR_DELETE_SQL = 'SELECT 1';
-export const UNCLAIMED_STALE_SQL = 'SELECT 1';
-export const FORK_REWARD_EVENTS_SQL = 'SELECT 1';
-export const LOWEST_SCAN_FAILURE_FROM_SQL = 'SELECT 1';
-export function noteRewardedPairs() { return { deleted: 0, marked: 0 }; }
-export function getForkRewardEventData() { return []; }
-export function getLowestScanFailureFrom() { return null; }
+// R2: the forward pass's reward notes (lib/reward-events.js). A pair the chain just paid leaves the unclaimed
+// cache at once; a stash whose reward could not be attributed to one pair has its cache marked stale (the
+// next read recomputes it), but only when it caches a row of that era (any row when the era is unknown) and
+// only by updating its existing kv row: a stash nobody looked at gets no row. Primary-key lookups only.
+export const UNCLAIMED_PAIR_DELETE_SQL = 'DELETE FROM staking_rewards_unclaimed WHERE stash = ? AND era = ? AND validator = ?';
+export const UNCLAIMED_STALE_SQL = "UPDATE kv SET value = '0', updated_at = ? WHERE key = ? AND EXISTS (SELECT 1 FROM staking_rewards_unclaimed WHERE stash = ? AND (? IS NULL OR era = ?))";
+export function noteRewardedPairs({ pairs = [], stale = [] } = {}) {
+    const out = { deleted: 0, marked: 0 };
+    if (!(pairs && pairs.length) && !(stale && stale.length)) return out;
+    runTx(() => {
+        const del = db.prepare(UNCLAIMED_PAIR_DELETE_SQL);
+        for (const p of pairs || []) {
+            if (!p || p.stash == null || p.validator == null || !Number.isFinite(Number(p.era))) continue;
+            out.deleted += del.run(String(p.stash), Number(p.era), String(p.validator)).changes;
+        }
+        const mark = db.prepare(UNCLAIMED_STALE_SQL);
+        const now = Date.now();
+        for (const s of stale || []) {
+            if (!s || s.stash == null) continue;
+            const era = s.era == null || !Number.isFinite(Number(s.era)) ? null : Number(s.era);
+            out.marked += mark.run(now, 'unclaimed_at:' + String(s.stash), String(s.stash), era, era).changes;
+        }
+    });
+    return out;
+}
+// The staking rewards a discarded fork stored for one height (same fork test as lib/id-migration.js
+// deleteForkRows), read BEFORE the repair deletes them. By the block index.
+export const FORK_REWARD_EVENTS_SQL = "SELECT data FROM events WHERE block = ? AND (block_hash IS NULL OR block_hash = '' OR block_hash != ?) AND section = 'staking' AND method IN ('Rewarded', 'Reward')";
+export function getForkRewardEventData(block, canonicalHash) {
+    return db.prepare(FORK_REWARD_EVENTS_SQL).all(Number(block), String(canonicalHash || '')).map(r => { try { return JSON.parse(r.data); } catch (e) { return null; } });
+}
+// The lowest outstanding failure of an indexer at or above a height (the freshness window, lib/freshness.js).
+export const LOWEST_SCAN_FAILURE_FROM_SQL = 'SELECT MIN(block) AS lo FROM scan_failures WHERE indexer = ? AND block >= ?';
+export function getLowestScanFailureFrom(indexer, from) {
+    const row = db.prepare(LOWEST_SCAN_FAILURE_FROM_SQL).get(String(indexer), Number(from));
+    const lo = row && row.lo != null ? Number(row.lo) : NaN;
+    return Number.isFinite(lo) ? lo : null;
+}
 
 // --- price history ---
 // Multi-provider: each row carries a `source` tag ('cmc' | 'ascendex' |
