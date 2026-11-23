@@ -1283,16 +1283,17 @@ function noteRewardEvents(records, extrinsics) {
 }
 // The reorg repair: a pair deleted because a discarded fork paid it may still be owed on the canonical chain,
 // so every stash the fork rewarded is marked stale (recomputed from chain state on its next read). Read
-// before the fork rows are deleted; never throws.
+// before the fork rows are deleted; never throws. `reorged`, not `stale`: the fork may have deleted the
+// stash's last cached row, and the stale mark's EXISTS would then find nothing to mark (review finding 1).
 function noteReorgedRewards(n, canonicalHash) {
     try {
-        const stale = [];
+        const reorged = new Set();
         for (const data of db.getForkRewardEventData(n, canonicalHash).slice(0, REWARD_NOTES_MAX_PER_BLOCK)) {
             const stash = storedRewardStash(data);
             if (!stash) continue;
-            try { stale.push({ stash: normalizeAddress(stash), era: null }); } catch (_) { /* not an address: nothing to mark */ }
+            try { reorged.add(normalizeAddress(stash)); } catch (_) { /* not an address: nothing to mark */ }
         }
-        if (stale.length) db.noteRewardedPairs({ pairs: [], stale });
+        if (reorged.size) db.noteRewardedPairs({ pairs: [], stale: [], reorged: [...reorged] });
     } catch (err) {
         console.warn(`[reorg] block ${n}: rewarded stashes not marked stale:`, err && err.message ? err.message : err);
     }
@@ -1307,11 +1308,29 @@ function lowestHoleFrom(indexer, from) {
     if (failure === null) return tail;
     return tail === null ? failure : Math.min(failure, tail);
 }
+// Every poll of every visitor reads the head, so it is memoised per worker for about a second (one RPC
+// serves all polls in that second, and concurrent polls share the read in flight) and bounded by a short
+// timeout: a node that does not answer gives null (unknown, never caught up) and the route still answers.
+// A memoised head is older than the route's state reads, so it is still a lower bound. Failures are not memoised.
+const FRESHNESS_HEAD_TIMEOUT_MS = 1500;
+const FRESHNESS_HEAD_MEMO_MS = 1000;
+const freshnessHeadMemo = { at: 0, value: null, inflight: null };
 async function freshnessHead() {
     try {
         if (!isRpcReady() || !globalApi) return null;
-        const h = await globalApi.rpc.chain.getHeader();
-        return h && h.number ? h.number.toNumber() : null;
+        const m = freshnessHeadMemo;
+        if (m.value !== null && Date.now() - m.at < FRESHNESS_HEAD_MEMO_MS) return m.value;
+        if (!m.inflight) {
+            const startedAt = Date.now();
+            m.inflight = withTimeout(globalApi.rpc.chain.getHeader(), FRESHNESS_HEAD_TIMEOUT_MS, 'freshness head')
+                .then((h) => {
+                    const v = h && h.number ? h.number.toNumber() : null;
+                    if (Number.isFinite(v)) { m.value = v; m.at = startedAt; }
+                    return Number.isFinite(v) ? v : null;
+                }, () => null)
+                .finally(() => { m.inflight = null; });
+        }
+        return await m.inflight;
     } catch (_) { return null; }
 }
 function freshnessNow({ chainHead = null, pending = [] } = {}) {
@@ -9141,15 +9160,19 @@ const CHAIN_GAP_COUNT_LIMIT = readPositiveInteger(process.env.CHAIN_GAP_COUNT_LI
 // Record what a scanChainRange pass could not complete.
 //
 // Two rules, both learned the hard way:
-//   * transientNumbers are NOT recorded at all. A node that was unreachable
+//   * transientNumbers never COUNT an attempt. A node that was unreachable
 //     tells us nothing about a block, so those attempts must be free
 //     (lib/rpc-errors.js — ten unlucky disconnects permanently retired three
-//     governance blocks in June).
+//     governance blocks in June). They are still QUEUED, at attempts = 0 and
+//     only if absent (deferTransientChainHeights): headSeen moves past them,
+//     and a height recorded nowhere was reported as indexed by the freshness
+//     field and the watermark although it was never scanned (R2 review).
 //   * the reason string is the ACTUAL error. requeueTransientScanFailures
 //     matches on last_error, so a constant like 'forward pass fetch failed'
 //     would leave a genuine transport casualty unrescuable forever.
 function recordChainScanFailures(result, passName) {
     if (!result) return;
+    deferTransientChainHeights(result.transientNumbers);
     const reasons = result.failureReasons instanceof Map ? result.failureReasons : new Map();
     for (const n of (result.failedNumbers || [])) {
         db.recordScanFailure('chain_index', n, `${passName}: ${reasons.get(n) || 'fetch failed'}`);
@@ -9157,6 +9180,26 @@ function recordChainScanFailures(result, passName) {
     for (const n of (result.incompleteNumbers || [])) {
         db.recordScanFailure('chain_index', n, `${passName}: events could not be decoded (F-006) — block stored, events pending`);
     }
+}
+
+// Queue the heights a pass could not fetch because the node was unavailable, as deferTransientScan does for
+// the rewards and transactions scanners: attempts = 0, only if absent, so the failure-queue pass retries them
+// and the watermark and freshness stop below the lowest one. Bounded like recordSkippedRange: at most
+// SKIP_RECORD_MAX rows in one go (the lowest heights, which are what pins the watermark); a remainder is owed
+// through the skip tail, which also pins freshness (lowestHoleFrom) and is drained a chunk per tick.
+function deferTransientChainHeights(numbers) {
+    const list = [...new Set((numbers || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+    if (!list.length) return 0;
+    const cap = Math.min(list.length, SKIP_RECORD_MAX);
+    for (let i = 0; i < cap; i++) db.queueScanFailureIfAbsent('chain_index', list[i], 'node unavailable, deferred (attempt not counted)');
+    if (list.length > cap) {
+        const key = 'skip:tail:chain_index';
+        const before = (db.getKv(key) || {}).ranges || [];
+        const after = addTail(before, { lo: list[cap], hi: list[list.length - 1] });
+        db.setKv(key, { ranges: after, updatedAt: Date.now() });
+        console.warn(`[chain_index] ${list.length} heights deferred (node unavailable); queued the lowest ${cap}, ${list[cap]}-${list[list.length - 1]} owed to the skip tail`);
+    }
+    return cap;
 }
 
 function recordSkippedRange(indexer, from, to, reason) {
@@ -10471,6 +10514,8 @@ async function recomputeUnclaimed(stash) {
     if (computingUnclaimed.has(stash) || !globalApi) return;
     computingUnclaimed.add(stash);
     try {
+        // Read the stash's forward-pass counter BEFORE any chain state (db.js beginUnclaimedRecompute).
+        const gen = db.beginUnclaimedRecompute(stash);
         const staking = globalApi.query && globalApi.query.staking;
         if (!staking || !staking.activeEra || !staking.erasValidatorReward) return;
         const activeOpt = await staking.activeEra();
@@ -10504,8 +10549,11 @@ async function recomputeUnclaimed(stash) {
             console.error(`Unclaimed rewards for ${stash}: every era's exposure read came back empty; not overwriting the stored list.`);
             return;
         }
-        db.replaceUnclaimed(stash, rows);
-        console.log(`Unclaimed rewards computed for ${stash}: ${rows.length} pending entries.`);
+        // Written, and stamped fresh, only if the forward pass did not touch this stash meanwhile; otherwise the
+        // cache is left stale (rewards.unpaid pending) and the next read recomputes.
+        const out = db.replaceUnclaimedIfUnchanged(stash, rows, gen);
+        if (out.written) console.log(`Unclaimed rewards computed for ${stash}: ${rows.length} pending entries.`);
+        else console.log(`Unclaimed rewards for ${stash}: a reward was indexed during the recompute; left stale for the next read.`);
     } catch (err) {
         console.warn(`Unclaimed rewards computation failed for ${stash}:`, err.message);
     } finally {

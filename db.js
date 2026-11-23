@@ -1973,9 +1973,10 @@ export function getClaimedRewardKeys(stash) {
 }
 
 // --- staking rewards (unclaimed / unpaid, computed on demand) ---
+export const UNCLAIMED_STASH_DELETE_SQL = 'DELETE FROM staking_rewards_unclaimed WHERE stash = ?';
 export function replaceUnclaimed(stash, rows) {
     runTx(() => {
-        db.prepare('DELETE FROM staking_rewards_unclaimed WHERE stash = ?').run(stash);
+        db.prepare(UNCLAIMED_STASH_DELETE_SQL).run(stash);
         const stmt = db.prepare('INSERT OR REPLACE INTO staking_rewards_unclaimed(stash,era,validator,amount) VALUES(?,?,?,?)');
         for (const r of (rows || [])) stmt.run(stash, r.era, r.validator ?? '', r.amount ?? 0);
     });
@@ -1989,28 +1990,82 @@ export function getUnclaimedComputedAt(stash) {
     return typeof v === 'number' ? v : 0;
 }
 
+// R2 review (the recompute race). A recompute of the unpaid list runs in a web worker and reads chain state
+// for seconds; the forward pass (the indexer process) may delete a pair the chain just paid meanwhile. A
+// per-stash counter in kv (`unclaimed_gen:<stash>`) is bumped by every forward-pass note and reorg mark for
+// the stash, inside the same transaction as the delete or mark. The recompute reads it BEFORE it reads chain
+// state (creating the row at 0 if absent) and checks it again inside its write transaction: if it moved,
+// the recompute's view may predate a payment, so it writes nothing and leaves the cache stale (the route then
+// says rewards.unpaid is pending and the next read recomputes). It lives in the database because the two
+// sides are different processes. One small row per stash that has a cache: only a recompute creates it, the
+// forward pass only updates an existing row. Primary-key lookups only.
+export const UNCLAIMED_GEN_INIT_SQL = "INSERT OR IGNORE INTO kv(key, value, updated_at) VALUES(?, '0', ?)";
+export const UNCLAIMED_GEN_READ_SQL = 'SELECT value FROM kv WHERE key = ?';
+export const UNCLAIMED_GEN_BUMP_SQL = 'UPDATE kv SET value = CAST(value AS INTEGER) + 1, updated_at = ? WHERE key = ?';
+const genKey = (stash) => 'unclaimed_gen:' + String(stash);
+function readGen(stash) {
+    const row = db.prepare(UNCLAIMED_GEN_READ_SQL).get(genKey(stash));
+    const n = row ? Number(row.value) : NaN;
+    return Number.isFinite(n) ? n : null;
+}
+export function beginUnclaimedRecompute(stash) {
+    db.prepare(UNCLAIMED_GEN_INIT_SQL).run(genKey(stash), Date.now());
+    return readGen(stash);
+}
+// The recompute's write: rows and the fresh stamp in one transaction, only when the counter has not moved
+// since beginUnclaimedRecompute. Otherwise nothing is written back and the cache is marked stale.
+export function replaceUnclaimedIfUnchanged(stash, rows, gen) {
+    return runTx(() => {
+        const now = readGen(stash);
+        if (gen === null || gen === undefined || now !== gen) {
+            db.prepare('INSERT OR REPLACE INTO kv(key, value, updated_at) VALUES(?,?,?)').run('unclaimed_at:' + stash, '0', Date.now());
+            return { written: false };
+        }
+        db.prepare(UNCLAIMED_STASH_DELETE_SQL).run(stash);
+        const stmt = db.prepare('INSERT OR REPLACE INTO staking_rewards_unclaimed(stash,era,validator,amount) VALUES(?,?,?,?)');
+        for (const r of (rows || [])) stmt.run(stash, r.era, r.validator ?? '', r.amount ?? 0);
+        db.prepare('INSERT OR REPLACE INTO kv(key, value, updated_at) VALUES(?,?,?)').run('unclaimed_at:' + stash, JSON.stringify(Date.now()), Date.now());
+        return { written: true };
+    });
+}
+
 // R2: the forward pass's reward notes (lib/reward-events.js). A pair the chain just paid leaves the unclaimed
 // cache at once; a stash whose reward could not be attributed to one pair has its cache marked stale (the
 // next read recomputes it), but only when it caches a row of that era (any row when the era is unknown) and
 // only by updating its existing kv row: a stash nobody looked at gets no row. Primary-key lookups only.
+// `reorged` (the reorg repair): stashes a discarded fork rewarded. The fork may have deleted their last
+// cached row, so there is no EXISTS here: any stash with a cache stamp is marked stale, still only by updating
+// its existing kv row. Every stash named here also has its recompute counter bumped (above).
 export const UNCLAIMED_PAIR_DELETE_SQL = 'DELETE FROM staking_rewards_unclaimed WHERE stash = ? AND era = ? AND validator = ?';
 export const UNCLAIMED_STALE_SQL = "UPDATE kv SET value = '0', updated_at = ? WHERE key = ? AND EXISTS (SELECT 1 FROM staking_rewards_unclaimed WHERE stash = ? AND (? IS NULL OR era = ?))";
-export function noteRewardedPairs({ pairs = [], stale = [] } = {}) {
+export const UNCLAIMED_REORG_STALE_SQL = "UPDATE kv SET value = '0', updated_at = ? WHERE key = ?";
+export function noteRewardedPairs({ pairs = [], stale = [], reorged = [] } = {}) {
     const out = { deleted: 0, marked: 0 };
-    if (!(pairs && pairs.length) && !(stale && stale.length)) return out;
+    if (!(pairs && pairs.length) && !(stale && stale.length) && !(reorged && reorged.length)) return out;
     runTx(() => {
+        const now = Date.now();
+        const touched = new Set();
         const del = db.prepare(UNCLAIMED_PAIR_DELETE_SQL);
         for (const p of pairs || []) {
             if (!p || p.stash == null || p.validator == null || !Number.isFinite(Number(p.era))) continue;
             out.deleted += del.run(String(p.stash), Number(p.era), String(p.validator)).changes;
+            touched.add(String(p.stash));
         }
         const mark = db.prepare(UNCLAIMED_STALE_SQL);
-        const now = Date.now();
         for (const s of stale || []) {
             if (!s || s.stash == null) continue;
             const era = s.era == null || !Number.isFinite(Number(s.era)) ? null : Number(s.era);
             out.marked += mark.run(now, 'unclaimed_at:' + String(s.stash), String(s.stash), era, era).changes;
+            touched.add(String(s.stash));
         }
+        const reorgMark = db.prepare(UNCLAIMED_REORG_STALE_SQL);
+        for (const stash of reorged || []) {
+            if (stash == null) continue;
+            out.marked += reorgMark.run(now, 'unclaimed_at:' + String(stash)).changes;
+            touched.add(String(stash));
+        }
+        const bump = db.prepare(UNCLAIMED_GEN_BUMP_SQL);
+        for (const stash of touched) bump.run(now, genKey(stash));
     });
     return out;
 }
