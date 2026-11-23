@@ -78,6 +78,9 @@ import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
+import { planStakeCalls, buildStakeTx, stakeAmountCheck, stakeAmountMessage, planProblemMessage, stakeMaxPlanck, transferablePlanckOf,
+    pdexNumberToPlanck, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK } from './lib/stake-plan.js';
+import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
 import { lockPeriodDays, labelConvictions } from './lib/conviction-lock.js';
@@ -9415,21 +9418,14 @@ function stakeMaxNominations() {
 // the user a fee for nothing. forceBatch executes every call and reports
 // per-item failures; batch stops at the first failure but keeps what already
 // executed. batchAll is now the LAST resort, not the first.
+// The Stake card does not come here: bond and nominate must succeed together,
+// so lib/stake-plan.js buildStakeTx sends them in one atomic batchAll (F1).
 function batchTx(api, calls) {
     if (calls.length === 1) return calls[0];
     if (api.tx.utility && api.tx.utility.forceBatch) return api.tx.utility.forceBatch(calls);
     if (api.tx.utility && api.tx.utility.batch) return api.tx.utility.batch(calls);
     if (api.tx.utility && api.tx.utility.batchAll) return api.tx.utility.batchAll(calls);
     throw new Error('utility.batch / batchAll is not available on this runtime.');
-}
-
-// staking.bond signature varies: legacy is (controller, value, payee), modern
-// is (value, payee). Detect from extrinsic metadata.
-function buildBondOrExtra(api, planckStr, stash, hasBond) {
-    if (hasBond) return api.tx.staking.bondExtra(planckStr);
-    const argCount = (api.tx.staking.bond && api.tx.staking.bond.meta && api.tx.staking.bond.meta.args) ? api.tx.staking.bond.meta.args.length : 2;
-    if (argCount >= 3) return api.tx.staking.bond(stash, planckStr, 'Staked');
-    return api.tx.staking.bond(planckStr, 'Staked');
 }
 
 // Newer staking pallets only expose payoutStakersByPage; older only payoutStakers.
@@ -9453,6 +9449,14 @@ function getStakeableBalance(data) {
 }
 
 // --- Stake / Nominate modal ---
+// Max: transferable (which already keeps the 1 PDEX existential deposit) less
+// the 0.2 PDEX fee reserve, exact in planck. Writes the field only on a press.
+function fillStakeMax() {
+    const data = currentWalletData;
+    if (!data) return;
+    const amtInput = document.getElementById('stake-amount-input');
+    if (amtInput) amtInput.value = planckToPdexText(stakeMaxPlanck({ transferablePlanck: transferablePlanckOf(data.balance), feeReservePlanck: STAKE_FEE_RESERVE_PLANCK }));
+}
 function showStakeError(msg) {
     const el = document.getElementById('stake-modal-error');
     if (el) { el.textContent = msg; el.style.display = 'block'; }
@@ -9470,6 +9474,8 @@ async function openStakeModal(keep) {
     clearStakeError();
     const amtInput = document.getElementById('stake-amount-input');
     if (amtInput) amtInput.value = '';
+    const maxBtn = document.getElementById('stake-max-btn');
+    if (maxBtn) maxBtn.title = stakeCopy('SC-05', { reserve: planckToPdexText(STAKE_FEE_RESERVE_PLANCK) });
 
     // Use `transferable` (free - totalStaked) so the hint reflects what's
     // actually available to bond, not the raw free balance which still
@@ -9585,44 +9591,24 @@ async function submitStakeTx() {
     if (!data) return showStakeError('Wallet data is not loaded.');
     if (!isSameAddress(getStoredWallet(), data.address)) return showStakeError('Connect this wallet to perform staking actions.');
 
+    // The amount as typed (never rewritten, rule M4), checked in planck (F2);
+    // then the plan, which holds a call only for what changed (lib/stake-plan.js).
     const amtStr = (document.getElementById('stake-amount-input').value || '').trim();
     const targets = Array.from(stakeSelected.keys());
-    const hasAmount = amtStr !== '' && parseFloat(amtStr) > 0;
-
-    if (!targets.length) return showStakeError('Select at least one validator before submitting.');
-    const maxNoms = stakeMaxNominations();
-    if (targets.length > maxNoms) return showStakeError(`At most ${maxNoms} validators can be nominated.`);
-
-    const available = getStakeableBalance(data);
     const hasBond = ((data.staking && data.staking.totalStaked) || 0) > 0;
-
-    if (hasAmount) {
-        const amt = parseFloat(amtStr);
-        if (!Number.isFinite(amt) || amt <= 0) return showStakeError('Enter a valid amount.');
-        // 1e-6 PDEX tolerance absorbs parseFloat / toFixed(4) precision drift
-        // so a user who types the displayed balance manually doesn't get a
-        // false "exceeds available" rejection. The 0.01 fee buffer below is
-        // orders of magnitude larger than this tolerance, so it's still safe.
-        const balanceTolerance = 1e-6;
-        if (amt > available + balanceTolerance) return showStakeError(`Amount exceeds your available balance (${stakingFormatPDEX(available)} PDEX).`);
-        if (amt > available - 0.01 + balanceTolerance) return showStakeError(`Keep at least 0.01 PDEX free for the transaction fee. Try ${stakingFormatPDEX(Math.max(0, available - 0.01))} PDEX or less.`);
-        if (!hasBond) {
-            const minStake = Number((data.network && data.network.minStake) || 0);
-            if (minStake > 0 && amt < minStake) {
-                return showStakeError(`A first-time bond must be at least the minimum stake (${stakingFormatPDEX(minStake)} PDEX).`);
-            }
-        }
-    } else if (!hasBond) {
-        return showStakeError('You have no existing bond — enter an amount to bond as well.');
-    }
+    const check = stakeAmountCheck({ typed: amtStr, transferablePlanck: transferablePlanckOf(data.balance), feeReservePlanck: STAKE_FEE_RESERVE_PLANCK,
+        feeFloorPlanck: FEE_MARGIN, minStakePlanck: pdexNumberToPlanck(data.network && data.network.minStake, 'ceil'), hasBond, optional: hasBond });
+    const amountMsg = stakeAmountMessage(check, { optional: hasBond });
+    if (amountMsg) return showStakeError(amountMsg);
+    const maxNoms = stakeMaxNominations();
+    const plan = planStakeCalls({ hasBond, amountPlanck: check.planck, currentTargets: ((data.staking && data.staking.nominating) || []).map(v => v.address),
+        targets, maxTargets: maxNoms, same: isSameAddress });
+    const planMsg = planProblemMessage(plan, { maxTargets: maxNoms });
+    if (planMsg) return showStakeError(planMsg);
+    const hasAmount = check.planck != null && check.planck > 0n;
 
     await submitSignedTx({
-        buildTx: (api) => {
-            const calls = [];
-            if (hasAmount) calls.push(buildBondOrExtra(api, pdexToPlanck(amtStr), data.address, hasBond));
-            calls.push(api.tx.staking.nominate(targets));
-            return batchTx(api, calls);
-        },
+        buildTx: (api) => buildStakeTx(api, plan, { stash: data.address }),
         label: 'Stake & nominate',
         action: { key: 'staking.bondNominate', params: { amount: hasAmount ? amtStr : null, n: targets.length, eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null } },
         button: document.getElementById('submit-stake-tx-btn'),
@@ -10700,16 +10686,7 @@ async function submitSendTx() {
     closeOn('multisig-review-modal', 'close-multisig-review');
 
     const stakeMax = document.getElementById('stake-max-btn');
-    if (stakeMax) stakeMax.addEventListener('click', () => {
-        const data = currentWalletData;
-        if (!data) return;
-        // Max button should propose the transferable balance (free minus
-        // already-bonded tokens), keeping a small fee buffer.
-        const available = getStakeableBalance(data);
-        const usable = Math.max(0, available - 0.01);
-        const amtInput = document.getElementById('stake-amount-input');
-        if (amtInput) amtInput.value = usable.toFixed(4);
-    });
+    if (stakeMax) stakeMax.addEventListener('click', fillStakeMax);
     const stakeClear = document.getElementById('stake-clear-btn');
     if (stakeClear) stakeClear.addEventListener('click', () => {
         stakeSelected.clear();
