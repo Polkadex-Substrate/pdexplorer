@@ -13,6 +13,7 @@ import {
     readIdentityFacts, buildChoiceSnapshot, eraDurationMs, toBool, FALLBACK_MAX_NOMINATIONS, readNominationsQuota
 } from '../lib/stake-choice-sync.js';
 import { TypeRegistry, Metadata } from '@polkadot/types';
+import { rewardPerActiveValidator } from '../lib/nominator-apy.js';
 import { loadFixture } from './helpers/extrinsic-builders.js';
 
 const some = (v) => ({ isSome: true, unwrap: () => v });
@@ -253,6 +254,9 @@ describe('buildChoiceSnapshot', () => {
         // Worked example from test/stake-apr.test.js: 16.43625 % over 28 eras.
         assert.ok(Math.abs(by.V1.perf['28'].apr - 16.43625) < 1e-9);
         assert.equal(by.W1.perf['28'].status, 'none');
+        // Network reward per active validator, for the stake-aware Est. APY fallback.
+        assert.equal(snap.rewardPerValidator, rewardPerActiveValidator(summaries, { activeEra: 100 }));
+        assert.ok(snap.rewardPerValidator > 0, String(snap.rewardPerValidator));
     });
     test('a failing name lookup degrades to Unknown', async () => {
         const snap = await buildChoiceSnapshot({ api: fakeApi(), activeEra: 100, summaries: [], formatPDEX, commissionPercent, getName: () => { throw new Error('rpc'); }, warn: () => {} });

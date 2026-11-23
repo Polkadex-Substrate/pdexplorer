@@ -196,7 +196,9 @@ describe('F-044 — no column claims a measured 30-day APY', () => {
     });
 
     test('the remaining column says what the number actually is', () => {
-        assert.match(src, /label: 'Est\. APY \(current commission\)'/);
+        // The column now shows the stake-aware estimate (lib/nominator-apy.js),
+        // so the commission-only qualifier is gone with the number it described.
+        assert.match(src, /key: NOMINATOR_APY_FIELD, label: 'Est\. APY'/);
     });
 });
 
