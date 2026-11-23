@@ -591,6 +591,96 @@ describe('R5: multisig (row 30): a first approval changes only the pending list;
     });
 });
 
+describe('R5 follow-ups: multisig pending list (executed claim on evidence, failed call, stalled head read)', () => {
+    const CALL2 = '0x0401';
+    const MSEV = { height: 900, index: 2 };
+    test('M1: the review was an execute but the chain recorded an approval; a later cancel by another signer is never shown as Executed', async () => {
+        const w = await msWorld({ signer: B });
+        try {
+            w.chain.pending = [{ hash: hashOf(CALL), approvals: [A] }];
+            await w.ui.mountPending(w.slot, w.ms);
+            await settle();
+            await w.ui.review({ multisig: w.ms, mode: 'approve', callHash: hashOf(CALL), callHex: CALL });
+            await settle();
+            await w.sign();
+            const r = w.sub.last();
+            assert.equal(r.action.params.kind, 'execute', 'the review was an execute');
+            await r.emit(READY);
+            w.chain.pending = [{ hash: hashOf(CALL), approvals: [A, C] }];   // the approval set changed before inclusion
+            w.chain.head = 42;
+            await r.emit(IN1, [ev('multisig', 'MultisigApproval', [B, MSEV, w.ms.address, hashOf(CALL)]), success()]);
+            await r.emit(FIN1, [success()]);
+            await w.clock.advance(3000);
+            w.chain.pending = [];                                            // another signer cancelled it
+            await w.ui.review({ multisig: w.ms, callHex: CALL2 });
+            await settle();
+            await w.sign();
+            const r2 = w.sub.last();
+            await r2.emit(READY);
+            w.chain.pending = [{ hash: hashOf(CALL2), approvals: [A] }]; w.chain.head = 43;
+            await r2.emit(IN2, [ev('multisig', 'NewMultisig', [B, w.ms.address, hashOf(CALL2)]), success()]);
+            assert.match(w.list().textContent, /1 of 2 approvals/, 'the list re-read at block 43');
+            assert.ok(w.list().querySelector('.ui-chip.is-positive') === null, 'no done chip on any row');
+            assert.doesNotMatch(w.list().textContent, /Executed in block/, 'the cancelled call is not claimed as executed');
+            assert.doesNotMatch(w.list().textContent, /Cancelled in block/, 'nor claimed as cancelled by this tab');
+        } finally { w.restore(); }
+    });
+    test('L1: the multisig call ran and failed (MultisigExecuted Err): the pending list is re-read, nothing is claimed', async () => {
+        const w = await msWorld({ signer: B });
+        try {
+            w.chain.pending = [{ hash: hashOf(CALL), approvals: [A] }];
+            await w.ui.mountPending(w.slot, w.ms);
+            await settle();
+            assert.ok(w.list().querySelector('.multisig-pending-row'), 'the row is listed');
+            await w.ui.review({ multisig: w.ms, mode: 'approve', callHash: hashOf(CALL), callHex: CALL, inner: { key: 'staking.bondNominate', params: {} } });
+            await settle();
+            await w.sign();
+            const r = w.sub.last();
+            await r.emit(READY);
+            w.chain.pending = []; w.chain.head = 42;                        // the chain removed it when it ran
+            let reads = 0;
+            const entries = w.chain.api.query.multisig.multisigs.entries;
+            w.chain.api.query.multisig.multisigs.entries = async (...a) => { reads++; return entries(...a); };
+            await r.emit(IN1, [ev('multisig', 'MultisigExecuted', [B, MSEV, w.ms.address, hashOf(CALL), { isOk: false, isErr: true, asErr: { isBadOrigin: true, type: 'BadOrigin' } }]), success()]);
+            await settle();
+            assert.ok(reads >= 1, 'the pending list was re-read');
+            assert.ok(w.list().querySelector('.multisig-pending-row') === null, 'the removed row no longer offers its button');
+            assert.ok(w.list().querySelector('.ui-chip.is-positive') === null, 'no Executed claim');
+            assert.doesNotMatch(w.list().textContent, /Executed in block/);
+            assert.deepEqual(w.wallet, [], 'no inner effects');
+        } finally { w.restore(); }
+    });
+    test('L2: a head read that never resolves: the refresh ends after the timeout without reading the list; a later trigger re-reads', async () => {
+        const clock = clockOf();
+        const real = coreOf(clock);
+        const subs = [];
+        const spy = { ...real, subscribe: (d, o) => { if (d === 'multisig.pending') subs.push(o); return real.subscribe(d, o); } };
+        const w = await msWorld({ clock, core: spy });
+        try {
+            assert.equal(subs.length, 1, 'the list subscribed');
+            let reads = 0, hang = true;
+            const entries = w.chain.api.query.multisig.multisigs.entries;
+            w.chain.api.query.multisig.multisigs.entries = async (...a) => { reads++; return entries(...a); };
+            w.chain.api.rpc.chain.getHeader = () => (hang ? new Promise(() => {}) : Promise.resolve({ number: { toNumber: () => 44, toString: () => '44' } }));
+            let ended = false;
+            const p = Promise.resolve(subs[0].reload({ poll: true, block: 44 })).then(v => { ended = true; return v; });
+            await settle();
+            assert.equal(ended, false, 'still waiting inside the timeout');
+            await clock.advance(1500);
+            await settle();
+            assert.equal(ended, true, 'the refresh ended after the timeout');
+            assert.equal(await p, null, 'quietly: nothing to report');
+            assert.equal(reads, 0, 'the list was not read off a stalled connection');
+            hang = false;
+            w.chain.pending = [{ hash: hashOf(CALL), approvals: [A] }];
+            const out = await subs[0].reload({ poll: true, block: 44 });
+            assert.ok(reads >= 1, 'the next trigger re-reads');
+            assert.match(w.list().textContent, /1 of 2 approvals/);
+            assert.equal(out && out.chainHead, 44);
+        } finally { w.restore(); }
+    });
+});
+
 describe('R5: effects row 30 and the proxy variants (lib/action-effects.js)', () => {
     const MS = 'multisig-address';
     const base = (o) => ({ key: 'multisig.transaction', stage: 'inBlock', events: [success()], blockNumber: 9, txHash: '0x1', signer: A, ...o });
