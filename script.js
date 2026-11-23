@@ -8635,7 +8635,7 @@ function renderWalletLoading(root, address) {
                 <div class="wallet-loading-banner">
                     <div class="wallet-spinner"><i class='bx bx-wallet'></i></div>
                     <div class="wallet-loading-text">
-                        <div class="wallet-loading-title">Loading your wallet dashboard</div>
+                        <div class="wallet-loading-title">Loading your account</div>
                         <div class="wallet-loading-msg" id="wallet-loading-msg">${steps[0].msg}</div>
                         <div class="wallet-loading-steps" id="wallet-loading-steps">
                             ${steps.map((s, i) => stepPill(s, i, i === 0 ? 'active' : 'pending')).join('')}
@@ -12569,7 +12569,7 @@ async function submitCouncilCandidacy() {
         action: { key: 'elections.candidacy' },
         button: btn,
         busyText: 'Signing...',
-        idleText: 'Sign & Submit Candidacy',
+        idleText: 'Sign and submit candidacy',
         onSuccess: () => { if (candidacyModal) candidacyModal.style.display = 'none'; }
     });
 }
@@ -12607,7 +12607,7 @@ async function submitCouncilVote() {
         action: { key: 'elections.vote', params: { n: candidates.length, stake: stakeInput } },
         button: document.getElementById('submit-vote-tx-btn'),
         busyText: 'Signing...',
-        idleText: 'Sign & Submit Vote',
+        idleText: 'Sign and submit vote',
         onSuccess: () => { if (voteModal) voteModal.style.display = 'none'; }
     });
 }
@@ -13166,7 +13166,7 @@ async function submitReferendumVote() {
         action: { key: 'democracy.vote', params: { aye, ref: refIndex, amount: amtStr, conviction, lockPeriodDays: lockPeriodDays(globalApi) } },
         button: document.getElementById('submit-referendum-vote-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign & Submit Vote',
+        idleText: 'Sign and submit vote',
         onError: showErr,
         // The row shows the stage; In block asks for a fresh copy, and the
         // live feed has the new tally and your vote meanwhile.

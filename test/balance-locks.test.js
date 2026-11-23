@@ -548,7 +548,7 @@ describe('democracyLockPlan: when the democracy lock can come off', () => {
         assert.equal(p.mode, 'delegating');
         const m = describeAccountLocks(snap({ frozen: s(PDEX), locks: [{ id: 'democrac', amount: s(PDEX), reasons: 'All' }],
             democracy: { delegating: true, target: OTHER, conviction: 'Locked3x', balance: s(PDEX), prior: { until: 0, amount: '0' }, lockingPeriod: 216000 } }));
-        assert.match(item(m, i => i.id === 'democrac').unlock, /undelegate/);
+        assert.match(item(m, i => i.id === 'democrac').unlock, /Undelegate/);   // S9: the button name
     });
     test('no current block (system.number failed): no made-up "locked until" day count', () => {
         const m = describeAccountLocks(snap({ block: null, frozen: s(PDEX), locks: [{ id: 'democrac', amount: s(PDEX), reasons: 'All' }],

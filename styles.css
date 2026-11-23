@@ -4822,6 +4822,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .ui-panel > .bx { flex-shrink: 0; font-size: 20px; line-height: 1.5; }
 .ui-panel-title { margin: 0 0 4px; font-size: 0.9rem; font-weight: 600; }
 .ui-panel-body { min-width: 0; flex: 1; }
+.ui-panel-body > p + p { margin-top: 8px; }
 .ui-panel.is-warn { background: linear-gradient(var(--accent-amber-wash), var(--accent-amber-wash)), var(--bg-surface); border-color: var(--accent-amber-line); box-shadow: inset 3px 0 0 var(--accent-amber); }
 .ui-panel.is-warn > .bx { color: var(--accent-amber); }
 .ui-panel.is-info { background: linear-gradient(var(--accent-blue-wash), var(--accent-blue-wash)), var(--bg-surface); border-color: var(--accent-blue-line); box-shadow: inset 3px 0 0 var(--accent-blue); }
@@ -5219,7 +5220,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .validate-keys-input { width: 100%; box-sizing: border-box; padding: 12px 16px; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.9rem; line-height: 1.6; resize: vertical; word-break: break-all; }
 .validate-keys-input[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-.validate-alert .bx { color: var(--accent-red); font-size: 20px; vertical-align: -4px; }
+.validate-alert .bx { color: var(--accent-red); font-size: 20px; vertical-align: -4px; margin-right: 8px; }
 .validate-alert { padding: 12px 16px; border: 1px solid var(--accent-red-line); border-radius: var(--radius-sm); background: var(--accent-red-wash); color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
 .validate-mismatch { margin: 0; }
 .validate-keys-table td { overflow-wrap: anywhere; }
@@ -5265,6 +5266,7 @@ a.validate-secondary { text-decoration: none; }
 .validate-setup-bar > span { flex: 1 1 0; height: 4px; border-radius: 2px; }
 .validate-setup-bar > .is-done { background: var(--accent-green); }
 .validate-setup-bar > .is-current { background: var(--accent-violet); }
+.validate-setup-bar > .is-open { background: var(--accent-violet-line); }
 .validate-setup-bar > .is-later { background: rgba(255, 255, 255, 0.12); }
 @media (forced-colors: active) {
     .validate-setup-bar > span { border: 1px solid CanvasText; }
@@ -5291,7 +5293,7 @@ a.validate-secondary { text-decoration: none; }
 .validate-review { list-style: none; counter-reset: validate-review; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .validate-review li { line-height: 1.6; }
 .validate-review > li { counter-increment: validate-review; position: relative; padding-left: 36px; overflow-wrap: anywhere; }
-.validate-review > li::before { content: counter(validate-review); position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-violet); color: var(--text-primary); font-size: 0.75rem; font-weight: 700; line-height: 1; }
+.validate-review > li::before { content: counter(validate-review); position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; background: transparent; border: 1px solid var(--accent-violet-line); color: var(--accent-violet-text); font-size: 0.75rem; font-weight: 700; line-height: 1; }
 .validate-review code.mono { color: var(--accent-violet-text); }
 .validate-review-text { font-weight: 600; color: var(--text-primary); }
 .validate-review-args { margin-top: 4px; font-size: 0.82rem; overflow-wrap: anywhere; }
@@ -5317,6 +5319,7 @@ a.validate-secondary { text-decoration: none; }
     .validate-steps { display: none; }
     .validate-setup-bar { display: flex; }
     .validate-setup > .validate-path.is-compact, .validate-guide > .validate-path.is-compact { padding: 0 16px; }
+    .validate-setup > .validate-path.is-compact { display: none; }
     .validate-stepwise-actions .validate-primary { width: 100%; min-height: 44px; justify-content: center; box-sizing: border-box; }
     .validate-stepwise-actions .validate-secondary, .validate-stepwise-actions .validate-text-btn { min-height: 44px; }
     .validate-stepwise-main { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
