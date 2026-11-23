@@ -124,7 +124,9 @@ function fakeChain() {
     };
     const stake = (block = 42) => { st.block = block; st.free = 350_980_000_000_000n; st.reserved = 150n * PDEX; st.ledger = 150n * PDEX; st.targets = PICKS.slice(); };
     const unstake = () => { st.free = 501n * PDEX; st.reserved = 0n; st.ledger = null; st.targets = []; };
-    return { st, query, stake, unstake };
+    // n PDEX more (or less, n negative) on the bond, seen at this block
+    const more = (n, block) => { st.block = block; st.free -= BigInt(n) * PDEX; st.reserved += BigInt(n) * PDEX; st.ledger += BigInt(n) * PDEX; };
+    return { st, query, stake, unstake, more };
 }
 const OK_EVENTS = [{ event: { section: 'staking', method: 'Bonded', data: [ME, 150n * PDEX] } }, { event: { section: 'system', method: 'ExtrinsicSuccess', data: [] } }];
 const TX_HASH = '0x' + 'ab'.repeat(32);
@@ -293,7 +295,7 @@ describe('state 20: after an included stake, My Account and the card follow in p
         c.close();
     });
     for (const [label, stage] of [['failed', 'failed'], ['dropped or usurped (ends failed)', 'failed'], ['never in a block (waiting)', 'waiting'],
-        ['processed, not confirmed', 'processed'], ['unverified', 'unverified'], ['cancelled in the wallet', 'cancelled']]) {
+        ['cancelled in the wallet', 'cancelled']]) {
         test(`${label}: nothing on the page changes and nothing is read; the card keeps the amount`, async () => {
             const c = await card({ data: firstTimer(), flow: true });
             const before = c.tab.root.innerHTML;
@@ -317,6 +319,7 @@ describe('state 20: after an included stake, My Account and the card follow in p
         await c.job().inBlock(42);
         assert.equal(text(staked), '150.0000 PDEX');
         staked.classList.remove('is-value-changed');
+        c.chain.unstake();   // the replacing block does not have it
         await c.job().stage('resent');
         assert.equal(text(c.dash.staked()), '0.0000 PDEX', 'the block was replaced: Total Staked is back to the last server value');
         assert.ok(c.dash.staked().classList.contains('is-value-changed'), 'with the wash (U12)');
@@ -356,6 +359,140 @@ describe('state 20: after an included stake, My Account and the card follow in p
         const bad = Object.entries(files).map(([f, src]) => [f, (stripComments(src).match(/\b(setTimeout|setInterval)\s*\(/g) || []).length, src]).filter(([, n, src]) => n > 0 || src === 'missing');
         assert.deepEqual(bad.map(([f, n, src]) => `${f}: ${src === 'missing' ? 'missing' : n + ' timer(s)'}`), [], 'a timer in the stake card');
     });
+});
+
+// ── the review of WP4 (2026-11-23): what a late server copy, a reorg of two actions and a re-read do ──
+// The server's copy as it answers from a block (its other fields as before the stake, unless over says otherwise).
+const serverAt = (block, over = {}) => ({ ...firstTimer(), freshness: { ...firstTimer().freshness, chainHead: block }, ...over });
+describe('WP4 review fixes: the chain read stands until the server has the block; a reorg re-reads; processed and unverified re-read', () => {
+    test('1. a server copy from block 41 after the chain read of block 42: the page keeps 150 PDEX in place, takes the freshness, and the card plans bondExtra', async () => {
+        const c = await card({ data: firstTimer(), flow: true });
+        const root = c.tab.root.firstElementChild;
+        await c.type('150');
+        await c.submit();
+        c.chain.stake(42);
+        await c.job().inBlock(42);
+        assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the chain read');
+        const req = c.pending();
+        assert.ok(req && req.url.startsWith('/api/wallet/'), 'the R2 poll asked the server');
+        req.resolve(serverAt(41));
+        await flush();
+        assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'a copy from block 41 put Total Staked back');
+        assert.equal(text(c.dash.total()), '500.9800 PDEX', 'a copy from block 41 put Total Balance back');
+        assert.deepEqual(c.dash.label(), [SC['SC-151'], SC['SC-151s']], 'the button went back to "Stake"');
+        assert.equal(c.dash.validators(), 8, 'My Validators was emptied');
+        assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 150, 'the page payload went back to no stake');
+        assert.equal(c.tab.ctx.currentWalletData.freshness.chainHead, 41, 'the copy\'s freshness is taken');
+        assert.deepEqual(c.refresh().tracked(ME), { block: 42 }, 'still tracked: the server is behind the block');
+        assert.equal(c.renders.length, 0, 'taken in place');
+        assert.equal(c.tab.root.firstElementChild, root);
+        c.dash.stakeBtn().click();
+        await flush();
+        assert.equal(c.sc('SC-141'), 'Your last staking action is in block #42. The figures here update in a moment.');
+        assert.equal(c.sc('SC-03c') || c.sc('SC-03b'), SC['SC-03b'], 'the card draws an existing staker');
+        await c.type('25');
+        await c.submit();
+        assert.equal(c.sent.length, 2, 'the second action was signed');
+        assert.deepEqual(callsOf(c, 1), ['staking.bondExtra'], 'a bonded account planned a first stake');
+        c.close();
+    });
+    test('1. the same copy with another change (a full renderWalletDashboard): the stake figures stay those of the chain read, Unstake stays open, the card plans bondExtra', async () => {
+        const c = await card({ data: firstTimer(), flow: true });
+        await c.type('150');
+        await c.submit();
+        c.chain.stake(42);
+        await c.job().inBlock(42);
+        c.pending().resolve(serverAt(41, { identity: 'Somebody' }));
+        await flush();
+        assert.equal(c.renders.length, 1, 'the copy differs outside the stake: the dashboard is drawn');
+        assert.match(text(c.tab.root.querySelector('.list-header h2')), /Somebody/, 'the rest of the copy is drawn');
+        assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the full render drew Total Staked from block 41');
+        assert.equal(text(c.dash.total()), '500.9800 PDEX');
+        assert.deepEqual(c.dash.label(), [SC['SC-151'], SC['SC-151s']]);
+        assert.equal(c.dash.validators(), 8);
+        assert.equal(c.dash.unstakeBtn().disabled, false, 'Unstake closed again');
+        assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 150);
+        assert.equal(c.tab.ctx.currentWalletData.identity, 'Somebody');
+        assert.deepEqual(c.refresh().tracked(ME), { block: 42 });
+        c.dash.stakeBtn().click();
+        await flush();
+        assert.equal(c.sc('SC-03c') || c.sc('SC-03b'), SC['SC-03b'], 'the card draws an existing staker');
+        await c.type('25');
+        await c.submit();
+        assert.deepEqual(callsOf(c, 1), ['staking.bondExtra'], 'a bonded account planned a first stake');
+        c.close();
+    });
+    test('2. a reorg of the second of two actions re-reads the chain: stake 150 in #42, add 50 in #45, #45 replaced: 150 PDEX, "Stake more"', async () => {
+        const c = await card({ data: firstTimer(), flow: true });
+        await c.type('150');
+        await c.submit();
+        c.chain.stake(42);
+        await c.job().inBlock(42);
+        c.dash.stakeBtn().click();
+        await flush();
+        await c.type('50');
+        await c.submit();
+        assert.deepEqual(callsOf(c, 1), ['staking.bondExtra']);
+        c.chain.more(50, 45);
+        await c.job().inBlock(45);
+        assert.equal(text(c.dash.staked()), '200.0000 PDEX', 'the second action drawn');
+        c.chain.more(-50, 45);   // #45 is replaced by a block without it; #42 stands
+        await c.job().stage('resent');
+        assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the reorg of #45 also undid the stake of #42');
+        assert.deepEqual(c.dash.label(), [SC['SC-151'], SC['SC-151s']]);
+        assert.equal(c.dash.validators(), 8);
+        assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 150);
+        assert.equal(c.refresh().tracked(ME), null, 'not tracked while it is not in a block');
+        assert.equal(c.renders.length, 0, 'never remounted');
+        c.close();
+    });
+    test('4. Unstake opens from the chain read (no wait for the server); a page blocked for stale balances stays blocked', async () => {
+        const c = await card({ data: firstTimer(), flow: true });
+        assert.equal(c.dash.unstakeBtn().disabled, true);
+        await c.type('150');
+        await c.submit();
+        c.chain.stake(42);
+        await c.job().inBlock(42);
+        assert.equal(c.dash.unstakeBtn().disabled, false, 'Unstake stays closed while the tile shows 150 PDEX');
+        assert.equal(c.dash.unstakeBtn().getAttribute('title'), null, '"No active bond to unstake." over a bond of 150 PDEX');
+        c.close();
+        const b = await card({ data: firstTimer(), flow: true });
+        const block = 'Balances could not be refreshed - reload before sending or staking.';
+        b.dash.unstakeBtn().setAttribute('title', block);
+        await b.type('150');
+        await b.submit();
+        b.chain.stake(42);
+        await b.job().inBlock(42);
+        assert.equal(b.dash.unstakeBtn().disabled, true, 'the chain read lifted the page\'s block');
+        assert.equal(b.dash.unstakeBtn().getAttribute('title'), block);
+        b.close();
+    });
+    for (const stage of ['processed', 'unverified']) {
+        test(`5. ${stage}: a plain re-read (U1) that claims nothing: drawn when the chain has it, nothing changes when it does not`, async () => {
+            const c = await card({ data: firstTimer(), flow: true });
+            const before = c.tab.root.innerHTML;
+            await c.type('150');
+            await c.submit();
+            const reads = c.chain.st.reads;
+            await c.job().stage(stage);
+            assert.ok(c.chain.st.reads > reads, `nothing re-read the chain after ${stage}`);
+            assert.equal(c.tab.root.innerHTML, before, 'the chain does not have it: nothing on the page changes');
+            assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 0);
+            assert.equal(c.input().value, '150', 'the amount stays');
+            assert.equal(c.refresh().tracked(ME), null, 'claims nothing');
+            c.close();
+            const d = await card({ data: firstTimer(), flow: true });
+            await d.type('150');
+            await d.submit();
+            d.chain.stake(42);   // the chain has it, though the watcher could not confirm it
+            await d.job().stage(stage);
+            assert.equal(text(d.dash.staked()), '150.0000 PDEX', 'the re-read is drawn');
+            assert.deepEqual(d.dash.label(), [SC['SC-151'], SC['SC-151s']]);
+            assert.equal(d.refresh().tracked(ME), null, 'claims nothing: no SC-141');
+            assert.equal(d.renders.length, 0, 'in place');
+            d.close();
+        });
+    }
 });
 
 // ── My Account's labels, /stake with no wallet, /stake read-only ──
@@ -422,6 +559,15 @@ describe('help: the nominating and choosing-validators topics speak the card\'s 
         assert.ok(t.body.includes(`<b>${SC['SC-150']}</b>`) && t.body.includes(`<b>${SC['SC-151']}</b>`), 'the button by its words (SC-150, SC-151)');
         assert.match(t.body, /Past return<\/b> is what the validators paid per PDEX over the last 28 eras, after commission\. Past rewards, not a guarantee\./);
         assert.ok(!/[–—]/.test(t.body), 'no em or en dash');
+    });
+    test('nominating (WP4 review): the card is not "one field and one button", rewards stay where an existing stake sends them, and a change can count from N+2', () => {
+        const b = topic('nominating').body.replace(/\s+/g, ' ');
+        const gone = ['The Stake PDEX card has one field, the amount, and one button.', 'shown behind one disclosure, and rewards are added to the stake.',
+            'A stake or a change of validators made during era N counts from era N+1. '];
+        assert.deepEqual(gone.filter(x => b.includes(x)), [], 'a false sentence is still in the topic');
+        for (const x of ['The simple view of the Stake PDEX card has one field, the amount.',
+            'By default a first stake has its rewards added to the stake; an existing stake keeps its rewards setting, which the card states.',
+            'A stake or a change of validators made during era N counts from era N+1, or from N+2 if made after era N\'s election snapshot.']) assert.ok(b.includes(x), `missing: ${x}`);
     });
     test('choosing validators: "Past return" for the figure and the Advanced view by name; "No history yet" for no figure', () => {
         const t = topic('choosing-validators');

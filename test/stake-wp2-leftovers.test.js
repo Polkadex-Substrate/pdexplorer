@@ -187,7 +187,7 @@ describe('c: a stake that could not be read is not 0', () => {
             getStoredWallet: () => ME, isSameAddress: (x, y) => x === y, currentWalletData: null, walletAprData: null, walletFetchGen: 0, walletRecentStore: null, VALIDATE_ON: false,
             stakingFormatPDEX: (v) => Number(v || 0).toFixed(4), stakingFormatNumber: (n) => String(n), stakingShortAddress: (x) => String(x).slice(0, 6) + '...', stakingEscapeHtml: escapeHtml,
             getStakeableBalance: () => 0, hasInjectedWalletNow: () => true, readWalletValidator: () => Promise.resolve(null),
-            payoutRefresh: { tileHtml: () => '', buttonHtml: () => '', paint() {} }, multisigUI: { mountAccounts() {}, mountPending() {} }, multisigStore: { find: () => null, list: () => [] }, postAction: {}, knownResults: {},
+            payoutRefresh: { tileHtml: () => '', buttonHtml: () => '', paint() {} }, stakeRefresh: { overlay: (d) => d }, multisigUI: { mountAccounts() {}, mountPending() {} }, multisigStore: { find: () => null, list: () => [] }, postAction: {}, knownResults: {},
             openSendModal() {}, openStakeModal() {}, openUnstakeModal() {}, openIdentityModal() {}, openWalletPicker() {}, disconnectWallet() {}
         };
         for (const n of ['helpIcon', 'rewardHistoryLinkHtml', 'walletViewingSlotHtml', 'renderUsdSubscript', 'buildViewOnlyCallout', 'formatDuration', 'formatLocalDate',
