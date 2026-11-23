@@ -6864,6 +6864,7 @@ app.get('/api/wallet/:address', async (req, res) => {
         // floating-point round-trip loss. See note next to activeStakedPlanck
         // in the response payload below.
         let activeStakedPlanck = null;
+        let ledgerRead = 'ok';
         const controller = (bondedOpt && bondedOpt.isSome) ? bondedOpt.unwrap().toString() : address;
         try {
             const ledgerOpt = await globalApi.query.staking.ledger(controller);
@@ -6877,7 +6878,12 @@ app.get('/api/wallet/:address', async (req, res) => {
                 try { activeStakedPlanck = ledger.active.toString(); } catch (_) {}
                 for (const u of (ledger.unlocking || [])) unlocking += balanceToPDEX(u.value);
             }
-        } catch (e) { }
+        } catch (e) {
+            // Reported, not swallowed as 0 staked: a bonded account read as
+            // unstaked would be offered staking.bond, which fails AlreadyBonded
+            // for a fee. The Stake modal plans nothing while this is 'failed'.
+            ledgerRead = 'failed';
+        }
 
         // My validators (nomination targets).
         let nominating = [];
@@ -6951,7 +6957,13 @@ app.get('/api/wallet/:address', async (req, res) => {
                 // this string and passes it untouched into api.tx.staking.unbond().
                 activeStakedPlanck: activeStakedPlanck != null ? String(activeStakedPlanck) : '0',
                 unlocking,
-                nominating
+                nominating,
+                // 'failed' when the ledger read threw: the figures above are
+                // then unknown, not 0.
+                ledgerRead,
+                // Staking.Bonded: the account that must sign nominate,
+                // setPayee, chill and unbond (394 metadata); null when not bonded.
+                controller: (bondedOpt && bondedOpt.isSome) ? controller : null
             },
             rewards: {
                 claimedTotal,

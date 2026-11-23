@@ -79,7 +79,7 @@ import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.
 import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
 import { planStakeCalls, buildStakeTx, stakeAmountCheck, stakeAmountMessage, planProblemMessage, stakeMaxPlanck, transferablePlanckOf,
-    pdexNumberToPlanck, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK } from './lib/stake-plan.js';
+    pdexNumberToPlanck, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK, stakeResultParams, planFullUnbond } from './lib/stake-plan.js';
 import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -9418,8 +9418,9 @@ function stakeMaxNominations() {
 // the user a fee for nothing. forceBatch executes every call and reports
 // per-item failures; batch stops at the first failure but keeps what already
 // executed. batchAll is now the LAST resort, not the first.
-// The Stake card does not come here: bond and nominate must succeed together,
-// so lib/stake-plan.js buildStakeTx sends them in one atomic batchAll (F1).
+// The Stake card and the full unstake do not come here: bond and nominate, and
+// chill and unbond, must succeed together, so lib/stake-plan.js buildStakeTx
+// sends them in one atomic batchAll (F1).
 function batchTx(api, calls) {
     if (calls.length === 1) return calls[0];
     if (api.tx.utility && api.tx.utility.forceBatch) return api.tx.utility.forceBatch(calls);
@@ -9595,22 +9596,22 @@ async function submitStakeTx() {
     // then the plan, which holds a call only for what changed (lib/stake-plan.js).
     const amtStr = (document.getElementById('stake-amount-input').value || '').trim();
     const targets = Array.from(stakeSelected.keys());
-    const hasBond = ((data.staking && data.staking.totalStaked) || 0) > 0;
+    // null (unknown) when the server could not read the ledger: nothing is planned.
+    const hasBond = data.staking && data.staking.ledgerRead === 'failed' ? null : ((data.staking && data.staking.totalStaked) || 0) > 0;
     const check = stakeAmountCheck({ typed: amtStr, transferablePlanck: transferablePlanckOf(data.balance), feeReservePlanck: STAKE_FEE_RESERVE_PLANCK,
         feeFloorPlanck: FEE_MARGIN, minStakePlanck: pdexNumberToPlanck(data.network && data.network.minStake, 'ceil'), hasBond, optional: hasBond });
     const amountMsg = stakeAmountMessage(check, { optional: hasBond });
     if (amountMsg) return showStakeError(amountMsg);
     const maxNoms = stakeMaxNominations();
     const plan = planStakeCalls({ hasBond, amountPlanck: check.planck, currentTargets: ((data.staking && data.staking.nominating) || []).map(v => v.address),
-        targets, maxTargets: maxNoms, same: isSameAddress });
+        targets, maxTargets: maxNoms, same: isSameAddress, controllerDiffers: !!(data.staking && data.staking.controller && !isSameAddress(data.staking.controller, data.address)) });
     const planMsg = planProblemMessage(plan, { maxTargets: maxNoms });
     if (planMsg) return showStakeError(planMsg);
-    const hasAmount = check.planck != null && check.planck > 0n;
 
     await submitSignedTx({
         buildTx: (api) => buildStakeTx(api, plan, { stash: data.address }),
         label: 'Stake & nominate',
-        action: { key: 'staking.bondNominate', params: { amount: hasAmount ? amtStr : null, n: targets.length, eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null } },
+        action: { key: 'staking.bondNominate', params: stakeResultParams(plan, { eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null }) },
         button: document.getElementById('submit-stake-tx-btn'),
         busyText: 'Signing…',
         idleText: 'Sign and stake',
@@ -9900,8 +9901,9 @@ async function submitUnstakeTx() {
     // removes the stash from the Nominators set first, so the post-check
     // computes min_active_bond = 0 and the ensure! passes.
     //
-    // utility.batchAll is atomic — either both succeed or both revert, so
-    // the user never ends up chilled-but-not-unbonded.
+    // One atomic utility.batchAll (lib/stake-plan.js planFullUnbond, built by
+    // buildStakeTx): both succeed or both revert, so the account is never
+    // left chilled but still bonded. A runtime without batchAll is refused.
     if (unstakeFullUnbondIntent && unstakeMaxPlanck && /^[0-9]+$/.test(String(unstakeMaxPlanck))) {
         const planckStr = String(unstakeMaxPlanck);
         // Marker so we can confirm from the browser console that the new
@@ -9917,15 +9919,7 @@ async function submitUnstakeTx() {
                 if (!api.tx.staking.unbond) {
                     throw new Error('Runtime does not expose staking.unbond.');
                 }
-                // batchTx falls back batchAll → batch → single-call so we
-                // tolerate runtimes that lack utility.batchAll. Atomicity is
-                // best-effort — batch (non-all) keeps going on inner failure
-                // but our chill is idempotent so a chill that already-chilled
-                // is fine.
-                return batchTx(api, [
-                    api.tx.staking.chill(),
-                    api.tx.staking.unbond(planckStr),
-                ]);
+                return buildStakeTx(api, planFullUnbond(planckStr));
             },
             label: 'Unstake',
             action: { key: 'staking.unbond', params: { amount: planckToPdexString(planckStr), full: true, unbondingText: data.network && data.network.unbondingMs ? formatDuration(data.network.unbondingMs) : null } },
