@@ -202,7 +202,7 @@ function forwardPass({ failNotes = false, cap = REWARD_NOTES_MAX_PER_BLOCK } = {
     const blocks = new Map();
     const ctx = {
         console: { warn: () => {}, log: () => {}, error: () => {} }, Number, String, Array, Set, Map, Math, Date, JSON, Promise,
-        isAttributableBatch, rewardNotesForBlock, encodeAddress, decodeAddress, chainSS58: 88, REWARD_NOTES_MAX_PER_BLOCK: cap,
+        isAttributableBatch, rewardNotesForBlock, storedRewardStash, encodeAddress, decodeAddress, chainSS58: 88, REWARD_NOTES_MAX_PER_BLOCK: cap,
         balanceToPDEX: (v) => Number(String(v)) / 1e12,
         db: failNotes ? { ...db, noteRewardedPairs: () => { throw new Error('database is locked'); } } : db,
         isRpcReady: () => true, isRpcUnavailableError: () => false, EVENTS_STRICT: true,
@@ -275,6 +275,7 @@ describe('the forward pass (server.js scanSingleBlock) notes rewards', () => {
     test('a reorged block: the fork\'s rewarded stashes are marked stale, so a pair deleted on the fork comes back on the next read', async () => {
         seed();
         db.noteRewardedPairs({ pairs: [{ stash: at88(ME), era: 501, validator: at88(V1) }], stale: [] });   // the fork's forward pass
+        db.insertBlocks([{ number: 2000, hash: '0xfork', authorAddress: V1, authorName: 'n', extrinsicsCount: 2, eventsCount: 1, timestamp: 1 }]);   // the fork as the forward pass stored it
         db.insertEvents([{ hash: '0xfork-0', txHash: '0xt', blockHash: '0xfork', block: 2000, eventIndex: 0, extrinsicIndex: 1, section: 'staking', method: 'Rewarded',
             data: { stash: ME, dest: 'Staked', amount: '1' }, signerAddress: ME, signerName: 'n', timestamp: 1, status: 'success' }]);
         const f = forwardPass();

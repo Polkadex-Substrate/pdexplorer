@@ -58,7 +58,7 @@ describe('buildFreshness: from the sync watermarks', () => {
             assert.equal(f.indexed.chain, null, JSON.stringify(bad));
             assert.equal(f.since.chain, null, JSON.stringify(bad));
         }
-        for (const head of [undefined, null, NaN, -1, 'x', Infinity]) {
+        for (const head of [null, NaN, -1, 'x', Infinity]) {   // (undefined is the helper's default of 1000)
             assert.equal(build({ chainHead: head }).chainHead, null, String(head));
         }
     });
@@ -104,7 +104,7 @@ describe('caughtUp(domain, freshness, block)', () => {
     }
     test('a pending domain is never caught up, whatever its watermark', () => {
         assert.equal(caughtUp('rewards.unpaid', { ...f, pending: ['rewards.unpaid'] }, 1), false);
-        assert.equal(caughtUp('rewards.claimed', { ...f, pending: ['rewards.unpaid'] }, 1), true);
+        assert.equal(caughtUp('rewards.claimed', { ...f, pending: ['rewards.unpaid'] }, 10), true);   // 10: inside the window (since 10)
     });
     test('unknown is not caught up: no freshness (an older server), null fields, a non-finite block', () => {
         for (const bad of [undefined, null, 'x', 7, {}, { chainHead: null, indexed: { chain: null } }, { indexed: 'x' }]) {

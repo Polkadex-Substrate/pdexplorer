@@ -133,7 +133,7 @@ describe('/api/wallet carries freshness (real handler, seeded database)', () => 
     test('additive: an older client reads every field it read before, with the same meaning; the R1 payout model parses it', async () => {
         const w = world();
         const r = await w.call('/api/wallet/:address', { address: ME });
-        const R1_KEYS = ['address', 'identity', 'balance', 'staking', 'rewards', 'recentTransactions', 'recentTransactionsNext', 'recentTransactionsTotal', 'provenance', 'index', 'network'];
+        const R1_KEYS = ['address', 'identity', 'balance', 'staking', 'rewards', 'recentTransactions', 'recentTransactionsNext', 'recentTransactionsTotal', 'provenance', 'index', 'network', 'price'];
         for (const k of R1_KEYS) assert.ok(k in r.body, `lost ${k}`);
         assert.deepEqual(Object.keys(r.body).filter(k => !R1_KEYS.includes(k)), ['freshness'], 'more than one new top-level field');
         assert.equal(r.body.rewards.unpaidCount, 2);

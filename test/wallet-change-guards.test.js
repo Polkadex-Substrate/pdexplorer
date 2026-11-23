@@ -257,7 +257,9 @@ describe('a success callback repaints the dashboard only while it is still shown
 
     test('no success callback calls fetchWalletDashboard directly any more', () => {
         assert.doesNotMatch(CODE, /setTimeout\(\(\) => fetchWalletDashboard\(/);
-        assert.equal((CODE.match(/setTimeout\(\(\) => refreshWalletDashboardFor\(data\.address\), 2500\)/g) || []).length, 8);
+        // R2: the payout's 2.5 s reload is replaced by evidence polling (lib/post-action.js); the other seven go in R3.
+        assert.equal((CODE.match(/setTimeout\(\(\) => refreshWalletDashboardFor\(data\.address\), 2500\)/g) || []).length, 7);
+        assert.doesNotMatch(bodyOf(CODE, 'submitPayoutTx'), /2500/);
         assert.match(CODE, /refresh: address => refreshWalletDashboardFor\(address\)/);
     });
 });

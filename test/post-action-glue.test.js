@@ -271,11 +271,14 @@ describe('R2: the payout flow polls the server on evidence', () => {
         await p.ctx.fetchWalletDashboard(ME);
         await flush();
         const bar = p.q('#wallet-action-bar');
-        await p.ctx.refreshWalletDashboardFor(ME);
+        await p.ctx.refreshWalletDashboardFor(ME, true);   // quiet: the poll's re-read
         await flush();
         assert.equal(p.q('#wallet-action-bar'), bar, 'a poll with nothing new remounted the dashboard');
+        await p.ctx.refreshWalletDashboardFor(ME);         // not quiet: a session change must repaint (it arms the action bar)
+        await flush();
+        assert.notEqual(p.q('#wallet-action-bar'), bar, 'a non-poll refresh skipped the repaint');
         srv.chain = 77;
-        const f = await p.ctx.refreshWalletDashboardFor(ME);
+        const f = await p.ctx.refreshWalletDashboardFor(ME, true);
         assert.equal(f && f.indexed.chain, 77, 'the refresh does not hand the freshness back to the core');
         assert.equal(p.glue.data().freshness.indexed.chain, 77, 'the page kept an old freshness for the same payload');
     });
