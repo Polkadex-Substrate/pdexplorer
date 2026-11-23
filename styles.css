@@ -2967,7 +2967,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .stake-validator-item:hover { background: rgba(255, 255, 255, 0.04); }
 .stake-validator-item.selected {
-    background: rgba(230, 0, 122, 0.08);
+    background: rgba(255, 255, 255, 0.04);
     cursor: default;
 }
 .stake-val-info { flex: 1; min-width: 0; }
@@ -4428,7 +4428,7 @@ h1, h2, h3 { font-weight: 600; }
 .stake-chip[data-preset="recommended"] { border-color: var(--brand-primary); color: var(--brand-primary); }
 .stake-chip:hover, .stake-seg-btn:hover { background: rgba(255, 255, 255, 0.08); }
 .stake-seg { display: inline-flex; align-items: center; gap: 4px; }
-.stake-seg-btn.is-on { background: rgba(230, 0, 122, 0.16); border-color: var(--brand-primary); }
+.stake-seg-btn.is-on { background: var(--accent-violet-tint); border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
 .stake-seg-n { color: var(--text-muted); }
 .stake-f select, .stake-f input[type="number"] {
     padding: 4px 6px;
@@ -4460,7 +4460,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .stake-why:focus { outline: 1px solid var(--brand-primary); }
 .stake-apr-note { margin-top: 8px; font-size: 0.7rem; color: var(--text-muted); }
-.stake-val-apr { color: var(--brand-secondary); font-weight: 600; cursor: help; }
+.stake-val-apr { color: var(--text-primary); font-weight: 600; cursor: help; }
 .stake-val-extra { margin-top: 1px; }
 .badge.stake-badge-waiting, .badge.stake-badge-info, .badge.stake-badge-warn {
     font-size: 0.62rem; letter-spacing: 0.03em; cursor: help;
@@ -5682,4 +5682,68 @@ a.validate-secondary { text-decoration: none; }
 @media (max-width: 340px) {
     .stake-title-row { flex-wrap: wrap; }
     .stake-view-switch { margin-left: 0; }
+}
+
+/* Stake PDEX card, advanced view (lib/stake-advanced-view.js; design 2026-11-22-stake-card-simple-and-advanced.md, sections 5.2
+   and 8). Neutral rows; violet structures (section edges, call names, the pressed status); amber for cautions and warnings;
+   red for SC-93 and an invalid address; green only on the selection's past return; the gradient only on the one primary.
+   1280: two columns, left 360 px (amount, rewards, what you will sign, primary), right the picker. 640 and below: one
+   column in the order amount, rewards, your selection, filters, all validators, what you will sign, primary. */
+.stake-section-head { margin: 0 0 8px; padding-left: 10px; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent-violet); }
+.stake-modal-body.is-advanced .stake-row { grid-template-columns: 1fr; gap: 12px; margin-bottom: 16px; }
+.stake-modal-body.is-advanced .stake-amount-wrap input { min-height: 48px; box-sizing: border-box; }
+.stake-adv-notes:empty, .stake-sign:empty { display: none; }
+.stake-adv-notes, .stake-rewards, .stake-sign { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.stake-rewards .ui-panel.is-line, .stake-sign .ui-panel.is-line, .stake-selection-extra .ui-panel.is-line { padding: 0; }
+.stake-payee { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; }
+.stake-payee legend { padding: 0; margin-bottom: 4px; font-size: 0.82rem; color: var(--text-secondary); }
+.stake-payee-opt { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 0.9rem; color: var(--text-primary); cursor: pointer; }
+.stake-payee-opt input { margin: 0; accent-color: var(--brand-primary); }
+.stake-payee:disabled .stake-payee-opt { opacity: 0.45; cursor: not-allowed; }
+.stake-payee-account { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.stake-payee-account .stake-label { margin-bottom: 0; }
+.stake-payee-account input { min-height: 44px; box-sizing: border-box; min-width: 0; }
+.stake-payee-account input[aria-invalid="true"] { border-color: var(--accent-red-line); }
+.stake-payee-msg { margin: 0; font-size: 0.82rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.stake-payee-msg .validate-msg { margin: 0; }
+.stake-search-row { margin-bottom: 12px; }
+.stake-search-row input {
+    width: 100%; box-sizing: border-box; min-height: 40px; padding: 8px 10px; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-color);
+    color: var(--text-primary); border-radius: var(--radius-sm); font: inherit; font-size: 0.9rem;
+}
+.stake-search-row input:focus { outline: none; border-color: var(--brand-primary); }
+.stake-val-meta .ui-chip { vertical-align: middle; margin: 2px 0; }
+.stake-selection-extra { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 12px 12px; }
+.stake-selection-extra:empty { display: none; }
+.stake-selection-extra p { margin: 0; }
+.stake-selection-extra .stake-return { align-self: stretch; }
+.stake-selection-extra .stake-return-basis { margin-top: 4px; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
+.stake-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.stake-confirm-actions .validate-secondary, .stake-auto-btn { min-height: 44px; }
+.stake-sign .stake-call-wrapper { margin: 4px 0 0; font-size: 0.82rem; }
+.stake-modal-body.is-advanced #submit-stake-tx-btn.validate-primary { margin-top: 0; }
+@media (min-width: 641px) {
+    .stake-modal-body.is-advanced { display: grid; grid-template-columns: 360px minmax(0, 1fr); grid-template-rows: repeat(9, auto) 1fr; column-gap: 24px; align-content: start; }
+    .stake-modal-body.is-advanced > * { grid-column: 1; min-width: 0; }
+    .stake-modal-body.is-advanced > .stake-title-row, .stake-modal-body.is-advanced > .stake-intro { grid-column: 1 / -1; }
+    .stake-modal-body.is-advanced > .stake-advanced { grid-column: 2; grid-row: 3 / -1; }
+}
+@media (max-width: 640px) {
+    .stake-modal-body.is-advanced { display: flex; flex-direction: column; }
+    .stake-modal-body.is-advanced .stake-advanced, .stake-modal-body.is-advanced .stake-pickers { display: contents; }
+    .stake-modal-body.is-advanced .stake-title-row { order: 1; }
+    .stake-modal-body.is-advanced .stake-intro { order: 2; }
+    .stake-modal-body.is-advanced .stake-adv-notes { order: 3; }
+    .stake-modal-body.is-advanced .stake-row { order: 4; }
+    .stake-modal-body.is-advanced .stake-rewards { order: 5; }
+    .stake-modal-body.is-advanced .stake-advanced > .stake-section-head { order: 6; }
+    .stake-modal-body.is-advanced #stake-selection { order: 7; margin-bottom: 12px; }
+    .stake-modal-body.is-advanced .stake-search-row { order: 8; }
+    .stake-modal-body.is-advanced #stake-filter-bar { order: 9; }
+    .stake-modal-body.is-advanced .stake-picker-all { order: 10; margin-bottom: 16px; }
+    .stake-modal-body.is-advanced .stake-sign { order: 11; }
+    .stake-modal-body.is-advanced #stake-modal-error { order: 12; }
+    .stake-modal-body.is-advanced #submit-stake-tx-btn { order: 13; }
+    .stake-modal-body.is-advanced .stake-primary-reason { order: 14; }
+    .stake-calls, .stake-payee-msg { overflow-wrap: anywhere; word-break: break-all; }
 }

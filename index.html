@@ -815,10 +815,12 @@
                         <h3 id="stake-title" tabindex="-1">Stake PDEX <a href="/help/nominating" class="help-inline-icon" title="Learn about staking" aria-label="Help: nominating a validator"><i class='bx bx-help-circle'></i></a></h3>
                         <button type="button" id="stake-view-switch" class="validate-secondary stake-view-switch" aria-pressed="false" title="Choose validators, rewards and amounts yourself"><i class='bx bx-slider-alt' aria-hidden="true"></i>Advanced</button>
                     </div>
-                    <p class="stake-intro" data-stake-view="advanced" hidden>Add to your bond and pick the validators you want to back. Your nomination set is replaced with whatever appears in the &ldquo;Selected&rdquo; box on submit.</p>
+                    <p class="stake-intro" data-stake-view="advanced" data-sc="SC-02" hidden>Change only what you want. The review lists exactly what you will sign.</p>
+                    <div id="stake-adv-notes" class="stake-adv-notes" data-stake-view="advanced" hidden></div>
 
                     <div class="stake-row">
                         <div class="stake-amount-block">
+                            <h4 class="stake-section-head" data-stake-view="advanced" data-sc="SC-61" hidden>Amount</h4>
                             <label class="stake-label" id="stake-amount-label" for="stake-amount-input" data-sc="SC-03">Amount to stake (PDEX)</label>
                             <div class="stake-amount-wrap">
                                 <input type="text" inputmode="decimal" id="stake-amount-input" data-input-kind="amount" placeholder="0.0" autocomplete="off" aria-describedby="stake-amount-hint stake-amount-msg">
@@ -830,38 +832,46 @@
                         </div>
                         <div class="stake-summary" id="stake-summary" data-stake-view="advanced" hidden>
                             <div><span>Currently staked</span><strong id="stake-current">--</strong></div>
-                            <div><span>Minimum stake</span><strong id="stake-minimum">--</strong></div>
-                            <div><span>Nominations chosen</span><strong id="stake-chosen-count">0 / 16</strong></div>
+                            <div><span>Smallest first stake</span><strong id="stake-minimum">--</strong></div>
+                            <div><span>You can stake up to</span><strong id="stake-max-figure">--</strong></div>
                         </div>
                     </div>
 
                     <div id="stake-simple" class="stake-simple" data-stake-view="simple"></div>
 
+                    <section id="stake-rewards" class="stake-rewards" data-stake-view="advanced" hidden></section>
+
                     <div class="stake-advanced" data-stake-view="advanced" hidden>
+                        <h4 class="stake-section-head" data-sc="SC-63">Validators</h4>
+                        <div class="stake-search-row">
+                            <input type="text" id="stake-validator-search" data-input-kind="search" placeholder="Search by name or address" aria-label="Search by name or address" autocomplete="off">
+                        </div>
                         <div id="stake-filter-bar" class="stake-filter-bar" aria-label="Validator filters"></div>
 
                         <div class="stake-pickers">
-                            <div class="stake-picker">
+                            <div class="stake-picker stake-picker-all">
                                 <div class="stake-picker-head">
-                                    <span>Available validators</span>
-                                    <input type="text" id="stake-validator-search" data-input-kind="search" placeholder="Search by name or address" autocomplete="off">
+                                    <span data-sc="SC-73">All validators</span>
                                 </div>
                                 <div id="stake-validator-list" class="stake-picker-list">
-                                    <div class="stake-empty">Loading validators…</div>
+                                    <div class="stake-empty">Loading validators</div>
                                 </div>
                             </div>
-                            <div class="stake-picker">
+                            <div class="stake-picker stake-picker-selection" id="stake-selection">
                                 <div class="stake-picker-head">
-                                    <span>Selected <span id="stake-selected-count" style="color:var(--text-muted);font-weight:400;font-size:0.78rem;margin-left:6px;">0 / 16</span></span>
-                                    <button type="button" id="stake-clear-btn" class="stake-clear-btn">Clear</button>
+                                    <span id="stake-selected-count" data-sc="SC-74">Your selection, 0 of 16</span>
+                                    <button type="button" id="stake-clear-btn" class="stake-clear-btn" data-stake-action="remove-all" data-sc="SC-75">Remove all</button>
                                 </div>
                                 <div id="stake-selected-list" class="stake-picker-list">
-                                    <div class="stake-empty">Pick validators from the list on the left.</div>
+                                    <div class="stake-empty" data-sc="SC-76">No validators selected. Add from the list, or use the automatic choice.</div>
                                 </div>
                                 <div id="stake-spread-note" aria-live="polite"></div>
+                                <div id="stake-selection-extra" class="stake-selection-extra"></div>
                             </div>
                         </div>
                     </div>
+
+                    <section id="stake-sign" class="stake-sign" data-stake-view="advanced" hidden></section>
 
                     <div id="stake-modal-error" class="staking-error" role="alert" style="display: none; margin-top: 16px;"></div>
                     <button id="submit-stake-tx-btn" class="modal-submit-btn">Sign and stake</button>

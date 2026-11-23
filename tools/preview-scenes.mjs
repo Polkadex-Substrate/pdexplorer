@@ -19,6 +19,8 @@
 // locks: the Balance breakdown redesign (locks-<scene>-<width>.html), no primary in any scene.
 // stake: the Stake PDEX card's simple view (stake-simple-<scene>-<width>.html, design 10.3 WP2): the real modal markup
 // over the wallet page, the REAL lib/stake-card-view.js over a validator snapshot run through the real loadPickerData.
+// Its advanced view (stake-advanced-<scene>-<width>.html, design 10.3 WP3) adds the REAL picker (lib/stake-picker-view.js)
+// and a REAL ApiPromise booted from the mainnet 394 metadata, so "Call details" is decoded from a built transaction.
 // WP3: the setup wizard, the separate steps, the manage panel (in its own card) and the node guide, driven
 // through test/helpers/wp3-world.js; a scene may name an element to scroll to (`scroll`), set on load.
 //
@@ -56,7 +58,10 @@ import { describeAccountLocks } from '../lib/balance-locks.js';
 import { mountBalanceLocks } from '../lib/balance-locks-view.js';
 import { caughtUp, pollDeadlineMs } from '../lib/freshness.js';
 import { createStakeCard } from '../lib/stake-card-view.js';
-import { loadPickerData } from '../lib/stake-picker-view.js';
+import { loadPickerData, createStakePicker } from '../lib/stake-picker-view.js';
+import { ApiPromise } from '@polkadot/api';
+import { loadFixture } from '../test/helpers/extrinsic-builders.js';
+import { mockProvider } from '../test/helpers/mock-provider.js';
 import { FEE_MARGIN } from '../lib/fee-preflight.js';
 
 const root = new URL('../', import.meta.url);
@@ -503,7 +508,14 @@ const ssnap = (list, full = true) => loadPickerData(async (url) => (url.endsWith
 const sfirst = (balance = { free: 1204.55, transferable: 1203.55 }) => ({ address: ME, balance, staking: { totalStaked: 0, nominating: [], ledgerRead: 'ok', controller: null }, network: STAKE_NET });
 const sstaker = (ns, totalStaked = 1150) => ({ address: ME, balance: { free: 1204.55, transferable: 54.55 },
     staking: { totalStaked, nominating: ns.map(n => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}` })), ledgerRead: 'ok', controller: totalStaked > 0 ? ME : null }, network: STAKE_NET });
-async function stakeWorld({ data, list = slist(), full = true, payee = { kind: 'staked', account: '' }, typed = '', steps = null }) {
+// One ApiPromise for every advanced scene: Call details decodes what buildStakeTx builds on it.
+let stakeApiP = null;
+const stakeApi = () => (stakeApiP = stakeApiP || (async () => {
+    const fx = loadFixture('metadata-mainnet-394.json');
+    const mock = mockProvider({ metadataHex: fx.metadata, specVersion: fx.specVersion, specName: fx.specName, transactionVersion: fx.transactionVersion });
+    return ApiPromise.create({ provider: mock.provider, noInitWarn: true });
+})());
+async function stakeWorld({ data, list = slist(), full = true, payee = { kind: 'staked', account: '' }, typed = '', steps = null, view = 'simple', failed = false }) {
     const window = new Window({ url: 'https://explorer.test/wallet' });
     const doc = window.document;
     doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
@@ -512,16 +524,36 @@ async function stakeWorld({ data, list = slist(), full = true, payee = { kind: '
     const modal = html.slice(html.indexOf('<div id="stake-modal"'), html.indexOf('<!-- Payout Rewards Modal -->')).replace('style="display: none;', 'style="display: flex;');
     doc.querySelector('.app-container').insertAdjacentHTML('beforeend', modal);
     let selected = [];
-    const card = createStakeCard({ root: doc.getElementById('stake-modal'), storage: null, esc: escapeHtml, short: shortAddr, duration: sdur, same: (a, b) => a === b,
-        connected: () => ME, feeFloorPlanck: FEE_MARGIN, quota: () => 16, reload: () => {},
-        selection: { get: () => selected.slice(), set: (rows) => { selected = rows.map(r => ({ address: r.address, name: r.name })); } } });
+    const storage = { getItem: (k) => (k === 'pdex_stake_view_v1' ? view : null), setItem() {} };
+    const api = view === 'advanced' ? await stakeApi() : null;
+    let picker = null;
+    const sel = () => new Map(selected.map(r => [r.address, r]));
+    const relist = () => { if (picker) picker.render(doc.getElementById('stake-validator-search').value, sel()); };
+    const card = createStakeCard({ root: doc.getElementById('stake-modal'), storage, esc: escapeHtml, short: shortAddr, duration: sdur, same: (a, b) => a === b,
+        connected: () => ME, feeFloorPlanck: FEE_MARGIN, quota: () => 16, reload: () => {}, api: () => api, onView: () => relist(),
+        selection: { get: () => selected.slice(), set: (rows) => { selected = rows.map(r => ({ address: r.address, name: r.name })); card && card.render(); } } });
+    picker = createStakePicker({ barEl: doc.getElementById('stake-filter-bar'), listEl: doc.getElementById('stake-validator-list'), noteEl: doc.getElementById('stake-spread-note'),
+        storage: null, escapeHtml, shortAddress: shortAddr, helpIcon: (slug, label) => `<a href="/help/${slug}" class="help-inline-icon" aria-label="${escapeHtml(label)}"><i class='bx bx-help-circle'></i></a>`,
+        onAdd: (a) => { if (!selected.some(r => r.address === a)) { const v = list.find(x => x.address === a); selected.push({ address: a, name: v ? v.name : null }); card.markManual(); relist(); } },
+        marks: () => card.marks() });
     selected = (data.staking.nominating || []).map(v => ({ address: v.address, name: v.name }));
     card.open({ data });
     if (data.staking.totalStaked > 0) card.setPayee(payee);
-    card.setSnapshot(await ssnap(list, full));
+    if (failed) {
+        card.setSnapshot(new Error('down'));
+        doc.getElementById('stake-validator-list').innerHTML = `<div class="stake-empty">${escapeHtml('Could not load the validator list.')}</div>`;
+    } else {
+        const snap = await ssnap(list, full);
+        card.setSnapshot(snap);
+        picker.setData(snap);
+        relist();
+    }
     const qa = (sel) => Array.from(doc.querySelectorAll(sel));
     const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), card, visible: (x) => !!x && !x.closest('[hidden]'), d: { account: { status: 'connected', address: ME } },
         type: (v) => { const i = doc.getElementById('stake-amount-input'); i.value = v; i.dispatchEvent(new window.Event('input', { bubbles: true })); },
+        payee: (v) => { const r = doc.querySelector(`#stake-rewards input[value="${v}"]`); r.checked = true; r.dispatchEvent(new window.Event('change', { bubbles: true })); },
+        account: (v) => { const i = doc.getElementById('stake-payee-account'); i.value = v; i.dispatchEvent(new window.Event('input', { bubbles: true })); },
+        add: (n) => { doc.querySelector(`#stake-validator-list .stake-validator-item[data-addr="${vaddr(40 + n)}"]`).click(); },
         dropOne: () => { selected = selected.slice(0, -1); card.markManual(); } };
     if (typed) w.type(typed);
     if (steps) await steps(w);
@@ -544,6 +576,26 @@ const STAKE_SCENES = [
     { id: 'stake-simple-staked-no-validators', primary: 1, need: '[data-sc="SC-140"]', build: () => stakeWorld({ data: sstaker([]) }) },
     { id: 'stake-simple-manual-selection', primary: 1, need: '[data-sc="SC-30b"]', build: () => stakeWorld({ data: sfirst(), typed: '250', steps: (w) => w.dropOne() }) }
 ].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+// WP3 (design 10.3): the advanced view. Chips: Waiting, Blocked, Raised recently, Raising now, Slashed, 100% commission,
+// Low return, Many payout pages, No history yet, Same identity, Chosen for you, each once in the list.
+const CHIP_LIST = () => slist({ 1: { identity: { hasIdentity: true, verified: true, parent: null } }, 2: { identity: { hasIdentity: true, verified: false, parent: vaddr(41) } },
+    3: { active: false }, 4: { blocked: true }, 5: { commissionHistory: { raisedRecently: true, pendingRaise: false } }, 7: { commissionHistory: { raisedRecently: false, pendingRaise: true } },
+    8: { slashEras: [1850] }, 9: { commission: 100 }, 10: { perf: { 28: { status: 'ok', apr: 4.2, erasUsed: 28, electedEras: 28, missedEras: 0, reliability: 100 } } },
+    11: { perf: { 28: { status: 'new', apr: null, erasUsed: 3, electedEras: 3, reliability: 100 } } } });
+const showAll = (w) => { w.q('[data-preset="all"]').click(); };
+const STAKE_ADV_SCENES = [
+    { id: 'stake-advanced-first', primary: 1, need: '[data-chip="chosen"]', build: () => stakeWorld({ data: sfirst(), typed: '250', view: 'advanced' }) },
+    { id: 'stake-advanced-existing-unchanged', primary: 1, need: '[data-sc="SC-74"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced' }) },
+    { id: 'stake-advanced-row-chips', primary: 1, need: '#stake-validator-list [data-chip="low"]', build: () => stakeWorld({ data: sfirst(), list: CHIP_LIST(), view: 'advanced', typed: '250',
+        steps: (w) => { showAll(w); } }) },
+    { id: 'stake-advanced-rewards-other-account', primary: 1, need: '[data-sc="SC-70"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced',
+        steps: (w) => { w.payee('account'); w.account(THEM); } }) },
+    { id: 'stake-advanced-call-details', primary: 1, need: '#stake-sign details.stake-call-details[open] [data-call="staking.nominate"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced', typed: '25',
+        steps: (w) => { w.payee('stash'); w.add(10); w.q('#stake-sign details.stake-call-details').open = true; } }), scroll: '#stake-sign' },
+    { id: 'stake-advanced-list-failed', primary: 1, need: '#stake-validator-list .stake-empty', build: () => stakeWorld({ data: sstaker([1, 2, 3]), view: 'advanced', failed: true }) },
+    { id: 'stake-advanced-confirm-automatic', primary: 1, need: '[data-sc="SC-40"]', build: () => stakeWorld({ data: sstaker([10, 11, 12]), view: 'advanced',
+        steps: (w) => { w.q('[data-stake-action="auto"]').click(); } }) }
+].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
 function checkStakeScene(w, s, err) {
     if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
     const modal = w.doc.querySelector('#stake-modal');
@@ -557,7 +609,7 @@ function checkStakeScene(w, s, err) {
 
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
-    stake: { scenes: STAKE_SCENES, check: checkStakeScene, prefix: '' } };
+    stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;

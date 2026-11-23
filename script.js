@@ -9478,8 +9478,6 @@ async function openStakeModal(keep) {
     if (!modal) return;
     clearStakeError();
     document.getElementById('stake-amount-input').value = '';
-    document.getElementById('stake-current').textContent = data.staking && data.staking.ledgerRead === 'failed' ? stakeCopy('SC-109') : stakingFormatPDEX(data.staking && data.staking.totalStaked) + ' PDEX';
-    document.getElementById('stake-minimum').textContent = stakingFormatPDEX(data.network && data.network.minStake) + ' PDEX';
     // The on-chain set; with keep (from "Change validators") only those.
     stakeSelected = new Map();
     for (const v of (data.staking && data.staking.nominating) || []) {
@@ -9494,10 +9492,10 @@ async function openStakeModal(keep) {
 }
 async function loadStakeChoice(token = stakeCardView().token()) {
     const listEl = document.getElementById('stake-validator-list');
-    if (listEl) listEl.innerHTML = '<div class="stake-empty">Loading validators…</div>';
+    if (listEl) listEl.innerHTML = `<div class="stake-empty">${stakeCopy('SC-111')}</div>`;
     let pick;
     try { pick = await loadValidatorsForPicker(); } catch (e) {
-        if (listEl) listEl.innerHTML = '<div class="stake-empty">Could not load validators.</div>';
+        if (listEl) listEl.innerHTML = `<div class="stake-empty">${stakeCopy('SC-112')}</div>`;
         return stakeCardView().setSnapshot(e, token);
     }
     stakeValidators = pick.validators;
@@ -9517,7 +9515,7 @@ function stakeCardView() {
     let storage = null;
     try { storage = window.localStorage; } catch (e) { storage = null; }
     stakeCard = createStakeCard({ root: document.getElementById('stake-modal'), storage, esc: stakingEscapeHtml, short: stakingShortAddress, duration: formatDuration,
-        same: isSameAddress, connected: getStoredWallet, feeFloorPlanck: FEE_MARGIN, quota: stakeMaxNominations, fillMax: fillStakeMax, reload: () => loadStakeChoice(),
+        same: isSameAddress, connected: getStoredWallet, feeFloorPlanck: FEE_MARGIN, quota: stakeMaxNominations, fillMax: fillStakeMax, reload: () => loadStakeChoice(), api: () => globalApi,
         selection: { get: () => Array.from(stakeSelected.values()), set: (rows) => { stakeSelected = new Map(rows.map(r => [r.address, { address: r.address, name: r.name }])); renderStakeSelected(); } },
         onView: (view, focusSearch) => {
             const s = document.getElementById('stake-validator-search');
@@ -9542,7 +9540,7 @@ function stakePickerView() {
         escapeHtml: stakingEscapeHtml,
         shortAddress: stakingShortAddress,
         helpIcon,
-        onAdd: (address) => addStakeValidator(address),
+        onAdd: (address) => addStakeValidator(address), marks: () => (stakeCard ? stakeCard.marks() : {}),
         isNarrow: () => !!(window.matchMedia && window.matchMedia('(max-width: 720px)').matches)
     });
     return stakePicker;
@@ -9554,7 +9552,7 @@ function renderStakeValidatorList(filterStr) {
 function addStakeValidator(address) {
     if (stakeSelected.has(address)) return;
     const maxNoms = stakeMaxNominations();
-    if (stakeSelected.size >= maxNoms) { showStakeError(`You can nominate at most ${maxNoms} validators per transaction.`); return; }
+    if (stakeSelected.size >= maxNoms) { showStakeError(stakeCopy('SC-108', { max: maxNoms })); return; }
     const v = stakeValidators.find(x => x.address === address) || { address, name: null };
     stakeSelected.set(address, { address, name: v.name });
     renderStakeSelected();
@@ -9571,33 +9569,9 @@ function removeStakeValidator(address) {
     if (stakeCard) stakeCard.markManual();
 }
 
+// "Your selection" (rows, count, past return, warnings) is drawn by the card (lib/stake-card-view.js).
 function renderStakeSelected() {
-    const el = document.getElementById('stake-selected-list');
-    const countEl = document.getElementById('stake-selected-count');
-    const headerCountEl = document.getElementById('stake-chosen-count');
-    const n = stakeSelected.size;
-    const maxNoms = stakeMaxNominations();
-    if (countEl) countEl.textContent = `${n} / ${maxNoms}`;
-    if (headerCountEl) headerCountEl.textContent = `${n} / ${maxNoms}`;
-    if (!el) return;
-    if (!n) { el.innerHTML = '<div class="stake-empty">Pick validators from the list on the left.</div>'; return; }
-    el.innerHTML = Array.from(stakeSelected.values()).map(v => {
-        const name = v.name && v.name !== 'Unknown' ? v.name : stakingShortAddress(v.address);
-        return `<div class="stake-validator-item selected" data-addr="${stakingEscapeHtml(v.address)}">
-            <div class="stake-val-info">
-                <div class="stake-val-name">${stakingEscapeHtml(name)}</div>
-                <div class="stake-val-meta">${stakingShortAddress(v.address)}</div>
-            </div>
-            <button type="button" class="stake-val-remove" aria-label="Remove">×</button>
-        </div>`;
-    }).join('');
-    el.querySelectorAll('.stake-val-remove').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const addr = btn.closest('.stake-validator-item').getAttribute('data-addr');
-            removeStakeValidator(addr);
-        });
-    });
+    if (stakeCard) stakeCard.render();
 }
 
 async function submitStakeTx() {
@@ -9607,7 +9581,7 @@ async function submitStakeTx() {
     if (stop) return message ? showStakeError(message) : undefined;
     // The plan the card shows (stakeFormPlan), a call only for what changed; the card is held still while recheck waits, then plans it again (section 4.2).
     const planNow = () => stakeFormPlan(data, { typed: (document.getElementById('stake-amount-input').value || '').trim(), targets: Array.from(stakeSelected.keys()),
-        maxTargets: stakeMaxNominations(), same: isSameAddress, connected: getStoredWallet(), feeFloorPlanck: FEE_MARGIN });
+        maxTargets: stakeMaxNominations(), same: isSameAddress, connected: getStoredWallet(), feeFloorPlanck: FEE_MARGIN, ...(stakeCard ? stakeCard.planOptions() : {}) });
     const form = planNow(), plan = form.plan;
     if (form.message) return showStakeError(form.message);
     const held = stakeCard ? await stakeCard.recheck(loadValidatorsForPicker, form, planNow) : () => {};
@@ -10685,8 +10659,6 @@ async function submitSendTx() {
     closeOn('send-modal', 'close-send-modal');
     closeOn('multisig-review-modal', 'close-multisig-review');
 
-    const stakeClear = document.getElementById('stake-clear-btn');
-    if (stakeClear) stakeClear.addEventListener('click', () => { stakeSelected.clear(); removeStakeValidator(null); });
     const stakeSubmit = document.getElementById('submit-stake-tx-btn');
     if (stakeSubmit) stakeSubmit.addEventListener('click', submitStakeTx);
 
