@@ -526,7 +526,7 @@ describe('(10) the copy: LOCK_COPY', () => {
             assert.doesNotMatch(t, /\b[a-z]+[A-Z]?[a-z]*\.[a-z][A-Za-z]+\b|\(\)|phrelect|democrac\b|Staking\.Staking|withdrawUnbonded|removeVoter|migrateCurrency|clearIdentity/, t);
             assert.doesNotMatch(t, /\bbelow\b/, t);
             assert.doesNotMatch(t, /!/, t);
-            assert.doesNotMatch(t, /[–—]/, t);
+            assert.doesNotMatch(t, /[\u2013\u2014]/, t);
         }
     });
     test('frozen all the way down', () => {
