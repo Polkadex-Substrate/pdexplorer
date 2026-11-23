@@ -495,6 +495,119 @@ describe('WP4 review fixes: the chain read stands until the server has the block
     }
 });
 
+// ── the Opus review of 2026-11-23: a withdrawal is the stake's own; tracking ends when the server has the block ──
+// Another action of the same account (a transfer), through the real core: in a block with clean events, then a later stage.
+const OTHER_HASH = '0x' + 'cd'.repeat(32);
+const TRANSFER_EVENTS = [{ event: { section: 'balances', method: 'Transfer', data: [ME, addr(9), 5n * PDEX] } }, { event: { section: 'system', method: 'ExtrinsicSuccess', data: [] } }];
+function otherAction(c) {
+    const action = { key: 'balances.transfer', params: { to: addr(9) } };
+    const seen = c.post.observe(action);
+    const show = seen.show(() => ({}));
+    const stage = seen.stage(() => {});
+    return {
+        async inBlock(block) { show(action, 'inBlock', TRANSFER_EVENTS, null, { blockNumber: block, txHash: OTHER_HASH, address: ME }); stage('inBlock', { stage: 'inBlock', outcome: { ok: true } }); await flush(); },
+        async stage(s) { show(action, s, null, null, { txHash: OTHER_HASH, address: ME }); stage(s, { stage: s, outcome: { ok: false } }); await flush(); }
+    };
+}
+// The server's copy equal to the page, answering from block n (the samePayload branch of adopt).
+const sameCopyAt = (c, n) => ({ ...JSON.parse(JSON.stringify(c.tab.ctx.currentWalletData)), freshness: { ...firstTimer().freshness, chainHead: n } });
+// The page's payload with a little more free balance (a reward paid), from block n: differs from the page only in balance.
+const moreFreeAt = (c, n) => { const d = sameCopyAt(c, n); d.balance = { ...d.balance, free: d.balance.free + 1, total: d.balance.total + 1 }; return d; };
+async function stakeAt42() {
+    const c = await card({ data: firstTimer(), flow: true });
+    await c.type('150');
+    await c.submit();
+    c.chain.stake(42);
+    await c.job().inBlock(42);
+    assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the chain read of the stake');
+    return c;
+}
+async function plansOnReopen(c, typed = '25') {
+    c.dash.stakeBtn().click();
+    await flush();
+    await c.type(typed);
+    await c.submit();
+    return callsOf(c, c.sent.length - 1);
+}
+describe('Opus review 2026-11-23: only the stake\'s own reorg or failure withdraws it; tracking ends when the server has its block', () => {
+    for (const [what, stage] of [['fails after its block', 'failed'], ['is reorged', 'resent']]) {
+        for (const failing of [true, false]) {
+            test(`the reviewer's scenario: stake 150 in #42, the server catches up at #50 with the same figures, then a transfer ${what}${failing ? ' and the chain read fails' : ''}: Total Staked stays 150 and the card plans bondExtra`, async () => {
+                const c = await stakeAt42();
+                c.pending().resolve(sameCopyAt(c, 50));
+                await flush();
+                assert.equal(c.renders.length, 0, 'the equal copy is taken in place');
+                const t = otherAction(c);
+                await t.inBlock(60);
+                c.chain.st.fail = failing;
+                const reads = c.chain.st.reads;
+                await t.stage(stage);
+                assert.equal(text(c.dash.staked()), '150.0000 PDEX', `the transfer's ${stage} notice withdrew the stake`);
+                assert.equal(c.chain.st.reads, reads, `the transfer's ${stage} notice made the stake refresh re-read the chain`);
+                assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 150, 'the page payload lost the stake');
+                assert.deepEqual(c.dash.label(), [SC['SC-151'], SC['SC-151s']], 'the button went back to "Stake"');
+                c.chain.st.fail = false;
+                assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra'], 'a bonded account planned a first stake');
+                c.close();
+            });
+        }
+        test(`while the stake is still tracked (the server has not caught up), a transfer that ${what} with a failing chain read withdraws nothing`, async () => {
+            const c = await stakeAt42();
+            const t = otherAction(c);
+            await t.inBlock(43);
+            c.chain.st.fail = true;
+            await t.stage(stage);
+            assert.equal(text(c.dash.staked()), '150.0000 PDEX', `the transfer's ${stage} notice withdrew the stake`);
+            assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 150);
+            assert.deepEqual(c.refresh().tracked(ME), { block: 42 }, 'the stake is no longer tracked after another action\'s notice');
+            c.chain.st.fail = false;
+            assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra'], 'a bonded account planned a first stake');
+            c.close();
+        });
+    }
+    test('tracking ends when the server catches up with an equal copy (the samePayload branch): a later copy differing in balance is the caller\'s to draw', async () => {
+        const c = await stakeAt42();
+        c.pending().resolve(sameCopyAt(c, 50));
+        await flush();
+        assert.equal(c.refresh().tracked(ME), null);
+        assert.equal(c.refresh().adopt(moreFreeAt(c, 51)), false, 'the stake is still tracked after the server caught up with an equal copy');
+        c.close();
+    });
+    test('tracking ends when the server catches up with a copy drawn in full: a later copy differing in balance is the caller\'s to draw', async () => {
+        const c = await stakeAt42();
+        c.pending().resolve({ ...sameCopyAt(c, 50), identity: 'Somebody' });
+        await flush();
+        assert.equal(c.renders.length, 1, 'the copy differs outside the stake: the dashboard is drawn');
+        assert.equal(c.refresh().adopt(moreFreeAt(c, 51)), false, 'the stake is still tracked after the server caught up in a full render');
+        c.close();
+    });
+    for (const [what, stage] of [['reorged', 'resent'], ['failed after its block', 'failed']]) {
+        test(`the stake's own ${what} with a failing chain read: the last chain figures stay (never 0 for a bonded account) and Total Staked is marked "May be behind"`, async () => {
+            const c = await stakeAt42();
+            c.chain.st.fail = true;
+            await c.job().stage(stage);
+            assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'a failed read during the withdrawal drew 0 staked');
+            assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 150);
+            const mark = c.q('#wallet-staked-label .ui-chip.is-wait.is-bare');
+            assert.equal(mark ? text(mark) : null, 'May be behind', 'the could-not-refresh mark (S14)');
+            assert.equal(c.refresh().tracked(ME), null, 'not tracked while it is not in a block');
+            c.close();
+        });
+        test(`regression guard: the stake's own ${what}, after another action of the account was in a block, still withdraws it (the chain no longer has it: 0 PDEX, "Stake", bond and nominate)`, async () => {
+            const c = await stakeAt42();
+            await otherAction(c).inBlock(43);
+            c.chain.unstake();
+            await c.job().stage(stage);
+            assert.equal(text(c.dash.staked()), '0.0000 PDEX', `the stake's own ${stage} did not withdraw it`);
+            assert.equal(c.tab.ctx.currentWalletData.staking.totalStaked, 0);
+            assert.deepEqual(c.dash.label(), [SC['SC-150'], SC['SC-150s']]);
+            assert.equal(c.refresh().tracked(ME), null);
+            assert.deepEqual(await plansOnReopen(c, '150'), ['staking.bond', 'staking.nominate']);
+            c.close();
+        });
+    }
+});
+
 // ── My Account's labels, /stake with no wallet, /stake read-only ──
 describe('My Account by stake, and the /stake shortcut where the card cannot open (section 6 rows 14, 15; SC-120, SC-121, SC-150, SC-151)', () => {
     test('the Stake button: SC-150 with no stake, SC-151 with one (both the dashboard and the action bar a session restores)', async () => {
