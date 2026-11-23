@@ -31,7 +31,7 @@ import { FEE_MARGIN } from '../lib/fee-preflight.js';
 import { pdexToPlanck } from '../lib/wallet-safety.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from '../lib/stake-picker-view.js';
 import { payeeOf } from '../lib/validator-manage.js';
-import { ERROR_COPY } from '../lib/tx-status.js';
+import { ERROR_COPY, SIGNING_CAP_MS } from '../lib/tx-status.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const HTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -855,5 +855,89 @@ describe('cross-file promises', () => {
     test('script.js stays wiring: the stake card body is shorter than before and the file under the ceiling', () => {
         const lines = (SCRIPT.match(/\n/g) || []).length;
         assert.ok(lines < 14697, `script.js has ${lines} lines; WP2 must lower it (14697 before)`);
+    });
+});
+
+// ── Stake card is released when the wallet never answers (review of 0587514, money path) ──
+// The card is held from the start of the recheck. If the wallet popup is closed the request stays pending,
+// the promise handed to the transaction flow never settles, and after the 180 s signing cap the flow ends
+// the tracking with the "waiting" stage (walletSilent). The card must be usable again then, with the typed
+// amount and the picks as they were; a late answer or a second release changes nothing.
+// A fake clock stands in for the cap; the fake tracker follows lib/tx-submit.js: start() says "signing",
+// the cap says "waiting", send() is the wallet step.
+function silentWallet(c, { answers = [] } = {}) {
+    const clock = { at: 0, timers: [], set(fn, ms) { this.timers.push({ due: this.at + ms, fn }); },
+        advance(ms) { this.at += ms; for (const t of this.timers.filter(x => x.due <= this.at)) { this.timers.splice(this.timers.indexOf(t), 1); t.fn(); } } };
+    const stages = [];
+    let n = 0;
+    c.tab.ctx.trackSignedTx = (o) => ({
+        start() { o.onStage('signing', {}); stages.push('signing'); clock.set(() => { stages.push('waiting'); o.onStage('waiting', { walletSilent: true }); }, SIGNING_CAP_MS); },
+        buildFailed() {},
+        send: (tx, who) => { c.sent.push({ tx, who, action: o.action }); return answers[n++] || new Promise(() => {}); }
+    });
+    return { clock, stages };
+}
+const picksOf = (c) => Array.from(c.tab.ctx.stakeSelected.keys()).sort();
+
+describe('the card is released when the wallet never answers (money path: a failed signature keeps the amount and picks)', () => {
+    test('the popup is closed, the request stays pending: after the 180 s cap the amount, Max, the view switch and both views are usable again, nothing typed or picked is lost', async () => {
+        const c = await card({ data: firstTimer(), snapshots: [await snapshotOf(fullList()), await snapshotOf(fullList())] });
+        const { clock } = silentWallet(c);
+        await c.type('150');
+        const picks = picksOf(c), lines = planLines(c);
+        assert.ok(picks.length > 0, 'the card drew its picks');
+        const { done } = await pressing(c);
+        done.catch(() => {});
+        await flush();
+        assert.equal(c.sent.length, 1, 'the wallet has the transaction');
+        assert.deepEqual(held(c), ALL_HELD, 'held while the wallet decides');
+        clock.advance(SIGNING_CAP_MS - 1000); await flush();
+        assert.deepEqual(held(c), ALL_HELD, 'released before the cap');
+        clock.advance(2000); await flush();
+        assert.deepEqual(held(c), NONE_HELD, 'after the cap the amount, Max, the view switch and both views stay inert');
+        assert.equal(c.input().value, '150', 'the typed amount is unchanged');
+        assert.deepEqual(picksOf(c), picks, 'the picks are unchanged');
+        assert.deepEqual(planLines(c), lines, 'the review is unchanged');
+        await c.click('#stake-max-btn');
+        assert.notEqual(c.input().value, '150', 'Max does nothing after the cap');
+        await c.type('200');
+        assert.equal(c.input().value, '200');
+        await c.click('#stake-view-switch');
+        assert.equal(c.q('.stake-advanced').hasAttribute('inert'), false);
+        assert.equal(c.q('#stake-view-switch').disabled, false);
+        c.close();
+    });
+    test('a throw inside the recheck after the hold releases the card', async () => {
+        const c = await card({ data: firstTimer(), snapshots: [await snapshotOf(fullList()), await snapshotOf(fullList())] });
+        silentWallet(c);
+        await c.type('150');
+        const real = c.tab.ctx.stakeFormPlan;
+        let calls = 0;
+        c.tab.ctx.stakeFormPlan = (...a) => { if (++calls > 1) throw new Error('boom'); return real(...a); };
+        let thrown = null;
+        const done = c.tab.fn('submitStakeTx')().catch(e => { thrown = e; });
+        await flush(); await done;
+        assert.ok(thrown, 'the press ended with the error');
+        assert.equal(c.sent.length, 0, 'nothing was signed');
+        assert.deepEqual(held(c), NONE_HELD, 'the card stayed held after a throw in the recheck');
+        assert.equal(c.input().value, '150');
+        c.close();
+    });
+    test('the release runs once: a stage end and then the settled promise do not release a later press', async () => {
+        const c = await card({ data: firstTimer(), snapshots: [await snapshotOf(fullList()), await snapshotOf(fullList())] });
+        let answer;
+        const first = new Promise(r => { answer = r; });
+        const { clock } = silentWallet(c, { answers: [first] });
+        await c.type('150');
+        const one = await pressing(c);
+        clock.advance(SIGNING_CAP_MS + 1); await flush();
+        assert.deepEqual(held(c), NONE_HELD, 'released by the end of tracking');
+        c.tab.ctx.loadValidatorsForPicker = () => new Promise(() => {});
+        const two = await pressing(c);
+        assert.deepEqual(held(c), ALL_HELD, 'a second press holds the card');
+        answer(); await one.done; await flush();
+        assert.deepEqual(held(c), ALL_HELD, 'the first press released the second one\'s hold');
+        void two;
+        c.close();
     });
 });
