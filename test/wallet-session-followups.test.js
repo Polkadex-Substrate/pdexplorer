@@ -27,6 +27,9 @@ import { bodyOf } from './helpers/source.js';
 import { makeProfile, openTab, fakeExtension, addr, memStorage, C } from './helpers/wallet-world.js';
 import { createMultisigUI } from '../lib/multisig-view.js';
 import { normalizeMultisig } from '../lib/multisig.js';
+import { createPostAction } from '../lib/post-action.js';
+import { createKnownResults } from '../lib/known-results.js';
+import { effectsFor } from '../lib/action-effects.js';
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const A = addr(1), B = addr(2), M = addr(9);
@@ -86,6 +89,7 @@ function world({ wc = false, member = false } = {}) {
         multisigStore: { find: (a) => multisigFind.value(a) },
         multisigUI: { mountAccounts() {}, review: async (r) => { reviews.push(r); } },
         showTxStatus: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex),
+        postAction: createPostAction({ effects: effectsFor, known: createKnownResults({ storage: null }) }),   // R1: submitSignedTx observes every submission (real core)
         trackSignedTx, WALLET_CHANGED_STALE: STALE, confirm: () => true, alert: () => {}
     });
     vm.runInContext('async ' + bodyOf(SCRIPT, 'submitSignedTx'), tab.ctx);

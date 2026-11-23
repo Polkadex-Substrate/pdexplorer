@@ -9363,7 +9363,7 @@ function renderWalletPriceChart(history) {
 // data backing each modal so users see live numbers without an extra fetch.
 let currentWalletData = null;
 // Post-action refresh (lib/post-action.js): what a block proved, shown in place and kept across a reload and other tabs.
-const knownResults = createKnownResults({ storage: () => window.localStorage, same: isSameAddress, listen: (f) => window.addEventListener('storage', f) });
+const knownResults = createKnownResults({ key: 'pdex_known_results', storage: () => window.localStorage, same: isSameAddress, listen: (f) => window.addEventListener('storage', f) });
 const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e) });
 const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, post: postAction, data: () => currentWalletData, same: isSameAddress, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, short: stakingShortAddress, esc: stakingEscapeHtml } });
 let validatorsCache = null;
