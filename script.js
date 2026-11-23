@@ -9484,6 +9484,7 @@ async function openStakeModal(keep) {
     renderStakeSelected();
     modal.style.display = 'flex';
     const token = stakeCardView().open({ data, keep: Array.isArray(keep) ? keep : null, tracked: stakeRefresh.tracked(data.address) });
+    stakeRefresh.opened(data.address);   // an unsettled bonded state: one fresh chain read (lib/stake-refresh.js)
     if (data.staking && data.staking.totalStaked > 0) readStakePayee(data.address).then(p => stakeCardView().setPayee(p, token));
     await loadStakeChoice(token);
 }
