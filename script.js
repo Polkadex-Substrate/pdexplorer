@@ -78,8 +78,10 @@ import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
-import { planStakeCalls, buildStakeTx, stakeAmountCheck, stakeAmountMessage, planProblemMessage, stakeMaxPlanck, transferablePlanckOf,
-    pdexNumberToPlanck, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK, stakeResultParams, planFullUnbond } from './lib/stake-plan.js';
+import { buildStakeTx, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK, stakeResultParams, planFullUnbond,
+    stakeFormPlan, signerRoles, planProblemMessage } from './lib/stake-plan.js';
+import { payeeOf } from './lib/validator-manage.js';
+import { createStakeCard } from './lib/stake-card-view.js';
 import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -9008,7 +9010,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                          already cached). -->
                     <div class="value-usd" data-pdex-amount="${balance.total}">${renderUsdSubscript(balance.total, latestPrice && latestPrice.price)}</div>
                 </div>
-                <div class="staking-summary-card"><div class="label">Total Staked</div><div class="value">${stakingFormatPDEX(staking.totalStaked)} PDEX</div></div>
+                <div class="staking-summary-card"><div class="label">Total Staked</div><div class="value">${staking.ledgerRead === 'failed' ? stakingEscapeHtml(stakeCopy('SC-109')) : stakingFormatPDEX(staking.totalStaked) + ' PDEX'}</div></div>
                 <div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">${stakingFormatPDEX(rewards.claimedTotal)} PDEX</div></div>
                 ${payoutRefresh.tileHtml(data)}
             </div>
@@ -9467,27 +9469,18 @@ function clearStakeError() {
     if (el) { el.textContent = ''; el.style.display = 'none'; }
 }
 
+// The card (lib/stake-card-view.js): the simple view over the same amount and
+// selection the picker edits; script.js only wires the page to it.
 async function openStakeModal(keep) {
     const data = currentWalletData;
     if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const modal = document.getElementById('stake-modal');
     if (!modal) return;
     clearStakeError();
-    const amtInput = document.getElementById('stake-amount-input');
-    if (amtInput) amtInput.value = '';
-    const maxBtn = document.getElementById('stake-max-btn');
-    if (maxBtn) maxBtn.title = stakeCopy('SC-05', { reserve: planckToPdexText(STAKE_FEE_RESERVE_PLANCK) });
-
-    // Use `transferable` (free - totalStaked) so the hint reflects what's
-    // actually available to bond, not the raw free balance which still
-    // counts tokens already locked in staking.
-    const stakeableBalance = getStakeableBalance(data);
-    document.getElementById('stake-available').textContent = stakingFormatPDEX(stakeableBalance);
-    document.getElementById('stake-current').textContent = stakingFormatPDEX(data.staking && data.staking.totalStaked) + ' PDEX';
+    document.getElementById('stake-amount-input').value = '';
+    document.getElementById('stake-current').textContent = data.staking && data.staking.ledgerRead === 'failed' ? stakeCopy('SC-109') : stakingFormatPDEX(data.staking && data.staking.totalStaked) + ' PDEX';
     document.getElementById('stake-minimum').textContent = stakingFormatPDEX(data.network && data.network.minStake) + ' PDEX';
-
-    // Pre-fill selected with the current nominations so the user can curate.
-    // keep (from "Change validators"): only those; a click event prefills all.
+    // The on-chain set; with keep (from "Change validators") only those.
     stakeSelected = new Map();
     for (const v of (data.staking && data.staking.nominating) || []) {
         if (Array.isArray(keep) && !keep.some(k => isSameAddress(k, v.address))) continue;
@@ -9495,28 +9488,47 @@ async function openStakeModal(keep) {
     }
     renderStakeSelected();
     modal.style.display = 'flex';
-
+    const token = stakeCardView().open({ data, keep: Array.isArray(keep) ? keep : null });
+    if (data.staking && data.staking.totalStaked > 0) readStakePayee(data.address).then(p => stakeCardView().setPayee(p, token));
+    await loadStakeChoice(token);
+}
+async function loadStakeChoice(token = stakeCardView().token()) {
     const listEl = document.getElementById('stake-validator-list');
     if (listEl) listEl.innerHTML = '<div class="stake-empty">Loading validators…</div>';
-    try {
-        const pick = await loadValidatorsForPicker();
-        stakeValidators = pick.validators;
-        stakePickerView().setData(pick);
-        renderStakeSelected();
-    } catch (e) {
+    let pick;
+    try { pick = await loadValidatorsForPicker(); } catch (e) {
         if (listEl) listEl.innerHTML = '<div class="stake-empty">Could not load validators.</div>';
-        return;
+        return stakeCardView().setSnapshot(e, token);
     }
-    renderStakeValidatorList('');
+    stakeValidators = pick.validators;
+    stakePickerView().setData(pick);
+    stakeCardView().setSnapshot(pick, token);
     const searchEl = document.getElementById('stake-validator-search');
-    if (searchEl) {
-        searchEl.value = '';
-        searchEl.oninput = () => renderStakeValidatorList(searchEl.value);
-    }
+    if (searchEl) { searchEl.value = ''; searchEl.oninput = () => renderStakeValidatorList(searchEl.value); }
+    renderStakeValidatorList('');
+}
+// Where rewards go now (Staking.Payee), for the simple view's rewards line; 'failed' when unread.
+async function readStakePayee(address) {
+    try { return payeeOf(await globalApi.query.staking.payee(address)) || 'failed'; } catch (e) { return 'failed'; }
+}
+let stakeCard = null;
+function stakeCardView() {
+    if (stakeCard) return stakeCard;
+    let storage = null;
+    try { storage = window.localStorage; } catch (e) { storage = null; }
+    stakeCard = createStakeCard({ root: document.getElementById('stake-modal'), storage, esc: stakingEscapeHtml, short: stakingShortAddress, duration: formatDuration,
+        same: isSameAddress, connected: getStoredWallet, feeFloorPlanck: FEE_MARGIN, quota: stakeMaxNominations, fillMax: fillStakeMax, reload: () => loadStakeChoice(),
+        selection: { get: () => Array.from(stakeSelected.values()), set: (rows) => { stakeSelected = new Map(rows.map(r => [r.address, { address: r.address, name: r.name }])); renderStakeSelected(); } },
+        onView: (view, focusSearch) => {
+            const s = document.getElementById('stake-validator-search');
+            if (view === 'advanced' && stakeValidators.length) renderStakeValidatorList(s ? s.value : '');
+            if (view === 'advanced' && focusSearch && s) s.focus();
+        } });
+    return stakeCard;
 }
 
 // Filters, sort, APR and the rows live in lib/stake-picker-view.js; the list
-// still calls back into addStakeValidator, and signing below is unchanged.
+// still calls back into addStakeValidator.
 let stakePicker = null;
 function stakePickerView() {
     if (stakePicker) return stakePicker;
@@ -9549,12 +9561,14 @@ function addStakeValidator(address) {
     const searchEl = document.getElementById('stake-validator-search');
     renderStakeValidatorList(searchEl ? searchEl.value : '');
     clearStakeError();
+    if (stakeCard) stakeCard.markManual();
 }
 function removeStakeValidator(address) {
     stakeSelected.delete(address);
     renderStakeSelected();
     const searchEl = document.getElementById('stake-validator-search');
     renderStakeValidatorList(searchEl ? searchEl.value : '');
+    if (stakeCard) stakeCard.markManual();
 }
 
 function renderStakeSelected() {
@@ -9589,33 +9603,21 @@ function renderStakeSelected() {
 async function submitStakeTx() {
     clearStakeError();
     const data = currentWalletData;
-    if (!data) return showStakeError('Wallet data is not loaded.');
-    if (!isSameAddress(getStoredWallet(), data.address)) return showStakeError('Connect this wallet to perform staking actions.');
-
-    // The amount as typed (never rewritten, rule M4), checked in planck (F2);
-    // then the plan, which holds a call only for what changed (lib/stake-plan.js).
-    const amtStr = (document.getElementById('stake-amount-input').value || '').trim();
-    const targets = Array.from(stakeSelected.keys());
-    // null (unknown) when the server could not read the ledger: nothing is planned.
-    const hasBond = data.staking && data.staking.ledgerRead === 'failed' ? null : ((data.staking && data.staking.totalStaked) || 0) > 0;
-    const check = stakeAmountCheck({ typed: amtStr, transferablePlanck: transferablePlanckOf(data.balance), feeReservePlanck: STAKE_FEE_RESERVE_PLANCK,
-        feeFloorPlanck: FEE_MARGIN, minStakePlanck: pdexNumberToPlanck(data.network && data.network.minStake, 'ceil'), hasBond, optional: hasBond });
-    const amountMsg = stakeAmountMessage(check, { optional: hasBond });
-    if (amountMsg) return showStakeError(amountMsg);
-    const maxNoms = stakeMaxNominations();
-    const plan = planStakeCalls({ hasBond, amountPlanck: check.planck, currentTargets: ((data.staking && data.staking.nominating) || []).map(v => v.address),
-        targets, maxTargets: maxNoms, same: isSameAddress, controllerDiffers: !!(data.staking && data.staking.controller && !isSameAddress(data.staking.controller, data.address)) });
-    const planMsg = planProblemMessage(plan, { maxTargets: maxNoms });
-    if (planMsg) return showStakeError(planMsg);
-
+    // The plan the card shows (lib/stake-plan.js stakeFormPlan): a call only for what changed.
+    const form = stakeFormPlan(data, { typed: (document.getElementById('stake-amount-input').value || '').trim(), targets: Array.from(stakeSelected.keys()),
+        maxTargets: stakeMaxNominations(), same: isSameAddress, connected: getStoredWallet(), feeFloorPlanck: FEE_MARGIN });
+    if (form.message) return showStakeError(form.message);
+    // The rule's picks checked again on the newest list (section 4.2); a changed pick sends nothing.
+    if (stakeCard && !(await stakeCard.recheck(loadValidatorsForPicker))) return;
+    const plan = form.plan;
     await submitSignedTx({
         buildTx: (api) => buildStakeTx(api, plan, { stash: data.address }),
         label: 'Stake & nominate',
         action: { key: 'staking.bondNominate', params: stakeResultParams(plan, { eraText: data.network && data.network.eraDurationMs ? formatDuration(data.network.eraDurationMs) : null }) },
         button: document.getElementById('submit-stake-tx-btn'),
         busyText: 'Signing…',
-        idleText: 'Sign and stake',
-        onError: showStakeError,
+        idleText: stakeCopy(plan.primary),
+        onError: (m) => { showStakeError(m); if (stakeCard) stakeCard.render(); },
         onSuccess: () => {
             const modal = document.getElementById('stake-modal');
             if (modal) modal.style.display = 'none';
@@ -9885,6 +9887,8 @@ async function submitUnstakeTx() {
     const data = currentWalletData;
     if (!data) return fail('Wallet data is not loaded.');
     if (!isSameAddress(getStoredWallet(), data.address)) return fail('Connect this wallet to perform staking actions.');
+    // chill and unbond are controller calls (394): from a stash whose controller is another account they fail NotController for a fee.
+    if (signerRoles(data.staking, data.address, isSameAddress).controllerDiffers) return fail(planProblemMessage({ problems: ['not-controller'] }));
     const amtStr = (document.getElementById('unstake-amount-input').value || '').trim();
     if (!isPositiveNumberInput(amtStr)) return fail('Enter an amount greater than zero.');
 
@@ -10679,15 +10683,8 @@ async function submitSendTx() {
     closeOn('send-modal', 'close-send-modal');
     closeOn('multisig-review-modal', 'close-multisig-review');
 
-    const stakeMax = document.getElementById('stake-max-btn');
-    if (stakeMax) stakeMax.addEventListener('click', fillStakeMax);
     const stakeClear = document.getElementById('stake-clear-btn');
-    if (stakeClear) stakeClear.addEventListener('click', () => {
-        stakeSelected.clear();
-        renderStakeSelected();
-        const searchEl = document.getElementById('stake-validator-search');
-        renderStakeValidatorList(searchEl ? searchEl.value : '');
-    });
+    if (stakeClear) stakeClear.addEventListener('click', () => { stakeSelected.clear(); removeStakeValidator(null); });
     const stakeSubmit = document.getElementById('submit-stake-tx-btn');
     if (stakeSubmit) stakeSubmit.addEventListener('click', submitStakeTx);
 

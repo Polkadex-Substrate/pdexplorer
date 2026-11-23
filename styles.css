@@ -5610,3 +5610,76 @@ a.validate-secondary { text-decoration: none; }
 .lock-failed { margin-bottom: 24px; }
 .lock-row.is-leaving { overflow: hidden; max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; margin: 0; border-width: 0; opacity: 0; transition: max-height 240ms ease-in, opacity 240ms ease-in, padding 240ms ease-in; }
 @media (prefers-reduced-motion: reduce) { .lock-row.is-leaving { transition: none; } }
+
+/* Stake PDEX card, simple view (lib/stake-card-view.js; design 2026-11-22-stake-card-simple-and-advanced.md, section 8).
+   Neutral surfaces; violet structures (switch, disclosure, call names); amber for the cautions; blue for the rule;
+   green only on the past return figure; the gradient only on the one primary. */
+.stake-modal-body [hidden] { display: none !important; }
+.stake-modal-body.is-simple { max-width: 540px; padding: 24px; }
+.stake-modal-body.is-advanced { max-width: 1040px; padding: 24px; }
+.stake-modal-body.is-simple .stake-row { grid-template-columns: 1fr; margin-bottom: 16px; }
+.stake-title-row { display: flex; align-items: center; gap: 12px; padding-right: 40px; margin-bottom: 16px; }
+.stake-title-row h3 { margin: 0; font-size: 1.2rem; font-weight: 700; }
+.stake-title-row h3:focus { outline: none; }
+.stake-view-switch { margin-left: auto; min-height: 44px; }
+.stake-view-switch .bx { font-size: 16px; color: var(--accent-violet-text); }
+.stake-view-switch[aria-pressed="true"] { border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
+.stake-intro { color: var(--text-secondary); margin: 0 0 16px; font-size: 0.88rem; }
+.stake-modal-body.is-simple .stake-amount-wrap input { min-height: 48px; box-sizing: border-box; }
+.stake-amount-wrap input[aria-invalid="true"] { border-color: var(--accent-red-line); }
+.stake-amount-wrap input:disabled, .stake-max-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+#stake-amount-msg > * { margin: 8px 0 0; }
+#stake-amount-msg .validate-text-btn { padding: 0 4px; }
+.stake-simple { display: flex; flex-direction: column; gap: 16px; }
+.stake-simple p { margin: 0; }
+.stake-block-head { margin: 0 0 8px; font-size: 0.82rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+.stake-happens-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 0.9rem; line-height: 1.5; }
+.stake-happens-list > li { display: flex; align-items: flex-start; gap: 8px; }
+.stake-happens-list > li:not(.ui-panel) > .bx { flex-shrink: 0; font-size: 16px; margin-top: 3px; color: var(--text-secondary); }
+.stake-happens-list > li.ui-panel { padding: 0; gap: 8px; }
+.stake-happens-list > li.ui-panel > .bx { font-size: 16px; margin-top: 3px; line-height: 1; }
+.stake-return-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stake-return-label { font-size: 0.82rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+.stake-return-value { font-size: 1.25rem; font-weight: 700; color: var(--brand-secondary); }
+.stake-return-none { font-size: 0.9rem; color: var(--text-secondary); }
+.stake-simple .stake-return-basis { margin-top: 4px; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
+.stake-validators { border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.02); }
+.stake-validators > summary { list-style: none; display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 8px 12px; box-sizing: border-box; cursor: pointer; }
+.stake-validators > summary::-webkit-details-marker { display: none; }
+.stake-validators > summary:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+.stake-validators-sum { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stake-validators-title { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
+.stake-validators-cap { font-size: 0.82rem; color: var(--text-secondary); }
+.stake-chevron { flex-shrink: 0; font-size: 20px; color: var(--accent-violet-text); }
+.stake-validators[open] .stake-chevron { transform: rotate(180deg); }
+.stake-validators-body { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; align-items: flex-start; }
+.stake-pick-list, .stake-proposal-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; line-height: 1.5; color: var(--text-primary); }
+.stake-pick-list .ui-chip, .stake-proposal-list .ui-chip { margin-left: 4px; vertical-align: middle; }
+.stake-simple .stake-data-line { font-size: 0.82rem; color: var(--text-secondary); }
+.stake-simple .ui-panel.is-line { padding: 0; }
+.stake-call-details { align-self: stretch; }
+.stake-plan-lines { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+.stake-plan-lines li { display: flex; align-items: center; gap: 8px; }
+.stake-plan-lines .bx { font-size: 16px; color: var(--text-secondary); }
+.stake-calls { margin: 0; padding-left: 20px; font-family: monospace; font-size: 0.82rem; line-height: 1.6; overflow-wrap: anywhere; word-break: break-all; color: var(--text-secondary); }
+.stake-calls code, .stake-call-wrapper code { color: var(--accent-violet-text); }
+.stake-call-targets { margin: 4px 0; padding-left: 16px; }
+.stake-call-targets code { color: var(--text-primary); }
+.stake-simple .stake-call-wrapper { margin-top: 4px; font-size: 0.82rem; }
+.stake-block-status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; font-size: 0.9rem; color: var(--text-secondary); }
+.stake-simple .ui-panel .validate-secondary { margin-top: 8px; min-height: 44px; }
+.stake-proposal { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.stake-proposal-group { display: flex; flex-direction: column; gap: 6px; }
+.stake-proposal-label { font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); }
+.stake-validators-body .validate-secondary, .stake-proposal .validate-secondary, .stake-block-status .validate-secondary { min-height: 44px; }
+.stake-modal-body #submit-stake-tx-btn.validate-primary { width: 100%; min-height: 48px; justify-content: center; margin-top: 16px; box-sizing: border-box; font-size: 0.94rem; }
+.stake-primary-reason { margin: 8px 0 0; font-size: 0.82rem; color: var(--text-secondary); text-align: center; }
+@media (max-width: 640px) {
+    .stake-modal-body.is-simple, .stake-modal-body.is-advanced { padding: 16px; }
+    .stake-return-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .stake-simple .ui-panel .validate-secondary, .stake-proposal .validate-secondary { width: 100%; justify-content: center; }
+}
+@media (max-width: 340px) {
+    .stake-title-row { flex-wrap: wrap; }
+    .stake-view-switch { margin-left: 0; }
+}

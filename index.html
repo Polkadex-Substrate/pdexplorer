@@ -809,53 +809,63 @@
 
             <!-- Stake / Nominate Modal -->
             <div id="stake-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass stake-modal-body">
+                <div class="glass stake-modal-body is-simple" role="dialog" aria-modal="true" aria-labelledby="stake-title">
                     <button type="button" id="close-stake-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Stake &amp; Nominate <a href="/help/nominating" class="help-inline-icon" title="Learn about staking" aria-label="Help: nominating a validator"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Add to your bond and pick the validators you want to back. Your nomination set is replaced with whatever appears in the &ldquo;Selected&rdquo; box on submit.</p>
+                    <div class="stake-title-row">
+                        <h3 id="stake-title" tabindex="-1">Stake PDEX <a href="/help/nominating" class="help-inline-icon" title="Learn about staking" aria-label="Help: nominating a validator"><i class='bx bx-help-circle'></i></a></h3>
+                        <button type="button" id="stake-view-switch" class="validate-secondary stake-view-switch" aria-pressed="false" title="Choose validators, rewards and amounts yourself"><i class='bx bx-slider-alt' aria-hidden="true"></i>Advanced</button>
+                    </div>
+                    <p class="stake-intro" data-stake-view="advanced" hidden>Add to your bond and pick the validators you want to back. Your nomination set is replaced with whatever appears in the &ldquo;Selected&rdquo; box on submit.</p>
 
                     <div class="stake-row">
-                        <div>
-                            <label class="stake-label">Additional amount to bond (PDEX)</label>
+                        <div class="stake-amount-block">
+                            <label class="stake-label" id="stake-amount-label" for="stake-amount-input" data-sc="SC-03">Amount to stake (PDEX)</label>
                             <div class="stake-amount-wrap">
-                                <input type="number" id="stake-amount-input" data-input-kind="amount" placeholder="0.0" step="0.0001" min="0">
+                                <input type="text" inputmode="decimal" id="stake-amount-input" data-input-kind="amount" placeholder="0.0" autocomplete="off" aria-describedby="stake-amount-hint stake-amount-msg">
                                 <button type="button" id="stake-max-btn" class="stake-max-btn">Max</button>
                             </div>
-                            <div class="stake-hint">Available: <span id="stake-available">--</span> PDEX. Leave at 0 to only update nominations.</div>
+                            <div class="stake-hint" id="stake-amount-hint" data-sc="SC-04"></div>
+                            <p class="stake-hint" id="stake-max-note" data-sc="SC-05" hidden></p>
+                            <div id="stake-amount-msg" aria-live="polite"></div>
                         </div>
-                        <div class="stake-summary" id="stake-summary">
+                        <div class="stake-summary" id="stake-summary" data-stake-view="advanced" hidden>
                             <div><span>Currently staked</span><strong id="stake-current">--</strong></div>
                             <div><span>Minimum stake</span><strong id="stake-minimum">--</strong></div>
                             <div><span>Nominations chosen</span><strong id="stake-chosen-count">0 / 16</strong></div>
                         </div>
                     </div>
 
-                    <div id="stake-filter-bar" class="stake-filter-bar" aria-label="Validator filters"></div>
+                    <div id="stake-simple" class="stake-simple" data-stake-view="simple"></div>
 
-                    <div class="stake-pickers">
-                        <div class="stake-picker">
-                            <div class="stake-picker-head">
-                                <span>Available validators</span>
-                                <input type="text" id="stake-validator-search" data-input-kind="search" placeholder="Search by name or address" autocomplete="off">
+                    <div class="stake-advanced" data-stake-view="advanced" hidden>
+                        <div id="stake-filter-bar" class="stake-filter-bar" aria-label="Validator filters"></div>
+
+                        <div class="stake-pickers">
+                            <div class="stake-picker">
+                                <div class="stake-picker-head">
+                                    <span>Available validators</span>
+                                    <input type="text" id="stake-validator-search" data-input-kind="search" placeholder="Search by name or address" autocomplete="off">
+                                </div>
+                                <div id="stake-validator-list" class="stake-picker-list">
+                                    <div class="stake-empty">Loading validators…</div>
+                                </div>
                             </div>
-                            <div id="stake-validator-list" class="stake-picker-list">
-                                <div class="stake-empty">Loading validators…</div>
+                            <div class="stake-picker">
+                                <div class="stake-picker-head">
+                                    <span>Selected <span id="stake-selected-count" style="color:var(--text-muted);font-weight:400;font-size:0.78rem;margin-left:6px;">0 / 16</span></span>
+                                    <button type="button" id="stake-clear-btn" class="stake-clear-btn">Clear</button>
+                                </div>
+                                <div id="stake-selected-list" class="stake-picker-list">
+                                    <div class="stake-empty">Pick validators from the list on the left.</div>
+                                </div>
+                                <div id="stake-spread-note" aria-live="polite"></div>
                             </div>
-                        </div>
-                        <div class="stake-picker">
-                            <div class="stake-picker-head">
-                                <span>Selected <span id="stake-selected-count" style="color:var(--text-muted);font-weight:400;font-size:0.78rem;margin-left:6px;">0 / 16</span></span>
-                                <button type="button" id="stake-clear-btn" class="stake-clear-btn">Clear</button>
-                            </div>
-                            <div id="stake-selected-list" class="stake-picker-list">
-                                <div class="stake-empty">Pick validators from the list on the left.</div>
-                            </div>
-                            <div id="stake-spread-note" aria-live="polite"></div>
                         </div>
                     </div>
 
-                    <div id="stake-modal-error" class="staking-error" style="display: none; margin-top: 16px;"></div>
+                    <div id="stake-modal-error" class="staking-error" role="alert" style="display: none; margin-top: 16px;"></div>
                     <button id="submit-stake-tx-btn" class="modal-submit-btn">Sign and stake</button>
+                    <p id="stake-primary-reason" class="stake-primary-reason" hidden></p>
                 </div>
             </div>
 

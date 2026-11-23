@@ -17,6 +17,8 @@
 // package may name its own file prefix, as R1 does: r1-<scene>-<width>.html; a
 // package may bring its own page guard as `check`). WP2: the Validate hub, the dashboard and /validate/keys.
 // locks: the Balance breakdown redesign (locks-<scene>-<width>.html), no primary in any scene.
+// stake: the Stake PDEX card's simple view (stake-simple-<scene>-<width>.html, design 10.3 WP2): the real modal markup
+// over the wallet page, the REAL lib/stake-card-view.js over a validator snapshot run through the real loadPickerData.
 // WP3: the setup wizard, the separate steps, the manage panel (in its own card) and the node guide, driven
 // through test/helpers/wp3-world.js; a scene may name an element to scroll to (`scroll`), set on load.
 //
@@ -53,6 +55,9 @@ import { createPayoutRefresh } from '../lib/payout-refresh.js';
 import { describeAccountLocks } from '../lib/balance-locks.js';
 import { mountBalanceLocks } from '../lib/balance-locks-view.js';
 import { caughtUp, pollDeadlineMs } from '../lib/freshness.js';
+import { createStakeCard } from '../lib/stake-card-view.js';
+import { loadPickerData } from '../lib/stake-picker-view.js';
+import { FEE_MARGIN } from '../lib/fee-preflight.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -481,8 +486,78 @@ function checkLocksScene(w, s, err) {
     if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
 }
 
+// ── Stake card WP2 (cto-team/plans/2026-11-22-stake-card-simple-and-advanced.md, section 10.3): the simple view of the
+// Stake PDEX card open over My Account, own account connected. The card is the REAL lib/stake-card-view.js in the REAL
+// modal markup of index.html; the validators are "Validator A" to "Validator L" (and T) at filler addresses.
+const STAKE_NET = { minStake: 100, eraDurationMs: 86_400_000, unbondingMs: 28 * 86_400_000 };
+const sdur = (ms) => { const h = ms / 3600000; return h < 48 ? (Math.round(h * 10) / 10) + ' hours' : (Math.round(h / 24 * 10) / 10) + ' days'; };
+const sval = (n, apr, over = {}) => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}`, active: true, commission: [5, 3, 7, 5, 10, 4, 6, 5, 8, 2, 9, 5][(n - 1) % 12], blocked: false,
+    selfStake: 1000 + n, totalStake: 50000, exposurePages: n === 6 ? 2 : 1, exposureNominators: 20, backers: 20, identity: { hasIdentity: false, verified: false, parent: null }, slashEras: [],
+    commissionHistory: { raisedRecently: false, pendingRaise: false }, perf: { 28: { status: 'ok', apr, erasUsed: 28, electedEras: 28, missedEras: 0, reliability: 100 } }, ...over });
+const SAPR = [19.42, 18.97, 18.61, 18.2, 17.88, 17.5, 17.31, 16.9, 16.4, 15.8, 15.1, 14.6];
+const slist = (over = {}) => SAPR.map((apr, i) => sval(i + 1, apr, over[i + 1] || {}));
+const STAKE_T = (over = {}) => sval(20, 17.9, { name: 'Validator T', active: false, ...over });
+const ssnap = (list, full = true) => loadPickerData(async (url) => (url.endsWith('validator-choice')
+    ? (full ? { validators: list, activeEra: 1884, maxNominations: 16, exposurePageSize: 256 } : { status: 'Initializing', validators: [] })
+    : { validators: list.map(v => ({ address: v.address, name: v.name, commission: v.commission, totalStake: v.totalStake })), commissionHistoryEra: 1884 }));
+const sfirst = (balance = { free: 1204.55, transferable: 1203.55 }) => ({ address: ME, balance, staking: { totalStaked: 0, nominating: [], ledgerRead: 'ok', controller: null }, network: STAKE_NET });
+const sstaker = (ns, totalStaked = 1150) => ({ address: ME, balance: { free: 1204.55, transferable: 54.55 },
+    staking: { totalStaked, nominating: ns.map(n => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}` })), ledgerRead: 'ok', controller: totalStaked > 0 ? ME : null }, network: STAKE_NET });
+async function stakeWorld({ data, list = slist(), full = true, payee = { kind: 'staked', account: '' }, typed = '', steps = null }) {
+    const window = new Window({ url: 'https://explorer.test/wallet' });
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    doc.querySelector('#wallet-dashboard').innerHTML = `<div class="list-container glass"><div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2></div></div>`;
+    const html = rd('index.html');
+    const modal = html.slice(html.indexOf('<div id="stake-modal"'), html.indexOf('<!-- Payout Rewards Modal -->')).replace('style="display: none;', 'style="display: flex;');
+    doc.querySelector('.app-container').insertAdjacentHTML('beforeend', modal);
+    let selected = [];
+    const card = createStakeCard({ root: doc.getElementById('stake-modal'), storage: null, esc: escapeHtml, short: shortAddr, duration: sdur, same: (a, b) => a === b,
+        connected: () => ME, feeFloorPlanck: FEE_MARGIN, quota: () => 16, reload: () => {},
+        selection: { get: () => selected.slice(), set: (rows) => { selected = rows.map(r => ({ address: r.address, name: r.name })); } } });
+    selected = (data.staking.nominating || []).map(v => ({ address: v.address, name: v.name }));
+    card.open({ data });
+    if (data.staking.totalStaked > 0) card.setPayee(payee);
+    card.setSnapshot(await ssnap(list, full));
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), card, visible: (x) => !!x && !x.closest('[hidden]'), d: { account: { status: 'connected', address: ME } },
+        type: (v) => { const i = doc.getElementById('stake-amount-input'); i.value = v; i.dispatchEvent(new window.Event('input', { bubbles: true })); },
+        dropOne: () => { selected = selected.slice(0, -1); card.markManual(); } };
+    if (typed) w.type(typed);
+    if (steps) await steps(w);
+    return w;
+}
+const STAKE_SCENES = [
+    { id: 'stake-simple-first-empty', primary: 1, build: () => stakeWorld({ data: sfirst() }) },
+    { id: 'stake-simple-first-amount', primary: 1, need: '[data-sc="SC-23"]', build: () => stakeWorld({ data: sfirst(), typed: '250' }) },
+    { id: 'stake-simple-picks-open', primary: 1, need: 'details.stake-validators[open] [data-sc="SC-32"]', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { w.q('details.stake-validators').open = true; w.q('details.stake-call-details').open = true; } }) },
+    { id: 'stake-simple-existing-add', primary: 1, need: '[data-sc="SC-11b"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), typed: '25' }) },
+    { id: 'stake-simple-unhealthy', primary: 1, need: '[data-sc="SC-160"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 20]), list: [...slist(), STAKE_T()] }) },
+    { id: 'stake-simple-replacement', primary: 1, need: '.stake-proposal [data-group="removed"] .ui-chip', build: () => stakeWorld({ data: sstaker([1, 2, 3, 20]), list: [...slist(), STAKE_T()],
+        steps: (w) => w.q('[data-stake-action="replace"]').click() }) },
+    { id: 'stake-simple-short-pool', primary: 1, need: '[data-sc="SC-37"]', build: () => stakeWorld({ data: sfirst(), list: slist(Object.fromEntries(SAPR.map((_, i) => [i + 1, i < 3 ? {} : { active: false }]))) }) },
+    { id: 'stake-simple-no-data', primary: 1, need: '[data-sc="SC-114"]', build: () => stakeWorld({ data: sfirst(), full: false, typed: '250' }) },
+    { id: 'stake-simple-cannot-stake', primary: 0, need: '[data-sc="SC-115"]', build: () => stakeWorld({ data: sfirst({ free: 61.3, transferable: 60.3 }) }) },
+    { id: 'stake-simple-over-limit', primary: 1, need: '[data-sc="SC-102"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.55' }) },
+    { id: 'stake-simple-low-reserve', primary: 1, need: '[data-sc="SC-104"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.45' }) },
+    { id: 'stake-simple-staked-no-validators', primary: 1, need: '[data-sc="SC-140"]', build: () => stakeWorld({ data: sstaker([]) }) },
+    { id: 'stake-simple-manual-selection', primary: 1, need: '[data-sc="SC-30b"]', build: () => stakeWorld({ data: sfirst(), typed: '250', steps: (w) => w.dropOne() }) }
+].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+function checkStakeScene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    const modal = w.doc.querySelector('#stake-modal');
+    if (!modal || modal.style.display !== 'flex') { err.push('the stake card is not open'); return; }
+    const n = w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    for (const b of w.qa('#stake-modal button').filter(w.visible)) if (/\bis-(positive|wait|info|ok|warn)\b/.test(b.className)) err.push(`a coloured action: ${b.className}`);
+    for (const c of w.qa('#stake-modal .ui-chip').filter(w.visible)) if (!c.querySelector('.bx') || !c.textContent.trim()) err.push('a chip without an icon and a word');
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+
 // ── work packages: later rounds add theirs here ──
-const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' } };
+const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
+    stake: { scenes: STAKE_SCENES, check: checkStakeScene, prefix: '' } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
@@ -599,6 +674,8 @@ async function guardSelfTest() {
     const lockScene = LOCKS_SCENES[0];
     await expectFail('locks: a primary in the panel', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.ui-action').classList.add('validate-primary'); return w; } }, checkLocksScene), /1 primary actions visible/);
     await expectFail('locks: a chain id outside Details', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.lock-line').textContent = 'phrelect'; return w; } }, checkLocksScene), /a chain id outside Details: phrelect/);
+    const stakeScene = STAKE_SCENES[1];
+    await expectFail('stake: two primaries', () => renderScene({ ...stakeScene, build: async () => { const w = await stakeScene.build(); w.q('[data-stake-action="choose"]').classList.add('validate-primary'); return w; } }, checkStakeScene), /2 primary actions visible/);
     await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);
 }
 
@@ -616,7 +693,7 @@ async function main() {
         for (const s of wp.scenes) {
             if (only && s.id !== only) continue;
             const inner = await renderScene(s, wp.check);
-            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`${wp.prefix || 'wp' + n}-${s.id}-${width}.html`, html]); }
+            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`${wp.prefix === '' ? '' : (wp.prefix || 'wp' + n) + '-'}${s.id}-${width}.html`, html]); }
         }
         if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); files.push([`wp${n}-palette.html`, html]); }
     }
