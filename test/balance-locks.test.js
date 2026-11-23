@@ -638,7 +638,8 @@ describe('mountBalanceLocks: one server call per account', () => {
     test('a failed fetch leaves a short note, not a stack trace', async () => {
         const el = { innerHTML: '', isConnected: true };
         await mountBalanceLocks(el, ME, { fetchJson: async () => { throw new Error('boom <b>'); }, helpIcon: () => '' });
-        assert.match(el.innerHTML, /[Cc]ould not load/);
+        assert.match(el.innerHTML, /The balance breakdown could not be loaded\. Your PDEX is not affected\./);
+        assert.doesNotMatch(el.innerHTML, /Nothing is locked/);
         assert.ok(!el.innerHTML.includes('<b>'));
     });
     test('no slot: does nothing', async () => {

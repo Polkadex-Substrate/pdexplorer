@@ -182,13 +182,13 @@ describe('(1) every row kind of section 4: chip role, icon, word, group and line
         assert.deepEqual([next.id, next.chip.role, next.chip.icon, next.chip.word, next.text], ['SUM3', 'neutral', 'bx-time-five', 'Nothing ready yet', 'Next: 5 PDEX, about 2026-11-26.']);
         const quiet = sum({ reserved: s(PDEX), identity: { deposit: s(PDEX), subsDeposit: '0', subs: 0 } });
         assert.deepEqual([quiet.id, quiet.chip.icon, quiet.text], ['SUM4', 'bx-lock-alt', 'Nothing here needs you right now.']);
-        assert.equal(lockSummary({ groups: [] }), null);
+        assert.ok(lockSummary({ groups: [] }) == null);
     });
     test('whenText: about a UTC day, with the days left, or under a day', () => {
         assert.equal(whenText(NOW + 24 * DAY, NOW), 'about 2026-12-16 (24 days)');
         assert.equal(whenText(NOW + DAY, NOW), 'about 2026-11-23 (1 day)');
         assert.equal(whenText(NOW + 3600000, NOW), 'about 2026-11-22 (under a day)');
-        assert.equal(whenText(null, NOW), null);
+        assert.ok(whenText(null, NOW) == null);
     });
 });
 
@@ -219,7 +219,7 @@ describe('(2) the CEO\'s account', () => {
         assert.equal(text(b9), 'Unstake PDEX');
         assert.equal(b9.getAttribute('data-lock-open'), 'unstake');
         const looked = render('account');
-        assert.equal(rowByName(looked, 'Staked').querySelector('.ui-action'), null, 'no Unstake on the account page');
+        assert.ok(rowByName(looked, 'Staked').querySelector('.ui-action') == null, 'no Unstake on the account page');
         assert.equal(rowByName(looked, 'Staked').closest('[data-lock-group]').getAttribute('data-lock-group'), 'rest');
     });
     test('Unstaking is in G2 with its date; the summary says what is next', () => {
@@ -358,7 +358,7 @@ describe('(6) the rendered panel', () => {
         const d = dom(renderBalanceLocks(model({}), { helpIcon: () => '' }));
         assert.equal(text(d.querySelector('.lock-empty')), 'Nothing is locked or reserved on this account.');
         assert.ok(d.querySelector('.lock-empty .ui-tile.is-green.is-sm .bx-check'));
-        assert.equal(d.querySelector('.lock-summary'), null);
+        assert.ok(d.querySelector('.lock-summary') == null);
     });
 });
 
@@ -398,7 +398,7 @@ describe('(7) Remove council vote, Cancel vote and Undelegate ask once inside th
             assert.ok(strip && strip.classList.contains('ui-panel') && strip.classList.contains('is-warn'));
             assert.equal(strip.getAttribute('role'), 'group');
             assert.equal(strip.getAttribute('tabindex'), '-1');
-            assert.equal(p.doc.activeElement, strip, 'focus on the strip');
+            assert.ok(p.doc.activeElement === strip, 'focus on the strip');
             const said = text(p.doc.getElementById(strip.getAttribute('aria-labelledby')));
             if (sentence) assert.equal(said, sentence);
             else assert.match(said, /^Undelegate your votes\? Your delegate stops voting with your PDEX\. Undelegating keeps 30 PDEX locked until block 1,216,000 \(about \d{4}-\d{2}-\d{2}\); then unlock it here\.$/);
@@ -406,12 +406,12 @@ describe('(7) Remove council vote, Cancel vote and Undelegate ask once inside th
             const keep = strip.querySelector('.validate-text-btn');
             assert.equal(text(keep), keepLabel);
             keep.click();
-            assert.equal(p.el.querySelector('.lock-confirm'), null);
-            assert.equal(p.doc.activeElement, p.el.querySelector(sel), 'focus back on the action');
+            assert.ok(p.el.querySelector('.lock-confirm') == null);
+            assert.ok(p.doc.activeElement === p.el.querySelector(sel), 'focus back on the action');
             p.el.querySelector(sel).click();
             p.el.querySelector('.lock-confirm').dispatchEvent(p.key('Escape'));
-            assert.equal(p.el.querySelector('.lock-confirm'), null, 'Escape restores');
-            assert.equal(p.doc.activeElement, p.el.querySelector(sel));
+            assert.ok(p.el.querySelector('.lock-confirm') == null, 'Escape restores');
+            assert.ok(p.doc.activeElement === p.el.querySelector(sel));
             p.el.querySelector(sel).click();
             const yes = p.el.querySelector('.lock-confirm .ui-action');
             assert.equal(text(yes), confirmLabel);
@@ -426,7 +426,7 @@ describe('(7) Remove council vote, Cancel vote and Undelegate ask once inside th
         p.el.querySelector('[data-lock-action="migrate-currency"]').click();
         await p.flush();
         assert.equal(p.calls.length, 1);
-        assert.equal(p.el.querySelector('.lock-confirm'), null);
+        assert.ok(p.el.querySelector('.lock-confirm') == null);
     });
 });
 
@@ -479,7 +479,7 @@ describe('(9) the pressed button keeps its icon and focus and is never disabled 
         assert.equal(yes.disabled, false);
         assert.ok(yes.querySelector('i.bx-loader-alt.bx-spin'));
         assert.equal(text(yes), 'Remove council vote', 'label unchanged');
-        assert.equal(p.doc.activeElement, yes, 'focus stays');
+        assert.ok(p.doc.activeElement === yes, 'focus stays');
         const other = p.el.querySelector('[data-lock-open="unstake"]') || p.el.querySelector('.ui-action:not([aria-busy])');
         for (const b of qa(p.el, '.ui-action')) if (b !== yes) { assert.equal(b.getAttribute('aria-disabled'), 'true'); assert.equal(b.getAttribute('title'), 'Another action is in progress.'); assert.equal(b.disabled, false); }
         void other;
@@ -491,7 +491,7 @@ describe('(9) the pressed button keeps its icon and focus and is never disabled 
         assert.equal(yes.hasAttribute('aria-disabled'), false);
         assert.ok(yes.querySelector('i.bx.bx-user-minus'), 'its own icon back');
         assert.equal(text(yes), 'Remove council vote');
-        assert.equal(p.doc.activeElement, yes);
+        assert.ok(p.doc.activeElement === yes);
         for (const b of qa(p.el, '.ui-action')) assert.equal(b.hasAttribute('aria-disabled'), false);
     });
     // F5's other half: tx-submit runs the whole path with no button (its `button` parameter is optional).

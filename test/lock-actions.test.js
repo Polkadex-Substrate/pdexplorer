@@ -504,17 +504,17 @@ describe('the panel holds its action buttons from submit until the refresh', () 
             assert.equal(holds[holds.length - 1], false, String(run));
         }
     });
-    // Locked balances redesign 2.1: held is aria-disabled (focus can stay), never `disabled`; Remove council vote asks first.
-    test('mountBalanceLocks: a click holds every action button until the refreshed panel is rendered', async (t) => {
-        t.mock.timers.enable({ apis: ['setTimeout'] });
+    // Locked balances redesign 2.1: held is aria-disabled (focus can stay), never `disabled`; Remove council vote asks
+    // first. WP2: the re-read comes from the post-action core at inclusion, not from a fixed timer.
+    test('mountBalanceLocks: a click holds every action button until the refreshed panel is rendered', async () => {
         const model = { address: ME, ...describeAccountLocks(snap({ locks: [lock('staking ', 60n * PDEX), lock('phrelect', 10n * PDEX)], frozen: s(60n * PDEX),
-            elections: { voter: { votes: 1, stake: s(10n * PDEX), deposit: s(PDEX) }, candidacy: null } })) };
+            elections: { voter: { votes: 1, stake: s(10n * PDEX), deposit: s(PDEX) }, candidacy: null } })), freshness: { v: 1, chainHead: 42 } };
         const w = new Window();
         w.document.body.innerHTML = '<div id="slot"></div>';
         const el = w.document.getElementById('slot');
-        let fetches = 0;
+        let fetches = 0, sub = null;
         const submits = [];
-        await mountBalanceLocks(el, ME, { fetchJson: async () => { fetches++; return model; }, helpIcon: () => '',
+        await mountBalanceLocks(el, ME, { fetchJson: async () => { fetches++; return model; }, helpIcon: () => '', post: { subscribe: (d, x) => { sub = x; return () => {}; } },
             actions: { submit: async (o) => { submits.push(o); }, connected: () => ME, isSame: same, api: () => fakeTxApi() } });
         const buttons = () => Array.from(el.querySelectorAll('.ui-action'));
         assert.ok(buttons().length >= 2, 'the panel renders at least two action buttons');
@@ -529,7 +529,9 @@ describe('the panel holds its action buttons from submit until the refresh', () 
         assert.equal(submits.length, 1, 'a second click while held signs nothing');
         await submits[0].onSuccess();
         assert.ok(buttons().every(b => b.getAttribute('aria-disabled') === 'true'), 'still held after InBlock, until the refresh');
-        t.mock.timers.tick(2500);
+        assert.equal(fetches, 1, 'no re-read before the core asks');
+        assert.ok(sub, 'the panel subscribed to the core');
+        await sub.reload({ block: 42, fresh: true, reason: 'inBlock' });
         for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
         assert.equal(fetches, 2, 'the refresh re-read the model');
         assert.ok(buttons().length && buttons().every(b => !b.hasAttribute('aria-disabled')), 'the refreshed panel is enabled again');
