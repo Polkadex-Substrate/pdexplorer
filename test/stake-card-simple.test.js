@@ -726,6 +726,124 @@ describe('the gradient primary is set only while the card is open (WP2 review, i
     });
 });
 
+// ── WP2 money-path fix (Opus review of fc5a7f0, FIX FIRST): the press is frozen while the list reloads ──
+// A list reload at the press (the cache older than 60 s) is a wait with the button still active. What is
+// signed is the plan on screen when the wait ends: an edit during it, or a card closed during it, signs
+// nothing. The reload is held here by a promise the test resolves.
+function later() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
+// The press, started and left waiting: { done } settles when submitStakeTx returns (an async function would adopt it).
+const pressing = async (c) => { const done = c.tab.fn('submitStakeTx')(); await flush(); return { done }; };
+const held = (c) => ({ input: c.input().disabled, max: c.q('#stake-max-btn').disabled, view: c.q('#stake-view-switch').disabled, primary: c.primary().disabled,
+    simple: c.q('#stake-simple').hasAttribute('inert'), advanced: c.q('.stake-advanced').hasAttribute('inert'), busy: c.q('.stake-modal-body').getAttribute('aria-busy') === 'true' });
+const ALL_HELD = { input: true, max: true, view: true, primary: true, simple: true, advanced: true, busy: true };
+const NONE_HELD = { input: false, max: false, view: false, primary: false, simple: false, advanced: false, busy: false };
+
+describe('the press is frozen against edits during the recheck (WP2 money path; sections 4.2, 9: M2, M6)', () => {
+    test('the card is busy for the whole press: amount, Max, the view switch and the primary inactive, both views inert; released after', async () => {
+        const snap = await snapshotOf(fullList());
+        const reload = later();
+        const c = await card({ data: firstTimer(), snapshots: [snap, reload.promise] });
+        await c.type('150');
+        assert.deepEqual(held(c), NONE_HELD);
+        const { done } = await pressing(c);
+        assert.deepEqual(held(c), ALL_HELD, 'the card can be edited while the press waits for the list');
+        await c.click('#stake-max-btn');
+        assert.equal(c.input().value, '150', 'Max wrote the field during the press');
+        reload.resolve(snap);
+        await done; await flush();
+        assert.deepEqual(signedCalls(c).map(name), ['staking.bond', 'staking.nominate']);
+        assert.equal(signedCalls(c)[0].args[0].toBigInt(), 150n * PDEX);
+        assert.deepEqual(held(c), NONE_HELD, 'the card stays frozen after the press');
+        c.close();
+    });
+    test('(a) a first-timer types 150, presses, then 300 during the reload: nothing is signed, SC-39, the 300 kept; the next press signs 300', async () => {
+        const snap = await snapshotOf(fullList());
+        const reload = later();
+        const c = await card({ data: firstTimer(), snapshots: [snap, reload.promise] });
+        await c.type('150');
+        const { done } = await pressing(c);
+        await c.type('300');
+        assert.deepEqual(planLines(c), ['Stake 300 PDEX', 'Choose 8 validators'], 'the review shows 300');
+        reload.resolve(snap);
+        await done; await flush();
+        assert.equal(nothingSent(c), 0, `signed ${c.sent.length ? signedCalls(c)[0].args[0].toBigInt() / PDEX : 0} PDEX under a review showing 300`);
+        assert.equal(c.sc('SC-39'), SC39);
+        assert.equal(c.input().value, '300', 'the amount is never rewritten (M4)');
+        assert.deepEqual(held(c), NONE_HELD);
+        await c.submit();
+        assert.deepEqual(signedCalls(c).map(name), ['staking.bond', 'staking.nominate']);
+        assert.equal(signedCalls(c)[0].args[0].toBigInt(), 300n * PDEX, 'the signed amount is the one on screen');
+        c.close();
+    });
+    test('a validator removed during the reload (the selection changed under the press): nothing is signed, SC-39', async () => {
+        const snap = await snapshotOf(fullList());
+        const reload = later();
+        const c = await card({ data: firstTimer(), snapshots: [snap, reload.promise] });
+        await c.type('150');
+        const { done } = await pressing(c);
+        c.tab.fn('removeStakeValidator')(V(8));
+        await flush();
+        reload.resolve(snap);
+        await done; await flush();
+        assert.equal(nothingSent(c), 0, 'nominate signed with the eight picks while the card shows seven');
+        assert.equal(c.sc('SC-39'), SC39);
+        c.close();
+    });
+    test('(b) the card closed and reopened during the reload: nothing is signed, and the fresh card is empty and not busy', async () => {
+        const snap = await snapshotOf(fullList());
+        const reload = later();
+        const c = await card({ data: firstTimer(), snapshots: [snap, reload.promise] });
+        await c.type('150');
+        const { done } = await pressing(c);
+        c.doc.getElementById('stake-modal').style.display = 'none';
+        const reopening = c.tab.fn('openStakeModal')();
+        await flush();
+        assert.equal(c.input().value, '', 'the fresh card has no amount');
+        reload.resolve(snap);
+        await done; await reopening; await flush();
+        assert.equal(nothingSent(c), 0, 'bond and nominate were signed while the fresh card shows an empty amount');
+        assert.equal(c.input().value, '');
+        assert.deepEqual(held(c), { ...NONE_HELD, primary: true }, 'the fresh card is held by the old press');
+        c.close();
+    });
+    test('the card closed during the reload: nothing is signed', async () => {
+        const snap = await snapshotOf(fullList());
+        const reload = later();
+        const c = await card({ data: firstTimer(), snapshots: [snap, reload.promise] });
+        await c.type('150');
+        const { done } = await pressing(c);
+        c.doc.getElementById('stake-modal').style.display = 'none';
+        reload.resolve(snap);
+        await done; await flush();
+        assert.equal(nothingSent(c), 0, 'signed from a closed card');
+        c.close();
+    });
+});
+
+describe('Advanced with the fallback or a failed list signs a hand selection, as today (WP2 review, section 6 row 13; M2)', () => {
+    const lists = [['failed', async () => [new Error('down')]], ['not built yet', async () => [await snapshotOf(fullList(), { full: false })]]];
+    for (const [label, snaps] of lists) {
+        test(`list ${label}: removing one of three in the Selected box signs nominate in Advanced; the simple view still refuses with SC-122`, async () => {
+            const c = await card({ data: staker([1, 2, 3]), snapshots: await snaps() });
+            await c.click('#stake-view-switch');
+            assert.equal(c.q('#stake-simple')?.hidden, true);
+            c.q('#stake-selected-list [data-addr="' + V(3) + '"] .stake-val-remove').click();
+            await flush();
+            assert.equal(c.primary().disabled, false, `Advanced refuses the hand selection (${c.doc.getElementById('stake-primary-reason').textContent})`);
+            await c.click('#stake-view-switch');
+            assert.equal(c.primary().disabled, true, 'the simple view signs a change of validators it does not show');
+            assert.equal(c.sc('SC-122'), SC122);
+            await c.submit();
+            assert.equal(nothingSent(c), 0);
+            await c.click('#stake-view-switch');
+            await c.submit();
+            assert.deepEqual(signedCalls(c).map(name), ['staking.nominate'], 'the Selected box on screen is signed');
+            assert.deepEqual(signedCalls(c)[0].args[0].map(ss58), [V(1), V(2)]);
+            c.close();
+        });
+    }
+});
+
 describe('cross-file promises', () => {
     test('every spec id the view uses exists in STAKE_COPY; no stake card file reads the commission-only estimate (M10)', () => {
         const src = stripComments(readFileSync(new URL('../lib/stake-card-view.js', import.meta.url), 'utf8'));
