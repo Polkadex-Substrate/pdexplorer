@@ -72,7 +72,9 @@ import { trackSignedTx, recheckSignedTxs, WALLET_CHANGED_STALE } from './lib/tx-
 import { createPostAction } from './lib/post-action.js';
 import { createKnownResults } from './lib/known-results.js';
 import { effectsFor } from './lib/action-effects.js';
-import { caughtUp, pollDeadlineMs } from './lib/freshness.js';
+import { caughtUp, pollDeadlineMs, samePayload } from './lib/freshness.js';
+import { rewardsSeries, renderKey, planChartUpdate, applySeries, rewardsChartConfig, newChartSlot, paintChart, releaseChart, releaseCharts } from './lib/chart-update.js';
+import { pricePageChartConfig, walletPriceChartConfig, validatorChartConfig, democracyVoteChartConfig, democracyTurnoutChartConfig, democracyTurnoutPctChartConfig, analyticsChartConfig } from './lib/chart-configs.js';
 import { createPayoutRefresh, payoutSignSet } from './lib/payout-refresh.js';
 import { createGovRefresh } from './lib/gov-post-action.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
@@ -4583,6 +4585,17 @@ function stopCouncilPolling() {
     if (councilPollTimer) { clearInterval(councilPollTimer); councilPollTimer = null; }
 }
 
+// Chart.js charts the pages keep (lib/chart-update.js): painted by drawChart, released when their page or area goes.
+function drawChart(slot, canvas, subject, build) {
+    const reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);   // read at paint time
+    return paintChart(slot, canvas, subject, build, { Chart, reducedMotion });
+}
+function releasePageCharts() {
+    const vbox = document.getElementById('validator-details-container');
+    if (vbox) { vbox.shownFor = vbox.shownKey = null; }   // its canvas has no chart now: the next visit must paint, not skip
+    releaseCharts([pricePageSlot, validatorChartSlot, walletPriceSlot, ...Object.values(democracySlots), ...Object.values(analyticsSlots)]);
+}
+
 // Bumped on every route change, so async work started for one page can tell it is no longer on screen.
 let routeGeneration = 0;
 // What the page on screen subscribed to (wallet changes, its in-flight request); left on every route change.
@@ -4590,6 +4603,7 @@ const pageScope = createRouteScope();
 function routeTo(target) {
     routeGeneration++;
     pageScope.leave();
+    releasePageCharts();
     stopCouncilPolling(); democracyView.stop(); govDetailPage.stop();
     if (!target) target = 'home';
     // /democracy?ref=N and friends (emails, calendar, bookmarks) -> the item's own page.
@@ -5136,7 +5150,7 @@ const PRICE_PERIODS = [
     { label: 'ALL', days: 4000 }, // ≥ full backfill window
 ];
 let pricePagePeriodDays = 30;
-let pricePageChart = null;
+const pricePageSlot = newChartSlot();
 
 function getPricePeriodFromStorage() {
     try {
@@ -5155,6 +5169,7 @@ async function renderPricePage() {
     if (!root) return;
     pricePagePeriodDays = getPricePeriodFromStorage();
 
+    releaseChart(pricePageSlot);   // the page chrome is rebuilt: its canvas goes
     // Initial chrome — show the header + close button immediately so the
     // page feels responsive even while the data fetch is in flight.
     root.innerHTML = `
@@ -5247,43 +5262,8 @@ async function loadPricePageData() {
 
 function renderPricePageChart(history) {
     const canvas = document.getElementById('price-page-chart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    if (pricePageChart) { pricePageChart.destroy(); pricePageChart = null; }
-    if (!history.length) return;
-    // Sparse x-axis labels for long ranges so they stay legible. With 1500+
-    // points on the all-time view we want ~12 ticks total.
-    const dateFmt = history.length > 120
-        ? { month: 'short', year: '2-digit' }
-        : { month: 'short', day: 'numeric' };
-    pricePageChart = new Chart(canvas.getContext('2d'), {
-        type: 'line',
-        data: {
-            labels: history.map(p => new Date(p.timestamp).toLocaleDateString('en-US', dateFmt)),
-            datasets: [{
-                label: 'PDEX / USD',
-                data: history.map(p => p.price),
-                borderColor: '#00E676',
-                backgroundColor: 'rgba(0, 230, 118, 0.12)',
-                borderWidth: 2,
-                pointRadius: 0,
-                fill: true,
-                tension: 0.20,
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-                legend: { display: false },
-                tooltip: { callbacks: { label: ctx => ' $' + Number(ctx.parsed.y).toLocaleString('en-US', { maximumFractionDigits: 6 }) } }
-            },
-            scales: {
-                x: { ticks: { maxTicksLimit: 12, color: '#888' }, grid: { color: 'rgba(255,255,255,0.04)' } },
-                y: { ticks: { color: '#888', callback: v => '$' + v }, grid: { color: 'rgba(255,255,255,0.04)' } }
-            }
-        }
-    });
+    if (!canvas || !history.length || typeof Chart === 'undefined') { releaseChart(pricePageSlot); return; }
+    drawChart(pricePageSlot, canvas, String(pricePagePeriodDays), a => pricePageChartConfig(history, a));   // another period is another subject
 }
 
 function buildPriceStatsHtml(history, days) {
@@ -6732,7 +6712,7 @@ navItems.forEach(item => {
     });
 });
 
-let validatorChart = null;
+const validatorChartSlot = newChartSlot();
 
 // ─── Validator scorecard ────────────────────────────────────────────────────
 // Compact stat grid that surfaces the headline metrics a nominator needs to
@@ -6807,10 +6787,17 @@ function mountValidatorManageLink(data) {
     mount();
 }
 
+function renderValidatorChart(history, address) {
+    const canvas = document.getElementById('validatorChartCanvas');
+    if (!canvas || !history.length || typeof Chart === 'undefined') { releaseChart(validatorChartSlot); return; }
+    drawChart(validatorChartSlot, canvas, address, a => validatorChartConfig(history, a));
+}
+
 async function fetchValidatorDetails(address) {
     const container = document.getElementById('validator-details-container');
     if (!container) return;
-    container.innerHTML = '<div style="text-align:center; padding: 20px;">Fetching validator history...</div>';
+    const stay = container.shownFor === address;   // this validator is on screen: keep it while the fresh data is fetched
+    if (!stay) { releaseChart(validatorChartSlot); container.shownFor = null; container.innerHTML = '<div style="text-align:center; padding: 20px;">Fetching validator history...</div>'; }
 
     const shortAddr = address ? (address.substring(0, 8) + '…' + address.substring(address.length - 6)) : '';
     updateSeoMeta('validator-details', {
@@ -6821,6 +6808,8 @@ async function fetchValidatorDetails(address) {
 
     try {
         const data = await fetchApiJson(`/api/validator/${address}`);
+        const key = renderKey(data, address);
+        if (stay && container.shownKey === key) return;   // what is drawn is what arrived: paint nothing
 
         const validatorLabel = (data.identity && data.identity !== 'Unknown') ? data.identity : shortAddr;
         updateSeoMeta('validator-details', {
@@ -6978,75 +6967,11 @@ async function fetchValidatorDetails(address) {
             });
         }
 
-        // Render Chart.js
-        if (data.history.length > 0) {
-            const ctx = document.getElementById('validatorChartCanvas');
-            if (ctx) {
-                // Reverse to chronological order for chart
-                const chronHistory = [...data.history].reverse();
-                const labels = chronHistory.map(h => `Era ${h.era}`);
-                const commissions = chronHistory.map(h => h.commission);
-                const apys = chronHistory.map(h => h.apy);
-
-                if (validatorChart) validatorChart.destroy();
-
-                validatorChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [
-                            {
-                                label: 'Commission (%)',
-                                data: commissions,
-                                borderColor: '#ff6b6b',
-                                backgroundColor: '#ff6b6b',
-                                tension: 0.1,
-                                borderWidth: 2,
-                                pointRadius: 0
-                            },
-                            {
-                                label: 'APY (%)',
-                                data: apys,
-                                borderColor: '#4d88ff',
-                                backgroundColor: '#4d88ff',
-                                tension: 0.1,
-                                borderWidth: 2,
-                                pointRadius: 0
-                            }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        interaction: {
-                            mode: 'index',
-                            intersect: false,
-                        },
-                        plugins: {
-                            legend: {
-                                position: 'bottom',
-                                labels: { color: '#ccc', font: { family: 'Inter', size: 12 } }
-                            }
-                        },
-                        scales: {
-                            x: {
-                                ticks: { maxTicksLimit: 5, color: '#888' },
-                                grid: { color: 'rgba(255,255,255,0.05)' }
-                            },
-                            y: {
-                                ticks: {
-                                    callback: function (value) { return value + '%'; },
-                                    color: '#888'
-                                },
-                                grid: { color: 'rgba(255,255,255,0.05)' }
-                            }
-                        }
-                    }
-                });
-            }
-        }
+        renderValidatorChart(data.history, address);
+        container.shownFor = address; container.shownKey = key;   // only a completed render is remembered
 
     } catch (e) {
+        releaseChart(validatorChartSlot); container.shownFor = null;
         renderApiError(container, e, () => fetchValidatorDetails(address));
     }
 }
@@ -7058,7 +6983,7 @@ let stakingRewardsChart = null;
 // makeTable via the `pagination` config on the staking-rewards table.)
 let stakingRewardFilter = 'all';
 let stakingUnclaimedPolls = 0;
-let walletPriceChart = null;
+const walletPriceSlot = newChartSlot();
 
 // ─── /email/preferences ─────────────────────────────────────────────────────
 //
@@ -7391,7 +7316,7 @@ function initStakingRewardsPage(address) {
     const errEl = document.getElementById('staking-rewards-error');
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     pageScope.add(walletSession.onActiveAccountChange(onStakingRewardsWalletChange));
-    pageScope.add(() => stakingRewardsLatest.cancel());
+    pageScope.add(() => { stakingRewardsLatest.cancel(); if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; } });
     showStakingRewardsFor(address || '');
 }
 function renderStakingRewardsNote(plan) {
@@ -7408,7 +7333,7 @@ function showStakingRewardsFor(urlAddress) {
     const input = document.getElementById('staking-address-input');
     const resultsEl = document.getElementById('staking-rewards-results');
     if (plan.mode !== 'view') {
-        stakingRewardsLatest.cancel(); stakingRewardsData = null;
+        stakingRewardsLatest.cancel(); stakingRewardsData = null; if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
         if (input) input.value = '';
         if (resultsEl) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; }
         return;
@@ -7492,6 +7417,8 @@ async function fetchStakingRewards(address, isPoll) {
     if (!isPoll) {
         stakingRewardFilter = 'all';
         stakingUnclaimedPolls = 0;
+        // The area is replaced: a chart left alive would sit on a detached canvas.
+        if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
         resultsEl.style.display = 'block';
         resultsEl.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-secondary);">Loading staking rewards…</div>';
     }
@@ -7511,7 +7438,7 @@ async function fetchStakingRewards(address, isPoll) {
     } catch (e) {
         if (!req.isCurrent()) return;
         if (!isPoll) {
-            stakingRewardsData = null;
+            stakingRewardsData = null; if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
             resultsEl.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
         }
     }
@@ -7733,6 +7660,7 @@ function renderStakingRewards(data) {
     const unclaimedCount = (data.unclaimed || []).length;
 
     if (claimedCount === 0 && unclaimedCount === 0) {
+        if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }   // its canvas is about to go
         const note = data.unclaimedComputing
             ? 'Unpaid rewards are still being computed — this can take a moment.'
             : (index.backfillComplete
@@ -7756,6 +7684,9 @@ function renderStakingRewards(data) {
         return;
     }
 
+    const key = renderKey(data, stakingRewardFilter);
+    const keptWrap = resultsEl.querySelector('.staking-chart-wrap');
+    if (keptWrap && keptWrap.renderKey === key) return;   // the same page again (a poll with nothing new): paint nothing
     const rewards = getFilteredRewards(data, stakingRewardFilter);
     const fbtn = (key, label) => `<button class="reward-filter-btn${stakingRewardFilter === key ? ' active' : ''}" data-filter="${key}">${label}</button>`;
     const computingNote = data.unclaimedComputing
@@ -7802,6 +7733,9 @@ function renderStakingRewards(data) {
             </div>
         </div>
         <div id="staking-rewards-table-container"></div>`;
+    // Keep the chart's own wrap and canvas through the repaint so the bars update in place instead of redrawing.
+    const newWrap = resultsEl.querySelector('.staking-chart-wrap');
+    if (keptWrap && stakingRewardsChart && stakingRewardsChart.canvas.parentNode === keptWrap) newWrap.replaceWith(keptWrap);
 
     makeTable({
         container: document.getElementById('staking-rewards-table-container'),
@@ -7878,51 +7812,27 @@ function renderStakingRewards(data) {
     // filter bar instead.
 
     renderStakingRewardsChart(data);
+    resultsEl.querySelector('.staking-chart-wrap').renderKey = key;   // only a completed render is remembered
 }
 
 function renderStakingRewardsChart(data) {
     const canvas = document.getElementById('staking-rewards-chart');
     if (!canvas || typeof Chart === 'undefined') return;
+    const series = rewardsSeries(data);
+    if (!series) { if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; } return; }
+    const reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const plan = planChartUpdate(stakingRewardsChart && stakingRewardsChart.seriesDrawn, series, { reducedMotion, canvasKept: !!stakingRewardsChart && stakingRewardsChart.canvas === canvas });
+    if (plan.action === 'none') return;
+    if (plan.action === 'update') {
+        applySeries(stakingRewardsChart.data, series);
+        stakingRewardsChart.options.animation = plan.animation;
+        stakingRewardsChart.seriesDrawn = series;
+        stakingRewardsChart.update(plan.updateMode === 'none' ? 'none' : undefined);
+        return;
+    }
     if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
-
-    const claimedByEra = new Map();
-    const unclaimedByEra = new Map();
-    const eraSet = new Set();
-    const addTo = (map, era, amt) => {
-        const key = era == null ? 'Unknown' : era;
-        map.set(key, (map.get(key) || 0) + amt);
-        eraSet.add(key);
-    };
-    (data.claimed || []).forEach(r => addTo(claimedByEra, r.era, Number(r.amount) || 0));
-    (data.unclaimed || []).forEach(r => addTo(unclaimedByEra, r.era, Number(r.amount) || 0));
-
-    const eras = [...eraSet].filter(e => e !== 'Unknown').sort((a, b) => a - b);
-    if (eraSet.has('Unknown')) eras.push('Unknown');
-    if (eras.length === 0) return;
-    const labels = eras.map(e => e === 'Unknown' ? 'Unknown' : 'Era ' + e);
-
-    stakingRewardsChart = new Chart(canvas.getContext('2d'), {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [
-                { label: 'Claimed', data: eras.map(e => claimedByEra.get(e) || 0), backgroundColor: 'rgba(0, 230, 118, 0.6)', borderColor: '#00E676', borderWidth: 1, borderRadius: 3 },
-                { label: 'Unpaid', data: eras.map(e => unclaimedByEra.get(e) || 0), backgroundColor: 'rgba(230, 0, 122, 0.55)', borderColor: '#E6007A', borderWidth: 1, borderRadius: 3 }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { position: 'bottom', labels: { color: '#ccc', font: { size: 11 } } },
-                tooltip: { callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + Number(ctx.parsed.y).toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' PDEX' } }
-            },
-            scales: {
-                x: { stacked: true, ticks: { maxTicksLimit: 12, color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y: { stacked: true, ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
-            }
-        }
-    });
+    stakingRewardsChart = new Chart(canvas.getContext('2d'), rewardsChartConfig(series, plan.animation));
+    stakingRewardsChart.seriesDrawn = series;
 }
 
 function downloadStakingRewardsCSV() {
@@ -8916,11 +8826,11 @@ function repaintWalletPriceCard(price) {
     const history = (price && price.history) || [];
     const configured = !!(price && price.configured);
     if (history.length) {
-        wrap.innerHTML = '<canvas id="wallet-price-chart"></canvas>';
-        renderWalletPriceChart(history);
+        if (!wrap.querySelector('#wallet-price-chart')) wrap.innerHTML = '<canvas id="wallet-price-chart"></canvas>';   // the canvas in place keeps its chart
     } else {
         wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;text-align:center;padding:0 20px;">${configured ? 'Collecting price history — the chart fills in as data is polled.' : 'Price feed not configured.'}</div>`;
     }
+    renderWalletPriceChart(history);   // updates in place, or releases the chart when the card went empty
     // Refresh the headline price badge in the list-header too.
     const headerPrice = document.getElementById('wallet-price-header-price');
     const latest = price && price.latest;
@@ -9180,7 +9090,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
         // while the page is open, swap the action bar out for the callout.
         scheduleWalletSigningRechecks(data);
     }
-    if (priceHistory.length) renderWalletPriceChart(priceHistory);
+    renderWalletPriceChart(priceHistory);
     // Mount the Advanced section (proxies + multisig). Fires regardless of
     // ownership — proxies that delegate FROM this address are public chain
     // state, and the multisig calculator works without an active session.
@@ -9336,36 +9246,8 @@ function buildWalletActionBarMarkup(data) {
 
 function renderWalletPriceChart(history) {
     const canvas = document.getElementById('wallet-price-chart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    if (walletPriceChart) { walletPriceChart.destroy(); walletPriceChart = null; }
-    walletPriceChart = new Chart(canvas.getContext('2d'), {
-        type: 'line',
-        data: {
-            labels: history.map(p => new Date(p.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })),
-            datasets: [{
-                label: 'PDEX / USD',
-                data: history.map(p => p.price),
-                borderColor: '#00E676',
-                backgroundColor: 'rgba(0, 230, 118, 0.12)',
-                borderWidth: 2,
-                pointRadius: 0,
-                fill: true,
-                tension: 0.25
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: { callbacks: { label: ctx => ' $' + Number(ctx.parsed.y).toLocaleString('en-US', { maximumFractionDigits: 6 }) } }
-            },
-            scales: {
-                x: { ticks: { maxTicksLimit: 8, color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y: { ticks: { color: '#888', callback: v => '$' + v }, grid: { color: 'rgba(255,255,255,0.05)' } }
-            }
-        }
-    });
+    if (!canvas || !history.length || typeof Chart === 'undefined') { releaseChart(walletPriceSlot); return; }
+    drawChart(walletPriceSlot, canvas, currentWalletData ? currentWalletData.address : '', a => walletPriceChartConfig(history, a));
 }
 
 // --- Wallet staking actions: stake more, pay out rewards, unstake ---
@@ -11090,9 +10972,7 @@ async function submitDiscussionPost(threadId, root = document.getElementById('di
 // --- Democracy Page ---
 let democracyData = null;
 let democracyTab = 'overview';
-let democracyVoteChart = null;
-let democracyTurnoutChart = null;
-let democracyTurnoutPctChart = null;
+const democracySlots = { vote: newChartSlot(), turnout: newChartSlot(), pct: newChartSlot() };
 // Per-tab quick-filter pills. These survive tab switches so a user who
 // filters Referenda to "Ongoing", switches to Statistics, and comes back to
 // Referenda still sees their filter applied.
@@ -11169,6 +11049,7 @@ async function fetchDemocracyData(opts = {}) {
     const root = document.getElementById('democracy-content');
     if (!root) return;
     const quiet = !!(opts.quiet && democracyData);
+    const generation = routeGeneration;   // a response that lands after the user left paints nothing
     if (!quiet) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading democracy data...</div>';
     try {
         const res = await democracyView.fetchRest(opts.fresh);
@@ -11179,7 +11060,9 @@ async function fetchDemocracyData(opts = {}) {
         const data = await parseJsonResponse(res);
         if (!res.ok || data.error) throw new Error(data.error || ('Request failed (' + res.status + ')'));
         democracyData = data;
-        if (quiet) democracyView.update(); else renderDemocracy();
+        if (generation !== routeGeneration) return data.freshness;
+        if (quiet) { democracyView.update(); if (democracyTab === 'statistics') renderDemocracyCharts(democracyView.data() || democracyData); return data.freshness; }   // the bars follow the tallies
+        renderDemocracy();
         return data.freshness;
     } catch (e) {
         if (quiet) return console.warn('[democracy] refresh failed:', e && e.message);
@@ -11208,6 +11091,7 @@ function renderDemocracy() {
     else if (democracyTab === 'statistics') body = renderDemocracyStatisticsBody(d);
     else body = renderDemocracyOverview(d);
 
+    releaseCharts(Object.values(democracySlots));   // the page is redrawn: its canvases go
     root.innerHTML = `
         <div class="list-container glass">
             <div class="list-header" style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
@@ -11457,62 +11341,14 @@ function renderDemocracyStatisticsBody(d) {
 
 function renderDemocracyCharts(d) {
     if (typeof Chart === 'undefined') return;
-    [democracyVoteChart, democracyTurnoutChart, democracyTurnoutPctChart].forEach(c => { if (c) c.destroy(); });
-    democracyVoteChart = democracyTurnoutChart = democracyTurnoutPctChart = null;
-
     const refs = (d.referenda || []).filter(r => r.tallyKnown).slice().sort((a, b) => a.refIndex - b.refIndex);
-    if (!refs.length) return;
-    const labels = refs.map(r => '#' + r.refIndex);
-    const axis = (extra) => Object.assign({
-        ticks: { color: '#888', maxTicksLimit: 14 }, grid: { color: 'rgba(255,255,255,0.05)' }
-    }, extra || {});
-
-    const voteCanvas = document.getElementById('dem-vote-chart');
-    if (voteCanvas) {
-        democracyVoteChart = new Chart(voteCanvas.getContext('2d'), {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    { label: 'Ayes', data: refs.map(r => r.ayes || 0), backgroundColor: 'rgba(0,230,118,0.6)', borderColor: '#00E676', borderWidth: 1 },
-                    { label: 'Nays', data: refs.map(r => r.nays || 0), backgroundColor: 'rgba(230,0,122,0.55)', borderColor: '#E6007A', borderWidth: 1 }
-                ]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'bottom', labels: { color: '#ccc', font: { size: 11 } } },
-                    title: { display: true, text: 'Vote Trend — Ayes vs Nays (PDEX)', color: '#ccc' }
-                },
-                scales: { x: axis({ stacked: true }), y: axis({ stacked: true, beginAtZero: true, maxTicksLimit: 8 }) }
-            }
-        });
-    }
-    const turnoutCanvas = document.getElementById('dem-turnout-chart');
-    if (turnoutCanvas) {
-        democracyTurnoutChart = new Chart(turnoutCanvas.getContext('2d'), {
-            type: 'bar',
-            data: { labels, datasets: [{ label: 'Turnout', data: refs.map(r => r.turnout || 0), backgroundColor: 'rgba(124,108,255,0.6)', borderColor: '#7c6cff', borderWidth: 1 }] },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: { x: axis({ maxTicksLimit: 12 }), y: axis({ beginAtZero: true, maxTicksLimit: 6 }) }
-            }
-        });
-    }
-    const pctCanvas = document.getElementById('dem-turnoutpct-chart');
-    if (pctCanvas) {
-        const issuance = Number(d.totalIssuance) || 0;
-        democracyTurnoutPctChart = new Chart(pctCanvas.getContext('2d'), {
-            type: 'bar',
-            data: { labels, datasets: [{ label: 'Turnout %', data: refs.map(r => issuance > 0 ? (r.turnout / issuance * 100) : 0), backgroundColor: 'rgba(124,108,255,0.6)', borderColor: '#7c6cff', borderWidth: 1 }] },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ' ' + ctx.parsed.y.toFixed(3) + '%' } } },
-                scales: { x: axis({ maxTicksLimit: 12 }), y: axis({ beginAtZero: true, maxTicksLimit: 6, ticks: { color: '#888', callback: v => v + '%' } }) }
-            }
-        });
-    }
+    if (!refs.length) { releaseCharts(Object.values(democracySlots)); return; }
+    const issuance = Number(d.totalIssuance) || 0;
+    [['dem-vote-chart', democracySlots.vote, a => democracyVoteChartConfig(refs, a)], ['dem-turnout-chart', democracySlots.turnout, a => democracyTurnoutChartConfig(refs, a)],
+     ['dem-turnoutpct-chart', democracySlots.pct, a => democracyTurnoutPctChartConfig(refs, issuance, a)]].forEach(([id, slot, build]) => {
+        const canvas = document.getElementById(id);
+        if (canvas) drawChart(slot, canvas, 'democracy', build); else releaseChart(slot);
+    });
 }
 
 // --- Event wiring: staking rewards + wallet connect ---
@@ -13924,11 +13760,10 @@ async function labelVeto(address, signer, btn, openedFor) {
 // Analytics dashboard — KPI cards + 4 daily time-series charts driven by the
 // /api/analytics/{snapshot,timeseries} endpoints.
 //
-// Chart.js instances are tracked in `analyticsChartHandles` so subsequent
-// re-renders (date-range change, refresh) destroy the old canvas before
-// creating a new one — Chart.js leaks canvas + listeners otherwise.
+// Chart.js instances are kept in `analyticsSlots` (one per canvas): a re-render
+// updates or replaces them (lib/chart-update.js) and a route change releases them.
 // ─────────────────────────────────────────────────────────────────────────────
-let analyticsChartHandles = {};
+const analyticsSlots = {};
 let analyticsRangeDays = 30;
 
 async function fetchAnalyticsData() {
@@ -13939,6 +13774,7 @@ async function fetchAnalyticsData() {
     // bare spinner. The real data usually arrives from the pre-warmed cache.
     const skelKpis = Array(6).fill('<div class="skel skel-kpi"></div>').join('');
     const skelCharts = Array(6).fill('<div class="skel skel-chart"></div>').join('');
+    releaseCharts(Object.values(analyticsSlots));   // the skeleton replaces every canvas
     el.innerHTML =
         '<div class="list-container glass analytics-skeleton" aria-busy="true">' +
             '<div class="list-header"><h2>Network Analytics</h2>' +
@@ -14081,11 +13917,6 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
         </div>
     `;
 
-    // Destroy any prior Chart.js instances before re-mounting so canvases
-    // don't leak on date-range toggles.
-    Object.values(analyticsChartHandles).forEach(c => { try { c.destroy(); } catch (_) {} });
-    analyticsChartHandles = {};
-
     drawAnalyticsBarChart('analytics-chart-tx-count',   series.txCount,         'Transactions',   '#e6007a');
     drawAnalyticsLineChart('analytics-chart-tx-volume',  series.txVolume,        'PDEX volume',    '#00d4ff');
     drawAnalyticsLineChart('analytics-chart-addrs',      series.activeAddresses, 'Active addresses','#2ecc71');
@@ -14121,77 +13952,14 @@ function analyticsChartCard(title, canvasId, subtitle) {
     </div>`;
 }
 
-function drawAnalyticsBarChart(canvasId, series, label, color) {
+// The range in force is the subject: another range is another chart, the same range with the same series paints nothing.
+function drawAnalyticsChart(kind, canvasId, series, label, color) {
     const canvas = document.getElementById(canvasId);
-    if (!canvas || !Array.isArray(series) || !window.Chart) return;
-    analyticsChartHandles[canvasId] = new Chart(canvas, {
-        type: 'bar',
-        data: {
-            labels: series.map(p => p.day),
-            datasets: [{
-                label,
-                data: series.map(p => p.value),
-                backgroundColor: color,
-                borderColor: color,
-                borderWidth: 0
-            }]
-        },
-        options: analyticsChartOptions()
-    });
+    if (!canvas || !Array.isArray(series) || typeof Chart === 'undefined') return;
+    drawChart(analyticsSlots[canvasId] || (analyticsSlots[canvasId] = newChartSlot()), canvas, String(analyticsRangeDays), a => analyticsChartConfig(kind, series, label, color, a));
 }
-
-function drawAnalyticsLineChart(canvasId, series, label, color) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas || !Array.isArray(series) || !window.Chart) return;
-    analyticsChartHandles[canvasId] = new Chart(canvas, {
-        type: 'line',
-        data: {
-            labels: series.map(p => p.day),
-            datasets: [{
-                label,
-                data: series.map(p => p.value),
-                borderColor: color,
-                backgroundColor: color + '33',
-                fill: true,
-                tension: 0.3,
-                pointRadius: 2,
-                pointHoverRadius: 4
-            }]
-        },
-        options: analyticsChartOptions()
-    });
-}
-
-// Shared Chart.js options — single source so all the analytics charts
-// look identical (dark grid, no legend, compact ticks).
-function analyticsChartOptions() {
-    return {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-            legend: { display: false },
-            tooltip: {
-                callbacks: {
-                    label: ctx => ' ' + (ctx.dataset.label || '') + ': ' + Number(ctx.parsed.y).toLocaleString('en-US', { maximumFractionDigits: 4 })
-                }
-            }
-        },
-        scales: {
-            x: {
-                ticks: { color: '#888', maxRotation: 0, autoSkip: true, maxTicksLimit: 7 },
-                grid:  { color: 'rgba(255,255,255,0.04)' }
-            },
-            y: {
-                beginAtZero: true,
-                ticks: {
-                    color: '#888',
-                    callback: v => Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })
-                },
-                grid:  { color: 'rgba(255,255,255,0.04)' }
-            }
-        }
-    };
-}
+function drawAnalyticsBarChart(canvasId, series, label, color) { drawAnalyticsChart('bar', canvasId, series, label, color); }
+function drawAnalyticsLineChart(canvasId, series, label, color) { drawAnalyticsChart('line', canvasId, series, label, color); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Watchlist — localStorage-backed star/unstar across the explorer.
