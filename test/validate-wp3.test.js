@@ -165,7 +165,7 @@ describe('WP3 5.1: the setup wizard', () => {
         assert.ok(timing.some(t => /^A new validator/.test(t) || /era/.test(t)), 'the timing line is a blue info line');
         assert.equal(decl('.validate-review code.mono', 'color'), 'var(--accent-violet-text)');
         const marker = rulesFor('.validate-review > li::before')[0];
-        assert.ok(marker && /counter/.test(marker.decls.content) && marker.decls.width === '24px' && marker.decls.background === 'var(--accent-violet)', 'review numbers are 24 px violet markers');
+        assert.ok(marker && /counter/.test(marker.decls.content) && marker.decls.width === '24px' && marker.decls.background === 'transparent' && /violet-line/.test(marker.decls.border), 'review numbers are 24 px outlined violet markers (S3)');
     });
     test('the multisig review: the change warning is an amber panel', async () => {
         const w = await state('wiz-review-multisig');
@@ -240,7 +240,7 @@ describe('WP3 5.2: the separate steps view', () => {
         const note = qa(w4.el, '.validate-setup-note').find(n => txt(n) === SW.panelStay);
         assert.ok(note && !note.closest('.ui-panel'));
     });
-    test('the status line names its state; S9 is an amber line; S10 sits in a green panel with the timing; the others are plain', async () => {
+    test('the status line names its state; S9 is an amber line; S10 sits in a green panel, the timing a blue line after it; the others are plain', async () => {
         for (const id of STEPS) {
             const w = await state(id);
             const st = w.el.querySelector('#validate-stepwise-status');
@@ -251,7 +251,7 @@ describe('WP3 5.2: the separate steps view', () => {
             else if (s === 'S10') {
                 const ok = st.closest('.ui-panel.is-ok');
                 assert.ok(ok && hasIcon(ok, 'bx-check-circle'), id);
-                assert.ok(qa(ok, 'p').length >= 2, 'the timing sits in the same panel');
+                assert.ok(ok.nextElementSibling.classList.contains('is-info') && ok.nextElementSibling.classList.contains('is-line'), 'the timing is a blue line after the panel (S5)');
             } else assert.ok(!st.closest('.ui-panel'), id + ' is plain');
         }
     });
