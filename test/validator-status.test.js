@@ -543,6 +543,28 @@ describe('the routes', () => {
             assert.ok(reads.indexOf('head') >= 0 && reads.indexOf('head') < reads.indexOf('bonded'), 'the head is read before the state: ' + reads.join(','));
         });
     });
+    test('status (R5): the head advances while the state is being read: freshness.chainHead is the head read BEFORE the state (the lower one), never a newer head', async () => {
+        clock += 31_000;
+        let height = 500;
+        const savedRpc = api.rpc;
+        api.rpc = { chain: { getHeader: async () => ({ number: num(height) }) } };
+        // The chain moves on at the FIRST state read of any kind (a head read started alongside the state, or after it, sees the newer block).
+        const restore = [];
+        for (const pallet of Object.values(api.query)) {
+            for (const k of Object.keys(pallet)) {
+                const orig = pallet[k];
+                if (typeof orig !== 'function') continue;
+                pallet[k] = Object.assign(function (...a) { height += 7; return orig.apply(this, a); }, orig);
+                restore.push(() => { pallet[k] = orig; });
+            }
+        }
+        try {
+            const r = await get(`/api/validator/${addr(87)}/status`);
+            assert.equal(r.status, 200);
+            assert.ok(height > 500, 'the fake chain did advance while the state was read');
+            assert.equal(r.body.freshness.chainHead, 500, 'chainHead must be the head read before the state (500), not a head read with or after it (' + r.body.freshness.chainHead + ')');
+        } finally { restore.forEach(f => f()); api.rpc = savedRpc; }
+    });
     test('status (R5): ?fresh=1 bypasses the 30 s memo, answers no-store, and refills the memo for the next plain read', async () => {
         const a = addr(84);
         await withHead(100, () => get(`/api/validator/${a}/status`));

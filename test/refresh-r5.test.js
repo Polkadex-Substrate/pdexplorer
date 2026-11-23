@@ -677,3 +677,140 @@ describe('R5: the wiring in script.js (design 2.1 multisig branch and section 7)
         assert.match(src, /d\.multisigReview\(\{[^}]*inner: \{ key: M\.MANAGE_ACTION, params: \{ stash \} \}/);
     });
 });
+
+// ── regression guards for the five mutations that survived the Sprint R5 mutation run ──
+describe('R5 guards: late and older reads never draw (validator card and multisig pending list)', () => {
+    // A status fetch the test releases by hand, in any order. Reads are recorded; the body is built at release.
+    function gatedFetch(w) {
+        const real = w.d.fetchJson;
+        const gates = [];
+        w.d.fetchJson = (u) => {
+            if (!/\/status\?fresh=1$/.test(u)) return real(u);
+            return new Promise((resolve) => { gates.push((body) => resolve(JSON.parse(JSON.stringify(body)))); });
+        };
+        return gates;
+    }
+    // The headline holds focus after the first read, and a focused node is never replaced (a patch waits for focusout): let go of it.
+    const unfocus = (w) => { const a = w.doc.activeElement; if (a && a !== w.doc.body && typeof a.blur === 'function') a.blur(); };
+    const cardRefresh = async (w) => { w.core.notify({ account: STASH, domains: ['validator.status'], reason: 'failed' }); await settle(); };
+
+    test('(mutation 1) a read below the inclusion block that carries an OLDER value than the card is not drawn', async () => {
+        const w = await hubWorld();
+        assert.match(w.card(), /Commission\s*5%\./);
+        const r = await signCommission(w);
+        w.api.st.commission = 70_000_000;
+        w.server.pct[STASH] = 3;                    // the lagging server's copy (head 41, below block 42) differs from the card
+        await r.emit(IN1, [prefsSet(), success()]);
+        assert.ok(freshReads(w.server.reads).length >= 1, 'the card did read the server at inclusion');
+        assert.match(w.card(), /Commission\s*5%\./, 'a read below the action\'s block (head 41 < 42) must not replace the card, even with a different value');
+        assert.doesNotMatch(w.card(), /3%/, 'the below-block copy was drawn');
+        await w.clock.advance(1500);
+        assert.match(w.card(), /Commission\s*5%\./, 'still the card as it was while the server lags');
+        w.server.head = 42; w.server.pct[STASH] = 7;
+        await w.clock.advance(3000);
+        assert.match(w.card(), /Commission\s*7%\./, 'drawn once the read reached block 42');
+        await r.emit(FIN1, [prefsSet(), success()]);
+    });
+
+    test('(mutation 2) two overlapping reads resolving out of order: the older read does not replace the newer one', async () => {
+        const w = await hubWorld();
+        assert.match(w.card(), /Commission\s*5%\./);
+        unfocus(w);
+        const gates = gatedFetch(w);
+        await cardRefresh(w);
+        await cardRefresh(w);
+        assert.equal(gates.length, 2, 'two reads of the card are in flight');
+        gates[1](statusModel(STASH, 8, 43));        // the newer read resolves first
+        await settle();
+        assert.match(w.card(), /Commission\s*8%\./, 'the newer read is drawn');
+        gates[0](statusModel(STASH, 6, 42));        // the older read lands late
+        await settle();
+        assert.match(w.card(), /Commission\s*8%\./, 'an older read (head 42 < drawn 43) must not replace a newer one');
+        assert.doesNotMatch(w.card(), /6%/);
+    });
+
+    test('(mutation 3) the validator page is left mid-read (remounted for another account): the late read draws nowhere', async () => {
+        const w = await hubWorld();
+        const gates = gatedFetch(w);
+        await cardRefresh(w);
+        assert.equal(gates.length, 1, 'a read of the old stash is in flight');
+        const oldSlot = w.doc.getElementById('validate-status-slot');
+        const oldHtml = oldSlot.innerHTML;
+        w.core.accountChanged(OTHER);
+        await mountValidatePage(w.el, { ...w.d, fetchJson: w.server.fetch, account: { status: 'connected', address: OTHER }, manage: { ...w.d.manage, account: { status: 'connected', address: OTHER } } });
+        await settle();
+        assert.match(w.card(), /Commission\s*9%\./, 'the new account\'s card');
+        const newHtml = w.doc.getElementById('validate-status-slot').innerHTML;
+        gates[0](statusModel(STASH, 7, 50));        // the old stash's read lands late, with a newer head
+        await settle();
+        assert.match(w.card(), /Commission\s*9%\./, 'the old stash\'s late read was painted into the new page');
+        assert.doesNotMatch(w.card(), /7%/);
+        assert.equal(w.doc.getElementById('validate-status-slot').innerHTML, newHtml, 'the new page is untouched');
+        assert.equal(oldSlot.innerHTML, oldHtml, 'the old page\'s nodes are untouched too');
+    });
+
+    test('(mutation 3b) the validator page is replaced by another page in the same root mid-read: the late read draws nowhere', async () => {
+        const w = await hubWorld();
+        const gates = gatedFetch(w);
+        await cardRefresh(w);
+        const oldSlot = w.doc.getElementById('validate-status-slot');
+        const oldHtml = oldSlot.innerHTML;
+        w.el.innerHTML = '<div id="other-page">Another page</div>';   // the SPA moved on; nothing re-mounted the hub
+        gates[0](statusModel(STASH, 7, 50));
+        await settle();
+        assert.equal(oldSlot.innerHTML, oldHtml, 'the left page\'s card was repainted');
+        assert.equal(w.el.textContent, 'Another page', 'nothing was painted into the page now shown');
+    });
+
+    function stallEntries(w) {
+        const m = w.chain.api.query.multisig.multisigs;
+        const real = m.entries;
+        const gates = [];
+        m.entries = (...a) => new Promise((resolve) => { gates.push(() => resolve(real(...a))); });
+        return { gates, restore: () => { m.entries = real; } };
+    }
+    async function approveFirst(w) {
+        await w.ui.review({ multisig: w.ms, callHex: CALL, inner: { key: 'balances.transfer', params: { to: C } } });
+        await settle();
+        await w.sign();
+        const r = w.sub.last();
+        await r.emit(READY);
+        return r;
+    }
+
+    test('(mutation 4) the multisig pending list is left mid-read (slot removed): the late read does not repaint it', async () => {
+        const w = await msWorld();
+        try {
+            const list = w.list();
+            assert.match(list.textContent, /No pending transactions/);
+            const r = await approveFirst(w);
+            const st = stallEntries(w);
+            w.chain.pending = [{ hash: hashOf(CALL), approvals: [A] }];
+            w.chain.head = 42;
+            await r.emit(IN1, [ev('multisig', 'NewMultisig', [A, w.ms.address, hashOf(CALL)]), success()]);
+            assert.equal(st.gates.length, 1, 'the pending read is in flight');
+            w.slot.remove();                        // the person left the wallet page
+            st.gates[0]();
+            await settle();
+            assert.match(list.textContent, /No pending transactions/, 'the late read repainted a list the person had left');
+            assert.doesNotMatch(list.textContent, /approvals/);
+        } finally { w.restore(); }
+    });
+
+    test('(mutation 4b) the network (api) changes mid-read: the late read of the old api does not repaint the pending list', async () => {
+        const w = await msWorld();
+        try {
+            const r = await approveFirst(w);
+            const st = stallEntries(w);
+            w.chain.pending = [{ hash: hashOf(CALL), approvals: [A] }];
+            w.chain.head = 42;
+            await r.emit(IN1, [ev('multisig', 'NewMultisig', [A, w.ms.address, hashOf(CALL)]), success()]);
+            assert.equal(st.gates.length, 1, 'the pending read is in flight');
+            const before = w.list().innerHTML;
+            w.chain.api = { ...w.chain.api };       // a different node connection is now current
+            st.gates[0]();
+            await settle();
+            assert.equal(w.list().innerHTML, before, 'a read from the previous api was painted');
+        } finally { w.restore(); }
+    });
+});
