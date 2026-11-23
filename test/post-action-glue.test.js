@@ -273,10 +273,12 @@ describe('R2: the payout flow polls the server on evidence', () => {
         const bar = p.q('#wallet-action-bar');
         await p.ctx.refreshWalletDashboardFor(ME, true);   // quiet: the poll's re-read
         await flush();
-        assert.equal(p.q('#wallet-action-bar'), bar, 'a poll with nothing new remounted the dashboard');
+        // Identity as a boolean: on failure assert.equal(node, node) would render two happy-dom nodes (the whole
+        // window graph) into its message and run the process out of memory instead of reporting.
+        assert.ok(p.q('#wallet-action-bar') === bar, 'a poll with nothing new remounted the dashboard');
         await p.ctx.refreshWalletDashboardFor(ME);         // not quiet: a session change must repaint (it arms the action bar)
         await flush();
-        assert.notEqual(p.q('#wallet-action-bar'), bar, 'a non-poll refresh skipped the repaint');
+        assert.ok(p.q('#wallet-action-bar') !== bar, 'a non-poll refresh skipped the repaint');
         srv.chain = 77;
         const f = await p.ctx.refreshWalletDashboardFor(ME, true);
         assert.equal(f && f.indexed.chain, 77, 'the refresh does not hand the freshness back to the core');

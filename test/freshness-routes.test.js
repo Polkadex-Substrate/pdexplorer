@@ -77,10 +77,14 @@ function world({ head = 1000, unclaimedFresh = true } = {}) {
         UNCLAIMED_TTL: 20 * 60 * 1000, computingUnclaimed: new Set(), recomputeUnclaimed: (a) => { recomputed.push(a); },
         getNetworkInfo: async () => null, getMinNominatorBondCached: async () => 1,
         serverError: (res, err) => { res.status(500).json({ error: String(err && err.message) }); },
-        computeRealizedApr: () => null, CHAIN_INDEX_INTERVAL_MS: 12_000, STAKING_REWARDS_INTERVAL_MS: 60_000, THIRTY_SECONDS: 30_000
+        computeRealizedApr: () => null, CHAIN_INDEX_INTERVAL_MS: 12_000, STAKING_REWARDS_INTERVAL_MS: 60_000, THIRTY_SECONDS: 30_000,
+        Error, setTimeout, clearTimeout, process: { env: {} }, DEV_API_TIMEOUT_MS: 30_000
     };
     vm.createContext(ctx);
-    vm.runInContext([bodyOf(SERVER, 'lowestHoleFrom'), 'async ' + bodyOf(SERVER, 'freshnessHead'), 'async ' + bodyOf(SERVER, 'routeFreshness'), bodyOf(SERVER, 'freshnessNow'),
+    // The head read's memo and timeout (review finding 4) live beside freshnessHead; each world gets its own memo.
+    const optLine = (start) => { const i = SERVER.indexOf(start); return i === -1 ? '' : SERVER.slice(i, SERVER.indexOf('\n', i)); };
+    vm.runInContext([optLine('const FRESHNESS_HEAD_TIMEOUT_MS'), optLine('const FRESHNESS_HEAD_MEMO_MS'), optLine('const freshnessHeadMemo'), bodyOf(SERVER, 'withTimeout'),
+        bodyOf(SERVER, 'lowestHoleFrom'), 'async ' + bodyOf(SERVER, 'freshnessHead'), 'async ' + bodyOf(SERVER, 'routeFreshness'), bodyOf(SERVER, 'freshnessNow'),
         routeSource('/api/wallet/:address'), routeSource('/api/staking-rewards/:address'), routeSource('/api/proxies/:address'), routeSource('/api/multisigs/:address')].join('\n'), ctx);
     const call = async (p, params, query = {}) => { const res = fakeRes(); await handlers[p]({ params, query, path: p }, res); return res; };
     return { api, order, recomputed, handlers, call, ctx };
@@ -201,7 +205,7 @@ describe('/api/account/:address/locks carries freshness (lib/balance-locks-api.j
         await fresh.json();
         assert.equal(fresh.headers.get('cache-control'), 'no-store');
     });
-    test('server.js passes the freshness reader to the locks route', () => {
+    test('server.js passes the freshness reader to the locks route (text guard; the behaviour test is in test/r2-review-fixes.test.js)', () => {
         assert.match(SERVER, /registerBalanceLocksRoute\(app, \{[^}]*serverError, freshness: routeFreshness \}\)/);
     });
 });

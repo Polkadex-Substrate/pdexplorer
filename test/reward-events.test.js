@@ -293,7 +293,7 @@ describe('the forward pass (server.js scanSingleBlock) notes rewards', () => {
 
 describe('wiring in server.js', () => {
     const code = SERVER;
-    test('scanSingleBlock notes rewards right after identity events; repairReorgedBlock notes the fork before deleting its rows', () => {
+    test('scanSingleBlock notes rewards right after identity events; repairReorgedBlock notes the fork before deleting its rows (text guard; the behaviour test is in test/r2-review-fixes.test.js)', () => {
         const scan = bodyOf(code, 'scanSingleBlock');
         assert.ok(scan.indexOf('noteRewardEvents(allEvents, extrinsics)') > scan.indexOf('noteIdentityEvents(allEvents)'));
         const repair = bodyOf(code, 'repairReorgedBlock');
