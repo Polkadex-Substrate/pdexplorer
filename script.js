@@ -6344,7 +6344,7 @@ async function fetchAccountDetails(address) {
             </div>
         `;
         accountDetailsContainer.innerHTML = html;
-        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps(), post: postAction, page: 'account' });
         mountNominationStatus(document.getElementById('account-nominations-slot'), data.account, { fetchJson: fetchApiJson, helpIcon });
 
         // Audit F-122: bind copy with addEventListener and read the address
@@ -9186,7 +9186,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     // ownership — proxies that delegate FROM this address are public chain
     // state, and the multisig calculator works without an active session.
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
-    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps(), post: postAction, page: 'wallet',
+        unstake: () => { const u = document.getElementById('wallet-act-unstake'); return !!(isOwnWallet && u && !u.disabled); }, openUnstake: openUnstakeModal });
     mountNominationStatus(document.getElementById('wallet-nominations-slot'), data.address, { fetchJson: fetchApiJson, helpIcon,
         canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), data.address), openPicker: (keep) => openStakeModal(keep) });
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
