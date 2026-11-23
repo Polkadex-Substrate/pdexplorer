@@ -126,7 +126,7 @@ function govPage({ route = 'council', wallet = ME, member = true } = {}) {
         "let councilMotionsFilter = 'all'; let councilCallFilter = 'all';",
         stmt('const COLLECTIVE_VIEWS = {'), line('const collectiveView = '), stmt('const freshFetch = '),
         line('const candidacyModal = '), stmt('const councilCandidacyUI = createCouncilCandidacyUI('),
-        line('let treasuryData = '), line('let treasuryTab = '), line('let democracyData = '),
+        line('let treasuryData = '), line('let treasuryTab = '), line('let democracyData = '), line('let democracyTab = '), line('let routeGeneration = '),
         line('const knownResults = createKnownResults('), line('const postAction = createPostAction('), line('const govRefresh = createGovRefresh('),
         'async ' + bodyOf(SCRIPT, 'fetchCouncilData'), 'async ' + bodyOf(SCRIPT, 'fetchTechnicalCommitteeData'),
         bodyOf(SCRIPT, 'councilMotionVote'), bodyOf(SCRIPT, 'councilMotionClose'), 'async ' + bodyOf(SCRIPT, 'submitCouncilCandidacy'),
