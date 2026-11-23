@@ -79,7 +79,10 @@ describe('patchSection: a section repaints alone, and only when its markup chang
         read.getBoundingClientRect = () => (grown ? { top: 180, bottom: 480, height: 300 } : { top: 120, bottom: 420, height: 300 });
         const scrolled = [];
         win.scrollBy = (x, y) => { scrolled.push([x, y]); };
-        const out = patchSection(top, (grown = true, '<p>much longer</p><p>rows</p>'), { doc, win, root });
+        // the section above grows when its new markup is written (not before the call measures)
+        const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(top), 'innerHTML') || Object.getOwnPropertyDescriptor(win.Element.prototype, 'innerHTML');
+        Object.defineProperty(top, 'innerHTML', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); grown = true; } });
+        const out = patchSection(top, '<p>much longer</p><p>rows</p>', { doc, win, root });
         assert.equal(out, 'replaced');
         assert.deepEqual(scrolled, [[0, 60]], 'the reader was pushed down by a section above the viewport');
     });
