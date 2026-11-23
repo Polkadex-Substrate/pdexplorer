@@ -122,9 +122,11 @@ describe('Q28: Copy confirms at the button that was pressed', () => {
 });
 
 describe('Q35: phone tap targets', () => {
-    test('under 768 px the secondary, text and lock buttons are 44 px tall', () => {
-        const rule = parseRules(CSS).find(r => /max-width:\s*768px/.test(r.media) && ['.validate-secondary', '.validate-text-btn', '.lock-action-btn'].every(s => r.selectors.includes(s)));
-        assert.ok(rule, 'one rule in the 768 px query names the three classes');
+    test('under 768 px the secondary and text buttons are 44 px tall; the lock buttons (.ui-action) are 44 px at every width', () => {
+        const rule = parseRules(CSS).find(r => /max-width:\s*768px/.test(r.media) && ['.validate-secondary', '.validate-text-btn'].every(s => r.selectors.includes(s)));
+        assert.ok(rule, 'one rule in the 768 px query names the two classes');
         assert.equal(rule.decls['min-height'], '44px');
+        const action = parseRules(CSS).filter(r => !r.media && r.selectors.includes('.ui-action') && 'min-height' in r.decls);
+        assert.deepEqual(action.map(r => r.decls['min-height']), ['44px'], 'the balance breakdown buttons, outside any media query');
     });
 });

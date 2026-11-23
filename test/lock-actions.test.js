@@ -34,6 +34,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import { Window } from 'happy-dom';
 import {
     slashingSpanCount, unbondingSchedule, democracyActions, lockActions, lockRemoved, lockActionSpec
 } from '../lib/lock-actions.js';
@@ -430,14 +431,16 @@ describe('lockActionSpec: the call each button signs, and who may sign it', () =
 describe('runLockAction: the click path (submitSignedTx, then the chain check)', () => {
     const orphanModel = { actions: { orphan: { stash: ME, amount: s(60n * PDEX) } } };
     const msgEl = () => ({ textContent: '', className: '' });
-    test('passes the spec to submit, with the button, key and verify', async () => {
+    // Locked balances redesign, F5: the panel owns the pressed button (busy, never disabled), so none goes to submit.
+    test('passes the spec to submit, with the key and verify, and no button', async () => {
         const calls = [];
         const button = { textContent: 'Remove leftover staking lock' };
         await runLockAction('migrate-currency', { model: orphanModel, address: ME, button, msg: msgEl(),
             deps: { submit: async (o) => { calls.push(o); }, connected: () => OTHER, isSame: same, api: () => fakeTxApi() } });
         assert.equal(calls.length, 1);
         assert.equal(calls[0].action.key, 'staking.migrateCurrency');
-        assert.equal(calls[0].button, button);
+        assert.equal(calls[0].button, undefined);
+        assert.equal(calls[0].idleText, undefined);
         assert.equal(typeof calls[0].verify, 'function');
         assert.equal(typeof calls[0].buildTx, 'function');
     });
@@ -501,62 +504,65 @@ describe('the panel holds its action buttons from submit until the refresh', () 
             assert.equal(holds[holds.length - 1], false, String(run));
         }
     });
-    test('mountBalanceLocks: a click disables every action button until the refreshed panel is rendered', async (t) => {
-        t.mock.timers.enable({ apis: ['setTimeout'] });
+    // Locked balances redesign 2.1: held is aria-disabled (focus can stay), never `disabled`; Remove council vote asks
+    // first. WP2: the re-read comes from the post-action core at inclusion, not from a fixed timer.
+    test('mountBalanceLocks: a click holds every action button until the refreshed panel is rendered', async () => {
         const model = { address: ME, ...describeAccountLocks(snap({ locks: [lock('staking ', 60n * PDEX), lock('phrelect', 10n * PDEX)], frozen: s(60n * PDEX),
-            elections: { voter: { votes: 1, stake: s(10n * PDEX), deposit: s(PDEX) }, candidacy: null } })) };
-        let buttons = [], handler = null, fetches = 0;
-        const btnOf = (action) => ({ disabled: false, textContent: action, getAttribute: (k) => (k === 'data-lock-action' ? action : null), closest() { return this; } });
-        const el = {
-            isConnected: true,
-            set innerHTML(h) { this._h = h; buttons = [...h.matchAll(/data-lock-action="([^"]+)"/g)].map(m => btnOf(m[1])); },
-            get innerHTML() { return this._h; },
-            addEventListener: (type, fn) => { if (type === 'click') handler = fn; },
-            querySelectorAll: (sel) => (sel === '[data-lock-action]' ? buttons : []),
-            querySelector: () => msgEl()
-        };
+            elections: { voter: { votes: 1, stake: s(10n * PDEX), deposit: s(PDEX) }, candidacy: null } })), freshness: { v: 1, chainHead: 42 } };
+        const w = new Window();
+        w.document.body.innerHTML = '<div id="slot"></div>';
+        const el = w.document.getElementById('slot');
+        let fetches = 0, sub = null, skew = 0;
         const submits = [];
-        await mountBalanceLocks(el, ME, { fetchJson: async () => { fetches++; return model; }, helpIcon: () => '',
+        await mountBalanceLocks(el, ME, { fetchJson: async () => { fetches++; return model; }, helpIcon: () => '', post: { subscribe: (d, x) => { sub = x; return () => {}; } }, now: () => Date.now() + skew,
             actions: { submit: async (o) => { submits.push(o); }, connected: () => ME, isSame: same, api: () => fakeTxApi() } });
-        assert.ok(buttons.length >= 2, 'the panel renders at least two action buttons');
-        const clicked = buttons.find(b => b.getAttribute('data-lock-action') === 'elections-remove');
-        handler({ target: clicked });
+        const buttons = () => Array.from(el.querySelectorAll('.ui-action'));
+        assert.ok(buttons().length >= 2, 'the panel renders at least two action buttons');
+        el.querySelector('[data-lock-action="elections-remove"]').click();
+        const clicked = el.querySelector('.lock-confirm [data-lock-action="elections-remove"]');
+        skew += 1000;   // a deliberate confirm, not the second click of the press that opened the strip
+        clicked.click();
         await new Promise(r => setImmediate(r));
         assert.equal(submits.length, 1);
-        assert.ok(buttons.every(b => b.disabled), 'every action button is disabled from submit');
-        handler({ target: buttons.find(b => b !== clicked) });
+        assert.ok(buttons().every(b => b.getAttribute('aria-disabled') === 'true' && !b.disabled), 'every action button is held from submit, none disabled');
+        buttons().find(b => b !== clicked).click();
         await new Promise(r => setImmediate(r));
         assert.equal(submits.length, 1, 'a second click while held signs nothing');
-        clicked.disabled = false;                 // tx-submit restore() at InBlock
         await submits[0].onSuccess();
-        assert.ok(buttons.every(b => b.disabled), 'still held after InBlock, until the refresh');
-        t.mock.timers.tick(2500);
+        assert.ok(buttons().every(b => b.getAttribute('aria-disabled') === 'true'), 'still held after InBlock, until the refresh');
+        assert.equal(fetches, 1, 'no re-read before the core asks');
+        assert.ok(sub, 'the panel subscribed to the core');
+        await sub.reload({ block: 42, fresh: true, reason: 'inBlock' });
         for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
         assert.equal(fetches, 2, 'the refresh re-read the model');
-        assert.ok(buttons.length && buttons.every(b => !b.disabled), 'the refreshed panel is enabled again');
+        assert.ok(buttons().length && buttons().every(b => !b.hasAttribute('aria-disabled')), 'the refreshed panel is enabled again');
     });
 });
 
 describe('renderBalanceLocks: the release buttons', () => {
     const base = (over) => describeAccountLocks(snap(over));
-    test('orphan: the button is on the public page too, labelled for anyone, fee refunded', () => {
-        const html = renderBalanceLocks(base({ locks: [lock('staking ', 60n * PDEX)], frozen: s(60n * PDEX) }), { canSign: false });
+    test('orphan: the button is on the public page too for any connected wallet, fee refunded; with no wallet it says to connect any', () => {
+        const html = renderBalanceLocks(base({ locks: [lock('staking ', 60n * PDEX)], frozen: s(60n * PDEX) }), { canSign: false, connected: OTHER });
         assert.match(html, /data-lock-action="migrate-currency"/);
         assert.match(html, /Remove leftover staking lock/);
         assert.match(html, /[Aa]nyone can submit this; the fee is refunded/);
+        const none = renderBalanceLocks(base({ locks: [lock('staking ', 60n * PDEX)], frozen: s(60n * PDEX) }), { canSign: false });
+        assert.doesNotMatch(none, /data-lock-action="migrate-currency"/);
+        assert.match(none, /Connect any wallet to remove it\. It does not have to be this account\./);
     });
     const st = { bonded: true, total: s(30n * PDEX), active: s(10n * PDEX), unlocking: s(20n * PDEX),
         chunks: [{ value: s(15n * PDEX), era: 100 }, { value: s(5n * PDEX), era: 104 }], currentEra: 101, activeEra: 101, activeEraStart: Date.UTC(2026, 10, 5), spans: 0, controller: ME, stash: ME };
     test('withdraw: "Ready to withdraw" with the button for the owner, and the chunks still unbonding with a date', () => {
         const html = renderBalanceLocks(base({ staking: st, locks: [lock('staking ', 30n * PDEX)] }), { canSign: true });
-        assert.match(html, /Ready to withdraw: 15 PDEX/);
+        assert.match(html, /<span class="lock-amount">15 PDEX<\/span> <span class="lock-name">Finished unstaking<\/span><\/h4><span class="ui-chip is-positive"><i class="bx bx-check" aria-hidden="true"><\/i>Ready to withdraw/);
         assert.match(html, /data-lock-action="withdraw"/);
         assert.match(html, /5 PDEX/);
         assert.match(html, /2026-11-08/, 'era 104 starts three eras after 2026-11-05');
     });
     test('withdraw: visitors see the amounts but no button', () => {
         const html = renderBalanceLocks(base({ staking: st, locks: [lock('staking ', 30n * PDEX)] }), { canSign: false });
-        assert.match(html, /Ready to withdraw: 15 PDEX/);
+        assert.match(html, /<span class="lock-amount">15 PDEX<\/span> <span class="lock-name">Finished unstaking<\/span><\/h4><span class="ui-chip is-positive"><i class="bx bx-check" aria-hidden="true"><\/i>Ready to withdraw/);
+        assert.match(html, /Connect this account to do this\./);
         assert.doesNotMatch(html, /data-lock-action="withdraw"/);
     });
     test('democracy: "Remove votes and unlock" for the owner, cancel buttons for running referenda', () => {

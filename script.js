@@ -6325,7 +6325,7 @@ async function fetchAccountDetails(address) {
             </div>
         `;
         accountDetailsContainer.innerHTML = html;
-        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+        mountBalanceLocks(document.getElementById('account-locks-slot'), data.account, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps(), post: postAction, page: 'account' });
         mountNominationStatus(document.getElementById('account-nominations-slot'), data.account, { fetchJson: fetchApiJson, helpIcon });
 
         // Audit F-122: bind copy with addEventListener and read the address
@@ -9152,7 +9152,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     // ownership — proxies that delegate FROM this address are public chain
     // state, and the multisig calculator works without an active session.
     // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
-    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps() });
+    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps(), post: postAction, page: 'wallet',
+        unstake: () => { const u = document.getElementById('wallet-act-unstake'); return !!(isOwnWallet && u && !u.disabled); }, openUnstake: openUnstakeModal });
     mountNominationStatus(document.getElementById('wallet-nominations-slot'), data.address, { fetchJson: fetchApiJson, helpIcon,
         canChange: () => isOwnWallet && isSameAddress(getStoredWallet(), data.address), openPicker: (keep) => openStakeModal(keep) });
     renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
@@ -12648,8 +12649,9 @@ async function resolveWalletSigner(fail, signingAccount = null) {
 async function submitSignedTx({ buildTx, label, button, busyText, idleText, onError, onSuccess, action: act, onStage, onMultisigEnd, verify, signingAccount = null, multisigHandled = false, expectedWallet = getStoredWallet(), expectedRevision = null }) {
     const action = { ...(act || {}), label, id: 'tx-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
     const stage = (s, m) => { if (onStage) { try { onStage(s, m || {}); } catch (e) { console.warn('[tx-status] onStage', e); } } };
+    // Every fail() here is before anything was signed or sent: the model says so (wallet.notSigned).
     const fail = (m) => {
-        const model = onError ? { stage: 'failed', text: m } : showTxStatus(action, 'failed', null, m);
+        const model = onError ? { stage: 'failed', key: 'wallet.notSigned', text: m } : showTxStatus(action, 'failed', null, m);
         stage(model.stage, model);
         if (onError) onError(m, model);
     };
