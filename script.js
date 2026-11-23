@@ -9605,13 +9605,13 @@ async function submitStakeTx() {
     // The card's own data (lib/stake-card-view.js press): changed under it, the card redraws and nothing is signed.
     const { data, stop, message } = stakeCard ? stakeCard.press(currentWalletData) : { data: currentWalletData };
     if (stop) return message ? showStakeError(message) : undefined;
-    // The plan the card shows (lib/stake-plan.js stakeFormPlan): a call only for what changed.
-    const form = stakeFormPlan(data, { typed: (document.getElementById('stake-amount-input').value || '').trim(), targets: Array.from(stakeSelected.keys()),
+    // The plan the card shows (stakeFormPlan), a call only for what changed; the card is held still while recheck waits, then plans it again (section 4.2).
+    const planNow = () => stakeFormPlan(data, { typed: (document.getElementById('stake-amount-input').value || '').trim(), targets: Array.from(stakeSelected.keys()),
         maxTargets: stakeMaxNominations(), same: isSameAddress, connected: getStoredWallet(), feeFloorPlanck: FEE_MARGIN });
+    const form = planNow(), plan = form.plan;
     if (form.message) return showStakeError(form.message);
-    // The rule's picks checked again on the newest list (section 4.2); a changed pick sends nothing.
-    if (stakeCard && !(await stakeCard.recheck(loadValidatorsForPicker))) return;
-    const plan = form.plan;
+    const held = stakeCard ? await stakeCard.recheck(loadValidatorsForPicker, form, planNow) : () => {};
+    if (!held) return;
     await submitSignedTx({
         buildTx: (api) => buildStakeTx(api, plan, { stash: data.address }),
         label: 'Stake & nominate',
@@ -9625,7 +9625,7 @@ async function submitStakeTx() {
             if (modal) modal.style.display = 'none';
             setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
         }
-    });
+    }).finally(held);
 }
 
 // --- Pay out rewards modal ---
