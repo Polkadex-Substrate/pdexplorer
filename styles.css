@@ -5601,10 +5601,10 @@ a.validate-secondary { text-decoration: none; }
 .balance-locks .list-header .lock-updating { margin-left: auto; }
 .lock-row-msg { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; font-size: 0.82rem; line-height: 1.5; color: var(--text-primary); }
 .lock-row-msg > .bx { flex-shrink: 0; font-size: 18px; }
-.lock-row-msg.is-positive > .bx { color: var(--accent-green); }
-.lock-row-msg.is-wait > .bx { color: var(--accent-amber); }
-.lock-row-msg.is-info > .bx { color: var(--accent-blue-text); }
-.lock-row-msg.is-error > .bx { color: var(--accent-red); }
+.lock-msg.is-positive > .bx { color: var(--accent-green); }
+.lock-msg.is-wait > .bx { color: var(--accent-amber); }
+.lock-msg.is-info > .bx { color: var(--accent-blue-text); }
+.lock-msg.is-error > .bx { color: var(--accent-red); }
 .lock-row-msg .validate-secondary, .lock-failed .validate-secondary, .lock-behind .validate-secondary { min-height: 44px; }
 .lock-failed, .lock-behind { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin: 12px 24px 0; }
 .lock-failed { margin-bottom: 24px; }
