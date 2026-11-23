@@ -73,7 +73,7 @@ import { createPostAction } from './lib/post-action.js';
 import { createKnownResults } from './lib/known-results.js';
 import { effectsFor } from './lib/action-effects.js';
 import { caughtUp, pollDeadlineMs, samePayload } from './lib/freshness.js';
-import { rewardsSeries, renderKey, planChartUpdate, applySeries } from './lib/chart-update.js';
+import { rewardsSeries, renderKey, planChartUpdate, applySeries, rewardsChartConfig } from './lib/chart-update.js';
 import { createPayoutRefresh, payoutSignSet } from './lib/payout-refresh.js';
 import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
@@ -7900,30 +7900,7 @@ function renderStakingRewardsChart(data) {
         return;
     }
     if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
-    const [claimed, unpaid] = series.datasets;
-    stakingRewardsChart = new Chart(canvas.getContext('2d'), {
-        type: 'bar',
-        data: {
-            labels: series.labels,
-            datasets: [
-                { label: 'Claimed', data: claimed.data, backgroundColor: 'rgba(0, 230, 118, 0.6)', borderColor: '#00E676', borderWidth: 1, borderRadius: 3 },
-                { label: 'Unpaid', data: unpaid.data, backgroundColor: 'rgba(230, 0, 122, 0.55)', borderColor: '#E6007A', borderWidth: 1, borderRadius: 3 }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: plan.animation,
-            plugins: {
-                legend: { position: 'bottom', labels: { color: '#ccc', font: { size: 11 } } },
-                tooltip: { callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + Number(ctx.parsed.y).toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' PDEX' } }
-            },
-            scales: {
-                x: { stacked: true, ticks: { maxTicksLimit: 12, color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y: { stacked: true, ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
-            }
-        }
-    });
+    stakingRewardsChart = new Chart(canvas.getContext('2d'), rewardsChartConfig(series, plan.animation));
     stakingRewardsChart.seriesDrawn = series;
 }
 
