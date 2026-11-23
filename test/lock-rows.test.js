@@ -46,14 +46,18 @@ function snap(over = {}) {
 }
 const lock = (id, amount) => ({ id, amount: s(amount), reasons: 'All' });
 const model = (over) => ({ address: ME, ...describeAccountLocks(snap(over)) });
-const bonded = (total, chunks, over = {}) => ({ bonded: true, total: s(total), active: s(total), unlocking: '0', chunks, currentEra: 120, activeEra: 120, activeEraStart: NOW, spans: 0, controller: ME, stash: ME, ...over });
+// A ledger as the chain keeps it: total = active + every unlocking chunk (over.active sets a mismatch on purpose).
+const bonded = (total, chunks, over = {}) => ({ bonded: true, total: s(total), active: s(total - chunks.reduce((a, c) => a + BigInt(c.value), 0n)), unlocking: '0', chunks,
+    currentEra: 120, activeEra: 120, activeEraStart: NOW, spans: 0, controller: ME, stash: ME, ...over });
 
-// The CEO's account: a council vote backing 5 candidates (15,000 PDEX and a 13.59 PDEX deposit), and a
-// staking hold with one chunk still unbonding (280.0586 PDEX, about 2026-12-16, 24 days from now).
+// The CEO's account as his screenshot shows it: a council vote backing 5 candidates (15,000 PDEX and a 13.59 PDEX
+// deposit), and a staking hold and ledger total of 17,348.0818 PDEX: active 17,068.0232 and one chunk of 280.0586
+// PDEX unlocking at era 1907 (24 eras from now: about 2026-12-16).
+const HOLD = P(17348.0818);
 const CEO = () => model({
-    free: s(20_000n * PDEX), reserved: s(5_000n * PDEX + P(13.59)), frozen: s(15_000n * PDEX),
-    locks: [lock('phrelect', 15_000n * PDEX)], holds: [{ id: 'Staking.Staking', amount: s(5_000n * PDEX) }],
-    staking: bonded(5_000n * PDEX, [{ value: s(P(280.0586)), era: 144 }]),
+    free: s(20_000n * PDEX), reserved: s(HOLD + P(13.59)), frozen: s(15_000n * PDEX),
+    locks: [lock('phrelect', 15_000n * PDEX)], holds: [{ id: 'Staking.Staking', amount: s(HOLD) }],
+    staking: bonded(HOLD, [{ value: s(P(280.0586)), era: 1907 }], { currentEra: 1883, activeEra: 1883 }),
     elections: { voter: { votes: 5, stake: s(15_000n * PDEX), deposit: s(P(13.59)) }, candidacy: null }
 });
 
@@ -182,13 +186,13 @@ describe('(1) every row kind of section 4: chip role, icon, word, group and line
         assert.deepEqual([next.id, next.chip.role, next.chip.icon, next.chip.word, next.text], ['SUM3', 'neutral', 'bx-time-five', 'Nothing ready yet', 'Next: 5 PDEX, about 2026-11-26.']);
         const quiet = sum({ reserved: s(PDEX), identity: { deposit: s(PDEX), subsDeposit: '0', subs: 0 } });
         assert.deepEqual([quiet.id, quiet.chip.icon, quiet.text], ['SUM4', 'bx-lock-alt', 'Nothing here needs you right now.']);
-        assert.ok(lockSummary({ groups: [] }) == null);
+        assert.equal(lockSummary({ groups: [] }), null);
     });
     test('whenText: about a UTC day, with the days left, or under a day', () => {
         assert.equal(whenText(NOW + 24 * DAY, NOW), 'about 2026-12-16 (24 days)');
         assert.equal(whenText(NOW + DAY, NOW), 'about 2026-11-23 (1 day)');
         assert.equal(whenText(NOW + 3600000, NOW), 'about 2026-11-22 (under a day)');
-        assert.ok(whenText(null, NOW) == null);
+        assert.equal(whenText(null, NOW), null);
     });
 });
 
@@ -214,7 +218,9 @@ describe('(2) the CEO\'s account', () => {
         assert.equal(qa(d, '.lock-row').filter(li => /Voting deposit/.test(text(li.querySelector('.lock-name')))).length, 0, 'the deposit is not a row of its own');
         const staked = rowByName(d, 'Staked');
         assert.equal(staked.closest('[data-lock-group]').getAttribute('data-lock-group'), 'act');
-        assert.equal(text(staked.querySelector('.lock-amount')), '4,719.9414 PDEX');
+        assert.equal(text(staked.querySelector('.lock-amount')), '17,068.0232 PDEX');
+        assert.equal(text(rowByName(d, 'Unstaking').querySelector('.lock-amount')), '280.0586 PDEX');
+        assert.equal(P(17068.0232) + P(280.0586), HOLD, 'Staked and Unstaking add up to the hold');
         const b9 = staked.querySelector('.ui-action');
         assert.equal(text(b9), 'Unstake PDEX');
         assert.equal(b9.getAttribute('data-lock-open'), 'unstake');
@@ -242,6 +248,17 @@ describe('(2) the CEO\'s account', () => {
     });
 });
 
+describe('W1: the fee note says PDEX once', () => {
+    test('the exact sentence, one unit after the amount', () => {
+        const d = lockDisplay(model({ free: s(100n * PDEX), reserved: s(50n * PDEX), frozen: s(300n * PDEX), locks: [lock('democrac', 300n * PDEX)],
+            holds: [{ id: 'Staking.Staking', amount: s(50n * PDEX) }], staking: bonded(50n * PDEX, []) }), { canSign: true, connected: ME, now: NOW });
+        const w1 = d.notes.find(n => n.id === 'W1');
+        assert.ok(w1, 'the W1 note');
+        assert.equal(w1.text, 'This account cannot pay a network fee: 300 PDEX is locked and reserved PDEX (50 PDEX) counts toward the lock, so free PDEX must keep the other 250 PDEX, and at least the existential deposit (1 PDEX), and the free balance (100 PDEX) does not cover that plus the fee. So nothing can be sent or signed from it. Send at least 150.05 PDEX to this account first.');
+        assert.doesNotMatch(w1.text, /PDEX PDEX/);
+    });
+});
+
 describe('(3) splitStaking: the parts always add up to the chain amount', () => {
     const item = { kind: 'hold', id: 'Staking.Staking', amount: s(100n * PDEX) };
     const sum = (rows) => rows.reduce((a, r) => a + BigInt(r.amount), 0n);
@@ -257,6 +274,19 @@ describe('(3) splitStaking: the parts always add up to the chain amount', () => 
     test('not split when the two exceed the row, or there is no ledger schedule', () => {
         assert.deepEqual(splitStaking(item, { withdrawable: s(90n * PDEX), pending: [{ value: s(20n * PDEX), era: 130 }] }).map(r => [r.kindId, r.amount]), [['K01', s(100n * PDEX)]]);
         assert.deepEqual(splitStaking(item, null).map(r => [r.kindId, r.amount]), [['K01', s(100n * PDEX)]]);
+    });
+    test('not split when the ledger\'s active plus every unlocking chunk is not the hold; split when it is', () => {
+        const w = (active, ready, pending) => ({ active: s(active * PDEX), withdrawable: s(ready * PDEX), pending: pending.map((v, i) => ({ value: s(v * PDEX), era: 130 + i, eta: NOW + DAY })) });
+        assert.deepEqual(splitStaking(item, w(100n, 0n, [5n])).map(r => [r.kindId, r.amount]), [['K01', s(100n * PDEX)]], 'active 100 + 5 unlocking is not 100');
+        assert.deepEqual(splitStaking(item, w(90n, 10n, [5n])).map(r => [r.kindId, r.amount]), [['K01', s(100n * PDEX)]], 'active 90 + 15 unlocking is not 100');
+        assert.deepEqual(splitStaking(item, w(85n, 10n, [5n])).map(r => [r.kindId, r.amount]), [['K02', s(10n * PDEX)], ['K03', s(5n * PDEX)], ['K01', s(85n * PDEX)]]);
+        assert.deepEqual(splitStaking(item, w(0n, 60n, [40n])).map(r => [r.kindId, r.amount]), [['K02', s(60n * PDEX)], ['K03', s(40n * PDEX)]]);
+    });
+    test('the model carries the ledger\'s active: a hold whose ledger does not add up shows the one staking row, as before', () => {
+        const rows = (st) => lockDisplay(model({ holds: [{ id: 'Staking.Staking', amount: s(5_000n * PDEX) }], reserved: s(5_000n * PDEX), staking: st }), { canSign: true, connected: ME, page: 'wallet', now: NOW })
+            .groups.flatMap(g => g.rows).map(r => [r.name, r.amount]);
+        assert.deepEqual(rows(bonded(5_000n * PDEX, [{ value: s(P(280.0586)), era: 144 }], { active: s(5_000n * PDEX) })), [['Staked', s(5_000n * PDEX)]], 'total = active = 5,000 with a chunk: not split');
+        assert.deepEqual(rows(bonded(5_000n * PDEX, [{ value: s(P(280.0586)), era: 144 }])).sort(), [['Staked', s(5_000n * PDEX - P(280.0586))], ['Unstaking', s(P(280.0586))]].sort());
     });
     test('with both a staking lock and a staking hold, only the hold is split', () => {
         const d = lockDisplay(model({ locks: [lock('staking ', 30n * PDEX)], frozen: s(30n * PDEX), holds: [{ id: 'Staking.Staking', amount: s(30n * PDEX) }], reserved: s(30n * PDEX),
@@ -369,12 +399,15 @@ async function mounted(m, { connected = ME, submit = async () => {} } = {}) {
     doc.body.innerHTML = '<div id="slot"></div>';
     const el = doc.getElementById('slot');
     const calls = [];
-    await mountBalanceLocks(el, ME, { fetchJson: async () => m, helpIcon: () => '', page: 'wallet',
+    // later(ms): the panel's clock moves on, as between a press and a deliberate second press.
+    let skew = 0;
+    await mountBalanceLocks(el, ME, { fetchJson: async () => m, helpIcon: () => '', page: 'wallet', now: () => Date.now() + skew,
         actions: { submit: async (o) => { calls.push(o); return submit(o); }, connected: () => connected, isSame: same, api: () => ({}) } });
     const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r)); };
     const key = (k) => new w.KeyboardEvent('keydown', { key: k, bubbles: true });
-    return { w, doc, el, calls, flush, key };
+    return { w, doc, el, calls, flush, key, later: (ms) => { skew += ms; } };
 }
+const DELIBERATE = 1000;
 const DELEGATING = () => model({ locks: [lock('democrac', 30n * PDEX)], frozen: s(30n * PDEX),
     democracy: { delegating: true, target: OTHER, conviction: 'Locked1x', balance: s(30n * PDEX), prior: { until: 0, amount: '0' }, lockingPeriod: PERIOD } });
 const RUNNING = () => model({ locks: [lock('democrac', 40n * PDEX)], frozen: s(40n * PDEX),
@@ -415,10 +448,35 @@ describe('(7) Remove council vote, Cancel vote and Undelegate ask once inside th
             p.el.querySelector(sel).click();
             const yes = p.el.querySelector('.lock-confirm .ui-action');
             assert.equal(text(yes), confirmLabel);
+            p.later(DELIBERATE);
             yes.click();
             yes.click();
             await p.flush();
             assert.equal(p.calls.length, 1, 'one submit');
+        });
+        test(`${id}: a double click on the action opens one strip; the second click does nothing`, async () => {
+            const p = await mounted(m());
+            const first = p.el.querySelector(sel);
+            first.click();
+            first.click();
+            await p.flush();
+            const row = first.closest('li.lock-row');
+            assert.equal(row.querySelectorAll('.lock-confirm').length, 1, 'one strip in the row');
+            assert.equal(p.el.querySelectorAll('.lock-confirm').length, 1, 'one strip in the panel');
+            assert.ok(p.doc.activeElement === row.querySelector('.lock-confirm'), 'focus on the strip');
+            assert.equal(p.calls.length, 0);
+        });
+        test(`${id}: a click on the confirm right after the strip opened is the same gesture and signs nothing; a deliberate one signs once`, async () => {
+            const p = await mounted(m());
+            p.el.querySelector(sel).click();
+            const yes = p.el.querySelector('.lock-confirm .ui-action');
+            yes.click();
+            await p.flush();
+            assert.equal(p.calls.length, 0, 'the double click never reaches the confirm');
+            p.later(DELIBERATE);
+            yes.click();
+            await p.flush();
+            assert.equal(p.calls.length, 1, 'a deliberate confirm signs once');
         });
     }
     test('collect actions go straight to the wallet', async () => {
@@ -469,6 +527,7 @@ describe('(9) the pressed button keeps its icon and focus and is never disabled 
         const yes = p.el.querySelector('.lock-confirm .ui-action');
         assert.ok(yes, 'the confirm strip and its action');
         yes.focus();
+        p.later(DELIBERATE);
         yes.click();
         await p.flush();
         assert.equal(p.calls.length, 1);

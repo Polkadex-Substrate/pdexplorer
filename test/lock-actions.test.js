@@ -512,14 +512,15 @@ describe('the panel holds its action buttons from submit until the refresh', () 
         const w = new Window();
         w.document.body.innerHTML = '<div id="slot"></div>';
         const el = w.document.getElementById('slot');
-        let fetches = 0, sub = null;
+        let fetches = 0, sub = null, skew = 0;
         const submits = [];
-        await mountBalanceLocks(el, ME, { fetchJson: async () => { fetches++; return model; }, helpIcon: () => '', post: { subscribe: (d, x) => { sub = x; return () => {}; } },
+        await mountBalanceLocks(el, ME, { fetchJson: async () => { fetches++; return model; }, helpIcon: () => '', post: { subscribe: (d, x) => { sub = x; return () => {}; } }, now: () => Date.now() + skew,
             actions: { submit: async (o) => { submits.push(o); }, connected: () => ME, isSame: same, api: () => fakeTxApi() } });
         const buttons = () => Array.from(el.querySelectorAll('.ui-action'));
         assert.ok(buttons().length >= 2, 'the panel renders at least two action buttons');
         el.querySelector('[data-lock-action="elections-remove"]').click();
         const clicked = el.querySelector('.lock-confirm [data-lock-action="elections-remove"]');
+        skew += 1000;   // a deliberate confirm, not the second click of the press that opened the strip
         clicked.click();
         await new Promise(r => setImmediate(r));
         assert.equal(submits.length, 1);

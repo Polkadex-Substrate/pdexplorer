@@ -17,7 +17,10 @@ import { createPostAction } from '../lib/post-action.js';
 import { createKnownResults } from '../lib/known-results.js';
 import { effectsFor } from '../lib/action-effects.js';
 import { caughtUp, pollDeadlineMs } from '../lib/freshness.js';
-import { readRepo, stripComments } from './helpers/source.js';
+import { readRepo, stripComments, bodyOf } from './helpers/source.js';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { makeProfile, openTab, fakeExtension } from './helpers/wallet-world.js';
 import { parseRules } from './helpers/css-rules.js';
 
 const PDEX = 10n ** 12n;
@@ -40,13 +43,22 @@ function snap(over = {}) {
     };
 }
 const lock = (id, amount) => ({ id, amount: s(amount), reasons: 'All' });
-const bonded = (total, chunks) => ({ bonded: true, total: s(total), active: s(total), unlocking: '0', chunks, currentEra: 120, activeEra: 120, activeEraStart: NOW, spans: 0, controller: ME, stash: ME });
+// A ledger as the chain keeps it: total = active + every unlocking chunk (active can be set apart to test a mismatch).
+const bonded = (total, chunks, era = 120) => ({ bonded: true, total: s(total), active: s(total - chunks.reduce((a, c) => a + BigInt(c.value), 0n)), unlocking: '0', chunks,
+    currentEra: era, activeEra: era, activeEraStart: NOW, spans: 0, controller: ME, stash: ME });
 const at = (head, over) => ({ address: ME, ...describeAccountLocks(snap(over)), freshness: { v: 1, chainHead: head } });
-const STAKE = { holds: [{ id: 'Staking.Staking', amount: s(5_000n * PDEX) }], staking: bonded(5_000n * PDEX, [{ value: s(P(280.0586)), era: 144 }]) };
-// The CEO's account before and after Remove council vote.
-const CEO = (head = 41, over = {}) => at(head, { ...STAKE, reserved: s(5_000n * PDEX + P(13.59)), frozen: s(15_000n * PDEX), locks: [lock('phrelect', 15_000n * PDEX)],
+// The CEO's account as his screenshot shows it: a staking hold and ledger total of 17,348.0818 PDEX, active 17,068.0232,
+// one chunk of 280.0586 PDEX unlocking at era 1907 (24 eras from now: about 2026-12-16); a council vote lock of
+// 15,000 PDEX and a 13.59 PDEX voting deposit. Before and after Remove council vote.
+const HOLD = P(17348.0818);
+const STAKE = { holds: [{ id: 'Staking.Staking', amount: s(HOLD) }], staking: bonded(HOLD, [{ value: s(P(280.0586)), era: 1907 }], 1883) };
+const CEO = (head = 41, over = {}) => at(head, { ...STAKE, reserved: s(HOLD + P(13.59)), frozen: s(15_000n * PDEX), locks: [lock('phrelect', 15_000n * PDEX)],
     elections: { voter: { votes: 5, stake: s(15_000n * PDEX), deposit: s(P(13.59)) }, candidacy: null }, ...over });
-const CEO_AFTER = (head = 42) => at(head, { ...STAKE, reserved: s(5_000n * PDEX) });
+const CEO_AFTER = (head = 42) => at(head, { ...STAKE, reserved: s(HOLD) });
+// The CEO's account with 150 PDEX finished unstaking as well (era 1880): Withdraw unstaked PDEX and Remove council vote.
+const MIXED = (head = 41, ready = 150n * PDEX) => at(head, { holds: [{ id: 'Staking.Staking', amount: s(HOLD) }],
+    staking: bonded(HOLD, [{ value: s(ready), era: 1880 }, { value: s(P(280.0586)), era: 1907 }], 1883), reserved: s(HOLD + P(13.59)), frozen: s(15_000n * PDEX),
+    locks: [lock('phrelect', 15_000n * PDEX)], elections: { voter: { votes: 5, stake: s(15_000n * PDEX), deposit: s(P(13.59)) }, candidacy: null } });
 const ORPHAN = (head = 41) => at(head, { locks: [lock('staking ', 60n * PDEX)], frozen: s(60n * PDEX) });
 const ORPHAN_GONE = (head = 42) => at(head, {});
 
@@ -73,11 +85,13 @@ function makeClock() {
         }
     };
 }
+const DELIBERATE = 1000;
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
 const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 
 // A page: the slot, the core, the server answers (a queue; the last one repeats), a fake submit.
-async function page({ models, page: where = 'wallet', connected = ME, reduced = false, api = () => ({}), submit = null, core = true } = {}) {
+async function page({ models, page: where = 'wallet', connected: wallet = ME, reduced = false, api = () => ({}), submit = null, core = true } = {}) {
+    let connected = wallet;
     const w = new Window({ url: 'https://explorer.test/wallet' });
     const doc = w.document;
     doc.body.innerHTML = '<main><div id="slot"></div></main>';
@@ -119,14 +133,16 @@ async function page({ models, page: where = 'wallet', connected = ME, reduced = 
     await mountBalanceLocks(el, ME, opts);
     await flush();
     const row = (name) => Array.from(el.querySelectorAll('li.lock-row')).find(li => text(li.querySelector('.lock-name')) === name) || null;
+    // A deliberate confirm: a second later than the press that opened the strip (never the same gesture).
     const press = async (sel) => {
         el.querySelector(sel).click();
         const yes = el.querySelector('.lock-confirm .ui-action');
-        if (yes) { yes.focus(); yes.click(); }
+        if (yes) { await clock.advance(DELIBERATE); yes.focus(); yes.click(); }
         await flush();
     };
     const hold = () => { let r; const p = new Promise(x => { r = x; }); gate = { promise: p }; return () => { gate = null; r(); }; };
-    return { w, doc, el, clock, reads, jobs, subs, post, known, opts, row, press, hold, models: queue, remount: () => mountBalanceLocks(el, ME, opts) };
+    return { w, doc, el, clock, reads, jobs, subs, post, known, opts, row, press, hold, models: queue, remount: () => mountBalanceLocks(el, ME, opts),
+        connect: (who) => { connected = who; } };
 }
 
 describe('pure parts: diffRows, focusAfterLeave, rowMessage', () => {
@@ -183,7 +199,7 @@ describe('(13) a re-read keeps the painted panel and the nodes of unchanged rows
         const council = pg.row('Council vote'), unstaking = pg.row('Unstaking');
         const card = pg.el.querySelector('section.balance-locks');
         pg.models.length = 0;
-        pg.models.push(CEO(41, { holds: [{ id: 'Staking.Staking', amount: s(5_100n * PDEX) }], staking: bonded(5_100n * PDEX, [{ value: s(P(280.0586)), era: 144 }]) }));
+        pg.models.push(CEO(41, { holds: [{ id: 'Staking.Staking', amount: s(HOLD + 100n * PDEX) }], staking: bonded(HOLD + 100n * PDEX, [{ value: s(P(280.0586)), era: 1907 }], 1883) }));
         const open = pg.hold();
         const again = pg.remount();
         await flush();
@@ -195,7 +211,7 @@ describe('(13) a re-read keeps the painted panel and the nodes of unchanged rows
         await flush();
         assert.ok(pg.row('Council vote') === council, 'unchanged row: same node');
         assert.ok(pg.row('Unstaking') === unstaking, 'unchanged row: same node');
-        assert.equal(text(pg.row('Staked').querySelector('.lock-amount')), '4,819.9414 PDEX', 'the changed row repainted');
+        assert.equal(text(pg.row('Staked').querySelector('.lock-amount')), '17,168.0232 PDEX', 'the changed row repainted');
         assert.ok(pg.row('Staked').querySelector('.lock-amount').classList.contains('is-value-changed'), 'with the wash');
     });
 });
@@ -451,5 +467,157 @@ describe('the stylesheet for the self-updating panel (5, 6)', () => {
         assert.equal(find('.lock-row.is-leaving', 'transition', /prefers-reduced-motion/), 'none');
         assert.match(String(find('.lock-amount.is-value-changed', 'animation')), /^post-action-wash 1200ms/);
         assert.equal(find('.lock-amount.is-value-changed', 'animation', /prefers-reduced-motion/), 'none');
+    });
+});
+
+// Review finding 1 (BLOCKER): a submission still in the wallet holds every action until it ends. Before the fix a
+// re-read, a poll's end, another tab, a resume or a wallet change released the hold while the wallet popup was open,
+// and a second press started a second signature (two popups, the same nonce).
+describe('(review 1) a submission in the wallet holds every action until it ends', () => {
+    const WD = '[data-lock-action="withdraw"]', RM = '[data-lock-action="elections-remove"]';
+    const actions = (el) => Array.from(el.querySelectorAll('.ui-action'));
+    const held = (el) => actions(el).length > 0 && actions(el).every(b => b.getAttribute('aria-disabled') === 'true');
+    const free = (el) => actions(el).length > 0 && actions(el).every(b => !b.hasAttribute('aria-disabled'));
+    // Withdraw pressed; the wallet is open (submit never ends on its own).
+    const inWallet = async (models) => {
+        const open = [];
+        const pg = await page({ models, submit: async (o) => { open.push(o); } });
+        await pg.press(WD);
+        assert.equal(open.length, 1, 'the wallet is open for Withdraw');
+        assert.ok(held(pg.el), 'held from the press');
+        return { pg, open };
+    };
+    // A press on the same action and on another row's action (Remove council vote and its confirm).
+    const pressAgain = async (pg) => { pg.el.querySelector(WD).click(); await flush(); await pg.press(RM); };
+    // Counts held-to-free changes of one button.
+    const releasesOf = (btn) => { let n = 0; const orig = btn.removeAttribute.bind(btn); btn.removeAttribute = (a) => { if (a === 'aria-disabled' && btn.hasAttribute(a)) n++; return orig(a); }; return () => n; };
+    const TRIGGERS = [
+        ['a re-read with no block (a deadline, a notify)', (pg) => pg.subs[0].reload({ block: null, fresh: true, reason: 'notify' })],
+        ['state current (another component\'s poll ended)', (pg) => pg.subs[0].state('current')],
+        ['another tab\'s action (block 41)', (pg) => pg.subs[0].reload({ block: 41, fresh: true, reason: 'other-tab', origin: 'other-tab' })],
+        ['the tab resumed', (pg) => pg.post.resume()],
+        ['the core\'s wallet change', (pg) => pg.post.accountChanged(ME)]
+    ];
+    for (const [name, fire] of TRIGGERS) {
+        test(`${name}: every action stays held; the same action and another row's sign nothing`, async () => {
+            const { pg, open } = await inWallet([MIXED()]);
+            await fire(pg);
+            await flush();
+            await pressAgain(pg);
+            assert.equal(open.length, 1, 'one signature: no second popup');
+            assert.ok(pg.el.querySelector('.lock-confirm') == null, 'no confirm strip opens while held');
+            assert.ok(held(pg.el), 'still held');
+            assert.equal(pg.el.querySelector(WD).getAttribute('aria-busy'), 'true', 'Withdraw still busy');
+        });
+    }
+    test('a re-read that replaces the rows while held: the new rows are held, the new Withdraw busy; a click on them signs nothing', async () => {
+        const { pg, open } = await inWallet([MIXED(), MIXED(41, 151n * PDEX)]);
+        const before = pg.el.querySelector(WD);
+        await pg.subs[0].reload({ block: null, fresh: true, reason: 'notify' });
+        await flush();
+        const after = pg.el.querySelector(WD);
+        assert.ok(after && after !== before, 'the Withdraw row was replaced');
+        await pressAgain(pg);
+        assert.equal(open.length, 1, 'one signature');
+        assert.ok(held(pg.el), 'the replaced rows come back held');
+        assert.equal(after.getAttribute('aria-busy'), 'true', 'the pressed action, busy in its new row');
+        for (const b of actions(pg.el)) if (b !== after) assert.equal(b.getAttribute('title'), LOCK_COPY.HELD);
+    });
+    test('the account changes while the old account\'s submission is in the wallet: the new account\'s actions stay held until it ends, then work', async () => {
+        const { pg, open } = await inWallet([MIXED()]);
+        const B8 = '[data-lock-action="migrate-currency"]';
+        pg.connect(OTHER);
+        pg.models.length = 0;
+        pg.models.push({ ...ORPHAN(), address: OTHER });
+        await mountBalanceLocks(pg.el, OTHER, pg.opts);
+        await flush();
+        assert.ok(pg.el.querySelector(B8), 'the new account\'s panel, with its action');
+        pg.el.querySelector(B8).click();
+        await flush();
+        assert.equal(open.length, 1, 'no second signature for the new account');
+        assert.ok(held(pg.el), 'held: the old account\'s signature is still in the wallet');
+        open[0].onStage('cancelled');
+        open[0].onError('Cancelled in the wallet.', { stage: 'cancelled' });
+        await flush();
+        assert.ok(free(pg.el), 'let go when the old one ended');
+        pg.el.querySelector(B8).click();
+        await flush();
+        assert.equal(open.length, 2, 'the new account\'s action works');
+    });
+    const ENDINGS = [
+        ['it fails', (o) => { o.onError('Nope.'); }],
+        ['it is cancelled in the wallet', (o) => { o.onStage('cancelled'); o.onError('Cancelled in the wallet.', { stage: 'cancelled' }); }]
+    ];
+    for (const [name, end] of ENDINGS) {
+        test(`${name}: nothing lets go while it is in the wallet; then released exactly once and the actions work again`, async () => {
+            const { pg, open } = await inWallet([MIXED()]);
+            const releases = releasesOf(pg.el.querySelector(RM));
+            await pg.subs[0].reload({ block: null, fresh: true, reason: 'notify' });
+            await flush();
+            pg.subs[0].state('current');
+            await flush();
+            assert.equal(releases(), 0, 'nothing let go while in the wallet');
+            end(open[0]);
+            await flush();
+            assert.equal(releases(), 1, 'let go once, when it ended');
+            assert.ok(free(pg.el), 'every action free');
+            await pg.press(RM);
+            assert.equal(open.length, 2, 'the actions work again');
+        });
+    }
+    test('it is included: held until the inclusion re-read caught up, released exactly once, then the actions work again', async () => {
+        const pg = await page({ models: [CEO(), CEO(), CEO_AFTER()] });
+        let opened = 0;
+        pg.opts.openUnstake = () => { opened++; };
+        const unstake = () => pg.el.querySelector('[data-lock-open="unstake"]');
+        await pg.press(RM);
+        assert.equal(pg.jobs.length, 1);
+        const releases = releasesOf(unstake());
+        await pg.subs[0].reload({ block: null, fresh: true, reason: 'notify' });
+        await flush();
+        assert.equal(releases(), 0, 'nothing let go while in the wallet');
+        unstake().click();
+        assert.equal(opened, 0, 'held: Unstake does nothing');
+        await pg.jobs[0].inBlock(42);
+        await flush();
+        assert.equal(releases(), 1, 'let go once, at the inclusion re-read');
+        assert.ok(free(pg.el));
+        unstake().click();
+        assert.equal(opened, 1, 'the actions work again');
+    });
+});
+
+// Review finding 4: a wallet that fails before anything is signed (here the extension refuses authorisation) goes
+// through script.js submitSignedTx's fail(). Nothing was sent, so the row says it in amber (M11), not the red alert
+// (M12). The real submitSignedTx and resolveWalletSigner from script.js, in a wallet-world tab.
+describe('(review 4) a wallet error before signing: M11 in the row, through the real submitSignedTx', () => {
+    test('authorisation refused: the wallet\'s words in amber, no alert', async () => {
+        const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
+        const ext = fakeExtension('polkadot-js', [{ address: ME, name: 'One' }]);
+        const profile = makeProfile({ extensions: [ext] });
+        profile.local.setItem('pdex_wallet_address', ME);
+        profile.local.setItem('pdex_wallet_source', 'polkadot-js');
+        const tab = openTab(profile, { path: '/wallet/' + ME });
+        const sent = [];
+        Object.assign(tab.ctx, {
+            globalApi: { registry: {} }, liveRuntimeError: () => null, isMobileDevice: () => false, multisigStore: { find: () => null },
+            showTxStatus: () => { throw new Error('the panel passes onError: no status card'); },
+            postAction: createPostAction({ effects: effectsFor, known: createKnownResults({ storage: null }) }),
+            trackSignedTx: () => ({ start() {}, buildFailed() {}, send: async () => { sent.push('send'); } })
+        });
+        vm.runInContext('async ' + bodyOf(SCRIPT, 'submitSignedTx') + '\n', tab.ctx);
+        ext.provider.enable = async () => { throw new Error('Rejected by the user'); };
+        const calls = [];
+        const pg = await page({ models: [CEO()], submit: (o) => { calls.push(o); return tab.fn('submitSignedTx')(o); } });
+        await pg.press('[data-lock-action="elections-remove"]');
+        await flush();
+        assert.equal(calls.length, 1, 'the real handler ran');
+        assert.deepEqual(sent, [], 'nothing was sent');
+        const msg = pg.row('Council vote').querySelector('.lock-row-msg');
+        assert.ok(msg, 'a message in the row');
+        assert.equal(text(msg.querySelector('span')), 'Wallet extension authorization was rejected.');
+        assert.ok(msg.classList.contains('is-wait') && msg.querySelector('.bx-error'), 'amber M11');
+        assert.ok(msg.getAttribute('role') == null, 'not an alert: nothing was sent');
+        assert.ok(pg.el.querySelectorAll('.ui-action').length && Array.from(pg.el.querySelectorAll('.ui-action')).every(b => !b.hasAttribute('aria-disabled')), 'the actions are free again');
     });
 });

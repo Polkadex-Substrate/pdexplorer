@@ -38,6 +38,12 @@ describe('locks- preview scenes', () => {
         const text = w.doc.querySelector('#wallet-locks-slot').textContent.replace(/\s+/g, ' ');
         assert.match(text, /Backs 5 candidates\. Removing the vote releases 15,000 PDEX and the 13\.59 PDEX deposit together\./);
         assert.match(text, /Until about 2026-12-16/);
+        // His screenshot: hold and ledger total 17,348.0818, active 17,068.0232, one chunk of 280.0586 unlocking.
+        const amount = (name) => { const li = Array.from(w.doc.querySelectorAll('#wallet-locks-slot li.lock-row')).find(x => x.querySelector('.lock-name').textContent.trim() === name); return li ? li.querySelector('.lock-amount').textContent.trim() : null; };
+        assert.equal(amount('Staked'), '17,068.0232 PDEX');
+        assert.equal(amount('Unstaking'), '280.0586 PDEX');
+        assert.equal(amount('Council vote'), '15,000 PDEX');
+        assert.match(text, /\+ also 13\.59 PDEX Voting deposit/);
         assert.ok(w.doc.querySelector('header.topbar #connect-wallet-btn.is-connected'), 'own account: header drawn connected');
     });
 });
