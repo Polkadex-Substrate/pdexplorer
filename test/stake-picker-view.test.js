@@ -250,12 +250,15 @@ describe('cross-file promises', () => {
     test('script.js stays under the 15,000-line ceiling', () => {
         assert.ok(script.split('\n').length < 15000);
     });
-    test('signing is untouched: submitStakeTx still nominates the Selected box through submitSignedTx', () => {
+    // WP1 of the stake card redesign: the Selected box goes into planStakeCalls and
+    // buildStakeTx builds that plan (test/stake-modal-plan.test.js runs it).
+    test('signing: submitStakeTx plans the Selected box and builds that plan through submitSignedTx', () => {
         const body = bodyOf(script, 'submitStakeTx');
-        assert.match(body, /api\.tx\.staking\.nominate\(targets\)/);
+        assert.match(body, /planStakeCalls\(/);
+        assert.match(body, /buildTx: \(api\) => buildStakeTx\(api, plan, /);
         assert.match(body, /await submitSignedTx\(\{/);
         assert.match(body, /Array\.from\(stakeSelected\.keys\(\)\)/);
-        assert.ok(!/stake-picker-view|createStakePicker/.test(body));
+        assert.ok(!/batchTx|stake-picker-view|createStakePicker/.test(body));
     });
     test('the stake modal takes the nominations limit from the snapshot, not a literal 16', () => {
         const code = stripComments(script);
