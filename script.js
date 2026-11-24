@@ -8767,6 +8767,7 @@ async function fetchWalletDashboard(address, opts) {
             }
             return;
         }
+        if (didPaintFromCache && walletSections.older(result.data)) return result.data.freshness || null;   // R3: a node behind the copy on screen (a quiet re-read drew newer): that copy stays
         latestWallet = result.data;
         stopLoading();
         clearWalletStaleBanner(root);
@@ -8879,7 +8880,7 @@ function paintWalletViewingSlot() {
 function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
-    data = walletSections.overlay(stakeRefresh.overlay(data));   // a chain read or a proven name newer than this copy wins (lib/stake-refresh.js, lib/wallet-sections.js)
+    data = walletSections.overlay(stakeRefresh.overlay(data), { frame: true, live });   // a chain read or a proven name newer than this copy wins (lib/stake-refresh.js, lib/wallet-sections.js)
     currentWalletData = data;
     // Stash the staking-rewards payload so the APR card's period pills
     // can recompute against the cached claimed array without re-fetching
@@ -12987,7 +12988,7 @@ async function renderProxyList(address, isOwnWallet, ctx = {}) {
                 submitSignedTx({
                     buildTx: api => api.tx.proxy.removeProxy(delegate, proxyType, delay),
                     label: `Remove ${proxyType} proxy`,
-                    action: { key: 'proxy.remove', params: { delegate, type: proxyType } },
+                    action: { key: 'proxy.remove', params: { delegate, type: proxyType, delay } },
                     button: btn,
                     busyText: 'Signing…',
                     idleText: 'Remove',
@@ -12998,6 +12999,7 @@ async function renderProxyList(address, isOwnWallet, ctx = {}) {
         } } });
         return data.freshness || null;
     } catch (e) {
+        walletSections.forgetProxies(el);   // a settle hold ending later draws nothing over what is drawn here
         // 501 from the backend when the runtime has no proxy pallet → hide
         // gracefully rather than rendering a scary error.
         if (e && e.status === 501) {
