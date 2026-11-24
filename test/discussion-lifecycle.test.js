@@ -291,7 +291,7 @@ describe('wiring in server.js and script.js', () => {
     });
     test('the SPA renders the links, the Discuss links and the kind labels from the lib', () => {
         assert.match(bodyOf(script, 'renderThread'), /renderLifecycleLinks\(thread\.links, stakingEscapeHtml\)/);
-        assert.match(bodyOf(script, 'renderThread'), /onUpdated: d => renderThread\(\{ links: thread\.links, \.\.\.d\.thread \}/, 'an edit keeps the link block');
+        assert.match(bodyOf(script, 'renderThread'), /onUpdated: d => \{? ?renderThread\(\{ links: thread\.links, \.\.\.d\.thread \}/, 'an edit keeps the link block');
         assert.match(bodyOf(script, 'renderDemocracyOverview'), /externalSummaryHtml\(ext, stakingEscapeHtml\)/);
         assert.match(bodyOf(script, 'mountDemocracyReferendaTable'), /referendumDiscussCell\(row\)/);
         assert.match(script, /filter: \{ type: 'select', options: kindFilterOptions\(\) \}/);

@@ -435,6 +435,8 @@ describe('#70 follow-up 1: discussion sign-in (signRaw) takes the wallet-session
             profile.logoutCalls.push((init && init.headers && init.headers.Authorization) || '');
             return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
         };
+        // R6: a sign-in tells the other tabs (lib/server-refresh.js); recorded here, not under test.
+        tab.ctx.serverRefresh = { signedIn() {} };
         vm.runInContext(bodyOf(SCRIPT, 'discussSignInFor'), tab.ctx);
         tab.fn('selectWallet')(A, 'polkadot-js');
         const run = () => tab.fn('discussSignInFor')(A).then(() => 'signed in', (e) => e.message);

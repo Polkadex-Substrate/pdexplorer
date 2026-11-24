@@ -266,7 +266,9 @@ describe('a success callback repaints the dashboard only while it is still shown
         assert.equal((CODE.match(/setTimeout\(\(\) => refreshWalletDashboardFor\(/g) || []).length, 0);
         assert.doesNotMatch(bodyOf(CODE, 'submitPayoutTx'), /2500/);
         assert.doesNotMatch(bodyOf(CODE, 'submitStakeTx'), /2500|setTimeout/);
-        assert.match(CODE, /refresh: address => refreshWalletDashboardFor\(address\)/);
+        // R6 leftover: the multisig review's whole-wallet remount was a fallback for a page without the post-action
+        // core; script.js always gives it the core, so the fallback wiring is gone (lib/multisig-view.js keeps it).
+        assert.doesNotMatch(CODE, /refresh: address => refreshWalletDashboardFor\(address\)/);
     });
 });
 
@@ -303,6 +305,8 @@ describe('discussion sign-in', () => {
         const alerts = [], posts = [];
         Object.assign(tab.ctx, {
             alert: (m) => alerts.push(m),
+            // R6: a sign-in tells the other tabs (lib/server-refresh.js); not under test here.
+            serverRefresh: { signedIn() {} },
             fetch: async (url, init) => {
                 posts.push(String(url));
                 const u = String(url);

@@ -252,7 +252,9 @@ function page({ wallet = A, stored = [], rejectSign = false, path = '/discussion
         // The one place that asks a wallet (lib/wallet-sources.js), as script.js builds it.
         walletSources: createSourceRegistry({ getInjected: () => ({ 'polkadot-js': ext }) }), signingKeys, findSigner,
         stakingEscapeHtml: escapeHtml, stakingShortAddress: (a) => String(a).slice(0, 6) + '...' + String(a).slice(-4),
-        formatLocalDateTime: () => 'today', helpIcon: () => ''
+        formatLocalDateTime: () => 'today', helpIcon: () => '',
+        // R6: the thread registers where it is drawn, a post and a sign-in tell the other tabs (lib/server-refresh.js).
+        serverRefresh: { threadShown() {}, thread() {}, labels() {}, signedIn() {} }
     };
     const code = LIFT.map(n => {
         const at = SCRIPT.indexOf(`function ${n}(`);
