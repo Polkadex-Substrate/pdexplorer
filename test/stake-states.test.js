@@ -744,6 +744,134 @@ describe('the Lead\'s ruling 2026-11-23: an uncertain bonded state signs nothing
     });
 });
 
+// ── Opus review 2 of 2026-11-23: a stake in a block that no chain read has reached is unsettled (SC-109) ──
+// Between a stake's in-block notice and the first chain read at or beyond its block, the page still holds the copy
+// from before the stake: a failed read, or a node behind the block (the RPC load balancer), would let the card plan
+// bond on an account bonded in that block. Until a chain read at or beyond the block is drawn, or a server copy at or
+// beyond it arrives, the bonded state is unsettled: the card refuses with SC-109 and signs nothing. A withdrawn stake's
+// block stays the floor: a server copy older than it settles nothing. In the stuck case, re-opening the card reads the
+// chain once.
+async function stakeInBlockUnread(how, block = 42) {
+    const c = await card({ data: firstTimer(), flow: true });
+    await c.type('150');
+    await c.submit();
+    c.chain.stake(block);
+    if (how === 'fails') c.chain.st.fail = true; else c.chain.st.block = block - 1;
+    await c.job().inBlock(block);
+    return c;
+}
+const reachBlock = (c, block = 42) => { c.chain.st.fail = false; c.chain.st.block = block; };
+describe('Opus review 2 2026-11-23: a tracked stake no chain read has reached is unsettled; the withdrawn block is the floor; a re-open reads the chain', () => {
+    for (const how of ['fails', 'behind']) {
+        const what = how === 'fails' ? 'the chain read fails' : 'the node is behind the block';
+        test(`the reviewer's probe: a first stake in #42 and ${what}: tracked, the card refuses with SC-109 and signs nothing`, async () => {
+            const c = await stakeInBlockUnread(how);
+            assert.deepEqual(c.refresh().tracked(ME), { block: 42 }, 'the stake is tracked');
+            assert.equal(text(c.dash.staked()), '0.0000 PDEX', 'nothing is drawn before a read reaches the block');
+            assert.equal(c.tab.ctx.currentWalletData.staking.ledgerRead, stakePlan.LEDGER_UNSETTLED, 'the page payload is not unsettled while no read has reached the block');
+            await refusesWhileUncertain(c, '150', { mark: false });
+            await refusesWhileUncertain(c, '25', { mark: false });
+            c.close();
+        });
+        test(`a server copy older than the block settles nothing (${what}); a copy at the block does`, async () => {
+            const c = await stakeInBlockUnread(how);
+            c.pending().resolve(serverAt(41));
+            await flush();
+            await refusesWhileUncertain(c, '150', { mark: false });
+            c.tab.ctx.renderWalletDashboard(serverAfter(firstTimer()), { history: [], configured: false }, null);
+            assert.equal(c.tab.ctx.currentWalletData.staking.ledgerRead, 'ok', 'a server copy at or beyond the block did not settle it');
+            assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra'], 'after the server\'s bonded copy');
+            c.close();
+        });
+        test(`after a successful chain read at the block (${what} first), the card plans bondExtra; a read older than the block settles nothing`, async () => {
+            const c = await stakeInBlockUnread(how);
+            c.chain.st.fail = false;
+            c.chain.st.block = 41;
+            await c.clock.run(1);
+            assert.equal(c.tab.ctx.currentWalletData.staking.ledgerRead, stakePlan.LEDGER_UNSETTLED, 'a read older than the block settled it');
+            await refusesWhileUncertain(c, '150', { mark: false });
+            reachBlock(c);
+            await c.clock.run(1);
+            assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the read at the block is drawn');
+            assert.equal(chip(c), null, 'no mark once a read reached the block');
+            assert.equal(c.dash.unstakeBtn().disabled, false, 'Unstake opens with the bond the chain read');
+            assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra']);
+            c.close();
+        });
+    }
+    test('the reviewer\'s second probe: a stake in #42 never read, reorged, back in #43 while reads fail: the card refuses with SC-109 and signs nothing', async () => {
+        const c = await stakeInBlockUnread('fails');
+        await c.job().stage('resent');
+        await refusesWhileUncertain(c, '150', { mark: false });
+        await c.job().inBlock(43);
+        assert.deepEqual(c.refresh().tracked(ME), { block: 43 }, 'the stake is tracked in its new block');
+        await refusesWhileUncertain(c, '150', { mark: false });
+        await refusesWhileUncertain(c, '25', { mark: false });
+        reachBlock(c, 43);
+        await c.clock.run(1);
+        assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the read at #43 is drawn');
+        assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra']);
+        c.close();
+    });
+    test('a stake read in #42, reorged with a failing read, back in #43 while reads fail: the card refuses with SC-109 and signs nothing', async () => {
+        const c = await stakeAt42();
+        c.chain.st.fail = true;
+        await c.job().stage('resent');
+        await refusesWhileUncertain(c, '150');
+        await c.job().inBlock(43);
+        await refusesWhileUncertain(c, '150', { mark: false });
+        await refusesWhileUncertain(c, '25', { mark: false });
+        c.close();
+    });
+    for (const [what, stage] of [['reorged', 'resent'], ['failed after its block', 'failed']]) {
+        test(`the withdrawn block is the floor: the stake ${what} with a failing read, a server copy older than #42 settles nothing, one at #42 does`, async () => {
+            const c = await stakeAt42();
+            c.chain.st.fail = true;
+            await c.job().stage(stage);
+            await refusesWhileUncertain(c, '150');
+            c.pending().resolve(serverAt(41));
+            await flush();
+            assert.equal(c.tab.ctx.currentWalletData.staking.ledgerRead, stakePlan.LEDGER_UNSETTLED, 'a server copy older than the withdrawn block settled it');
+            await refusesWhileUncertain(c, '150', { mark: false });
+            await refusesWhileUncertain(c, '25', { mark: false });
+            c.tab.ctx.renderWalletDashboard(serverAt(42), { history: [], configured: false }, null);
+            assert.equal(c.tab.ctx.currentWalletData.staking.ledgerRead, 'ok', 'a server copy at the withdrawn block did not settle it');
+            assert.deepEqual(await plansOnReopen(c, '150'), ['staking.bond', 'staking.nominate']);
+            c.close();
+        });
+    }
+    test('the stuck case (the core gave up): re-opening the card reads the chain once, and that read settles it: bondExtra', async () => {
+        const c = await stakeInBlockUnread('fails');
+        await c.clock.run();
+        await refusesWhileUncertain(c, '150');
+        reachBlock(c, 44);
+        const reads = c.chain.st.reads;
+        c.dash.stakeBtn().click();
+        await flush();
+        assert.equal(c.chain.st.reads - reads, 1, 're-opening the card did not read the chain exactly once');
+        assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the re-open read is drawn');
+        assert.equal(chip(c), null, 'the re-open read settled it: no mark');
+        assert.equal(c.tab.ctx.currentWalletData.staking.ledgerRead, 'ok');
+        await c.type('25');
+        await c.submit();
+        assert.deepEqual(callsOf(c, c.sent.length - 1), ['staking.bondExtra'], 'after the re-open read');
+        c.close();
+    });
+    test('the stuck case: a re-open read older than the block settles nothing; a later server copy at the block does', async () => {
+        const c = await stakeInBlockUnread('fails');
+        await c.clock.run();
+        c.chain.st.fail = false;
+        c.chain.st.block = 41;
+        const reads = c.chain.st.reads;
+        await refusesWhileUncertain(c, '150');
+        assert.equal(c.chain.st.reads - reads, 1, 're-opening the card did not read the chain exactly once');
+        c.tab.ctx.renderWalletDashboard(serverAfter(firstTimer()), { history: [], configured: false }, null);
+        assert.equal(c.tab.ctx.currentWalletData.staking.ledgerRead, 'ok', 'a server copy at or beyond the block did not settle it');
+        assert.deepEqual(await plansOnReopen(c), ['staking.bondExtra']);
+        c.close();
+    });
+});
+
 // ── My Account's labels, /stake with no wallet, /stake read-only ──
 describe('My Account by stake, and the /stake shortcut where the card cannot open (section 6 rows 14, 15; SC-120, SC-121, SC-150, SC-151)', () => {
     test('the Stake button: SC-150 with no stake, SC-151 with one (both the dashboard and the action bar a session restores)', async () => {
