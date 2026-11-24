@@ -616,7 +616,7 @@ describe('R3 review 2 (HIGH) and 3 (MEDIUM): a failed section re-read blocks sig
         p.srv.fail = null;
         RACE.send.change(p.srv.state);
         await p.poll();
-        assert.equal(banner(p), null, 'the banner stayed after a drawn read');
+        assert.equal(!!banner(p), false, 'the banner stayed after a drawn read');
         assert.equal(t(p.q('#wallet-total-value')), '994.9900 PDEX');
         for (const id of ['wallet-act-send', 'wallet-act-unstake', 'wallet-act-identity']) {
             const b = p.doc.getElementById(id);
@@ -656,7 +656,7 @@ describe('R3 review 2 (HIGH) and 3 (MEDIUM): a failed section re-read blocks sig
         await failSend(p);
         p.srv.fail = null;   // the server answers at #42 with nothing changed (it has not indexed the transfer)
         await p.poll();
-        assert.equal(banner(p), null, 'the banner stayed after a drawn read');
+        assert.equal(!!banner(p), false, 'the banner stayed after a drawn read');
         for (const id of ['wallet-act-send', 'wallet-act-unstake', 'wallet-act-identity']) {
             const b = p.doc.getElementById(id);
             assert.ok(!b.disabled && !BLOCKED.test(b.getAttribute('title') || ''), `${id} stayed closed with no banner`);
@@ -682,7 +682,7 @@ describe('R3 review 4 (LOW) and 5 (LOW): the proxy list', () => {
         assert.equal(rows.length, 2);
         assert.ok(rows[1].querySelector('.ui-chip.is-positive'), 'the removed row (delay 7) does not settle');
         assert.ok(rows[0].querySelector('.proxy-remove-btn[data-delay="0"]'), 'the row at delay 0, still on chain, lost its Remove button');
-        assert.equal(rows[0].querySelector('.ui-chip'), null, 'the row at delay 0 says it was removed');
+        assert.equal(!!rows[0].querySelector('.ui-chip'), false, 'the row at delay 0 says it was removed');
     });
 
     test('5: the settle hold does not draw the last list over the error a failed re-read drew', async () => {
