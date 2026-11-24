@@ -2,7 +2,7 @@
 // section 3 rows 7, 8 and 20): what the block's events PROVE about the identity name and the proxy list.
 //   identity.set:   IdentitySet { who = signer } and a display name typed: set identity.name = that name
 //   identity.clear: IdentityCleared { who = signer }: set identity.name = null
-//   proxy.remove:   ProxyRemoved { delegator = signer, delegatee, proxyType }: remove `${delegate}:${type}`
+//   proxy.remove:   ProxyRemoved { delegator = signer, delegatee, proxyType, delay }: remove `${delegate}:${type}:${delay}`
 // No event for this account, an empty display or a failed outcome claims nothing. Dev account addresses.
 
 import { test, describe } from 'node:test';
@@ -40,15 +40,22 @@ describe('identity.set and identity.clear: the name the block proves', () => {
 });
 
 describe('proxy.remove: the row the block proves gone', () => {
-    test('ProxyRemoved naming this delegate and type: that row is removed for the signer', () => {
-        const eff = run('proxy.remove', { delegate: V1, type: 'Staking' }, [ev('proxy', 'ProxyRemoved', [ME, V1, 'Staking', 0]), success]);
-        assert.deepEqual(eff.known, [{ account: ME, domain: 'proxies', op: 'remove', key: `${V1}:Staking`, value: null }]);
+    test('ProxyRemoved naming this delegate, type and delay: that row is removed for the signer', () => {
+        const eff = run('proxy.remove', { delegate: V1, type: 'Staking', delay: 0 }, [ev('proxy', 'ProxyRemoved', [ME, V1, 'Staking', 0]), success]);
+        assert.deepEqual(eff.known, [{ account: ME, domain: 'proxies', op: 'remove', key: `${V1}:Staking:0`, value: null }]);
+    });
+    // R3 review 4: the same delegate and type can be set at two delays; the key names the one the block removed.
+    test('the same delegate and type at two delays: the key carries the delay; another delay, or none signed, claims nothing', () => {
+        const seven = run('proxy.remove', { delegate: V1, type: 'Staking', delay: 7 }, [ev('proxy', 'ProxyRemoved', [ME, V1, 'Staking', 7]), success]);
+        assert.deepEqual(seven.known, [{ account: ME, domain: 'proxies', op: 'remove', key: `${V1}:Staking:7`, value: null }]);
+        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking', delay: 7 }, [ev('proxy', 'ProxyRemoved', [ME, V1, 'Staking', 0]), success]).known, []);
+        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking' }, [ev('proxy', 'ProxyRemoved', [ME, V1, 'Staking', 0]), success]).known, []);
     });
     test('another delegate, another type, another delegator or no event: nothing is claimed', () => {
-        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking' }, [ev('proxy', 'ProxyRemoved', [ME, OTHER, 'Staking', 0]), success]).known, []);
-        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking' }, [ev('proxy', 'ProxyRemoved', [ME, V1, 'Any', 0]), success]).known, []);
-        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking' }, [ev('proxy', 'ProxyRemoved', [OTHER, V1, 'Staking', 0]), success]).known, []);
-        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking' }, [success]).known, []);
+        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking', delay: 0 }, [ev('proxy', 'ProxyRemoved', [ME, OTHER, 'Staking', 0]), success]).known, []);
+        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking', delay: 0 }, [ev('proxy', 'ProxyRemoved', [ME, V1, 'Any', 0]), success]).known, []);
+        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking', delay: 0 }, [ev('proxy', 'ProxyRemoved', [OTHER, V1, 'Staking', 0]), success]).known, []);
+        assert.deepEqual(run('proxy.remove', { delegate: V1, type: 'Staking', delay: 0 }, [success]).known, []);
     });
     test('proxy.add claims no row (the list re-reads the chain)', () => {
         assert.deepEqual(run('proxy.add', { delegate: V1, type: 'Staking', delay: 0 }, [ev('proxy', 'ProxyAdded', [ME, V1, 'Staking', 0]), success]).known, []);

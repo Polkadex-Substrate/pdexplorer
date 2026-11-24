@@ -178,7 +178,7 @@ describe('the proxy list rows', () => {
     test('rows, the deposit, the Remove buttons; a row removed in a block holds its settle word and no button', () => {
         const proxyListHtml = need('proxyListHtml');
         const payload = { proxies: [{ delegate: D1, proxyType: 'Staking', delay: 0 }, { delegate: D2, proxyType: 'Any', delay: 5 }], deposit: 2.5 };
-        const { doc } = dom(`<div id="l">${proxyListHtml(payload, { isOwn: true, settling: new Map([[need('proxyKey')(D2, 'Any'), 42]]), ...fmt })}</div>`);
+        const { doc } = dom(`<div id="l">${proxyListHtml(payload, { isOwn: true, settling: new Map([[need('proxyKey')(D2, 'Any', 5), 42]]), ...fmt })}</div>`);
         const rows = Array.from(doc.querySelectorAll('tbody tr'));
         assert.equal(rows.length, 2);
         assert.ok(rows[0].querySelector('.proxy-remove-btn[data-delegate="' + D1 + '"][data-proxy-type="Staking"][data-delay="0"]'));

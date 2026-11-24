@@ -41,6 +41,7 @@ const sectionsModule = await import('../lib/wallet-sections.js').then((m) => m, 
 const SCRIPT = readRepo('script.js', import.meta.url);
 const GENESIS = '0x' + '22'.repeat(32);
 const flush = async () => { for (let i = 0; i < 16; i++) await new Promise(r => setImmediate(r)); };
+const between = (start, end) => { const i = SCRIPT.indexOf(start); return i < 0 ? '' : SCRIPT.slice(i, SCRIPT.indexOf(end, i) + end.length); };
 const line = (start) => { const i = SCRIPT.indexOf(start); return i < 0 ? '' : SCRIPT.slice(i, SCRIPT.indexOf('\n', i)); };
 const lift = (name) => { const at = SCRIPT.indexOf(`function ${name}(`); if (at < 0) return ''; return (SCRIPT.slice(Math.max(0, at - 6), at) === 'async ' ? 'async ' : '') + bodyOf(SCRIPT, name); };
 const t = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : null);
@@ -71,25 +72,29 @@ const SECTIONS = {
     proxies: '#wallet-proxy-list', proxyForm: '#wallet-proxy-add', locks: '#wallet-locks-slot', nominations: '#wallet-nominations-slot'
 };
 
-function walletPage() {
+// realBlock: the page's own stale banner and action block (F-068) instead of the recorders (the R3 review's tests).
+function walletPage({ realBlock = false } = {}) {
     const win = new Window({ url: 'https://explorer.test/wallet', settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } });
     const doc = win.document;
     doc.body.innerHTML = `<div id="wallet-dashboard"></div>${MODALS}`;
     const timers = [];
     const log = { built: [], walletReads: 0, proxyReads: 0, aprReads: 0, locksMounts: 0, nominationMounts: 0, aprRenders: 0, blocked: [], banners: [], scrolled: [] };
-    const srv = { head: 41, chain: 41, tx: 41, rewards: 41, state: base(), proxies: [{ delegate: V3, proxyType: 'Staking', delay: 0 }], gate: null, connected: ME };
+    // fail / proxyFail: the next /api/wallet or /api/proxies answers that error (a 500)
+    const srv = { head: 41, chain: 41, tx: 41, rewards: 41, state: base(), proxies: [{ delegate: V3, proxyType: 'Staking', delay: 0 }], gate: null, connected: ME, fail: null, proxyFail: null };
     const fresh = () => ({ v: 1, chainHead: srv.head, indexed: { chain: srv.chain, rewards: srv.rewards, tx: srv.tx }, since: { chain: 1, rewards: 1, tx: 1 },
         kv: { council: null, democracy: null, treasury: null }, pending: [], intervalMs: { chain: 12000, rewards: 60000, tx: 30000 } });
     const reply = (body) => ({ ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body)) });
+    const refuse = (error) => ({ ok: false, status: 500, json: async () => ({ error }) });
     const fetch = async (url) => {
         url = String(url);
         if (url.startsWith('/api/wallet/')) {
             log.walletReads++;
+            if (srv.fail) return refuse(srv.fail);
             const body = { ...srv.state, freshness: fresh() };   // the copy as of the moment it is asked
             if (srv.gate) await srv.gate;
             return reply(body);
         }
-        if (url.startsWith('/api/proxies/')) { log.proxyReads++; return reply({ account: ME, proxies: srv.proxies, deposit: srv.proxies.length * 2.5, freshness: fresh() }); }
+        if (url.startsWith('/api/proxies/')) { log.proxyReads++; if (srv.proxyFail) return refuse(srv.proxyFail); return reply({ account: ME, proxies: srv.proxies, deposit: srv.proxies.length * 2.5, freshness: fresh() }); }
         if (url.startsWith('/api/proxy-types')) return reply({ types: ['Any', 'Staking'] });
         if (url.startsWith('/api/staking-rewards/')) { log.aprReads++; return reply({ claimed: [], apr: null }); }
         return reply({});
@@ -152,6 +157,8 @@ function walletPage() {
         ...['renderWalletDashboard', 'bindWalletActionHandlers', 'buildWalletActionBarMarkup', 'mountWalletNominations', 'mountWalletRewardsTable', 'mountWalletTxTable',
             'walletRefreshFailed', 'refreshWalletDashboardFor', 'fetchWalletDashboard', 'isWalletRoute', 'submitSignedTx', 'submitSendTx', 'submitUnstakeTx', 'submitWithdrawUnbonded',
             'submitSetIdentity', 'submitClearIdentity', 'toIdData', 'showIdentityError', 'hideIdentityError', 'renderWalletAdvancedSection', 'renderProxyList', 'renderAddProxyForm'].map(lift),
+        ...(realBlock ? ['let walletActionsBlockedReason = null;', between('const WALLET_ACTION_IDS = [', '];'), line('const WALLET_STALE_BANNER_ID = '),
+            ...['describeAge', 'showWalletStaleBanner', 'clearWalletStaleBanner', 'disableWalletActions', 'clearWalletActionBlock', 'applyWalletActionBlock'].map(lift)] : []),
         `globalThis.__glue = { known: knownResults, data: () => currentWalletData, setData: (d) => { currentWalletData = d; },
             full: (v, m) => { unstakeFullUnbondIntent = true; unstakeMaxPlanck = m; } };`
     ].join('\n');
@@ -488,5 +495,211 @@ describe('R3 guards', () => {
         const n = SCRIPT.split('\n').length - (SCRIPT.endsWith('\n') ? 1 : 0);
         assert.ok(n <= 14430 - 100, `script.js has ${n} lines (R3 budget: at most ${14430 - 100})`);
         assert.equal((stripComments(SCRIPT).match(/id="wallet-act-send"/g) || []).length, 0, 'the action bar markup is still in script.js');
+    });
+});
+
+// The R3 review (Opus, money path), one block per finding. Each reproduces the finding on the page's own code.
+const BLOCK_IDS = ['wallet-act-send', 'wallet-act-stake', 'wallet-act-payout', 'wallet-act-unstake', 'wallet-act-identity'];
+const BLOCKED = /^Balances could not be refreshed/;
+const barButtons = (p) => BLOCK_IDS.map(id => p.doc.getElementById(id)).filter(Boolean);
+const allClosed = (p, why) => {
+    const btns = barButtons(p);
+    assert.ok(btns.length >= 4, `the action bar is not on the page (${btns.length} buttons)`);
+    for (const b of btns) assert.ok(b.disabled && BLOCKED.test(b.getAttribute('title') || ''), `${why}: ${b.id} is open (disabled ${b.disabled}, title ${b.getAttribute('title')})`);
+};
+const banner = (p) => p.q('#wallet-stale-banner.is-error');
+// The sends of the race: what the inclusion at #42 proves, and how the page shows it.
+const RACE = {
+    send: { change: (s) => { s.balance = { free: 894.99, reserved: 100, total: 994.99, transferable: 394.99, transferableAllowDeath: 395.99 }; },
+        events: [ev('balances', 'Transfer', [ME, OTHER, '5000000000000']), success()],
+        shown: (p) => [t(p.q('#wallet-total-value')), p.glue.data().balance.transferable], after: ['994.9900 PDEX', 394.99] },
+    unstake: { change: (s) => { s.staking = { ...s.staking, activeStaked: 440, unlocking: 60 }; },
+        events: [ev('staking', 'Unbonded', [ME, '10000000000000']), success()],
+        shown: (p) => [p.glue.data().staking.activeStaked], after: [440] },
+    withdraw: { change: (s) => { s.staking = { ...s.staking, totalStaked: 450, unlocking: 0 }; s.balance = { ...s.balance, transferable: 450 }; },
+        events: [ev('staking', 'Withdrawn', [ME, '50000000000000']), success()],
+        shown: (p) => [t(p.q('#wallet-staked-value')), p.glue.data().balance.transferable], after: ['450.0000 PDEX', 450] }
+};
+
+describe('R3 review 1 (HIGH): an older full load in flight is not drawn over the newer copy the sections drew', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+    afterEach(() => mock.timers.reset());
+
+    for (const kind of Object.keys(RACE)) {
+        test(`${kind}: a session-restore load answered at #40 lands after the sections drew #42: nothing older is drawn`, async () => {
+            const p = walletPage();
+            await p.render();
+            let release;
+            p.srv.gate = new Promise(r => { release = r; });
+            p.srv.head = 40;   // the full load is answered by a node behind, before the action
+            const full = p.ctx.refreshWalletDashboardFor(ME);
+            await flush();
+            p.srv.gate = null;
+            await start(p, kind);
+            p.srv.head = 42;
+            RACE[kind].change(p.srv.state);
+            await p.emit(IN_BLOCK, RACE[kind].events);
+            assert.deepEqual(RACE[kind].shown(p), RACE[kind].after, 'the sections did not draw #42');
+            release();
+            await flush(); await full;
+            assert.deepEqual(RACE[kind].shown(p), RACE[kind].after, 'the older full load was drawn over the newer copy');
+        });
+    }
+
+    test('send: a cold load (snapshot on screen) answered at #40 lands after the sections drew #42: nothing older is drawn', async () => {
+        const p = walletPage();
+        p.ctx.readWalletCache = () => ({ wallet: { ...base(), freshness: { v: 1, chainHead: 39 } }, savedAt: 1 });
+        let release;
+        p.srv.gate = new Promise(r => { release = r; });
+        p.srv.head = 40;
+        const full = p.ctx.refreshWalletDashboardFor(ME);
+        await flush();
+        assert.equal(t(p.q('#wallet-total-value')), '1000.0000 PDEX', 'the snapshot was not painted');
+        p.srv.gate = null;
+        await start(p, 'send');
+        p.srv.head = 42;
+        RACE.send.change(p.srv.state);
+        await p.emit(IN_BLOCK, RACE.send.events);
+        assert.deepEqual(RACE.send.shown(p), RACE.send.after, 'the sections did not draw #42');
+        release();
+        await flush(); await full;
+        assert.deepEqual(RACE.send.shown(p), RACE.send.after, 'the older full load was drawn over the newer copy');
+    });
+
+    test('a full render sets what is drawn: a later quiet copy newer than it is drawn, even when an earlier render was newer still', async () => {
+        const p = walletPage();
+        p.srv.head = 50;
+        await p.render();   // an earlier visit at #50
+        p.srv.head = 45;
+        await p.render();   // the dashboard drawn again from a copy at #45 (no snapshot)
+        await start(p, 'send');
+        p.srv.head = 46;
+        RACE.send.change(p.srv.state);
+        await p.emit(IN_BLOCK, RACE.send.events);
+        assert.deepEqual(RACE.send.shown(p), RACE.send.after, 'a copy newer than the one on screen was dropped');
+    });
+
+    test('guard: a snapshot is not evidence: a live copy behind the snapshot\'s head is still drawn', async () => {
+        const p = walletPage();
+        p.ctx.readWalletCache = () => ({ wallet: { ...base(), balance: { ...base().balance, total: 2000 }, freshness: { v: 1, chainHead: 45 } }, savedAt: 1 });
+        p.srv.head = 44;
+        await p.ctx.refreshWalletDashboardFor(ME);
+        await flush();
+        assert.equal(t(p.q('#wallet-total-value')), '1000.0000 PDEX', 'the live copy was not drawn over the snapshot');
+    });
+});
+
+describe('R3 review 2 (HIGH) and 3 (MEDIUM): a failed section re-read blocks signing, a drawn read unblocks it', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+    afterEach(() => mock.timers.reset());
+    const failSend = async (p) => {
+        await start(p, 'send');
+        p.srv.fail = 'node down';
+        p.srv.head = 42;
+        await p.emit(IN_BLOCK, RACE.send.events);
+    };
+
+    test('guard (2): a failed re-read shows the stale banner and closes every signing button', async () => {
+        const p = walletPage({ realBlock: true });
+        await p.render();
+        await failSend(p);
+        assert.ok(banner(p), 'no stale banner after a failed re-read');
+        assert.match(t(banner(p)), /node down/);
+        allClosed(p, 'after a failed re-read');
+    });
+
+    test('guard (2, and 3 for a newer copy): a later read that is drawn clears the banner and re-opens the buttons', async () => {
+        const p = walletPage({ realBlock: true });
+        await p.render();
+        await failSend(p);
+        allClosed(p, 'after a failed re-read');
+        p.srv.fail = null;
+        RACE.send.change(p.srv.state);
+        await p.poll();
+        assert.equal(banner(p), null, 'the banner stayed after a drawn read');
+        assert.equal(t(p.q('#wallet-total-value')), '994.9900 PDEX');
+        for (const id of ['wallet-act-send', 'wallet-act-unstake', 'wallet-act-identity']) {
+            const b = p.doc.getElementById(id);
+            assert.ok(!b.disabled && !BLOCKED.test(b.getAttribute('title') || ''), `${id} stayed closed after a drawn read`);
+        }
+    });
+
+    test('guard (2): the block is applied again after every repaint of the bar (a name from another tab, a full render)', async () => {
+        const p = walletPage({ realBlock: true });
+        await p.render();
+        await failSend(p);
+        allClosed(p, 'after a failed re-read');
+        p.glue.known.add([{ account: ME, domain: 'identity', op: 'set', key: 'name', value: 'From Another Tab', block: 99, txHash: '0x' + 'ef'.repeat(32) }]);
+        await flush();
+        assert.equal(t(p.q('#wallet-act-identity strong')), 'Update identity', 'the bar was not synced (this test proves nothing)');
+        allClosed(p, 'after the bar was synced');
+        await p.render();
+        allClosed(p, 'after a full render');
+    });
+
+    test('3: a failed read, then a copy from a node behind the one drawn: the banner stays and every button stays closed (no silent block)', async () => {
+        const p = walletPage({ realBlock: true });
+        await p.render();   // drawn at #41
+        await failSend(p);
+        p.srv.fail = null;
+        p.srv.head = 40;
+        RACE.send.change(p.srv.state);
+        await p.poll();
+        assert.equal(t(p.q('#wallet-total-value')), '1000.0000 PDEX', 'the older copy was drawn');
+        assert.ok(banner(p), 'the buttons are closed with no banner to say why');
+        allClosed(p, 'after an older copy');
+    });
+
+    test('guard (3): a failed read, then the same copy again: the banner goes and the buttons re-open', async () => {
+        const p = walletPage({ realBlock: true });
+        await p.render();
+        await failSend(p);
+        p.srv.fail = null;   // the server answers at #42 with nothing changed (it has not indexed the transfer)
+        await p.poll();
+        assert.equal(banner(p), null, 'the banner stayed after a drawn read');
+        for (const id of ['wallet-act-send', 'wallet-act-unstake', 'wallet-act-identity']) {
+            const b = p.doc.getElementById(id);
+            assert.ok(!b.disabled && !BLOCKED.test(b.getAttribute('title') || ''), `${id} stayed closed with no banner`);
+        }
+    });
+});
+
+describe('R3 review 4 (LOW) and 5 (LOW): the proxy list', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+    afterEach(() => mock.timers.reset());
+
+    test('4: the same delegate and type at two delays: only the row removed (its delay) settles; the other keeps Remove', async () => {
+        const p = walletPage();
+        p.srv.proxies = [{ delegate: V3, proxyType: 'Staking', delay: 0 }, { delegate: V3, proxyType: 'Staking', delay: 7 }];
+        await p.render();
+        await flush();
+        p.q('.proxy-remove-btn[data-delay="7"]').click();
+        await flush();
+        assert.deepEqual(p.log.built.at(-1).args, [V3, 'Staking', 7]);
+        await p.emit({ type: 'Ready' });
+        await p.emit(IN_BLOCK, [ev('proxy', 'ProxyRemoved', [ME, V3, 'Staking', 7]), success()]);
+        const rows = Array.from(p.doc.querySelectorAll('#wallet-proxy-list tbody tr'));
+        assert.equal(rows.length, 2);
+        assert.ok(rows[1].querySelector('.ui-chip.is-positive'), 'the removed row (delay 7) does not settle');
+        assert.ok(rows[0].querySelector('.proxy-remove-btn[data-delay="0"]'), 'the row at delay 0, still on chain, lost its Remove button');
+        assert.equal(rows[0].querySelector('.ui-chip'), null, 'the row at delay 0 says it was removed');
+    });
+
+    test('5: the settle hold does not draw the last list over the error a failed re-read drew', async () => {
+        const p = walletPage();
+        p.ctx.renderApiError = (el, e) => { el.innerHTML = `<div class="api-error">Error: ${e.message}</div>`; };
+        await p.render();
+        p.q('.proxy-remove-btn').click();
+        await flush();
+        await p.emit({ type: 'Ready' });
+        await p.emit(IN_BLOCK, [ev('proxy', 'ProxyRemoved', [ME, V3, 'Staking', 0]), success()]);
+        assert.ok(p.q('#wallet-proxy-list .ui-chip.is-positive'), 'the removed row does not settle');
+        p.srv.proxyFail = 'proxies down';
+        await p.poll();
+        assert.equal(t(p.q('#wallet-proxy-list')), 'Error: proxies down', 'the failed re-read drew no error');
+        const hold = p.live(REFRESH_UI.settleHoldMs);
+        assert.equal(hold.length, 1, 'no settle hold armed');
+        hold[0].live = false; hold[0].f(); await flush();
+        assert.equal(t(p.q('#wallet-proxy-list')), 'Error: proxies down', 'the settle hold drew the last list over the error');
     });
 });
