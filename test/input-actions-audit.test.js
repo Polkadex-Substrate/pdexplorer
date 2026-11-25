@@ -83,7 +83,8 @@ describe('every text box on main declares its kind or why it has none', () => {
     test('the opt-outs are the five numeric steppers from the spec, each with a reason', () => {
         const outs = textTags.filter(t => t.status === 'opt-out');
         const where = outs.map(t => t.id || (t.tag.match(/name="(\w+)"/) || [])[1]).sort();
-        assert.deepEqual(where, ['multisig-threshold', 'proxy-add-delay', 'threshold', 'threshold', 'treasury-spend-threshold']);
+        // The full add form's threshold has an id now, for its visible label (spec 2026-11-25-multisig-and-advanced-cards.md, 3.1 row 8).
+        assert.deepEqual(where, ['ms-add-threshold', 'multisig-threshold', 'proxy-add-delay', 'threshold', 'treasury-spend-threshold']);
         for (const t of outs) assert.ok(t.reason.length >= 5, t.reason);
     });
 

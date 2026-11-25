@@ -186,10 +186,11 @@ describe('the proxy list rows', () => {
         assert.equal(rows[1].querySelector('.ui-chip.is-positive').textContent.trim(), STRINGS.S5.replace('{n}', '42'));
         assert.match(doc.getElementById('l').textContent, /Deposit reserved: 2\.5000 PDEX/);
     });
-    test('no proxies: today\'s words, with the form hint only for the owner', () => {
+    // The words of spec 2026-11-25-multisig-and-advanced-cards.md, section 7 ("Proxies empty").
+    test('no proxies: the spec\'s words, with the form hint only for the owner', () => {
         const proxyListHtml = need('proxyListHtml');
         const { doc } = dom(`<div id="a">${proxyListHtml({ proxies: [] }, { isOwn: true, ...fmt })}</div><div id="b">${proxyListHtml({ proxies: [] }, { isOwn: false, ...fmt })}</div>`);
-        assert.equal(doc.getElementById('a').textContent.trim(), 'No proxies set. Use the form below to add one.');
-        assert.equal(doc.getElementById('b').textContent.trim(), 'No proxies set.');
+        assert.equal(doc.getElementById('a').textContent.trim(), 'No proxies yet. Add one below.');
+        assert.equal(doc.getElementById('b').textContent.trim(), 'No proxies yet.');
     });
 });

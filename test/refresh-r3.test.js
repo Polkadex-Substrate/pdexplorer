@@ -38,6 +38,9 @@ import { ME, OTHER, V1, V2, V3, REGISTRY } from './helpers/payout-events.js';
 
 // New in R3; missing before it.
 const sectionsModule = await import('../lib/wallet-sections.js').then((m) => m, () => ({}));
+// The Advanced card's markup (spec 2026-11-25-multisig-and-advanced-cards.md, 6.0): the add-proxy handler stays in
+// script.js, its markup comes from this module.
+const advancedModule = await import('../lib/wallet-advanced-view.js').then((m) => m, () => ({}));
 const SCRIPT = readRepo('script.js', import.meta.url);
 const GENESIS = '0x' + '22'.repeat(32);
 const flush = async () => { for (let i = 0; i < 16; i++) await new Promise(r => setImmediate(r)); };
@@ -121,7 +124,7 @@ function walletPage({ realBlock = false } = {}) {
         multisigStore: { find: () => null }, multisigUI: { review: async () => {}, mountAccounts() {}, mountPending() {} },
         resolveWalletSigner: async () => ({ account: { address: ME }, signer: {} }),
         trackSignedTx, showTxStatus: (a, s, e, err, x) => buildTxModel(a, s, e, err, x),
-        createKnownResults, createPostAction, effectsFor, caughtUp, pollDeadlineMs, samePayload, ...payoutRefreshModule, ...stakeRefreshModule, ...sectionsModule,
+        createKnownResults, createPostAction, effectsFor, caughtUp, pollDeadlineMs, samePayload, ...payoutRefreshModule, ...stakeRefreshModule, ...sectionsModule, ...advancedModule,
         mountWalletRecentTx,
         stakingFormatPDEX: fmtPdex, stakingFormatNumber: (n) => (n == null ? '-' : String(n)), stakingShortAddress: (x) => String(x).slice(0, 6) + '...', stakingEscapeHtml: escapeHtml,
         formatDuration: (ms) => (ms == null ? '-' : `${ms / 3600000}h`), formatLocalDate: (x) => `D${x}`, looksLikeTxHash: () => true,
@@ -367,7 +370,7 @@ describe('R3: each wallet action repaints only what changed, in place', () => {
         const hold = p.live(REFRESH_UI.settleHoldMs);
         assert.equal(hold.length, 1, 'no settle hold armed');
         hold[0].live = false; hold[0].f(); await flush();
-        assert.equal(t(p.q('#wallet-proxy-list')), 'No proxies set. Use the form below to add one.', 'the proven-removed row came back from the older server copy');
+        assert.equal(t(p.q('#wallet-proxy-list')), 'No proxies yet. Add one below.', 'the proven-removed row came back from the older server copy');
         assert.ok(p.doc.activeElement === typed && typed.value === 'esTyped', 'the add-proxy form lost what was typed');
         assert.deepEqual(await seen(), ['proxies']);
         no2500(p);
@@ -913,7 +916,7 @@ describe('fidelity review 2026-11-24, R6 and R7: the proxy list', () => {
         p.glue.known.add([{ account: ME, domain: 'proxies', op: 'remove', key: `${V3}:Staking:0`, block: 42, txHash: '0x' + 'ef'.repeat(32) }]);
         core(p).notify({ account: ME, domains: ['proxies'], reason: 'other-tab', origin: 'other-tab' });
         await flush(); await flush();
-        assert.equal(t(p.q('#wallet-proxy-list')), 'No proxies set. Use the form below to add one.', 'the other tab\'s removal is not drawn');
+        assert.equal(t(p.q('#wallet-proxy-list')), 'No proxies yet. Add one below.', 'the other tab\'s removal is not drawn');
         assert.equal(said(p), '', 'another tab\'s action was announced here');
     });
     test('R7: Remove is the shared action button "Remove proxy" with bx-user-minus, and stays so after a submit that did not land', async () => {
@@ -931,5 +934,44 @@ describe('fidelity review 2026-11-24, R6 and R7: the proxy list', () => {
         const again = p.q('#wallet-proxy-list .proxy-remove-btn');
         assert.equal(t(again), 'Remove proxy', 'the button came back as plain "Remove"');
         assert.ok(again.querySelector('i.bx.bx-user-minus'), 'the icon was lost after the submit');
+    });
+});
+
+describe('multisig and Advanced cards (spec 2026-11-25): Add proxy and the load failure, on the real page code', () => {
+    test('T5: Add proxy is a .ui-action with bx-user-plus, still holds its icon after a busy then idle swap; the call is addProxy(V2, Staking, 7)', async () => {
+        const p = walletPage();
+        await p.render();
+        const btn = p.q('#proxy-add-submit');
+        assert.ok(btn.classList.contains('ui-action') && !btn.classList.contains('staking-download-btn'), btn.className);
+        assert.ok(btn.querySelector('i.bx.bx-user-plus'), 'no icon');
+        assert.equal(t(btn), 'Add proxy');
+        p.q('#proxy-add-delegate').value = V2;
+        p.q('#proxy-add-type').value = 'Staking';
+        p.q('#proxy-add-delay').value = '7';
+        btn.click();
+        await flush();
+        assert.deepEqual(p.log.built.at(-1), { name: 'proxy.addProxy', args: [V2, 'Staking', 7] }, 'the signed call changed');
+        assert.equal(btn.getAttribute('aria-busy'), 'true', 'the button did not go busy');
+        await p.emit({ type: 'Ready' });
+        p.srv.head = 42;
+        p.srv.proxies = [...p.srv.proxies, { delegate: V2, proxyType: 'Staking', delay: 7 }];
+        await p.emit(IN_BLOCK, [ev('proxy', 'ProxyAdded', [ME, V2, 'Staking', 7]), success()]);
+        const back = p.q('#proxy-add-submit');
+        assert.ok(back === btn, 'the button was repainted');
+        assert.equal(back.hasAttribute('aria-busy'), false, 'the button is still busy');
+        assert.ok(back.querySelector('i.bx.bx-user-plus'), 'the icon was lost after the busy then idle swap');
+        assert.equal(t(back), 'Add proxy');
+    });
+    test('sweep row 9: a first load that fails is an amber panel "This account could not be loaded. {msg}", no red inline line', async () => {
+        const p = walletPage();
+        p.srv.fail = 'node down';
+        await p.ctx.fetchWalletDashboard(ME);
+        await flush();
+        const root = p.q('#wallet-dashboard');
+        const panel = root.querySelector('.ui-panel.is-warn');
+        assert.ok(panel && panel.querySelector('.bx-error'), root.innerHTML.slice(0, 200));
+        assert.equal(t(panel), 'This account could not be loaded. node down');
+        assert.equal(root.querySelector('[style*="color"]'), null, 'a colour written in markup');
+        assert.ok(!/Error:/.test(root.textContent));
     });
 });

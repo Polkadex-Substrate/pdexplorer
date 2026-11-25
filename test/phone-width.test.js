@@ -36,7 +36,8 @@ describe('T1 to T4: the stylesheet at 640 px and 360 px', () => {
         test(`T1 at ${width}: the head stacks; the actions wrap; every control is 44 px tall`, () => {
             assert.equal(declsAt('#wsec-head .list-header', width)['flex-direction'], 'column', 'the head row does not stack');
             assert.equal(declsAt('.wallet-head-actions', width)['flex-wrap'], 'wrap', 'the actions do not wrap');
-            assert.equal(declsAt('.wallet-head-actions .staking-download-btn', width)['min-height'], '44px', 'Switch wallet and Disconnect are not 44 px');
+            // Switch wallet and Disconnect are now the secondary tier (spec 2026-11-25-multisig-and-advanced-cards.md, sweep rows 1, 2).
+            assert.equal(declsAt('.wallet-head-actions .validate-secondary', width)['min-height'], '44px', 'Switch wallet and Disconnect are not 44 px');
             assert.equal(declsAt('.wallet-head-copy', width)['min-height'], '44px', 'Copy address is not 44 px');
         });
         test(`T3 at ${width}: the proxy table stacks into rows`, () => {
@@ -111,7 +112,8 @@ describe('T5 and T6: the head markup (frameHtml)', () => {
         assert.ok(btn.closest(`[data-address="${ME}"]`), 'the button is not inside a [data-address] element');
         assert.equal(btn.querySelector('.wallet-head-copy-word').textContent, 'Copy address');
         assert.ok(btn.querySelector('.bx-copy'), 'no copy icon');
-        assert.ok(btn.classList.contains('staking-download-btn'), 'Copy address is not the neutral control');
+        // The neutral control is the secondary tier now (spec 2026-11-25, sweep row 3); the download-button class is gone.
+        assert.ok(btn.classList.contains('validate-secondary') && !btn.classList.contains('staking-download-btn'), 'Copy address is not the neutral control');
         assert.equal(doc.querySelector('#wsec-head .list-header #wallet-head-copy'), null, 'the copy button is inside .list-header');
     });
 });

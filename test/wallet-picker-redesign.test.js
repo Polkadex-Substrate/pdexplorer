@@ -676,9 +676,13 @@ describe('script.js: switch from the header returns to the page it started on', 
         assert.ok(SCRIPT.split('\n').length < 15000);
     });
 
-    test('the dashboard\'s multisig hint links to the open section and uses the control\'s words', () => {
-        assert.match(SCRIPT, /href="\/wallet\?switch=1#multisig"[^>]*>Add a multisig wallet</);
-        assert.ok(!SCRIPT.includes('Add an existing multisig'));
+    // The hint moved into the Advanced card's pending viewer (lib/wallet-advanced-view.js) with the words of spec
+    // 2026-11-25-multisig-and-advanced-cards.md, section 7 ("Pending foot"); it still opens the add form's section.
+    test('the dashboard\'s multisig hint links to the open section and uses the control\'s words', async () => {
+        const { pendingHtml } = await import('../lib/wallet-advanced-view.js');
+        const html = pendingHtml([{ callHash: '0x' + '11'.repeat(32), approvals: [], depositor: '', when: null }], {});
+        assert.match(html, /href="\/wallet\?switch=1#multisig"[^>]*>add this multisig wallet</);
+        assert.ok(!SCRIPT.includes('Add an existing multisig') && !html.includes('Add an existing multisig'));
     });
 });
 

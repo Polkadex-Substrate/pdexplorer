@@ -32,6 +32,7 @@ import { createKnownResults } from '../lib/known-results.js';
 import { effectsFor } from '../lib/action-effects.js';
 // R3: the proxy list is painted by the wallet sections (absent before R3).
 const sections = await import('../lib/wallet-sections.js').then((m) => m, () => ({}));
+const advancedView = await import('../lib/wallet-advanced-view.js').then((m) => m, () => ({}));
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const A = addr(1), B = addr(2), M = addr(9);
@@ -360,6 +361,7 @@ describe('Sprint 7 B4: proxy add and remove carry the wallet-session revision', 
             fetchApiJson: async () => ({ proxies: [{ delegate: B, proxyType: 'Staking', delay: 0 }], deposit: '1' }),
             stakingFormatNumber: String, stakingFormatPDEX: String, chainDelegate: (d) => d, ss58PrefixOf: () => 88, renderApiError() {},
             cachedProxyTypes: ['Staking', 'Any'], VALIDATE_ON: false, proxyPrefill: () => null, proxyDelegateProblem: () => null, renderRecipientRefusal() {},
+            ...advancedView,   // the add-proxy form's markup and field errors (lib/wallet-advanced-view.js, spec 2026-11-25)
             // R3: the list's rows are painted by the wallet sections, with the known results of this page (none here)
             ...(sections.createWalletSections ? { walletSections: sections.createWalletSections({ doc: w.tab.ctx.document, post: { subscribe: () => () => {} }, known: { list: () => [] },
                 data: () => null, setData() {}, same: (a, b) => a === b, multisigName: () => null,

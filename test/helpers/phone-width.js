@@ -119,4 +119,5 @@ export function scenesAt375() {
     } finally { rmSync(dir, { recursive: true, force: true }); }
     return built;
 }
-export const walletScene = (id) => /^(account|r1|sections)-/.test(id);
+// The Advanced and Multisig wallets scenes (spec 2026-11-25) are wallet scenes too: drawn in the real frame.
+export const walletScene = (id) => /^(account|r1|sections|advanced|multisig)-/.test(id);
