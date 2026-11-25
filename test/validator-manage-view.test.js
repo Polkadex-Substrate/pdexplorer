@@ -121,17 +121,18 @@ const check = async (el, sel, on = true) => { const i = el.querySelector(sel); a
 const reviewTexts = (el) => Array.from(el.querySelectorAll('ol.validate-review > li')).map(li => [li.querySelector('.validate-review-text').textContent, li.querySelector('code').textContent]);
 
 describe('the menu for an active validator: secondary actions, no primary, links to the existing flows', () => {
-    test('heading, the five actions as secondary buttons, no primary; unbond and withdraw link to /unstake', async () => {
+    test('heading, the four routine actions as secondary buttons and Stop validating as a text button (C-1), no primary; unbond and withdraw link to /unstake', async () => {
         const { el } = await mount();
         assert.equal(el.querySelector('#validate-manage-title').textContent.trim(), 'Manage this validator');
-        assert.deepEqual(Array.from(el.querySelectorAll('[data-manage-action]')).map(b => b.textContent.trim()), ['Change commission', 'Rotate keys', 'Bond more', 'Change payee', 'Stop validating']);
-        for (const b of el.querySelectorAll('[data-manage-action]')) assert.ok(b.classList.contains('validate-secondary'), b.textContent);
+        assert.deepEqual(Array.from(el.querySelectorAll('[data-manage-action]')).map(b => b.textContent.trim()), ['Change commission', 'Rotate keys', 'Bond more', 'Change where rewards go', 'Stop validating']);
+        for (const b of el.querySelectorAll('.validate-manage-actions [data-manage-action]')) assert.ok(b.classList.contains('validate-secondary'), b.textContent);
+        assert.ok(el.querySelector('.validate-manage-stop [data-manage-action="chill"]').classList.contains('validate-text-btn'));
         assert.deepEqual(primaries(el), []);
         assert.ok(el.querySelector('a[href="/unstake"]'));
     });
-    test('offline this session: exactly one primary, Open the node checklist', async () => {
+    test('offline this session: exactly one primary, Check my node, to the check step of the node guide (Q26)', async () => {
         const { el } = await mount({}, { model: { rows: [{ id: 'online', word: 'Offline' }] } });
-        assert.deepEqual(primaries(el).map(a => [a.textContent.trim(), a.getAttribute('href')]), [['Open the node checklist', '/validate/node']]);
+        assert.deepEqual(primaries(el).map(a => [a.textContent.trim(), a.getAttribute('href')]), [['Check my node', '/validate/node#node-step-check']]);
     });
     test('something unbonding: Rebond is offered', async () => {
         const api = fakeApi({ ledger: { controller: STASH, stash: STASH, active: 450n * PDEX, total: 500n * PDEX, unlocking: [{ value: 50n * PDEX, era: 520 }] } });
@@ -335,14 +336,17 @@ describe('bond more, change payee, rebond', () => {
 });
 
 describe('stop validating: the confirmation says what happens and when', () => {
-    test('consequences, one primary "Stop validating" (outline elsewhere, never the error colour), Unbond instead to the existing flow', async () => {
+    test('consequences, "Stop validating" signs from a secondary (C-1; never the error colour), no primary, Unbond instead to the existing flow', async () => {
         const { el, d } = await mount();
         const menuBtn = el.querySelector('[data-manage-action="chill"]');
         assert.ok(!menuBtn.classList.contains('validate-primary'));
         await click(el, '[data-manage-action="chill"]');
         for (const s of ['You stay bonded and keep your session keys.', 'You stop being a candidate from the next era.', 'keep the node running until era 500 ends', 'Your nominators keep their nominations']) assert.ok(el.textContent.includes(s), s);
         assert.deepEqual(reviewTexts(el), [['Stop validating', 'staking.chill']]);
-        assert.deepEqual(primaries(el).map(b => b.textContent.trim()), ['Stop validating']);
+        assert.deepEqual(primaries(el).map(b => b.textContent.trim()), []);   // text, never a node: a failing node walks the window
+        const sign = el.querySelector('[data-manage-action="sign"]');
+        assert.ok(sign.classList.contains('validate-secondary'));
+        assert.equal(sign.textContent.trim(), 'Stop validating');
         assert.equal(el.querySelector('a[href="/unstake"]').textContent.trim(), 'Unbond instead');
         await click(el, '[data-manage-action="sign"]');
         assert.deepEqual(d.submits[0].action.params.expectEvents, ['staking.Chilled']);
@@ -434,7 +438,7 @@ describe('review round 5: the menu follows the live chain, not the page model fe
         const l = labels(el);
         assert.ok(!l.includes('Change commission'), l.join());
         assert.ok(!l.includes('Stop validating'), l.join());
-        assert.ok(l.includes('Rotate keys') && l.includes('Bond more') && l.includes('Change payee'), l.join());
+        assert.ok(l.includes('Rotate keys') && l.includes('Bond more') && l.includes('Change where rewards go'), l.join());
         assert.doesNotMatch(el.textContent, /Commission: /);
     });
     test('after a confirmed commission change, the menu shows the new commission', async () => {

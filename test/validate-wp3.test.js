@@ -53,7 +53,9 @@ const decl = (sel, prop, media = '') => { const r = rulesFor(sel, media).filter(
 // ── one primary per state (R3 and the fallback spec tables): the expected count of every state ──
 const ZERO = new Set(['wiz-restoring', 'wiz-chain-down', 'wiz-refusal', 'wiz-step2-mismatch', 'wiz-result-missing', 'wiz-result-approval',
     'steps-S3', 'steps-S6-blocked', 'steps-S7', 'steps-S8',
-    'man-idle', 'man-unbonding', 'man-legacy', 'man-chain-down', 'man-disabled', 'man-keys-mismatch', 'man-result-done', 'man-result-waiting', 'man-proxy', 'man-proxy-delay', 'man-ms-approval', 'man-ms-pending']);
+    'man-idle', 'man-unbonding', 'man-legacy', 'man-chain-down', 'man-disabled', 'man-keys-mismatch', 'man-result-done', 'man-result-waiting', 'man-proxy', 'man-proxy-delay', 'man-ms-approval', 'man-ms-pending',
+    // C-1 (CEO approval 2026-11-25): the Stop validating confirm step signs from a secondary, so it has no primary.
+    'man-chill', 'man-ms-review']);
 const ALL = [...SETUP_STATES.map(s => s[0]), ...MANAGE_STATES.map(s => s[0])];
 
 describe('WP3: one primary per view state, never an accent on an action', () => {
@@ -185,10 +187,11 @@ describe('WP3 5.1: the setup wizard', () => {
             assert.ok(icon, word + ' has an icon');
         }
     });
-    test('the confirmed result is a green panel, verbatim, with the one primary Open validator status', async () => {
+    test('the confirmed result is a green panel titled Validator set up (Q36), verbatim, with the one primary Open validator status', async () => {
         const w = await state('wiz-result-applied');
         const ok = w.el.querySelector('.ui-panel.is-ok');
-        assert.ok(ok && ok.querySelector('[role="status"]') && /^Submitted and confirmed in block #\d+/.test(txt(ok)));
+        assert.ok(ok && ok.querySelector('[role="status"]') && /^Submitted and confirmed in block #\d+/.test(txt(ok.querySelector('[role="status"]'))));
+        assert.equal(txt(ok.querySelector('.ui-panel-title')), 'Validator set up');
         assert.ok(hasIcon(ok, 'bx-check-circle'));
         assert.deepEqual(qa(w.el, '.validate-primary').map(txt), ['Open validator status']);
     });
@@ -271,11 +274,16 @@ describe('WP3 5.3: the manage panel', () => {
         assert.ok(h.querySelector('.ui-tile.is-violet .bx-slider-alt'));
         assert.equal(txt(h), 'Manage this validator');
     });
-    test('action buttons: secondary, a leading icon each (Stop validating neutral, never red), a grid, 44 px', async () => {
+    test('action buttons: secondary, a leading icon each, a 2 by 2 grid, 44 px; Stop validating out of the grid as a neutral text button (C-1)', async () => {
         const w = await state('man-unbonding');
-        const ICON = { commission: 'bx-purchase-tag', keys: 'bx-key', bondExtra: 'bx-plus-circle', payee: 'bx-wallet', chill: 'bx-pause-circle', rebond: 'bx-revision' };
+        const ICON = { commission: 'bx-purchase-tag', keys: 'bx-key', bondExtra: 'bx-plus-circle', payee: 'bx-wallet', rebond: 'bx-revision' };
         const bs = qa(w.el, '.validate-manage-actions button');
-        assert.equal(bs.length, 6);
+        assert.deepEqual(bs.map(b => b.getAttribute('data-manage-action')), ['commission', 'keys', 'bondExtra', 'payee', 'rebond']);
+        const stop = qa(w.el, '.validate-manage-stop button');
+        assert.equal(stop.length, 1);
+        assert.ok(stop[0].classList.contains('validate-text-btn') && !stop[0].classList.contains('validate-secondary'));
+        assert.ok(stop[0].firstElementChild && stop[0].firstElementChild.classList.contains('bx-pause-circle'));
+        assert.equal(decl('.validate-manage-stop .validate-text-btn .bx', 'color'), 'var(--text-secondary)');
         for (const b of bs) {
             const k = b.getAttribute('data-manage-action');
             assert.ok(b.classList.contains('validate-secondary'), k);
@@ -284,7 +292,7 @@ describe('WP3 5.3: the manage panel', () => {
         assert.equal(decl('.validate-manage-actions .validate-secondary .bx', 'color'), 'var(--accent-violet-text)');
         assert.equal(decl('.validate-manage-actions', 'display'), 'grid');
         assert.match(decl('.validate-manage-actions', 'grid-template-columns'), /repeat\(2,/);
-        assert.match(decl('.validate-manage-actions', 'grid-template-columns', '1024px') || '', /repeat\(3,/);
+        assert.deepEqual(RULES.filter(r => r.selectors.includes('.validate-manage-actions') && /repeat\(3,/.test(r.decls['grid-template-columns'] || '')).map(r => r.media), [], 'never three columns');
         assert.equal(decl('.validate-manage-actions', 'grid-template-columns', '480px'), '1fr');
         assert.equal(decl('.validate-manage-actions .validate-secondary', 'min-height'), '44px');
     });
@@ -312,12 +320,14 @@ describe('WP3 5.3: the manage panel', () => {
         const purge = qa(w.el, 'p').find(p => txt(p) === PURGE_NOTE);
         assert.ok(purge && !purge.closest('.ui-panel'));
     });
-    test('stop validating: the facts list in an amber panel; the button is the neutral primary as section 5.3 says', async () => {
+    test('stop validating: the facts list in an amber panel; the button is a neutral secondary with the pause icon (C-1), no primary', async () => {
         const w = await state('man-chill');
         const facts = w.el.querySelector('.validate-manage-facts');
         assert.ok(facts.closest('.ui-panel.is-warn'));
         const sign = w.el.querySelector('[data-manage-action="sign"]');
-        assert.ok(sign.classList.contains('validate-primary') && !/is-error/.test(sign.className));
+        assert.ok(sign.classList.contains('validate-secondary') && !/is-error/.test(sign.className));
+        assert.ok(sign.firstElementChild && sign.firstElementChild.classList.contains('bx-pause-circle'));
+        assert.equal(qa(w.el, '.validate-primary').length, 0);
     });
     test('pending multisig changes: amber tile, a Pending chip per change, the warning in an amber panel', async () => {
         const w = await state('man-ms-pending');

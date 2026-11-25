@@ -122,7 +122,7 @@ describe('the wizard opens at the first unsatisfied step; one primary per view',
         const { el } = dom(); await mountValidatorSetup(el, deps()); await settle();
         assert.equal(heading(el), 'Start with a running node');
         assert.ok(el.textContent.includes(VALIDATE_STATEMENT));
-        assert.match(el.textContent, /The explorer takes your word for this step\./);
+        assert.match(el.textContent, /Optional check\. The explorer cannot see your server, so it takes your word\./);
         const items = Array.from(el.querySelectorAll('ol.validate-steps > li'));
         assert.deepEqual(items.map(li => li.querySelector('.validate-step-name').textContent), SETUP_STEPS);
         assert.equal(items[0].getAttribute('aria-current'), 'step');

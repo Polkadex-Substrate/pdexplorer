@@ -295,7 +295,7 @@ const WP3_SCENES = [
     { id: 'steps-S10', primary: 1, need: '.validate-stepwise-done', build: wp3('steps-S10') },
     { id: 'manage-idle', primary: 0, need: '#validate-manage-slot .validate-manage-actions', build: wp3('man-idle', { slot: manageSlot }) },
     { id: 'manage-rotate-keys', primary: 1, need: '#validate-manage-keys', build: wp3('man-keys', { slot: manageSlot }) },
-    { id: 'manage-stop', primary: 1, need: '.validate-manage-facts', build: wp3('man-chill', { slot: manageSlot }) },
+    { id: 'manage-stop', primary: 0, need: '.validate-manage-facts', build: wp3('man-chill', { slot: manageSlot }) },   // C-1: signs from a secondary
     { id: 'manage-pending-multisig', primary: 0, need: '.validate-manage-pending', build: wp3('man-ms-pending', { slot: manageSlot }) },
     { id: 'guide-top', primary: 1, need: '.validate-guide .validate-path.is-compact', build: wp3('guide-pending') },
     { id: 'guide-step-commands', primary: 1, need: '[aria-labelledby="node-step-client"] .validate-cmd', scroll: '#node-step-client', build: wp3('guide-published') },

@@ -130,7 +130,7 @@ async function scene({ drive = async () => {} }) {
 
 const SCENES = [
     { id: 'manage-active', title: 'The manage panel for an active validator (heartbeat received): the five actions as secondary buttons, no primary; unbond and withdraw link to the existing Unstake modal',
-        build: () => scene({}), need: ['#validate-manage-slot .validate-manage', '[data-manage-action="commission"]', '[data-manage-action="chill"].validate-secondary', '#validate-manage-slot a[href="/unstake"]'], primary: 0 },
+        build: () => scene({}), need: ['#validate-manage-slot .validate-manage', '[data-manage-action="commission"]', '.validate-manage-stop [data-manage-action="chill"].validate-text-btn', '#validate-manage-slot a[href="/unstake"]'], primary: 0 },
     { id: 'commission-review', title: 'Change commission, review: from 5% to 7% with the call and its arguments, when it applies (the next era), that nominators see it, the fee; one primary',
         build: () => scene({ drive: async (h) => { await h.click('[data-manage-action="commission"]'); await h.type('#validate-manage-commission', '7'); await h.click('[data-manage-action="review"]'); } }),
         need: ['ol.validate-review > li', '.validate-review-args'], primary: 1 },
@@ -140,9 +140,9 @@ const SCENES = [
     { id: 'rotate-keys-review', title: 'Rotate keys, review: session.setKeys, the session the keys start in, the old-node rule in bold weight, and that the explorer never removes keys',
         build: () => scene({ drive: async (h) => { await h.click('[data-manage-action="keys"]'); await h.type('#validate-manage-keys', NEWBLOB); await h.click('[data-manage-action="review"]'); } }),
         need: ['strong.validate-manage-rule', 'ol.validate-review > li'], primary: 1 },
-    { id: 'chill-confirm', title: 'Stop validating, confirmation: what happens and when, staking.chill, one primary "Stop validating", and "Unbond instead" to the existing flow',
+    { id: 'chill-confirm', title: 'Stop validating, confirmation: what happens and when, staking.chill, "Stop validating" as a secondary (no primary), and "Unbond instead" to the existing flow',
         build: () => scene({ drive: async (h) => { await h.click('[data-manage-action="chill"]'); } }),
-        need: ['.validate-manage-facts li', '#validate-manage-slot a[href="/unstake"]'], primary: 1 }
+        need: ['.validate-manage-facts li', '#validate-manage-slot a[href="/unstake"]', '[data-manage-action="sign"].validate-secondary'], primary: 0 }
 ];
 
 // Green only on the Active pill and the Heartbeat word (design 5.2).
