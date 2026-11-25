@@ -354,7 +354,7 @@ function stakingWorld(t, { path = '/staking-rewards', connected = '', source = '
     };
     vm.createContext(ctx);
     const prelude = `
-        let stakingRewardsData = null, stakingRewardFilter = 'all', stakingUnclaimedPolls = 0;
+        let stakingRewardsData = null, stakingRewardsChart = null, stakingRewardFilter = 'all', stakingUnclaimedPolls = 0;
         const walletSession = createWalletSession({ storage, toAddress: toPolkadexAddress, isSame: isSameAddress, isValid: isValidPolkadexAddress });
         const pageScope = createRouteScope();
         const stakingRewardsLatest = createLatest();

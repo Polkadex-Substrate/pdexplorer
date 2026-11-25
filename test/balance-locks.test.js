@@ -586,8 +586,9 @@ describe('renderBalanceLocks: the panel', () => {
         })), { helpIcon: help });
         assert.match(html, /29,245\.5 PDEX/);
         assert.match(html, /619\.9975 PDEX/);
-        assert.match(html, /Leftover lock/);
-        assert.match(html, /href="\/help\/locked-balance"/);
+        assert.match(html, /Leftover staking lock/);
+        assert.match(html, /Can remove now/);
+        assert.match(html, /href="\/help\/locked-balance" class="item-link">More about leftover locks</);
     });
     test('the overlap note appears when two locks overlap', () => {
         const html = renderBalanceLocks(describeAccountLocks(snap({
@@ -637,7 +638,8 @@ describe('mountBalanceLocks: one server call per account', () => {
     test('a failed fetch leaves a short note, not a stack trace', async () => {
         const el = { innerHTML: '', isConnected: true };
         await mountBalanceLocks(el, ME, { fetchJson: async () => { throw new Error('boom <b>'); }, helpIcon: () => '' });
-        assert.match(el.innerHTML, /[Cc]ould not load/);
+        assert.match(el.innerHTML, /The balance breakdown could not be loaded\. Your PDEX is not affected\./);
+        assert.doesNotMatch(el.innerHTML, /Nothing is locked/);
         assert.ok(!el.innerHTML.includes('<b>'));
     });
     test('no slot: does nothing', async () => {

@@ -179,18 +179,21 @@ describe('S9: the unlock text matches what is on screen', () => {
         elections: { voter: { stake: String(5n * PD), deposit: String(PD), votes: 3 }, candidacy: null },
         identity: null, proxy: null, pallets: { vesting: false, ormlVesting: false }
     });
-    const cells = (html) => { const d = new Window().document; d.body.innerHTML = html; return qa(d, 'tbody tr td:last-child').map(txt).join(' | '); };
-    test('with a signing account the text points below, where the buttons are', () => {
-        const t = cells(renderBalanceLocks(model, { helpIcon: () => '', canSign: true }));
-        assert.match(t, /use Remove votes and unlock below/);
-        assert.match(t, /Use Remove council vote below/);
+    // Locked balances redesign (4.4): no sentence points at a button any more. The rows' visible words (Details
+    // left out) name what happens; the button is there by its own name, or, for a viewer who cannot sign, V1.
+    const rows = (html) => { const d = new Window().document; d.body.innerHTML = html; return qa(d, '.lock-row').map(li => { const c = li.cloneNode(true); for (const x of qa(c, 'details')) x.remove(); return txt(c); }).join(' | '); };
+    test('with a signing account the buttons are in the rows, by name, and no sentence says "below"', () => {
+        const t = rows(renderBalanceLocks(model, { helpIcon: () => '', canSign: true }));
+        assert.match(t, /Remove council vote/);
+        assert.match(t, /Remove this vote after its own lock ends; removing it earlier frees nothing\./, '#7 waits for its own lock: no button yet');
+        assert.doesNotMatch(t, /\bbelow\b/);
         assert.doesNotMatch(t, /onnect this account/);
     });
-    test('without one (a looked-up account, no wallet) it says to connect, naming each button', () => {
-        const t = cells(renderBalanceLocks(model, { helpIcon: () => '', canSign: false }));
-        assert.match(t, /connect this account, then use Remove votes and unlock\b(?! below)/);
-        assert.match(t, /Connect this account, then use Remove council vote\./);
-        assert.doesNotMatch(t, /Remove votes and unlock below|Remove council vote below/);
+    test('without one (a looked-up account, no wallet) each action is replaced by the sentence to connect', () => {
+        const t = rows(renderBalanceLocks(model, { helpIcon: () => '', canSign: false }));
+        assert.equal((t.match(/Connect this account to do this\./g) || []).length, 1, 'the council row (the democracy row has nothing to do yet)');
+        assert.doesNotMatch(t, /Remove council vote/);
+        assert.doesNotMatch(t, /\bbelow\b|then use/);
     });
     test('delegating and ongoing rows name buttons, not calls', () => {
         const base = { free: String(100n * PD), reserved: '0', frozen: String(PD), ed: String(PD), block: 2000, blockMs: 12000, bondingDays: 28, locks: [{ id: 'democrac', amount: String(PD), reasons: 'All' }],
@@ -199,7 +202,9 @@ describe('S9: the unlock text matches what is on screen', () => {
         const ong = describeAccountLocks({ ...base, democracy: { delegating: false, lockingPeriod: 216000, votes: [{ index: 3, aye: true, conviction: 'Locked1x', balance: String(PD) }], prior: { until: 0, amount: '0' }, referenda: { 3: { ongoing: true, end: 5000 } } } });
         for (const m of [del, ong]) assert.doesNotMatch(m.items.find(i => i.id === 'democrac').unlock, /democracy\.[a-zA-Z]+/);
         assert.match(del.items.find(i => i.id === 'democrac').unlock, /^Use Undelegate below\./);
-        assert.match(cells(renderBalanceLocks(del, { helpIcon: () => '', canSign: false })), /^Connect this account, then use Undelegate\./);
+        for (const m of [del, ong]) assert.doesNotMatch(rows(renderBalanceLocks(m, { helpIcon: () => '', canSign: true })), /democracy\.[a-zA-Z]+|\bbelow\b/);
+        assert.match(rows(renderBalanceLocks(del, { helpIcon: () => '', canSign: true })), /Undelegate votes/);
+        assert.match(rows(renderBalanceLocks(del, { helpIcon: () => '', canSign: false })), /Connect this account to do this\./);
     });
 });
 

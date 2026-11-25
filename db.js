@@ -1431,8 +1431,11 @@ export function upsertEraRewardSummary(summary) {
         .run(Number(summary.era), Number(summary.reward) || 0, Number(summary.totalPoints) || 0,
             JSON.stringify(summary.validators || {}), Date.now());
 }
+// Also read on the request path by the validator page (server.js nominatorApySummaries, memoised); a range on the
+// INTEGER PRIMARY KEY, pinned by test/nominator-apy-routes.test.js.
+export const ERA_REWARD_SUMMARIES_SQL = 'SELECT era, reward, total_points AS totalPoints, validators FROM era_reward_summary WHERE era >= ? ORDER BY era ASC';
 export function getEraRewardSummaries(fromEra = 0) {
-    return db.prepare('SELECT era, reward, total_points AS totalPoints, validators FROM era_reward_summary WHERE era >= ? ORDER BY era ASC')
+    return db.prepare(ERA_REWARD_SUMMARIES_SQL)
         .all(Number(fromEra) || 0)
         .map(r => {
             let validators = {};

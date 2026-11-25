@@ -6,7 +6,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     validatorRowHtml, filterBarHtml, spreadNoteHtml, updateBar, readControl, loadPickerData,
-    createStakePicker, showAllState, compactNumber, aprNoteText, CHOICE_URL, FALLBACK_URL, maxNominationsFrom
+    createStakePicker, showAllState, compactNumber, CHOICE_URL, FALLBACK_URL, maxNominationsFrom
 } from '../lib/stake-picker-view.js';
 import { FALLBACK_MAX_NOMINATIONS } from '../lib/stake-choice-sync.js';
 import { DEFAULT_FILTERS, RECOMMENDED_PRESET, STORAGE_KEY, selectedGroups } from '../lib/stake-filters.js';
@@ -27,30 +27,45 @@ const row = (o = {}) => ({
 });
 
 describe('row html', () => {
-    test('shows APR, commission, compact stake, self-stake, reliability, backers', () => {
+    // WP3 of the stake card (design 2026-11-22, sections 5.2 and 7, SC-78): "Past return" in words a person
+    // reads, the role chips of 5.2 in place of the upper-case badges; the figure is in --text-primary.
+    test('shows the past return, commission, compact stake, own stake, reliability, stakers', () => {
         const h = validatorRowHtml(row(), { esc, shortAddress, window: 28 });
-        assert.match(h, /APR 16\.44%/);
-        assert.match(h, /5\.0% comm/);
+        assert.match(h, /16\.44% a year/);
+        assert.match(h, /5\.0% commission/);
         assert.match(h, /1\.23M PDEX/);
-        assert.match(h, /self 1500/);
+        assert.match(h, /own stake 1500/);
         assert.match(h, /96% reliable/);
-        assert.match(h, /12 backers/);
+        assert.match(h, /12 stakers/);
         assert.match(h, /Not a guarantee/);
         assert.match(h, /data-addr="addr1"/);
+        assert.ok(!/APR |comm\b|self \d|backers/.test(h.replace(/title="[^"]*"/g, '')), 'the old row words are gone');
     });
-    test('new and none render words with an explanation, never a number', () => {
+    test('new and none render "No history yet" as a chip with an explanation, never a number', () => {
         const n = validatorRowHtml(row({ perf: { '28': { status: 'new', apr: null, electedEras: 3 } } }), { esc, shortAddress, window: 28 });
-        assert.match(n, /APR new/);
+        assert.match(n, /data-chip="nohistory"[^>]*>.*No history yet/s);
         assert.match(n, /history for only 3 of the last 28 eras; 7 are needed/);
+        assert.ok(!/% a year/.test(n));
         const none = validatorRowHtml(row({ perf: null }), { esc, shortAddress, window: 28 });
-        assert.match(none, /APR n\/a/);
+        assert.match(none, /No history yet/);
+        const cold = validatorRowHtml(row({ perf: null }), { esc, shortAddress, window: 28, full: false });
+        assert.ok(!/No history yet|% a year/.test(cold), 'the fallback list makes no return claim');
     });
-    test('badges: waiting, blocked, raise, slashed, same identity', () => {
-        const h = validatorRowHtml(row({ active: false, blocked: true, slashEras: [5], commissionHistory: { pendingRaise: true } }),
-            { esc, shortAddress, window: 28, sameIdentityAsPick: true });
-        for (const b of ['WAITING', 'BLOCKED', 'RAISING NOW', 'SLASHED', 'SAME IDENTITY']) assert.ok(h.includes(b), b);
-        assert.ok(!validatorRowHtml(row(), { esc, shortAddress, selected: true, sameIdentityAsPick: true }).includes('SAME IDENTITY'),
+    test('chips: waiting, blocked, raise, slashed, 100% commission, low return, payout pages, same identity, chosen for you', () => {
+        const h = validatorRowHtml(row({ active: false, blocked: true, slashEras: [5], commissionHistory: { pendingRaise: true }, commission: 100, exposurePages: 3,
+            perf: { '28': { status: 'ok', apr: 2, erasUsed: 28, electedEras: 28, reliability: 100, missedEras: 0 } } }),
+            { esc, shortAddress, window: 28, sameIdentityAsPick: true, median: 10 });
+        for (const [k, w] of [['waiting', 'Waiting'], ['blocked', 'Blocked'], ['raising', 'Raising now'], ['slashed', 'Slashed'], ['commission100', '100% commission'],
+            ['low', 'Low return'], ['pages', 'Many payout pages'], ['same', 'Same identity']]) {
+            assert.match(h, new RegExp(`class="ui-chip [^"]*" data-chip="${k}"[^>]*><i class="bx [^"]*" aria-hidden="true"></i>${w}<`), k);
+        }
+        assert.ok(!/WAITING|BLOCKED|SLASHED|RAISING NOW|SAME IDENTITY/.test(h), 'no upper-case badges');
+        assert.ok(!validatorRowHtml(row(), { esc, shortAddress, selected: true, sameIdentityAsPick: true }).includes('data-chip="same"'),
             'a pick is not flagged against itself');
+        assert.ok(validatorRowHtml(row(), { esc, shortAddress, selected: true, chosen: true }).includes('data-chip="chosen"'));
+        assert.ok(!validatorRowHtml(row(), { esc, shortAddress, selected: false, chosen: true }).includes('data-chip="chosen"'), 'only while selected');
+        assert.ok(!validatorRowHtml(row(), { esc, shortAddress, window: 28, median: 10 }).includes('data-chip="low"'), '16.44 is not under 7.5');
+        assert.ok(!validatorRowHtml(row(), { esc, shortAddress, window: 28 }).includes('data-chip="low"'), 'no median, no low-return claim');
     });
     test('selected rows get a disabled tick', () => {
         assert.match(validatorRowHtml(row(), { esc, shortAddress, selected: true }), /disabled aria-label="Already selected"/);
@@ -86,16 +101,16 @@ describe('filter bar html', () => {
         assert.match(h, /data-preset="all"/);
         assert.match(h, /href="\/help\/choosing-validators"/);
         assert.match(h, /<details class="stake-filter-more" open>/);
+        assert.match(h, /Past return over <select data-f="aprWindow">/, 'SC-79');
+        assert.match(h, /<option value="apr"[^>]*>Highest past return</, 'SC-79');
+        assert.ok(!/APR over|Highest APR|data-apr-note/.test(h), 'the APR words and the 38-word note are gone (section 3.2)');
+        assert.match(filterBarHtml(DEFAULT_FILTERS, { esc, full: false }), /data-sc="SC-114"[^>]*>Reward history is still being built, so past returns and some filters are not available yet\.</);
         assert.ok(!filterBarHtml(DEFAULT_FILTERS, { esc, open: false }).includes('stake-filter-more" open'), 'folded on phones');
     });
     test('a hostile stored state cannot reach the markup', () => {
         const h = filterBarHtml({ ...DEFAULT_FILTERS, maxCommission: '"><script>', sort: '<x>' }, { esc });
         assert.ok(!h.includes('<script>'));
         assert.ok(!h.includes('<x>'));
-    });
-    test('the APR note says it is history', () => {
-        assert.match(aprNoteText(84), /last 84 completed eras.*Past rewards, not a guarantee/);
-        assert.match(aprNoteText(28), /assumes every payout page is claimed/);
     });
     test('the APR tooltip says how many eras it averages and how many were in the active set', () => {
         const h = validatorRowHtml(row({ perf: { '28': { status: 'ok', apr: 4.1, erasUsed: 28, electedEras: 7, reliability: 100, missedEras: 0 } } }), { esc, shortAddress, window: 28 });
@@ -144,7 +159,7 @@ describe('controls', () => {
 });
 
 describe('updateBar', () => {
-    test('writes counts, status, slider label and note', () => {
+    test('writes counts, status and slider label', () => {
         const els = {};
         const mk = (attrs) => ({ textContent: '', attrs, getAttribute: k => attrs[k], setAttribute(k, val) { attrs[k] = val; }, classList: { toggle(c, on) { attrs.on = on; } } });
         const countFor = mk({ 'data-count-for': 'maxCommission' });
@@ -162,7 +177,6 @@ describe('updateBar', () => {
         assert.equal(statusBtn.attrs['aria-pressed'], 'true');
         assert.equal(els.shown.textContent, 'showing 3 of 9');
         assert.equal(els.out.textContent, 'any');
-        assert.match(els.note.textContent, /last 7 completed eras/);
     });
 });
 
@@ -250,20 +264,27 @@ describe('cross-file promises', () => {
     test('script.js stays under the 15,000-line ceiling', () => {
         assert.ok(script.split('\n').length < 15000);
     });
-    test('signing is untouched: submitStakeTx still nominates the Selected box through submitSignedTx', () => {
+    // WP1 of the stake card redesign: the Selected box goes into planStakeCalls and
+    // buildStakeTx builds that plan (test/stake-modal-plan.test.js runs it).
+    test('signing: submitStakeTx plans the Selected box and builds that plan through submitSignedTx', () => {
         const body = bodyOf(script, 'submitStakeTx');
-        assert.match(body, /api\.tx\.staking\.nominate\(targets\)/);
+        // WP2: through stakeFormPlan, the function the simple view renders its review from (one source, M6).
+        assert.match(body, /stakeFormPlan\(/);
+        assert.match(body, /buildTx: \(api\) => buildStakeTx\(api, plan, /);
         assert.match(body, /await submitSignedTx\(\{/);
         assert.match(body, /Array\.from\(stakeSelected\.keys\(\)\)/);
-        assert.ok(!/stake-picker-view|createStakePicker/.test(body));
+        assert.ok(!/batchTx|stake-picker-view|createStakePicker/.test(body));
     });
     test('the stake modal takes the nominations limit from the snapshot, not a literal 16', () => {
         const code = stripComments(script);
-        for (const fn of ['addStakeValidator', 'renderStakeSelected', 'submitStakeTx']) {
+        // WP3: the card draws "Your selection" (lib/stake-card-view.js) from the quota it is given.
+        for (const fn of ['addStakeValidator', 'submitStakeTx']) {
             const body = bodyOf(code, fn);
             assert.ok(!/\b16\b/.test(body), `${fn} still has a literal 16`);
             assert.match(body, /stakeMaxNominations\(\)/, fn);
         }
+        assert.ok(!/\b16\b/.test(bodyOf(code, 'renderStakeSelected')));
+        assert.match(bodyOf(code, 'stakeCardView'), /quota: stakeMaxNominations/);
         assert.match(bodyOf(code, 'stakeMaxNominations'), /maxNominationsFrom\(validatorsCache && validatorsCache\.meta/);
     });
     test('the picker module never builds a transaction', () => {
