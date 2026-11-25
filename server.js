@@ -5982,6 +5982,7 @@ app.get('/api/proxies/:address', async (req, res) => {
         // The proxy pallet stores (Vec<ProxyDefinition>, Balance) in
         // `proxy.proxies(account)`. Each ProxyDefinition has { delegate,
         // proxyType, delay }.
+        const freshHead = await freshnessHead();   // R3: before the state query, a lower bound of what it read (the list polls on it)
         const result = await globalApi.query.proxy.proxies(address);
         const [defsRaw, depositRaw] = result;
         const proxies = (defsRaw || []).toArray ? defsRaw.toArray() : Array.from(defsRaw || []);
@@ -5993,7 +5994,8 @@ app.get('/api/proxies/:address', async (req, res) => {
         res.json({
             account: address,
             proxies: mapped,
-            deposit: depositRaw ? balanceToPDEX(depositRaw) : 0
+            deposit: depositRaw ? balanceToPDEX(depositRaw) : 0,
+            freshness: freshnessNow({ chainHead: freshHead })
         });
     } catch (err) {
         console.error('API Error /api/proxies/:address:', err);

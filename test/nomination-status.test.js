@@ -405,7 +405,8 @@ describe('wiring: server, docs, help, both pages, the picker', () => {
     });
     test('both pages mount the panel; the wallet one can open the picker', () => {
         assert.match(script, /import \{ mountNominationStatus \} from '\.\/lib\/nomination-status-view\.js'/);
-        assert.match(script, /id="wallet-nominations-slot"/);
+        // R3: My Account's frame (and its slot) is drawn by lib/wallet-sections.js
+        assert.match(fs.readFileSync(new URL('../lib/wallet-sections.js', import.meta.url), 'utf8'), /id="wallet-nominations-slot"/);
         assert.match(script, /id="account-nominations-slot"/);
         assert.equal((script.match(/mountNominationStatus\(/g) || []).length, 2);
         assert.match(script, /openPicker: \(keep\) => openStakeModal\(keep\)/);

@@ -33,6 +33,8 @@ import { maxNominationsFrom } from '../lib/stake-picker-view.js';
 import { escapeHtml } from '../lib/html-escape.js';
 // WP4: the stake parts of the dashboard (absent before WP4: the dashboard then draws them inline).
 const stakeRefreshModule = await import('../lib/stake-refresh.js').then((m) => m, () => ({}));
+// R3: the dashboard's frame is drawn by lib/wallet-sections.js (absent before R3).
+const sectionsModule = await import('../lib/wallet-sections.js').then((m) => m, () => ({}));
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const addr = (n) => encodeAddress(new Uint8Array(32).fill(n), 88);
@@ -193,7 +195,11 @@ describe('c: a stake that could not be read is not 0', () => {
         for (const n of ['helpIcon', 'rewardHistoryLinkHtml', 'walletViewingSlotHtml', 'renderUsdSubscript', 'buildViewOnlyCallout', 'formatDuration', 'formatLocalDate',
             'makeTable', 'mountWalletRecentTx', 'fetchApiJson', 'bindViewOnlyCalloutHandlers', 'applyWalletActionBlock', 'scheduleWalletSigningRechecks',
             'mountBalanceLocks', 'lockActionDeps', 'mountNominationStatus', 'mountWalletNominations', 'renderWalletAdvancedSection', 'refreshWalletMultisigs', 'renderWalletAprCard',
-            'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash', 'bindWalletActionHandlers']) ctx[n] = noop;
+            'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash', 'bindWalletActionHandlers', 'mountWalletRewardsTable', 'mountWalletTxTable', 'buildWalletActionBarMarkup']) ctx[n] = noop;
+        // R3: the frame comes from the wallet sections (the real module, over this page; nothing else of it runs here).
+        if (sectionsModule.createWalletSections) ctx.walletSections = sectionsModule.createWalletSections({ doc, win, post: { subscribe: () => () => {} }, known: { list: () => [] },
+            data: () => null, setData() {}, payout: ctx.payoutRefresh, stake: ctx.stakeRefresh, multisigName: () => null,
+            fmt: { pdex: ctx.stakingFormatPDEX, number: ctx.stakingFormatNumber, esc: escapeHtml, short: ctx.stakingShortAddress, duration: () => '' } });
         vm.createContext(ctx);
         vm.runInContext(bodyOf(SCRIPT, 'renderWalletDashboard'), ctx);
         const tile = () => Array.from(doc.querySelectorAll('.staking-summary-card')).find(c => c.querySelector('.label')?.textContent.trim() === 'Total Staked');

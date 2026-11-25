@@ -401,8 +401,9 @@ describe('brand audit: tinted pager, plain links (cto-team/plans/2026-11-16-bran
         const link = ui.done.querySelector('a');
         assert.equal(link.getAttribute('class'), 'item-link is-inline');
         assert.equal(link.getAttribute('style'), null);
-        const script = readRepo('script.js', import.meta.url);
-        const header = script.split('\n').find(l => l.includes('View all on the account page'));
+        // R3: the card's header is in My Account's frame, lib/wallet-sections.js
+        const frame = readRepo('lib/wallet-sections.js', import.meta.url);
+        const header = frame.split('\n').find(l => l.includes('View all on the account page'));
         assert.match(header, /class="item-link is-inline"/);
         assert.ok(!/brand-secondary/.test(header));
         assert.match(rule('.item-link.is-inline'), /text-decoration: underline/);
@@ -433,12 +434,19 @@ describe('server and script wiring', () => {
     });
 
     test('renderWalletDashboard mounts the shared bar once per live render, keeps the store outside, and renames the link', () => {
+        // R3: the table mount is its own function (the wallet sections rebuild it alone), called by every live render;
+        // the card's markup is in lib/wallet-sections.js.
         const i = script.indexOf('function renderWalletDashboard(');
-        const body = script.slice(i, script.indexOf('\nfunction ', i + 10));
+        const render = script.slice(i, script.indexOf('\nfunction ', i + 10));
+        assert.match(render, /mountWalletTxTable\(data, live\)/);
+        const j = script.indexOf('function mountWalletTxTable(');
+        assert.ok(j >= 0, 'no mountWalletTxTable in script.js');
+        const body = script.slice(j, script.indexOf('\nfunction ', j + 10));
         assert.match(body, /mountWalletRecentTx\(/);
         assert.match(body, /store: walletRecentStore/);
-        assert.match(body, /View all on the account page/);
-        assert.ok(!/>View account</.test(body));
+        const frame = (() => { try { return readRepo('lib/wallet-sections.js', import.meta.url); } catch (e) { return ''; } })();
+        assert.match(frame, /View all on the account page/);
+        assert.ok(!/>View account</.test(frame + body));
         assert.match(script, /^const walletRecentStore = /m);
         assert.match(script, /renderWalletDashboard\(cached\.wallet, [^;]*\{ live: false \}\)/);
         assert.match(script, /renderWalletDashboard\(latestWallet, latestPrice, latestRewards, \{ live: true \}\)/);

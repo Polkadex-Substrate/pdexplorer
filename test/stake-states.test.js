@@ -44,6 +44,8 @@ import { escapeHtml } from '../lib/html-escape.js';
 
 // WP4's new module; missing before WP4, so each test that needs it fails on its own assertion.
 const refresh = await import('../lib/stake-refresh.js').then((m) => m, () => ({}));
+// R3: the dashboard's frame and its sections (absent before R3).
+const sections = await import('../lib/wallet-sections.js').then((m) => m, () => ({}));
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const HTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -59,7 +61,9 @@ const text = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : null);
 const LIFT = ['openStakeModal', 'loadStakeChoice', 'stakeCardView', 'submitStakeTx', 'fillStakeMax', 'submitSignedTx', 'showStakeError', 'clearStakeError',
     'stakeMaxNominations', 'renderStakeSelected', 'renderStakeValidatorList', 'stakePickerView', 'addStakeValidator',
     'getStakeableBalance', 'batchTx', 'buildBondOrExtra', 'formatDuration', 'renderWalletDashboard', 'bindWalletActionHandlers', 'mountWalletNominations',
-    'buildWalletActionBarMarkup'];
+    'buildWalletActionBarMarkup',
+    // R3: the dashboard's table mounts and the failed-refresh line (lifted when present)
+    'mountWalletRewardsTable', 'mountWalletTxTable', 'walletRefreshFailed'];
 function lift(name) {
     const at = SCRIPT.indexOf(`function ${name}(`);
     if (at === -1) return '';
@@ -154,7 +158,7 @@ async function card({ data, payee = { kind: 'staked', account: '' }, view = 'sim
         : { observe: () => ({ stage: (f) => f, show: (f) => f }), subscribe: () => () => {}, arm() {} };
     const renders = [];
     const noop = () => '';
-    Object.assign(tab.ctx, stakePlan, stakeCardView, payoutRefreshModule, refresh, {
+    Object.assign(tab.ctx, stakePlan, stakeCardView, payoutRefreshModule, refresh, sections, {
         FEE_MARGIN, pdexToPlanck, maxNominationsFrom, createStakePicker, payeeOf, Math, Number, parseFloat, BigInt, Date, queueMicrotask,
         stakingFormatPDEX: (n) => Number(n || 0).toFixed(4), stakingFormatNumber: (n) => String(n), showTxNotice: () => {},
         currentWalletData: data, stakeSelected: new Map(), stakeValidators: [], stakePicker: null, stakeCard: null,
@@ -178,7 +182,7 @@ async function card({ data, payee = { kind: 'staked', account: '' }, view = 'sim
         'renderWalletPriceChart', 'walletValidatorCard', 'looksLikeTxHash']) tab.ctx[n] = noop;
     vm.runInContext(LIFT.map(lift).join(''), tab.ctx);
     // The page's own lines: the payout refresh and the stake refresh, created as script.js creates them.
-    vm.runInContext(line('const payoutRefresh = createPayoutRefresh(') + line('const stakeRefresh = createStakeRefresh(')
+    vm.runInContext(line('const payoutRefresh = createPayoutRefresh(') + line('const stakeRefresh = createStakeRefresh(') + line('const walletSections = createWalletSections(')
         + 'globalThis.__stake = { refresh: typeof stakeRefresh === "undefined" ? null : stakeRefresh };', tab.ctx);
     if (!vm.runInContext('typeof stakeRefresh', tab.ctx).startsWith('o')) tab.ctx.stakeRefresh = { tracked: () => null, adopt: () => false };
     const real = tab.ctx.renderWalletDashboard;
@@ -404,7 +408,8 @@ describe('WP4 review fixes: the chain read stands until the server has the block
         await c.job().inBlock(42);
         c.pending().resolve(serverAt(41, { identity: 'Somebody' }));
         await flush();
-        assert.equal(c.renders.length, 1, 'the copy differs outside the stake: the dashboard is drawn');
+        // R3: a copy that differs outside the stake is drawn section by section in place, no longer by a full render.
+        assert.equal(c.renders.length, 0, 'the copy differs outside the stake: the dashboard was remounted instead of patched');
         assert.match(text(c.tab.root.querySelector('.list-header h2')), /Somebody/, 'the rest of the copy is drawn');
         assert.equal(text(c.dash.staked()), '150.0000 PDEX', 'the full render drew Total Staked from block 41');
         assert.equal(text(c.dash.total()), '500.9800 PDEX');
@@ -577,7 +582,9 @@ describe('Opus review 2026-11-23: only the stake\'s own reorg or failure withdra
         const c = await stakeAt42();
         c.pending().resolve({ ...sameCopyAt(c, 50), identity: 'Somebody' });
         await flush();
-        assert.equal(c.renders.length, 1, 'the copy differs outside the stake: the dashboard is drawn');
+        // R3: drawn in full section by section (in place), through the stake part's overlay, not by a remount.
+        assert.equal(c.renders.length, 0, 'the copy differs outside the stake: the dashboard was remounted instead of patched');
+        assert.match(text(c.tab.root.querySelector('.list-header h2')), /Somebody/, 'the rest of the copy is not drawn');
         assert.equal(c.refresh().adopt(moreFreeAt(c, 51)), false, 'the stake is still tracked after the server caught up in a full render');
         c.close();
     });

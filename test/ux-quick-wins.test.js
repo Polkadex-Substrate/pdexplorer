@@ -84,24 +84,28 @@ describe('Q6, Q16, Q21, Q22: static copy in index.html', () => {
 });
 
 describe('Q23, Q33, Q34: My Account', () => {
+    // R3: the dashboard's frame moved from script.js to lib/wallet-sections.js (walletFrameHtml); the same rules,
+    // read where the markup now lives.
+    const FRAME = (() => { try { return stripComments(read('lib/wallet-sections.js')); } catch (e) { return ''; } })();
     test('Q23: the heading without an identity is My Account', () => {
-        assert.match(SCRIPT, /identity \? stakingEscapeHtml\(identity\) : 'My Account'/);
-        assert.doesNotMatch(SCRIPT, /: 'Wallet Dashboard'/);
+        assert.match(FRAME, /name \? esc\(name\) : 'My Account'/);
+        assert.doesNotMatch(SCRIPT + FRAME, /: 'Wallet Dashboard'/);
     });
     test('Q33: the action bar comes before the balance breakdown and the nominations', () => {
-        const at = (id) => SCRIPT.indexOf(`id="${id}"`, SCRIPT.indexOf('root.innerHTML = `\n        <div class="list-container glass">\n            <div class="list-header">\n                <h2><i class=\'bx bx-wallet\''));
+        const at = (id) => FRAME.indexOf(`id="${id}"`);
         assert.ok(at('wallet-actions-slot') > 0 && at('wallet-locks-slot') > 0 && at('wallet-nominations-slot') > 0);
         assert.ok(at('wallet-actions-slot') < at('wallet-locks-slot'), 'actions before the breakdown');
         assert.ok(at('wallet-actions-slot') < at('wallet-nominations-slot'), 'actions before the validators');
     });
     test('Q34: the network card is "Network staking" and no longer repeats Total Staked', () => {
-        assert.ok(SCRIPT.includes('<div class="list-header"><h2>Network staking</h2></div>'));
-        assert.ok(!SCRIPT.includes('<h2>Staking Overview</h2>'));
-        assert.ok(!SCRIPT.includes('<div class="wallet-stat"><span>Total Staked</span>'));
-        // stake WP4: the tile is drawn by lib/stake-refresh.js (stakedTileHtml), which renderWalletDashboard calls.
-        assert.ok(/<div class="label"[^>]*>Total Staked<\/div>/.test(readFileSync(new URL('../lib/stake-refresh.js', import.meta.url), 'utf8')) && SCRIPT.includes('stakedTileHtml(data'), 'the summary card keeps the one Total Staked');
+        assert.ok(FRAME.includes('<div class="list-header"><h2>Network staking</h2></div>'));
+        assert.ok(!(SCRIPT + FRAME).includes('<h2>Staking Overview</h2>'));
+        assert.ok(!(SCRIPT + FRAME).includes('<div class="wallet-stat"><span>Total Staked</span>'));
+        // stake WP4: the tile is drawn by lib/stake-refresh.js (stakedTileHtml), which the frame calls.
+        assert.ok(/<div class="label"[^>]*>Total Staked<\/div>/.test(readFileSync(new URL('../lib/stake-refresh.js', import.meta.url), 'utf8')) && FRAME.includes('stakedTileHtml(data'), 'the summary card keeps the one Total Staked');
     });
 });
+
 
 describe('Q28: Copy confirms at the button that was pressed', () => {
     test('the pressed button reads Copied for 1.5 s, then Copy again; the line message stays', async (t) => {

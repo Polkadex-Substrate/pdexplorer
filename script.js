@@ -86,7 +86,8 @@ import { buildStakeTx, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, s
     stakeFormPlan, signerRoles, planProblemMessage } from './lib/stake-plan.js';
 import { payeeOf } from './lib/validator-manage.js';
 import { createStakeCard } from './lib/stake-card-view.js';
-import { createStakeRefresh, readStakeFigures, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, stakeIntentNoteHtml } from './lib/stake-refresh.js';
+import { createStakeRefresh, readStakeFigures, stakeIntentNoteHtml } from './lib/stake-refresh.js';
+import { createWalletSections, actionBarHtml, bindWalletActions } from './lib/wallet-sections.js';
 import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -8059,12 +8060,13 @@ let walletMenu = null;   // the header My Account menu, wired once at the bottom
 // Wallet routes are re-entered by their own navigation, so they are skipped.
 function isWalletRoute(r) { return /^(wallet|stake|staking)(\/|$)/.test(r || ''); }
 // A success callback's repaint: only while this address's dashboard is still the one on screen.
-function refreshWalletDashboardFor(address, quiet = false) {   // quiet: an R2 poll, an unchanged payload is not re-rendered
+function refreshWalletDashboardFor(address, quiet = false) {   // quiet: a poll after an action, the sections patch in place (R3)
     const r = readRouteFromLocation();
     if (!isSameAddress(getStoredWallet(), address) || !isWalletRoute(r)) return;
     if (r.startsWith('wallet/') && !isSameAddress(r.slice('wallet/'.length), address)) return;
-    const load = quiet ? fetchWalletDashboard(address, { keepPage: true, quiet: true }) : fetchWalletDashboard(address, { keepPage: true });
-    return load.then(r => r && r.painted);   // resolves to the server's freshness (R2 polls on it)
+    if (quiet) return walletSections.refresh(address);   // resolves to the server's freshness (the core polls on it)
+    const load = fetchWalletDashboard(address, { keepPage: true });
+    return load.then(r => r && r.painted);
 }
 function onWalletChanged() {
     reconcileDiscussSession();              // one discussion sign-in, bound to the active wallet
@@ -8745,6 +8747,7 @@ async function fetchWalletDashboard(address, opts) {
             }
             return;
         }
+        if (didPaintFromCache && walletSections.older(result.data)) return result.data.freshness || null;   // R3: a node behind the copy on screen (a quiet re-read drew newer): that copy stays
         latestWallet = result.data;
         stopLoading();
         clearWalletStaleBanner(root);
@@ -8752,7 +8755,7 @@ async function fetchWalletDashboard(address, opts) {
         // Re-render with the live wallet payload and whichever of price/
         // rewards has already landed. Anything still in-flight will paint
         // into the rendered DOM via the targeted handlers below.
-        if (!(opts && opts.quiet && onScreen && stakeRefresh.adopt(latestWallet))) renderWalletDashboard(latestWallet, latestPrice, latestRewards, { live: true });   // in place when it can (lib/stake-refresh.js)
+        renderWalletDashboard(latestWallet, latestPrice, latestRewards, { live: true });
         writeWalletCache(address, { wallet: latestWallet, price: latestPrice, rewards: latestRewards });
         // Live data is on screen — safe to open a shortcut's modal now.
         maybeRunWalletEntryIntent();
@@ -8795,6 +8798,12 @@ async function fetchWalletDashboard(address, opts) {
         }
     });
     return { painted };   // not awaited by callers that only start the load; resolves to the payload's freshness
+}
+
+// A sections re-read that failed: as fetchWalletDashboard's, the page says so and stops offering to sign against numbers it cannot confirm (F-068).
+function walletRefreshFailed(root, savedAt, msg) {
+    showWalletStaleBanner(root, savedAt, 'error', msg);
+    disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
 }
 
 // Targeted repaint for just the PDEX price chart slot inside the wallet
@@ -8847,144 +8856,72 @@ function paintWalletViewingSlot() {
 }
 
 // `live` is false on the cache paint (its cursor may be old): the Load 50 more bar mounts on live renders only.
+// The frame, once per account and entry; after an action the sections patch themselves (lib/wallet-sections.js).
 function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}) {
     const root = document.getElementById('wallet-dashboard');
     if (!root) return;
-    data = stakeRefresh.overlay(data);   // a chain read newer than this copy keeps its stake figures (lib/stake-refresh.js)
+    data = walletSections.overlay(stakeRefresh.overlay(data), { frame: true, live });   // a chain read or a proven name newer than this copy wins (lib/stake-refresh.js, lib/wallet-sections.js)
     currentWalletData = data;
     // Stash the staking-rewards payload so the APR card's period pills
     // can recompute against the cached claimed array without re-fetching
     // every time the user clicks a different period.
     walletAprData = rewardsPayload || null;
     const isOwnWallet = isSameAddress(getStoredWallet(), data.address);
-    const identity = data.identity && data.identity !== 'Unknown' ? data.identity : multisigStore.find(data.address)?.name;
-    const staking = data.staking || {};
-    const rewards = data.rewards || {};
-    const network = data.network || {};
-    const balance = data.balance || {};
-
-    // Recent rewards are a plain makeTable; recent transactions go through mountWalletRecentTx below, which tags
-    // each row with a `direction` (so the column sorts and filters) and adds the Load 50 more bar.
-    const recentClaimed = rewards.recentClaimed || [];
-
-    const priceConfigured = price && price.configured;
-    const priceHistory = (price && price.history) || [];
     const latestPrice = data.price || (price && price.latest) || null;
-
-    root.innerHTML = `
-        <div class="list-container glass">
-            <div class="list-header">
-                <h2><i class='bx bx-wallet'></i> ${identity ? stakingEscapeHtml(identity) : 'My Account'} ${helpIcon('switching-wallets', 'About the wallet dashboard')}</h2>
-                <div style="display:flex; gap:14px; align-items:center;">
-                    ${rewardHistoryLinkHtml(data.address)}
-                    <button id="wallet-switch-btn" class="staking-download-btn"${getStoredWallet() ? '' : ' hidden'}>Switch wallet</button>
-                    ${isOwnWallet ? '<button id="wallet-disconnect-btn" class="staking-download-btn">Disconnect</button>' : ''}
-                </div>
-            </div>
-            <div style="padding: 12px 24px 0;">
-                <div id="wallet-viewing-slot" data-address="${stakingEscapeHtml(data.address)}">${walletViewingSlotHtml(data.address)}</div>
-                <a href="/account/${encodeURIComponent(data.address)}" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${stakingEscapeHtml(data.address)}</a>
-            </div>
-            <div class="staking-summary-grid">
-                <div class="staking-summary-card">
-                    <div class="label">Total Balance</div>
-                    <div class="value accent" id="wallet-total-value">${stakingFormatPDEX(balance.total)} PDEX</div>
-                    <!-- USD subscript. data-pdex-amount lets pollPriceTicker
-                         refresh the figure live as the sidebar ticker polls,
-                         so it doesn't drift stale while the user is on the
-                         page. Initial value uses the price embedded in the
-                         wallet payload (or whatever pollPriceTicker has
-                         already cached). -->
-                    <div class="value-usd" data-pdex-amount="${balance.total}">${renderUsdSubscript(balance.total, latestPrice && latestPrice.price)}</div>
-                </div>
-                ${stakedTileHtml(data, { pdex: stakingFormatPDEX, esc: stakingEscapeHtml })}
-                <div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">${stakingFormatPDEX(rewards.claimedTotal)} PDEX</div></div>
-                ${payoutRefresh.tileHtml(data)}
-            </div>
-        </div>
-
-        ${isOwnWallet ? `
-        <div id="wallet-actions-slot">
-            ${hasInjectedWalletNow() ? `
-            <div class="wallet-action-bar" id="wallet-action-bar">
-                <button class="wallet-action-btn primary" id="wallet-act-send"${(getStakeableBalance(data) > 0) ? '' : ' disabled title="No transferable balance available."'}>
-                    <i class='bx bx-paper-plane'></i>
-                    <div><strong>Send PDEX</strong><span>Transfer to any Polkadex address</span></div>
-                </button>
-                ${stakeButtonHtml(staking, stakingEscapeHtml)}
-                ${payoutRefresh.buttonHtml(data)}
-                <button class="wallet-action-btn" id="wallet-act-unstake"${((staking.activeStaked || 0) > 0) ? '' : ' disabled title="No active bond to unstake."'}>
-                    <i class='bx bx-minus-circle'></i>
-                    <div><strong>Unstake</strong><span>Begin the unbonding period</span></div>
-                </button>
-                <button class="wallet-action-btn" id="wallet-act-identity">
-                    <i class='bx bx-id-card'></i>
-                    <div><strong>${data.identity && data.identity !== 'Unknown' ? 'Update identity' : 'Set identity'}</strong><span>Display name, email, twitter</span></div>
-                </button>
-            </div>` : buildViewOnlyCallout()}
-        </div>` : ''}
-        <div id="wallet-locks-slot"></div>
-        <div id="wallet-nominations-slot"></div>
-
-        <div id="wallet-multisig-slot"></div>
-        <div id="wallet-validator-slot"></div>
-
-        <div class="wallet-grid">
-            <div class="list-container glass">
-                <div class="list-header"><h2>PDEX Price (30d)</h2><span id="wallet-price-header-price" style="color:var(--brand-secondary);font-size:0.85rem;">${latestPrice ? `$${Number(latestPrice.price).toLocaleString('en-US', { maximumFractionDigits: 4 })}` : ''}</span></div>
-                <div class="staking-chart-wrap" id="wallet-price-chart-wrap" style="height:220px;">
-                    ${priceHistory.length ? '<canvas id="wallet-price-chart"></canvas>' : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;text-align:center;padding:0 20px;">${priceConfigured ? 'Collecting price history — the chart fills in as data is polled.' : 'Price feed not configured.'}</div>`}
-                </div>
-            </div>
-            <div class="list-container glass">
-                <div class="list-header"><h2>Network staking</h2></div>
-                <div class="wallet-stat-list">
-                    <div class="wallet-stat"><span>Minimum Stake</span><strong>${stakingFormatPDEX(network.minStake)} PDEX</strong></div>
-                    <div class="wallet-stat"><span>Active Nominators</span><strong>${stakingFormatNumber(network.activeNominators)} / ${stakingFormatNumber(network.totalNominators)}</strong></div>
-                    <div class="wallet-stat"><span>Active Validators</span><strong>${stakingFormatNumber(network.activeValidators)} / ${stakingFormatNumber(network.totalValidators)}</strong></div>
-                    <div class="wallet-stat"><span>Staking Period (era)</span><strong>${formatDuration(network.eraDurationMs)}</strong></div>
-                    <div class="wallet-stat"><span>Unstaking Period</span><strong>${formatDuration(network.unbondingMs)}</strong></div>
-                    <div class="wallet-stat"><span>Current Era</span><strong>${stakingFormatNumber(network.currentEra)}</strong></div>
-                </div>
-            </div>
-        </div>
-
-        <div class="wallet-grid">
-            <div class="list-container glass">
-                <div class="list-header"><h2>My Validators</h2><span id="wallet-my-validators-count" style="color:var(--text-secondary);font-size:0.78rem;">${(staking.nominating || []).length} nominated</span></div>
-                <div id="wallet-my-validators" style="padding: 8px 24px 20px;">${myValidatorsHtml(staking.nominating, { esc: stakingEscapeHtml, short: stakingShortAddress })}</div>
-            </div>
-            <div class="list-container glass">
-                <div class="list-header"><h2>Recent Staking Rewards</h2><a href="/staking-rewards/${encodeURIComponent(data.address)}" class="item-link is-inline" style="font-size:0.78rem;">View all</a></div>
-                <div id="wallet-recent-rewards-table"></div>
-            </div>
-        </div>
-
-        <!-- Average APR over a user-selected window. Card sits on its own
-             row so the period pills + result get the visual weight they
-             deserve as a primary metric on the My Account page. Populated
-             by renderWalletAprCard() after the dashboard innerHTML lands. -->
-        <div class="list-container glass" id="wallet-apr-card">
-            <div class="list-header">
-                <h2><i class='bx bx-line-chart' style="vertical-align:middle;color:var(--brand-secondary);"></i> Average APR</h2>
-                <div class="reward-filter" id="wallet-apr-periods"></div>
-            </div>
-            <div id="wallet-apr-body" style="padding:24px;"></div>
-        </div>
-
-        <div class="list-container glass">
-            <div class="list-header"><h2>Recent Transactions</h2><a href="/account/${encodeURIComponent(data.address)}" class="item-link is-inline" style="font-size:0.78rem;">View all on the account page</a></div>
-            <div id="wallet-recent-tx-table"></div>
-        </div>
-        <div id="wallet-advanced-section"></div>`;
+    const total = (data.balance || {}).total;
+    root.innerHTML = walletSections.frameHtml(data, { isOwn: isOwnWallet, help: helpIcon('switching-wallets', 'About the wallet dashboard'), historyLink: rewardHistoryLinkHtml(data.address),
+        canSwitch: !!getStoredWallet(), viewing: walletViewingSlotHtml(data.address), usd: renderUsdSubscript(total, latestPrice && latestPrice.price), price, latestPrice,
+        bar: isOwnWallet ? (hasInjectedWalletNow() ? buildWalletActionBarMarkup(data) : buildViewOnlyCallout()) : null });
     payoutRefresh.paint({ reason: 'render' });
+    mountWalletRewardsTable(data);
+    mountWalletTxTable(data, live);
 
-    // Mount the two small tables. These are typically short snapshots
-    // (top ~10 rows), but giving them the same filter/sort affordances as
-    // the long-form tables keeps the explorer's UX consistent.
-    makeTable({
-        container: document.getElementById('wallet-recent-rewards-table'),
-        rows: recentClaimed,
+    const switchBtn = document.getElementById('wallet-switch-btn');
+    if (switchBtn) switchBtn.addEventListener('click', openWalletPicker);   // keeps the current wallet until another is chosen
+    const disconnectBtn = document.getElementById('wallet-disconnect-btn');
+    if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectWallet);
+    if (isOwnWallet) {
+        bindWalletActionHandlers();
+        bindViewOnlyCalloutHandlers();
+        // F-068: renderWalletDashboard is also called from the CACHE paint, so
+        // a still-blocked state must survive a re-render here too.
+        applyWalletActionBlock();
+        // Mobile wallet WebViews sometimes inject `window.injectedWeb3` a
+        // beat after the page settles. If we rendered the view-only callout
+        // because nothing was injected at first paint, schedule a couple of
+        // re-checks that swap the action bar in once injection lands. We
+        // also do the reverse — if the user's wallet session has gone away
+        // while the page is open, swap the action bar out for the callout.
+        scheduleWalletSigningRechecks(data);
+    }
+    renderWalletPriceChart((price && price.history) || []);
+    // Mount the Advanced section (proxies + multisig). Fires regardless of
+    // ownership — proxies that delegate FROM this address are public chain
+    // state, and the multisig calculator works without an active session.
+    // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
+    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps(), post: postAction, page: 'wallet',
+        unstake: () => { const u = document.getElementById('wallet-act-unstake'); return !!(isOwnWallet && u && !u.disabled); }, openUnstake: openUnstakeModal });
+    mountWalletNominations(data.address, isOwnWallet);
+    renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
+    // Design 5.1: a Validator card only for an account that validates or has session keys.
+    if (VALIDATE_ON && isOwnWallet && globalApi) readWalletValidator(globalApi, data.address).then(v => { const s = document.getElementById('wallet-validator-slot'); if (s && v && isSameAddress(v.address, currentWalletData?.address)) s.innerHTML = walletValidatorCard(v, stakingEscapeHtml); });
+    refreshWalletMultisigs();
+    // Average APR card — runs after the rest of the dashboard so the
+    // ranked widget order on slow connections is: balance/staking →
+    // validators/recent → APR. The renderer reads `walletAprData`
+    // populated by fetchWalletDashboard and tolerates a null payload
+    // (renders an unavailable state).
+    renderWalletAprCard();
+}
+
+// Recent Staking Rewards, built alone (a section rebuild carries the sort and filters over).
+function mountWalletRewardsTable(data) {
+    const el = document.getElementById('wallet-recent-rewards-table');
+    if (!el) return;
+    const prev = el._wtable;
+    el._wtable = makeTable({
+        container: el, state: prev && prev.getState ? prev.getState() : null,
+        rows: (data.rewards || {}).recentClaimed || [],
         defaultSort: { key: 'era', dir: 'desc' },
         globalSearch: false,
         summarySuffix: 'rewards',
@@ -9007,14 +8944,21 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
             }
         ]
     });
+}
 
+// Recent Transactions with the Load 50 more bar; the loaded pages live in walletRecentStore, outside the render.
+function mountWalletTxTable(data, live) {
     const txGen = walletFetchGen;
     const txContainer = document.getElementById('wallet-recent-tx-table');
+    if (!txContainer) return;
+    const older = txContainer.parentElement && txContainer.parentElement.querySelector('.js-older-bar');
+    if (older) older.remove();   // a rebuild mounts its own Load more bar
+    const prev = txContainer._wtable;
     mountWalletRecentTx({
         container: txContainer, data, store: walletRecentStore, live,
         fetchJson: fetchApiJson, isCurrent: () => txGen === walletFetchGen,
-        buildTable: rows => makeTable({
-        container: txContainer,
+        buildTable: rows => (txContainer._wtable = makeTable({
+        container: txContainer, state: prev && prev.getState ? prev.getState() : null,
         rows,
         defaultSort: { key: 'timestamp', dir: 'desc' },
         globalSearch: false,
@@ -9049,45 +8993,8 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
                 format: row => `<span style="white-space:nowrap;">${row.timestamp ? stakingEscapeHtml(formatLocalDate(row.timestamp)) : '—'}</span>`
             }
         ]
-        })
+        }))
     });
-
-    const switchBtn = document.getElementById('wallet-switch-btn');
-    if (switchBtn) switchBtn.addEventListener('click', openWalletPicker);   // keeps the current wallet until another is chosen
-    const disconnectBtn = document.getElementById('wallet-disconnect-btn');
-    if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectWallet);
-    if (isOwnWallet) {
-        bindWalletActionHandlers();
-        bindViewOnlyCalloutHandlers();
-        // F-068: renderWalletDashboard is also called from the CACHE paint, so
-        // a still-blocked state must survive a re-render here too.
-        applyWalletActionBlock();
-        // Mobile wallet WebViews sometimes inject `window.injectedWeb3` a
-        // beat after the page settles. If we rendered the view-only callout
-        // because nothing was injected at first paint, schedule a couple of
-        // re-checks that swap the action bar in once injection lands. We
-        // also do the reverse — if the user's wallet session has gone away
-        // while the page is open, swap the action bar out for the callout.
-        scheduleWalletSigningRechecks(data);
-    }
-    renderWalletPriceChart(priceHistory);
-    // Mount the Advanced section (proxies + multisig). Fires regardless of
-    // ownership — proxies that delegate FROM this address are public chain
-    // state, and the multisig calculator works without an active session.
-    // Add/Remove proxy buttons are gated on isOwnWallet inside the renderer.
-    mountBalanceLocks(document.getElementById('wallet-locks-slot'), data.address, { fetchJson: fetchApiJson, helpIcon, actions: lockActionDeps(), post: postAction, page: 'wallet',
-        unstake: () => { const u = document.getElementById('wallet-act-unstake'); return !!(isOwnWallet && u && !u.disabled); }, openUnstake: openUnstakeModal });
-    mountWalletNominations(data.address, isOwnWallet);
-    renderWalletAdvancedSection(data.address || data.account, isOwnWallet);
-    // Design 5.1: a Validator card only for an account that validates or has session keys.
-    if (VALIDATE_ON && isOwnWallet && globalApi) readWalletValidator(globalApi, data.address).then(v => { const s = document.getElementById('wallet-validator-slot'); if (s && v && isSameAddress(v.address, currentWalletData?.address)) s.innerHTML = walletValidatorCard(v, stakingEscapeHtml); });
-    refreshWalletMultisigs();
-    // Average APR card — runs after the rest of the dashboard so the
-    // ranked widget order on slow connections is: balance/staking →
-    // validators/recent → APR. The renderer reads `walletAprData`
-    // populated by fetchWalletDashboard and tolerates a null payload
-    // (renders an unavailable state).
-    renderWalletAprCard();
 }
 
 // "Your validators" (lib/nomination-status-view.js); also re-read in place after a stake (lib/stake-refresh.js).
@@ -9105,19 +9012,11 @@ function refreshWalletMultisigs() {
     else multisigUI.mountAccounts(slot, { address, relatedOnly: true });
 }
 
-// Wire up the four wallet action buttons. Idempotent — re-binding after a
-// re-render of the action bar is safe because each new node has fresh listeners.
+// The action bar's one delegated listener on the dashboard, bound once (lib/wallet-sections.js): a patched or swapped
+// bar never binds twice, and a closed button opens nothing.
 function bindWalletActionHandlers() {
-    const sendBtn = document.getElementById('wallet-act-send');
-    const stakeBtn = document.getElementById('wallet-act-stake');
-    const payoutBtn = document.getElementById('wallet-act-payout');
-    const unstakeBtn = document.getElementById('wallet-act-unstake');
-    const identityBtn = document.getElementById('wallet-act-identity');
-    if (sendBtn && !sendBtn.disabled) sendBtn.addEventListener('click', openSendModal);
-    if (stakeBtn) stakeBtn.addEventListener('click', openStakeModal);
-    if (payoutBtn && !payoutBtn.disabled) payoutBtn.addEventListener('click', openPayoutModal);
-    if (unstakeBtn && !unstakeBtn.disabled) unstakeBtn.addEventListener('click', openUnstakeModal);
-    if (identityBtn) identityBtn.addEventListener('click', openIdentityModal);
+    bindWalletActions(document.getElementById('wallet-dashboard'), { 'wallet-act-send': openSendModal, 'wallet-act-stake': openStakeModal,
+        'wallet-act-payout': openPayoutModal, 'wallet-act-unstake': openUnstakeModal, 'wallet-act-identity': openIdentityModal });
 }
 
 // Wire up the "copy URL" affordance inside the read-only callout. The mobile
@@ -9199,29 +9098,9 @@ function scheduleWalletSigningRechecks(data) {
     _walletSigningRecheckTimer = setTimeout(tick, delays[i++]);
 }
 
-// Build only the action-bar HTML (used by scheduleWalletSigningRechecks when
-// it needs to swap the slot's contents). Mirrors the inline markup in
-// renderWalletDashboard so layout/copy stays consistent.
+// The action bar (lib/wallet-sections.js holds its one copy): the dashboard, the late-injection swap and the sections.
 function buildWalletActionBarMarkup(data) {
-    const staking = data.staking || {};
-    const stakeable = getStakeableBalance(data);
-    const active = staking.activeStaked || 0;
-    return `<div class="wallet-action-bar" id="wallet-action-bar">
-        <button class="wallet-action-btn primary" id="wallet-act-send"${stakeable > 0 ? '' : ' disabled title="No transferable balance available."'}>
-            <i class='bx bx-paper-plane'></i>
-            <div><strong>Send PDEX</strong><span>Transfer to any Polkadex address</span></div>
-        </button>
-        ${stakeButtonHtml(staking, stakingEscapeHtml)}
-        ${payoutRefresh.buttonHtml(data)}
-        <button class="wallet-action-btn" id="wallet-act-unstake"${active > 0 ? '' : ' disabled title="No active bond to unstake."'}>
-            <i class='bx bx-minus-circle'></i>
-            <div><strong>Unstake</strong><span>Begin the unbonding period</span></div>
-        </button>
-        <button class="wallet-action-btn" id="wallet-act-identity">
-            <i class='bx bx-id-card'></i>
-            <div><strong>${data.identity && data.identity !== 'Unknown' ? 'Update identity' : 'Set identity'}</strong><span>Display name, email, twitter</span></div>
-        </button>
-    </div>`;
+    return actionBarHtml(data, { esc: stakingEscapeHtml, stakeable: getStakeableBalance(data), payoutButton: payoutRefresh.buttonHtml(data) });
 }
 
 function renderWalletPriceChart(history) {
@@ -9239,7 +9118,9 @@ const knownResults = createKnownResults({ key: 'pdex_known_results', storage: ()
 const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e), caughtUp, deadlineMs: pollDeadlineMs });
 const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, post: postAction, data: () => currentWalletData, same: isSameAddress, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, short: stakingShortAddress, esc: stakingEscapeHtml }, refetch: (a) => refreshWalletDashboardFor(a, true) });
 // After a stake (lib/stake-refresh.js): the figures, the Stake button and the card follow a chain read at inclusion, in place.
-const stakeRefresh = createStakeRefresh({ doc: document, post: postAction, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, read: (a) => readStakeFigures(globalApi, a), same: isSameAddress, fmt: { pdex: stakingFormatPDEX, esc: stakingEscapeHtml, short: stakingShortAddress, usd: (n) => renderUsdSubscript(n) }, onData: (d, tracked) => { if (stakeCard) stakeCard.refreshed(d, tracked); }, nominations: (a) => mountWalletNominations(a, true), actions: { send: openSendModal, unstake: openUnstakeModal } });
+const stakeRefresh = createStakeRefresh({ doc: document, post: postAction, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, read: (a) => readStakeFigures(globalApi, a), same: isSameAddress, fmt: { pdex: stakingFormatPDEX, esc: stakingEscapeHtml, short: stakingShortAddress, usd: (n) => renderUsdSubscript(n) }, onData: (d, tracked) => { if (stakeCard) stakeCard.refreshed(d, tracked); }, nominations: (a) => mountWalletNominations(a, true) });   // Send and Unstake: the bar's delegated listener
+// R3: My Account in sections (lib/wallet-sections.js): after an action each section follows the server's copy in place, the name follows the block.
+const walletSections = createWalletSections({ doc: document, win: window, post: postAction, known: knownResults, same: isSameAddress, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, fetchWallet: (a) => fetch('/api/wallet/' + encodeURIComponent(a)), refetch: (a) => refreshWalletDashboardFor(a, true), stake: stakeRefresh, payout: payoutRefresh, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, esc: stakingEscapeHtml, short: stakingShortAddress, duration: (ms) => formatDuration(ms) }, multisigName: (a) => (multisigStore.find(a) || {}).name || null, setTimer: (f, ms) => setTimeout(f, ms), parts: { bar: (d) => buildWalletActionBarMarkup(d), gen: () => walletFetchGen, block: () => applyWalletActionBlock(), ok: () => { clearWalletStaleBanner(document.getElementById('wallet-dashboard')); clearWalletActionBlock(); }, failed: (a, msg) => walletRefreshFailed(document.getElementById('wallet-dashboard'), (readWalletCache(a) || {}).savedAt, msg), cache: (a, w) => writeWalletCache(a, { wallet: w }), nominations: (a) => mountWalletNominations(a, isSameAddress(getStoredWallet(), a)), rewards: (d) => mountWalletRewardsTable(d), tx: (d) => mountWalletTxTable(d, true), apr: (a) => fetch('/api/staking-rewards/' + encodeURIComponent(a)).then(r => r.json()).then(r => { if (r && currentWalletData && isSameAddress(currentWalletData.address, a)) { walletAprData = r; renderWalletAprCard(); } }).catch(() => {}) } });
 const govRefresh = createGovRefresh({ doc: document, post: postAction, known: knownResults, same: isSameAddress, nameOf: (a) => { const d = currentWalletData, n = d && d.address && isSameAddress(d.address, a) && d.identity && d.identity !== 'Unknown' ? d.identity : null; return n || (multisigStore.find(a) || {}).name || null; }, short: (a) => stakingShortAddress(a), selected: () => getStoredWallet(), api: () => globalApi, onPage: (p) => readRouteFromLocation() === p, caughtUp, setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), pages: { council: (o) => Promise.all([fetchCouncilData(o), fetchTechnicalCommitteeData(o)]), democracy: (o) => fetchDemocracyData({ ...o, quiet: true }), treasury: (o) => fetchTreasuryData(o) } });
 let validatorsCache = null;
 let validatorsCacheAt = 0;
@@ -9700,11 +9581,7 @@ async function submitWithdrawUnbonded() {
         busyText: 'Signing…',
         idleText: 'Withdraw unbonded funds',
         onError: fail,
-        onSuccess: () => {
-            const modal = document.getElementById('unstake-modal');
-            if (modal) modal.style.display = 'none';
-            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
-        }
+        onSuccess: () => { const modal = document.getElementById('unstake-modal'); if (modal) modal.style.display = 'none'; }   // the sections follow in place (R3)
     });
 }
 
@@ -9767,11 +9644,7 @@ async function submitUnstakeTx() {
                     isFullUnbond: true,
                 }, err));
             },
-            onSuccess: () => {
-                const modal = document.getElementById('unstake-modal');
-                if (modal) modal.style.display = 'none';
-                setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
-            }
+            onSuccess: () => { const modal = document.getElementById('unstake-modal'); if (modal) modal.style.display = 'none'; }   // the sections follow in place (R3)
         });
         return;
     }
@@ -9830,11 +9703,7 @@ async function submitUnstakeTx() {
         busyText: 'Signing…',
         idleText: 'Sign and unstake',
         onError: (err, m) => fail(decodeUnstakeError((m && m.raw) || err, { active, amt, minBond }, err)),
-        onSuccess: () => {
-            const modal = document.getElementById('unstake-modal');
-            if (modal) modal.style.display = 'none';
-            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
-        }
+        onSuccess: () => { const modal = document.getElementById('unstake-modal'); if (modal) modal.style.display = 'none'; }   // the sections follow in place (R3)
     });
 }
 
@@ -10036,19 +9905,12 @@ async function submitSetIdentity() {
     await submitSignedTx({
         buildTx: (api) => api.tx.identity.setIdentity(info),
         label: 'Set identity',
-        action: { key: 'identity.set' },
+        action: { key: 'identity.set', params: { display: info.display && info.display.Raw ? info.display.Raw : null } },   // the name signed: shown at inclusion (R3)
         button: document.getElementById('submit-identity-tx-btn'),
         busyText: 'Signing…',
         idleText: data && data.identity && data.identity !== 'Unknown' ? 'Update identity' : 'Save identity',
         onError: (m) => showIdentityError(m),
-        onSuccess: () => {
-            const modal = document.getElementById('identity-modal');
-            if (modal) modal.style.display = 'none';
-            // Bust the server-side identity cache by re-fetching the dashboard
-            // — getIdentity() in server.js memoises but the cache won't have
-            // our new value, so the visible name will refresh on next paint.
-            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
-        }
+        onSuccess: () => { const modal = document.getElementById('identity-modal'); if (modal) modal.style.display = 'none'; }   // the name follows the block (R3)
     });
 }
 
@@ -10069,11 +9931,7 @@ async function submitClearIdentity() {
         busyText: 'Signing…',
         idleText: 'Reset (clear)',
         onError: (m) => showIdentityError(m),
-        onSuccess: () => {
-            const modal = document.getElementById('identity-modal');
-            if (modal) modal.style.display = 'none';
-            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
-        }
+        onSuccess: () => { const modal = document.getElementById('identity-modal'); if (modal) modal.style.display = 'none'; }   // the name follows the block (R3)
     });
 }
 
@@ -10487,13 +10345,7 @@ async function submitSendTx() {
         busyText: 'Signing…',
         idleText: 'Sign and send',
         onError: showSendError,
-        onSuccess: () => {
-            const modal = document.getElementById('send-modal');
-            if (modal) modal.style.display = 'none';
-            // Refresh dashboard a beat later so the chain has finalized the
-            // new balances by the time we re-query.
-            setTimeout(() => refreshWalletDashboardFor(data.address), 2500);
-        }
+        onSuccess: () => { const modal = document.getElementById('send-modal'); if (modal) modal.style.display = 'none'; }   // the sections follow in place (R3)
     });
 }
 
@@ -13089,6 +12941,8 @@ async function renderWalletAdvancedSection(address, isOwnWallet) {
         </div>`;
 
     renderProxyList(address, isOwnWallet);
+    // R3: the list re-reads itself after a proxy action, on evidence (its rows only; the add form is never repainted)
+    walletSections.watch('proxies', () => document.getElementById('wallet-proxy-list'), address, (ctx) => renderProxyList(address, isOwnWallet, ctx));
     if (isOwnWallet) renderAddProxyForm(address);
     renderMultisigCalculator();
     if (!multisigStore.find(address)) renderMultisigPending(address);
@@ -13096,34 +12950,16 @@ async function renderWalletAdvancedSection(address, isOwnWallet) {
 
 // ── Proxies ─────────────────────────────────────────────────────────────────
 
-async function renderProxyList(address, isOwnWallet) {
+async function renderProxyList(address, isOwnWallet, ctx = {}) {
     const el = document.getElementById('wallet-proxy-list');
-    if (!el) return;
+    if (!el) return null;
     const expectedRevision = walletSession.revision();   // the session this list is drawn for, with address (#70)
     try {
         const data = await fetchApiJson('/api/proxies/' + encodeURIComponent(address));
-        const list = Array.isArray(data.proxies) ? data.proxies : [];
-        if (!list.length) {
-            el.innerHTML = `<div style="color:var(--text-muted);font-size:0.85rem;padding:8px 0;">No proxies set. ${isOwnWallet ? 'Use the form below to add one.' : ''}</div>`;
-            return;
-        }
-        const rows = list.map(p => `<tr>
-            <td style="padding:8px 4px;"><a href="/account/${encodeURIComponent(p.delegate)}" class="item-link address-cell" style="color:var(--brand-secondary);font-size:0.82rem;">${stakingEscapeHtml(stakingShortAddress(p.delegate))}</a></td>
-            <td style="padding:8px 4px;"><code style="font-size:0.78rem;color:var(--text-secondary);">${stakingEscapeHtml(p.proxyType)}</code></td>
-            <td style="padding:8px 4px;text-align:right;font-size:0.78rem;color:var(--text-secondary);">${stakingFormatNumber(p.delay)} blocks</td>
-            <td style="padding:8px 4px;text-align:right;">
-                ${isOwnWallet ? `<button type="button" class="staking-download-btn proxy-remove-btn" data-delegate="${stakingEscapeHtml(p.delegate)}" data-proxy-type="${stakingEscapeHtml(p.proxyType)}" data-delay="${p.delay}" style="padding:4px 10px;font-size:0.72rem;color:var(--error);border-color:rgba(231,76,60,0.4);">Remove</button>` : ''}
-            </td>
-        </tr>`).join('');
-        el.innerHTML = `
-            <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:6px;">Deposit reserved: ${stakingFormatPDEX(data.deposit)} PDEX</div>
-            <div class="table-responsive"><table class="data-table" style="margin:0;">
-                <thead><tr><th>Delegate</th><th>Type</th><th style="text-align:right;">Delay</th><th></th></tr></thead>
-                <tbody>${rows}</tbody>
-            </table></div>`;
-        // Remove handlers — each row's button fires proxy.removeProxy(delegate, type, delay).
-        if (isOwnWallet) {
-            el.querySelectorAll('.proxy-remove-btn').forEach(btn => btn.addEventListener('click', () => {
+        // Drawn in place (lib/wallet-sections.js): an unchanged list is not touched; a row a block proved removed settles, then leaves.
+        // Remove handlers on the rows drawn: each fires proxy.removeProxy(delegate, type, delay).
+        walletSections.paintProxies(el, { address, isOwn: isOwnWallet, payload: data, ctx, bind: (list) => { if (isOwnWallet) {
+            list.querySelectorAll('.proxy-remove-btn').forEach(btn => btn.addEventListener('click', () => {
                 const proxyType = btn.getAttribute('data-proxy-type');
                 const delay = parseInt(btn.getAttribute('data-delay'), 10) || 0;
                 // Chain-read, not typed: re-encode to the chain prefix and never block the removal.
@@ -13133,17 +12969,18 @@ async function renderProxyList(address, isOwnWallet) {
                 submitSignedTx({
                     buildTx: api => api.tx.proxy.removeProxy(delegate, proxyType, delay),
                     label: `Remove ${proxyType} proxy`,
-                    action: { key: 'proxy.remove', params: { delegate, type: proxyType } },
+                    action: { key: 'proxy.remove', params: { delegate, type: proxyType, delay } },
                     button: btn,
                     busyText: 'Signing…',
                     idleText: 'Remove',
                     expectedWallet: address,
-                    expectedRevision,
-                    onSuccess: () => setTimeout(() => renderProxyList(address, isOwnWallet), 2500)
+                    expectedRevision
                 });
             }));
-        }
+        } } });
+        return data.freshness || null;
     } catch (e) {
+        walletSections.forgetProxies(el);   // a settle hold ending later draws nothing over what is drawn here
         // 501 from the backend when the runtime has no proxy pallet → hide
         // gracefully rather than rendering a scary error.
         if (e && e.status === 501) {
@@ -13209,10 +13046,7 @@ async function renderAddProxyForm(address) {
             expectedWallet: address,
             expectedRevision,
             onError: showErr,
-            onSuccess: () => {
-                if (delegateInput) delegateInput.value = '';
-                setTimeout(() => renderProxyList(address, true), 2500);
-            }
+            onSuccess: () => { if (delegateInput) delegateInput.value = ''; }   // the list follows on evidence (R3)
         });
     });
 }

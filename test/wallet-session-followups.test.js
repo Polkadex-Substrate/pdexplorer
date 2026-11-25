@@ -30,6 +30,8 @@ import { normalizeMultisig } from '../lib/multisig.js';
 import { createPostAction } from '../lib/post-action.js';
 import { createKnownResults } from '../lib/known-results.js';
 import { effectsFor } from '../lib/action-effects.js';
+// R3: the proxy list is painted by the wallet sections (absent before R3).
+const sections = await import('../lib/wallet-sections.js').then((m) => m, () => ({}));
 
 const SCRIPT = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
 const A = addr(1), B = addr(2), M = addr(9);
@@ -358,6 +360,10 @@ describe('Sprint 7 B4: proxy add and remove carry the wallet-session revision', 
             fetchApiJson: async () => ({ proxies: [{ delegate: B, proxyType: 'Staking', delay: 0 }], deposit: '1' }),
             stakingFormatNumber: String, stakingFormatPDEX: String, chainDelegate: (d) => d, ss58PrefixOf: () => 88, renderApiError() {},
             cachedProxyTypes: ['Staking', 'Any'], VALIDATE_ON: false, proxyPrefill: () => null, proxyDelegateProblem: () => null, renderRecipientRefusal() {},
+            // R3: the list's rows are painted by the wallet sections, with the known results of this page (none here)
+            ...(sections.createWalletSections ? { walletSections: sections.createWalletSections({ doc: w.tab.ctx.document, post: { subscribe: () => () => {} }, known: { list: () => [] },
+                data: () => null, setData() {}, same: (a, b) => a === b, multisigName: () => null,
+                fmt: { pdex: String, number: String, esc: w.tab.ctx.stakingEscapeHtml, short: w.tab.ctx.stakingShortAddress, duration: String } }) } : {}),
             ...extra
         });
         w.api.tx = { proxy: { removeProxy: () => w.tx, addProxy: () => w.tx } };
