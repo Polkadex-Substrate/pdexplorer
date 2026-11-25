@@ -4252,7 +4252,7 @@ function parseValidatorAddress(raw) {
     try { return normalizeAddress(raw); } catch (e) { return null; }
 }
 registerValidatorRoutes(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), parseAddress: parseValidatorAddress,
-    cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk, statusRateOk: validatorStatusRateOk });
+    cacheShort, cacheMedium, serverError, incidents: (address, since) => db.getValidatorIncidents(address, since), nameOf: (address) => getIdentity(globalApi, address), rateOk: keyCheckRateOk, statusRateOk: validatorStatusRateOk, head: freshnessHead });
 // Sprint 7: the stashes an account is a proxy for (lib/proxied-stashes.js): the event index, then Proxy.Proxies live.
 registerProxiedStashesRoute(app, { api: () => globalApi, ready: requireRpc, gate: (req, res) => gateAddressParams(req, res, 'address'), events: (address, limit) => db.getProxyEventsChecked(address, limit), cacheShort, serverError, rateOk: validatorStatusRateOk });
 

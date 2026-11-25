@@ -7343,7 +7343,7 @@ function initValidatePage(address) {
     if (address === 'node') return settleHeader(mountNodeGuide(document.getElementById('validate-root'), { fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, nodeName, setNodeParam }));
     if (address === 'setup') return settleHeader(mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(true)));
     if (address === 'keys') { updateSeoMeta('validate', { title: KEYS_PAGE_TITLE, canonicalPath: '/validate/keys' }); return settleHeader(mountKeysPage(document.getElementById('validate-root'), { getAccount: () => walletSession.getActiveAccount(), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml })); }
-    const mount = (a) => settleHeader(mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
+    const mount = (a) => settleHeader(mountValidatePage(document.getElementById('validate-root'), { manage: validateSetupDeps(false), post: postAction, urlAddress: a, account: walletSession.getActiveAccount(), isSame: isSameAddress,
         fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, navigate: (r) => navigateTo(r), isAddress: isSearchableAddress, nodeName }));
     pageScope.add(walletSession.onActiveAccountChange((change) => {
         const viewed = readRouteFromLocation().slice('validate/'.length);
@@ -7359,7 +7359,7 @@ function validateSetupDeps(watch) {
     if (watch) pageScope.add(walletSession.onActiveAccountChange(() => { const p = mountValidatorSetup(document.getElementById('validate-root'), validateSetupDeps(false)); markHeaderOutline(); Promise.resolve(p).then(markHeaderOutline, markHeaderOutline); }));
     return { account: walletSession.getActiveAccount(), getApi: () => globalApi, isMultisig: (a) => !!multisigStore.find(a), revision: () => walletSession.revision(),
         findMultisig: (a) => multisigStore.find(a), multisigReview: (o) => multisigUI.review(o),
-        submit: (o) => submitSignedTx(o), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, isAddress: isSearchableAddress,
+        submit: (o) => submitSignedTx(o), fetchJson: fetchApiJson, helpIcon, esc: stakingEscapeHtml, shortAddr: stakingShortAddress, isAddress: isSearchableAddress, post: postAction,
         isSame: isSameAddress, renderCall: (c) => renderCallHtml(callToTree(c), {}, { raw: false }) };
 }
 
@@ -8018,7 +8018,7 @@ function multisigUIDeps() { return {
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
     canAskWallets: canAskWalletsForSigners, askWallets: askWalletsForSigners,
     submit: submitSignedTx, fetchJson: fetchApiJson,
-    refresh: address => refreshWalletDashboardFor(address), revision: () => walletSession.revision(),
+    refresh: address => refreshWalletDashboardFor(address), revision: () => walletSession.revision(), post: () => postAction,
     // A multisig stash's validator change: the Sprint 3 and 4 rules again at the approval that runs it.
     callGuard: (api, call, m) => validatorCallGuard(api, call, m.address),
     callNote: (api, call, m) => validatorCallNote(api, call, m.address)
@@ -12448,7 +12448,7 @@ async function submitSignedTx({ buildTx, label, button, busyText, idleText, onEr
             if (staleRuntime) throw new Error(staleRuntime);
             const tx = await buildTx(globalApi);
             if (!stillValid()) throw new Error(WALLET_CHANGED_STALE);
-            return await multisigUI.review({ multisig, callHex: tx.method.toHex(), onSuccess, onEnd: onMultisigEnd });
+            return await multisigUI.review({ multisig, callHex: tx.method.toHex(), onSuccess, onEnd: onMultisigEnd, inner: action });
         } catch (e) { return fail(e.message); }
     }
     const w = await resolveWalletSigner(fail, signingAccount);
