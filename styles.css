@@ -2871,19 +2871,19 @@ h1, h2, h3 { font-weight: 600; }
 }
 .stake-max-btn {
     padding: 0 14px;
-    background: rgba(230, 0, 122, 0.1);
-    border: 1px solid var(--brand-primary);
-    color: var(--brand-primary);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
     border-radius: var(--radius-sm);
-    font-size: 0.78rem;
+    font-size: 0.82rem;
     font-weight: 600;
     cursor: pointer;
     font-family: inherit;
 }
-.stake-max-btn:hover { background: rgba(230, 0, 122, 0.2); }
+.stake-max-btn:hover { border-color: var(--border-hover); }
 .stake-hint {
-    color: var(--text-muted);
-    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
     margin-top: 6px;
 }
 .stake-summary {
@@ -2951,7 +2951,7 @@ h1, h2, h3 { font-weight: 600; }
     padding: 6px;
 }
 .stake-empty {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 0.82rem;
     padding: 24px 12px;
     text-align: center;
@@ -2980,8 +2980,8 @@ h1, h2, h3 { font-weight: 600; }
     text-overflow: ellipsis;
 }
 .stake-val-meta {
-    font-size: 0.7rem;
-    color: var(--text-muted);
+    font-size: 0.82rem;
+    color: var(--text-secondary);
     margin-top: 2px;
 }
 .stake-val-add, .stake-val-remove {
@@ -2998,20 +2998,23 @@ h1, h2, h3 { font-weight: 600; }
     flex-shrink: 0;
 }
 .stake-val-add:hover:not(:disabled) {
-    background: rgba(0, 230, 118, 0.15);
-    border-color: var(--brand-secondary);
-    color: var(--brand-secondary);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
 }
 .stake-val-add:disabled { opacity: 0.5; cursor: default; }
 .stake-val-remove:hover {
-    background: rgba(230, 0, 122, 0.15);
-    border-color: var(--brand-primary);
-    color: var(--brand-primary);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+@media (max-width: 640px) {
+    .stake-val-add, .stake-val-remove { width: 44px; height: 44px; }
 }
 .stake-clear-btn {
     background: none;
     border: none;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     font-size: 0.74rem;
     font-family: inherit;
@@ -4425,7 +4428,7 @@ h1, h2, h3 { font-weight: 600; }
     font: inherit;
     cursor: pointer;
 }
-.stake-chip[data-preset="recommended"] { border-color: var(--brand-primary); color: var(--brand-primary); }
+.stake-chip[data-preset="recommended"] { border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
 .stake-chip:hover, .stake-seg-btn:hover { background: rgba(255, 255, 255, 0.08); }
 .stake-seg { display: inline-flex; align-items: center; gap: 4px; }
 .stake-seg-btn.is-on { background: var(--accent-violet-tint); border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
@@ -4459,7 +4462,7 @@ h1, h2, h3 { font-weight: 600; }
     font-size: 0.62rem; cursor: help;
 }
 .stake-why:focus { outline: 1px solid var(--brand-primary); }
-.stake-apr-note { margin-top: 8px; font-size: 0.7rem; color: var(--text-muted); }
+.stake-apr-note { margin-top: 8px; font-size: 0.82rem; color: var(--text-secondary); }
 .stake-val-apr { color: var(--text-primary); font-weight: 600; cursor: help; }
 .stake-val-extra { margin-top: 1px; }
 .badge.stake-badge-waiting, .badge.stake-badge-info, .badge.stake-badge-warn {
@@ -4753,8 +4756,14 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .lock-row.is-rest .lock-name { grid-column: 1; grid-row: 1; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
 .lock-row.is-rest .lock-amount { grid-column: 2; grid-row: 1; font-size: 0.9rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; text-align: right; }
 .lock-row.is-rest .lock-row-top .ui-chip { grid-column: 1 / 3; justify-self: start; }
+@media (min-width: 641px) {
+    .lock-row.is-rest .lock-row-top { grid-template-columns: auto minmax(0, 1fr) auto; }
+    .lock-row.is-rest .lock-row-top .ui-chip { grid-column: 2; grid-row: 1; }
+    .lock-row.is-rest .lock-amount { grid-column: 3; }
+}
 .lock-line { margin: 0; max-width: 72ch; font-size: 0.9rem; line-height: 1.6; color: var(--text-primary); }
 .lock-row-action { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.lock-row-action[hidden] { display: none; }
 .lock-row-action .ui-action { width: 100%; }
 .lock-hint { margin: 0; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
 .lock-connect { margin: 0; display: flex; align-items: flex-start; gap: 8px; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
@@ -4763,6 +4772,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .lock-child { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .lock-child .lock-line { flex: 1 1 100%; font-size: 0.82rem; }
 .lock-child .lock-row-action { flex: 1 1 100%; }
+.lock-child > .lock-confirm { flex: 1 1 100%; }
 .lock-child-head { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; font-weight: 600; color: var(--text-primary); }
 .lock-child-head .lock-amount { font-weight: 700; }
 .lock-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 44px; font-size: 0.82rem; }
@@ -5586,9 +5596,22 @@ a.validate-secondary { text-decoration: none; }
    small for a chip: same icon, word and role text colour, no background. The wash marks a figure whose value just
    changed: neutral, never a hue ("changed" is not a role), one shot of 1200 ms, none with reduced motion. */
 .ui-chip.is-bare { height: auto; padding: 0; background: none; }
-#wallet-unpaid-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-#wallet-unpaid-label .ui-chip.is-bare, #wallet-staked-label .ui-chip.is-bare { font-size: 0.72rem; }
-#wallet-unpaid-label .ui-chip.is-bare .bx, #wallet-staked-label .ui-chip.is-bare .bx { font-size: 14px; }
+#wallet-unpaid-label, #wallet-claimed-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#wallet-unpaid-label .ui-chip.is-bare, #wallet-claimed-label .ui-chip.is-bare, #wallet-staked-label .ui-chip.is-bare { font-size: 0.72rem; }
+#wallet-unpaid-label .ui-chip.is-bare .bx, #wallet-claimed-label .ui-chip.is-bare .bx, #wallet-staked-label .ui-chip.is-bare .bx { font-size: 14px; }
+/* The "could not refresh" line (lib/gov-post-action.js) sits straight under a card header: inset like the header, not flush with the card edge.
+   Wallet cards, then the council, democracy, treasury and validator status cards that host the same line. */
+#wsec-recent-tx > .ui-panel.is-line, #wsec-rewards > .ui-panel.is-line, #wallet-apr-card > .ui-panel.is-line,
+.council-page .list-container > .ui-panel.is-line, #democracy-content .list-container > .ui-panel.is-line, #treasury-content .list-container > .ui-panel.is-line,
+.validate-dash > .ui-panel.is-line { padding: 12px 24px 0; }
+@media (max-width: 640px) {
+    #wsec-recent-tx > .ui-panel.is-line, #wsec-rewards > .ui-panel.is-line, #wallet-apr-card > .ui-panel.is-line,
+    .council-page .list-container > .ui-panel.is-line, #democracy-content .list-container > .ui-panel.is-line, #treasury-content .list-container > .ui-panel.is-line,
+    .validate-dash > .ui-panel.is-line { padding: 12px 16px 0; }
+    /* "Updating" and the 7D, 30D, 90D and All buttons wrap under the title instead of running past a 375 px card. */
+    #wsec-recent-tx .list-header, #wsec-rewards .list-header, #wallet-apr-card .list-header { flex-wrap: wrap; gap: 8px 12px; }
+    #wsec-recent-tx .list-header h2, #wsec-rewards .list-header h2, #wallet-apr-card .list-header h2 { flex-wrap: wrap; }
+}
 #wallet-payout-reorg { margin: 12px 24px 0; }
 #payout-behind-line { margin: 0 0 12px; }
 @keyframes post-action-wash { from { background-color: rgba(255, 255, 255, 0.08); } to { background-color: transparent; } }
@@ -5608,7 +5631,7 @@ a.validate-secondary { text-decoration: none; }
 .lock-row-msg .validate-secondary, .lock-failed .validate-secondary, .lock-behind .validate-secondary { min-height: 44px; }
 .lock-failed, .lock-behind { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin: 12px 24px 0; }
 .lock-failed { margin-bottom: 24px; }
-.lock-row.is-leaving { overflow: hidden; max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; margin: 0; border-width: 0; opacity: 0; transition: max-height 240ms ease-in, opacity 240ms ease-in, padding 240ms ease-in; }
+.lock-row.is-leaving { overflow: hidden; max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; margin: 0; border-width: 0; opacity: 0; transition: max-height 240ms ease-out, opacity 240ms ease-out, padding 240ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .lock-row.is-leaving { transition: none; } }
 
 /* Stake PDEX card, simple view (lib/stake-card-view.js; design 2026-11-22-stake-card-simple-and-advanced.md, section 8).
@@ -5724,13 +5747,13 @@ a.validate-secondary { text-decoration: none; }
 .stake-confirm-actions .validate-secondary, .stake-auto-btn { min-height: 44px; }
 .stake-sign .stake-call-wrapper { margin: 4px 0 0; font-size: 0.82rem; }
 .stake-modal-body.is-advanced #submit-stake-tx-btn.validate-primary { margin-top: 0; }
-@media (min-width: 641px) {
+@media (min-width: 900px) {
     .stake-modal-body.is-advanced { display: grid; grid-template-columns: 360px minmax(0, 1fr); grid-template-rows: repeat(9, auto) 1fr; column-gap: 24px; align-content: start; }
     .stake-modal-body.is-advanced > * { grid-column: 1; min-width: 0; }
     .stake-modal-body.is-advanced > .stake-title-row, .stake-modal-body.is-advanced > .stake-intro { grid-column: 1 / -1; }
     .stake-modal-body.is-advanced > .stake-advanced { grid-column: 2; grid-row: 3 / -1; }
 }
-@media (max-width: 640px) {
+@media (max-width: 899px) {
     .stake-modal-body.is-advanced { display: flex; flex-direction: column; }
     .stake-modal-body.is-advanced .stake-advanced, .stake-modal-body.is-advanced .stake-pickers { display: contents; }
     .stake-modal-body.is-advanced .stake-title-row { order: 1; }

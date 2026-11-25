@@ -632,7 +632,7 @@ async function refusesWhileUncertain(c, typed = '25', { mark = true } = {}) {
     await flush();
     assert.equal(c.open(), true, 'the My Account button opens the card');
     await c.type(typed);
-    assert.equal(c.sc('SC-109'), SC['SC-109'], 'the card does not refuse with SC-109 while the bonded state is uncertain');
+    assert.equal(c.sc('SC-109b'), SC['SC-109b'], 'the card does not refuse with SC-109b while the bonded state is uncertain (fidelity review ruling c)');
     assert.equal(c.q('#submit-stake-tx-btn').disabled, true, 'the primary is active while the bonded state is uncertain');
     await c.submit();
     assert.deepEqual(c.sent.length > sent ? callsOf(c, c.sent.length - 1) : [], [], 'the press signed while the bonded state is uncertain');
@@ -942,8 +942,8 @@ describe('help: the nominating and choosing-validators topics speak the card\'s 
         const gone = ['The Stake PDEX card has one field, the amount, and one button.', 'shown behind one disclosure, and rewards are added to the stake.',
             'A stake or a change of validators made during era N counts from era N+1. '];
         assert.deepEqual(gone.filter(x => b.includes(x)), [], 'a false sentence is still in the topic');
-        for (const x of ['The simple view of the Stake PDEX card has one field, the amount.',
-            'By default a first stake has its rewards added to the stake; an existing stake keeps its rewards setting, which the card states.',
+        for (const x of ['The Stake PDEX card asks for one thing, the amount.',
+            'If you already stake, your rewards setting stays as it is and the card says what it is.',
             'A stake or a change of validators made during era N counts from era N+1, or from N+2 if made after era N\'s election snapshot.']) assert.ok(b.includes(x), `missing: ${x}`);
     });
     test('choosing validators: "Past return" for the figure and the Advanced view by name; "No history yet" for no figure', () => {
@@ -1017,7 +1017,7 @@ describe('WP3 review leftovers', () => {
         c.input().value = '300';   // no input event: the review still shows 150
         await c.submit();
         assert.equal(c.sent.length, 0, `signed ${c.sent.length ? 'a plan of 300' : ''} while the review showed 150`);
-        assert.equal(c.sc('SC-39'), SC['SC-39']);
+        assert.equal(c.sc('SC-39b'), SC['SC-39b'], 'the plan on screen changed: SC-39b (fidelity review ruling b)');
         assert.equal(c.input().value, '300', 'the amount is never rewritten (M4)');
         assert.ok(text(c.q('#stake-simple .stake-plan-lines')).includes('Stake 300 PDEX'), 'the card is drawn again on what would be signed');
         await c.submit();

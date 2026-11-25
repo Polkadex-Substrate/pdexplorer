@@ -256,7 +256,8 @@ describe('markup and model', () => {
         assert.equal(norm(p.pr.buttonHtml(none)), norm(`<button class="wallet-action-btn" id="wallet-act-payout" disabled title="No unclaimed rewards to pay out."><i class='bx bx-gift'></i><div><strong>Pay out rewards</strong><span>0 unclaimed entries</span></div></button><span id="wallet-payout-why" class="sr-only"></span>`));
         assert.equal(norm(p.pr.tileHtml(w)), norm(`<div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards</div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">6.7500 PDEX</div></div>`));
         const computing = { ...w, rewards: { ...w.rewards, unclaimedFresh: false } };
-        assert.match(p.pr.tileHtml(computing), /computing/);
+        // Fidelity review R4: the faint "computing..." note became the bare S1 mark in the label row; the value is the figure alone.
+        assert.equal(norm(p.pr.tileHtml(computing)), norm(`<div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards<span class="ui-chip is-wait is-bare"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Updating</span></div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">6.7500 PDEX</div></div>`));
     });
     test('the model: counts from unpaidCount (the list is capped at 200), totals by subtraction', () => {
         const rewards = { unpaidTotal: 100, unpaidCount: 250, unpaidEntries: PAIRS.map(x => ({ ...x, amount: 1 })) };

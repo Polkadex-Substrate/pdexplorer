@@ -40,6 +40,8 @@ const addr = (n) => encodeAddress(new Uint8Array(32).fill(n), 88);
 const PDEX = 10n ** 12n;
 const flush = async () => { for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 1)); };
 const V = (n) => addr(40 + n);
+// Fidelity review 2026-11-24, ruling c: the bonded state could not be read.
+const SC109B = 'The explorer cannot confirm yet what this account has staked, so nothing is signed from here. Close this card and open it again in a minute.';
 const LETTER = (n) => String.fromCharCode(64 + n);
 
 const LIFT = ['openStakeModal', 'loadStakeChoice', 'stakeCardView', 'submitStakeTx', 'fillStakeMax', 'submitSignedTx', 'showStakeError', 'clearStakeError',
@@ -493,8 +495,8 @@ describe('existing stakers: never re-picked, a replacement only offered (section
     });
     test('some not earning: SC-160 and "See a replacement"; adding PDEX before confirming signs no nominate', async () => {
         const c = await card({ data: staker([1, 20]), snapshots: [await snapshotOf([...fullList(), val(20, 18, { active: false, name: 'Validator T' })])] });
-        assert.equal(c.sc('SC-160'), '1 of your 2 validators are not earning for you.');
-        assert.ok(c.q('[data-sc="SC-160"]')?.closest('.ui-panel.is-warn'), 'an amber panel');
+        assert.equal(c.sc('SC-160s'), '1 of your 2 validators is not earning for you.', 'one: SC-160s (fidelity review M2)');
+        assert.ok(c.q('[data-sc="SC-160s"]')?.closest('.ui-panel.is-warn'), 'an amber panel');
         assert.equal(c.sc('SC-161a'), 'See a replacement');
         assert.ok(c.q('[data-sc="SC-161a"]')?.classList.contains('validate-secondary'), 'a secondary, not a second primary');
         assert.equal(c.primaries(), 1);
@@ -512,7 +514,7 @@ describe('existing stakers: never re-picked, a replacement only offered (section
         assert.equal(c.q('[data-group="removed"] li[data-addr] [data-sc="SC-164a"]')?.textContent.trim(), 'not active this era');
         assert.deepEqual(listed(c, '[data-group="added"] li[data-addr]'), [2, 3, 4, 5, 6, 7, 8].map(V));
         assert.deepEqual(['SC-163a', 'SC-163b', 'SC-163c'].map(c.sc), ['Kept', 'Removed', 'Added']);
-        assert.equal(c.sc('SC-30d'), 'Replacement: keep 1, replace 1');
+        assert.equal(c.sc('SC-30d'), 'Replacement: keep 1, remove 1, add 7', 'fidelity review M3');
         assert.equal(c.sc('SC-03c'), 'Amount to add (PDEX, optional)');
         assert.equal(c.primary().disabled, false, 'the amount is optional once a replacement is shown');
         assert.equal(c.primary().textContent.trim(), 'Sign and update validators', 'SC-51');
@@ -528,18 +530,18 @@ describe('existing stakers: never re-picked, a replacement only offered (section
     test('"Change validators" with a keep list opens on the proposal built from it', async () => {
         const snap = await snapshotOf([...fullList(), val(20, 18, { active: false, name: 'Validator T' })]);
         const c = await card({ data: staker([1, 20]), snapshots: [snap], keep: [V(1)] });
-        assert.equal(c.sc('SC-30d'), 'Replacement: keep 1, replace 1');
+        assert.equal(c.sc('SC-30d'), 'Replacement: keep 1, remove 1, add 7', 'fidelity review M3');
         assert.deepEqual(listed(c, '[data-group="kept"] li[data-addr]'), [V(1)]);
         c.close();
     });
-    test('a stake that could not be read (leftover c): SC-109 under the inactive primary, nothing signed', async () => {
+    test('a stake that could not be read (leftover c): SC-109b under the inactive primary, nothing signed', async () => {
         const c = await card({ data: staker([1, 2], { totalStaked: 0, activeStaked: 0, ledgerRead: 'failed' }) });
         await c.type('150');
-        assert.equal(c.sc('SC-109'), 'Your account is still loading. Try again in a moment.');
+        assert.equal(c.sc('SC-109b'), SC109B, 'fidelity review ruling c');
         assert.equal(c.primary().disabled, true);
         await c.submit();
         assert.equal(c.sent.length + c.built.length + c.reviews.length, 0);
-        assert.equal(c.errorText(), 'Your account is still loading. Try again in a moment.');
+        assert.equal(c.errorText(), SC109B);
         c.close();
     });
     test('staked with no validators (state 8): SC-140, the rule picks, and the primary signs nominate with no amount', async () => {
@@ -605,6 +607,8 @@ describe('the rewards setting is read from the chain (section 3.3)', () => {
 const planLines = (c) => c.qa('.stake-plan-lines li').map(li => li.textContent.trim());
 const nothingSent = (c) => c.sent.length + c.built.length + c.reviews.length;
 const SC39 = 'The validator list changed while this was open. Check the new choice, then sign.';
+// Fidelity review 2026-11-24, ruling b: the account (or the plan on screen) changed, not a pick.
+const SC39B = 'Your account changed while this was open. Check the amount and the validators, then sign.';
 const SC122 = 'Validators cannot be chosen right now, so there is nothing to sign yet.';
 
 describe('the press plans from the data the card was drawn from (WP2 review, item 1; sections 4.2, 9: M2, M6)', () => {
@@ -618,7 +622,7 @@ describe('the press plans from the data the card was drawn from (WP2 review, ite
         c.tab.ctx.currentWalletData = stakedNow();
         await c.submit();
         assert.equal(nothingSent(c), 0, 'the press signed from data the card never showed (bondExtra alone under a card showing bond and nominate)');
-        assert.equal(c.sc('SC-39'), SC39);
+        assert.equal(c.sc('SC-39b'), SC39B, 'the account or the plan on screen changed: SC-39b (fidelity review ruling b)');
         assert.equal(c.q('details.stake-validators')?.open, true, 'the card opens on what it now shows');
         assert.equal(c.sc('SC-03b'), 'Amount to add (PDEX)');
         assert.equal(c.sc('SC-30c'), 'Your 8 validators stay as they are');
@@ -637,7 +641,7 @@ describe('the press plans from the data the card was drawn from (WP2 review, ite
         c.tab.ctx.currentWalletData = staker([3, 4]);
         await c.submit();
         assert.equal(nothingSent(c), 0, 'nominate with the old list would silently undo the change made elsewhere');
-        assert.equal(c.sc('SC-39'), SC39);
+        assert.equal(c.sc('SC-39b'), SC39B, 'the account or the plan on screen changed: SC-39b (fidelity review ruling b)');
         assert.equal(c.sc('SC-30c'), 'Your 2 validators stay as they are');
         assert.deepEqual(listed(c), [V(3), V(4)], 'the card lists the validators the account has now');
         assert.deepEqual(planLines(c), ['Add 5 PDEX to your stake']);
@@ -768,7 +772,7 @@ describe('the press is frozen against edits during the recheck (WP2 money path; 
         reload.resolve(snap);
         await done; await flush();
         assert.equal(nothingSent(c), 0, `signed ${c.sent.length ? signedCalls(c)[0].args[0].toBigInt() / PDEX : 0} PDEX under a review showing 300`);
-        assert.equal(c.sc('SC-39'), SC39);
+        assert.equal(c.sc('SC-39b'), SC39B, 'the account or the plan on screen changed: SC-39b (fidelity review ruling b)');
         assert.equal(c.input().value, '300', 'the amount is never rewritten (M4)');
         assert.deepEqual(held(c), NONE_HELD);
         await c.submit();
@@ -789,7 +793,7 @@ describe('the press is frozen against edits during the recheck (WP2 money path; 
         reload.resolve(snap);
         await done; await flush();
         assert.equal(nothingSent(c), 0, 'nominate signed with the eight picks while the card shows seven');
-        assert.equal(c.sc('SC-39'), SC39);
+        assert.equal(c.sc('SC-39b'), SC39B, 'the account or the plan on screen changed: SC-39b (fidelity review ruling b)');
         c.close();
     });
     test('(b) the card closed and reopened during the reload: nothing is signed, and the fresh card is empty and not busy', async () => {
@@ -941,6 +945,86 @@ describe('the card is released when the wallet never answers (money path: a fail
         answer(); await one.done; await flush();
         assert.deepEqual(held(c), ALL_HELD, 'the first press released the second one\'s hold');
         void two;
+        c.close();
+    });
+});
+
+// ── Fidelity review 2026-11-24 (cto-team/plans/2026-11-24-fidelity-review-locks-stake-refresh.md): M2, M3, M4, rulings b and c, S1, S2, S5 ──
+const SC14F = 'The rewards change you made in Advanced is signed only from Advanced.';
+describe('fidelity review 2026-11-24: the Stake PDEX card', () => {
+    test('M2: two of four not earning keeps SC-160 ("are"); one is SC-160s ("is")', async () => {
+        const two = await card({ data: staker([1, 2, 20, 21]), snapshots: [await snapshotOf([...fullList(), val(20, 18, { active: false, name: 'Validator T' }), val(21, 18, { active: false, name: 'Validator U' })])] });
+        assert.equal(two.sc('SC-160'), '2 of your 4 validators are not earning for you.');
+        assert.equal(two.sc('SC-160s'), '');
+        two.close();
+        const one = await card({ data: staker([1, 2, 3, 20]), snapshots: [await snapshotOf([...fullList(), val(20, 18, { active: false, name: 'Validator T' })])] });
+        assert.equal(one.sc('SC-160s'), '1 of your 4 validators is not earning for you.');
+        assert.equal(one.sc('SC-160'), '', 'never "1 ... are"');
+        one.close();
+    });
+    test('M3: the replacement headline counts what is added (4 validators become 8: keep 3, remove 1, add 5)', async () => {
+        const c = await card({ data: staker([1, 2, 3, 20]), snapshots: [await snapshotOf([...fullList(), val(20, 18, { active: false, name: 'Validator T' })])] });
+        await c.click('[data-sc="SC-161a"]');
+        assert.equal(listed(c, '[data-group="added"] li[data-addr]').length, 5);
+        assert.equal(c.sc('SC-30d'), 'Replacement: keep 3, remove 1, add 5');
+        c.close();
+    });
+    test('M4: a rewards change made in Advanced is stated in Simple with SC-14f (no new accent); going back to the setting read drops it', async () => {
+        const c = await card({ data: staker([1, 2]), payee: { kind: 'stash', account: '' } });
+        assert.equal(c.sc('SC-14f'), '', 'nothing changed yet');
+        await c.click('#stake-view-switch');
+        const radio = c.q('#stake-rewards input[name="stake-payee"][value="staked"]');
+        assert.ok(radio, 'the Add to my stake radio');
+        radio.checked = true;
+        radio.dispatchEvent(new c.doc.defaultView.Event('change', { bubbles: true }));
+        await flush();
+        await c.click('#stake-view-switch');
+        assert.equal(c.sc('SC-14b'), 'Rewards are paid to this account as spendable PDEX.', 'Simple still states the setting on chain');
+        assert.equal(c.sc('SC-14f'), SC14F);
+        const line = c.q('[data-sc="SC-14f"]').closest('li');
+        assert.ok(line && line.querySelector('[data-sc="SC-14b"]'), 'a second sentence of the rewards line');
+        assert.ok(!line.classList.contains('ui-panel'), 'no new accent');
+        await c.click('#stake-view-switch');
+        const back = c.q('#stake-rewards input[name="stake-payee"][value="stash"]');
+        back.checked = true;
+        back.dispatchEvent(new c.doc.defaultView.Event('change', { bubbles: true }));
+        await flush();
+        await c.click('#stake-view-switch');
+        assert.equal(c.sc('SC-14f'), '', 'the setting read again: no change, no hint');
+        c.close();
+    });
+    test('ruling c: the Advanced figure slot says SC-109c when the stake could not be read', async () => {
+        const c = await card({ data: staker([1, 2], { totalStaked: 0, activeStaked: 0, ledgerRead: 'failed' }) });
+        await c.click('#stake-view-switch');
+        assert.equal(c.doc.getElementById('stake-current')?.textContent.trim(), 'Could not be read');
+        c.close();
+    });
+    test('S1: no SC-04 hint above SC-115 (state 9)', async () => {
+        const c = await card({ data: firstTimer({ free: 101.02, transferable: 100.02 }) });
+        assert.ok(c.sc('SC-115'));
+        assert.equal(c.sc('SC-04'), '', '"You can stake up to" directly above "To stake you need at least"');
+        c.close();
+    });
+    test('S2: Advanced states the figure once (no SC-04 hint beside "You can stake up to")', async () => {
+        const c = await card({ data: firstTimer() });
+        assert.equal(c.sc('SC-04'), 'You can stake up to 499.8 PDEX.', 'the simple view keeps it');
+        await c.click('#stake-view-switch');
+        assert.equal(c.sc('SC-04'), '');
+        assert.equal(c.doc.getElementById('stake-max-figure')?.textContent.trim(), '499.8 PDEX');
+        c.close();
+    });
+    test('S5: a list that failed to load in Advanced offers Try again (SC-113), which loads it again', async () => {
+        const c = await card({ data: firstTimer(), snapshots: [new Error('down'), await snapshotOf(fullList())] });
+        await c.click('#stake-view-switch');
+        const list = c.doc.getElementById('stake-validator-list');
+        assert.equal(list.querySelector('[data-sc="SC-112"]')?.textContent.trim(), 'Could not load the validator list.');
+        const retry = list.querySelector('[data-sc="SC-113"]');
+        assert.ok(retry, 'no Try again beside SC-112 in the Advanced list');
+        assert.equal(retry.textContent.trim(), 'Try again');
+        const before = c.loads();
+        retry.click();
+        await flush();
+        assert.equal(c.loads(), before + 1, 'the list is loaded again');
         c.close();
     });
 });

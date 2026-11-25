@@ -41,7 +41,9 @@ const addr = (n) => encodeAddress(new Uint8Array(32).fill(n), 88);
 const [V1, V2] = [21, 22].map(addr);
 const PDEX = 10n ** 12n;
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 1)); };
-const SC109 = 'Your account is still loading. Try again in a moment.';
+// Fidelity review 2026-11-24, ruling c: SC-109b for the card, SC-109c in the figure slot.
+const SC109 = 'The explorer cannot confirm yet what this account has staked, so nothing is signed from here. Close this card and open it again in a minute.';
+const SC109C = 'Could not be read';
 
 function lift(name) {
     const at = SCRIPT.indexOf(`function ${name}(`);
@@ -208,7 +210,7 @@ describe('c: a stake that could not be read is not 0', () => {
         const failed = tile();
         assert.ok(failed, 'no Total Staked tile');
         assert.ok(!/0\.0000 PDEX/.test(failed.textContent), `a failed read shows as ${failed.querySelector('.value').textContent.trim()}`);
-        assert.equal(failed.querySelector('.value').textContent.trim(), SC109);
+        assert.equal(failed.querySelector('.value').textContent.trim(), SC109C);
         ctx.renderWalletDashboard(wallet({ totalStaked: 0, nominating: [], ledgerRead: 'ok' }), { history: [], configured: false }, null);
         assert.equal(tile().querySelector('.value').textContent.trim(), '0.0000 PDEX', 'a read that worked still says 0');
         win.happyDOM.close();

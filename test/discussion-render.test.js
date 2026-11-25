@@ -61,6 +61,8 @@ async function openThread(body, signedInAs, viewOpts = {}) {
         getStoredWallet: () => signedInAs || null,
         sharedEscapeHtml: escapeHtml, decodeAddress, DISCUSS_TOKEN_KEY: 'pdex_discuss_session',
         discussSignIn: async () => false, submitDiscussionPost: () => {},
+        // R6: the thread registers where it is drawn (lib/server-refresh.js); not under test here.
+        serverRefresh: { threadShown() {}, thread() {}, labels() {}, signedIn() {} },
     };
     const run = new Function(...Object.keys(env), code + '\nreturn fetchDiscussionThread;')(...Object.values(env));
     const realError = console.error;   // the lib logs through the global console

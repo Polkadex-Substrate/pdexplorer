@@ -165,7 +165,7 @@ describe('My Account before the R3 move: the dashboard as drawn', () => {
         p.render(empty());
         const s = signature(p.doc);
         assert.equal(s.heading, 'My Account ?');
-        assert.deepEqual(s.tiles, ['Total Balance = 0.0000 PDEX $0.00', 'Total Staked = 0.0000 PDEX', 'Claimed Rewards = 0.0000 PDEX', 'Unpaid Rewards = 0.0000 PDEX computing…']);
+        assert.deepEqual(s.tiles, ['Total Balance = 0.0000 PDEX $0.00', 'Total Staked = 0.0000 PDEX', 'Claimed Rewards = 0.0000 PDEX', 'Unpaid RewardsUpdating = 0.0000 PDEX'], 'fidelity review R4: the bare S1 mark in the label row (the label and its chip, read as text), not "computing..." in the value');
         assert.deepEqual(s.actions, [
             { id: 'wallet-act-send', label: 'Send PDEX | Transfer to any Polkadex address', disabled: true, title: 'No transferable balance available.', aria: null },
             { id: 'wallet-act-stake', label: 'Stake | Stake PDEX and earn rewards', disabled: false, title: null, aria: null },

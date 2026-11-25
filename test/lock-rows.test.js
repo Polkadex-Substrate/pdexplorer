@@ -107,7 +107,7 @@ describe('(1) every row kind of section 4: chip role, icon, word, group and line
         ['K23 named reserve', { reserves: [{ id: 'abcdefgh', amount: s(PDEX) }], reserved: s(PDEX) }, 'K23', 'rest', NR, 'Reserved by a chain module. That module releases it.'],
         ['K24 identity', { identity: { deposit: s(PDEX), subsDeposit: '0', subs: 0 }, reserved: s(PDEX) }, 'K24', 'rest', DEP, 'Deposit for your on-chain identity. Returns when you clear your identity.'],
         ['K25 subs alone', { identity: { deposit: '0', subsDeposit: s(PDEX), subs: 2 }, reserved: s(PDEX) }, 'K25', 'rest', DEP, 'Deposit for 2 sub-accounts. Returns when you remove them.'],
-        ['K26 proxies', { proxy: { deposit: s(PDEX), count: 1, announcementDeposit: '0' }, reserved: s(PDEX) }, 'K26', 'rest', DEP, 'Deposit for 1 proxy. Returns when you remove them.'],
+        ['K26 proxies', { proxy: { deposit: s(PDEX), count: 1, announcementDeposit: '0' }, reserved: s(PDEX) }, 'K26', 'rest', DEP, 'Deposit for 1 proxy. Returns when you remove it.'],
         ['K27 announcements', { proxy: { deposit: '0', count: 0, announcementDeposit: s(PDEX) }, reserved: s(PDEX) }, 'K27', 'rest', DEP,
             'Deposit for announced proxy calls. Returns when the call is executed or the announcement is removed.'],
         ['K28 candidacy', { elections: { voter: null, candidacy: { role: 'Candidate', deposit: s(PDEX) } }, reserved: s(PDEX) }, 'K28', 'rest', ['neutral', 'bx-lock-alt', 'Bond'],
@@ -183,7 +183,7 @@ describe('(1) every row kind of section 4: chip role, icon, word, group and line
         const two = sum({ locks: [lock('staking ', 60n * PDEX), lock('democrac', 40n * PDEX)], frozen: s(60n * PDEX), democracy: { delegating: false, lockingPeriod: PERIOD, votes: [], referenda: {}, prior: { until: BLOCK - 1, amount: s(40n * PDEX) } } });
         assert.deepEqual([two.id, two.chip.word, two.text], ['SUM2', '2 ready now', '2 items are ready now. They are listed first.']);
         const next = sum({ holds: [{ id: 'Staking.Staking', amount: s(30n * PDEX) }], reserved: s(30n * PDEX), staking: bonded(30n * PDEX, [{ value: s(5n * PDEX), era: 124 }]) });
-        assert.deepEqual([next.id, next.chip.role, next.chip.icon, next.chip.word, next.text], ['SUM3', 'neutral', 'bx-time-five', 'Nothing ready yet', 'Next: 5 PDEX, about 2026-11-26.']);
+        assert.deepEqual([next.id, next.chip.role, next.chip.icon, next.chip.word, next.text], ['SUM3', 'neutral', 'bx-time-five', 'Nothing to collect yet', 'Next: 5 PDEX, about 2026-11-26.']);   // fidelity review L4
         const quiet = sum({ reserved: s(PDEX), identity: { deposit: s(PDEX), subsDeposit: '0', subs: 0 } });
         assert.deepEqual([quiet.id, quiet.chip.icon, quiet.text], ['SUM4', 'bx-lock-alt', 'Nothing here needs you right now.']);
         assert.equal(lockSummary({ groups: [] }), null);
@@ -236,7 +236,7 @@ describe('(2) the CEO\'s account', () => {
         assert.equal(text(u.querySelector('.ui-chip')), 'Until about 2026-12-16');
         assert.equal(text(u.querySelector('.lock-line')), 'You can withdraw it here from about 2026-12-16 (24 days).');
         assert.equal(text(d.querySelector('[data-lock-group="rest"] h3')), 'Nothing to do right now');
-        assert.equal(text(d.querySelector('.lock-summary')), 'Nothing ready yet Next: 280.0586 PDEX, about 2026-12-16.');
+        assert.equal(text(d.querySelector('.lock-summary')), 'Nothing to collect yet Next: 280.0586 PDEX, about 2026-12-16.', 'fidelity review L4');
     });
     test('no row shows phrelect, Staking.Staking or a call name outside Details; Details still holds the id', () => {
         const d = render('wallet');
@@ -676,5 +676,26 @@ describe('(12) the status card uses the button\'s words', () => {
         const wallet = lockDisplay(m, { canSign: true, connected: ME, page: 'wallet', unstake: true, now: NOW });
         assert.equal(wallet.groups[0].rows.find(r => r.kindId === 'K01').action.id, 'B9');
         assert.equal(lockDisplay(m, { canSign: true, connected: ME, page: 'wallet', unstake: false, now: NOW }).groups.flatMap(g => g.rows).find(r => r.kindId === 'K01').action, null);
+    });
+});
+
+// ── Fidelity review 2026-11-24 (cto-team/plans/2026-11-24-fidelity-review-locks-stake-refresh.md), L3 and L5 ──
+describe('fidelity review L3 and L5: one deposit says "it"; a split row says how its staking parts add up', () => {
+    const only = (over) => lockDisplay(model(over), { canSign: true, connected: ME, now: NOW }).groups.flatMap(g => g.rows);
+    test('L3: K25 and K26 with one: "Returns when you remove it."', () => {
+        const sub = only({ identity: { deposit: '0', subsDeposit: s(PDEX), subs: 1 }, reserved: s(PDEX) }).find(r => r.kindId === 'K25');
+        assert.equal(sub && sub.line, 'Deposit for 1 sub-account. Returns when you remove it.');
+        const proxy = only({ proxy: { deposit: s(PDEX), count: 1, announcementDeposit: '0' }, reserved: s(PDEX) }).find(r => r.kindId === 'K26');
+        assert.equal(proxy && proxy.line, 'Deposit for 1 proxy. Returns when you remove it.');
+        const two = only({ proxy: { deposit: s(PDEX), count: 2, announcementDeposit: '0' }, reserved: s(PDEX) }).find(r => r.kindId === 'K26');
+        assert.equal(two && two.line, 'Deposit for 2 proxies. Returns when you remove them.', 'more than one keeps "them"');
+    });
+    test('L5: the CEO\'s split Staked row: Details says the whole and its two parts, never "17,348.0818 PDEX bonded" beside 17,068.0232 Staked', () => {
+        const d = dom(renderBalanceLocks(CEO(), { helpIcon: () => '', canSign: true, connected: ME, page: 'wallet', unstake: true, now: NOW }));
+        const staked = rowByName(d, 'Staked');
+        assert.equal(text(staked.querySelector('.lock-amount')), '17,068.0232 PDEX');
+        const details = qa(staked, '.lock-details > p').map(text);
+        assert.ok(details.includes('Of 17,348.0818 PDEX in staking, 17,068.0232 is staked and 280.0586 is unstaking.'), `Details: ${JSON.stringify(details)}`);
+        assert.ok(!details.some(t => /17,348\.0818 PDEX bonded/.test(t)), 'the bonded total stated as if it were this row');
     });
 });

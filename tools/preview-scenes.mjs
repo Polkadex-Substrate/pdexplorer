@@ -17,6 +17,8 @@
 // package may name its own file prefix, as R1 does: r1-<scene>-<width>.html; a
 // package may bring its own page guard as `check`). WP2: the Validate hub, the dashboard and /validate/keys.
 // locks: the Balance breakdown redesign (locks-<scene>-<width>.html), no primary in any scene.
+// sections: My Account that updates itself (sections-<scene>-<width>.html, fidelity review 2026-11-24 P1): the REAL frame,
+// patches and indicators of lib/wallet-sections.js, the REAL stake and payout parts, told what the core tells them.
 // stake: the Stake PDEX card's simple view (stake-simple-<scene>-<width>.html, design 10.3 WP2): the real modal markup
 // over the wallet page, the REAL lib/stake-card-view.js over a validator snapshot run through the real loadPickerData.
 // Its advanced view (stake-advanced-<scene>-<width>.html, design 10.3 WP3) adds the REAL picker (lib/stake-picker-view.js)
@@ -42,7 +44,7 @@ import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 import { mountChooser, fakeWallet, acct, addr, tick } from '../test/helpers/chooser-world.js';
 import { mountPairingPanel } from '../lib/walletconnect-view.js';
-import { rootProps } from '../test/helpers/css-rules.js';
+import { rootProps, parseRules } from '../test/helpers/css-rules.js';
 import { mountValidatePage, mountKeysPage } from '../lib/validator-status-view.js';
 import { validatorStatusModel } from '../lib/validator-status.js';
 import { EXPECTED_LAYOUT } from '../lib/session-keys.js';
@@ -58,6 +60,7 @@ import { describeAccountLocks } from '../lib/balance-locks.js';
 import { mountBalanceLocks } from '../lib/balance-locks-view.js';
 import { caughtUp, pollDeadlineMs } from '../lib/freshness.js';
 import { createStakeCard } from '../lib/stake-card-view.js';
+import { stakeListFailedHtml } from '../lib/stake-plan.js';
 import { loadPickerData, createStakePicker } from '../lib/stake-picker-view.js';
 import { ApiPromise } from '@polkadot/api';
 import { loadFixture } from '../test/helpers/extrinsic-builders.js';
@@ -65,6 +68,8 @@ import { mockProvider } from '../test/helpers/mock-provider.js';
 import { FEE_MARGIN } from '../lib/fee-preflight.js';
 import { createStakeRefresh, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, stakeIntentNoteHtml } from '../lib/stake-refresh.js';
 import { classifyThrownError } from '../lib/tx-status.js';
+import { createWalletSections, actionBarHtml } from '../lib/wallet-sections.js';
+import { REFRESH_UI } from '../lib/refresh-ui.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -491,7 +496,22 @@ function checkLocksScene(w, s, err) {
     if (LOCK_CHAIN_ID.test(shown.textContent)) err.push(`a chain id outside Details: ${shown.textContent.match(LOCK_CHAIN_ID)[0]}`);
     for (const b of panel.querySelectorAll('button')) if (!b.classList.contains('ui-action') && !b.classList.contains('validate-secondary') && !b.classList.contains('validate-text-btn')) err.push(`a button that is not an action button: ${b.className}`);
     if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+    // Fidelity review L1: one visible action per row while a confirm strip is open. [hidden] only hides what the
+    // stylesheet lets it hide: a class with its own display needs a ".class[hidden] { display: none }" rule.
+    for (const li of panel.querySelectorAll('li.lock-row')) {
+        if (!li.querySelector('.lock-confirm')) continue;
+        const n = Array.from(li.querySelectorAll('[data-lock-action]')).filter(b => drawnUnderCss(b)).length;
+        if (n !== 1) err.push(`${n} visible [data-lock-action] in the row "${(li.querySelector('.lock-name') || {}).textContent || ''}" while its confirm strip is open`);
+    }
 }
+const DISPLAY = new Map();
+for (const r of parseRules(STYLES)) if (!r.media) for (const sel of r.selectors) if (/^\.[\w-]+(\[hidden\])?$/.test(sel) && r.decls.display) DISPLAY.set(sel, r.decls.display);
+const hiddenWins = (el) => {
+    const cls = Array.from(el.classList || []);
+    const shows = cls.some(c => { const d = DISPLAY.get('.' + c); return d && d !== 'none'; });
+    return !shows || cls.some(c => DISPLAY.get(`.${c}[hidden]`) === 'none');
+};
+function drawnUnderCss(el) { for (let e = el; e; e = e.parentElement) if (e.hasAttribute && e.hasAttribute('hidden') && hiddenWins(e)) return false; return true; }
 
 // ── Stake card WP2 (cto-team/plans/2026-11-22-stake-card-simple-and-advanced.md, section 10.3): the simple view of the
 // Stake PDEX card open over My Account, own account connected. The card is the REAL lib/stake-card-view.js in the REAL
@@ -543,7 +563,7 @@ async function stakeWorld({ data, list = slist(), full = true, payee = { kind: '
     if (data.staking.totalStaked > 0) card.setPayee(payee);
     if (failed) {
         card.setSnapshot(new Error('down'));
-        doc.getElementById('stake-validator-list').innerHTML = `<div class="stake-empty">${escapeHtml('Could not load the validator list.')}</div>`;
+        doc.getElementById('stake-validator-list').innerHTML = stakeListFailedHtml();   // the markup script.js loadStakeChoice draws
     } else {
         const snap = await ssnap(list, full);
         card.setSnapshot(snap);
@@ -567,7 +587,7 @@ const STAKE_SCENES = [
     { id: 'stake-simple-picks-open', primary: 1, need: 'details.stake-validators[open] [data-sc="SC-32"]', build: () => stakeWorld({ data: sfirst(), typed: '250',
         steps: (w) => { w.q('details.stake-validators').open = true; w.q('details.stake-call-details').open = true; } }) },
     { id: 'stake-simple-existing-add', primary: 1, need: '[data-sc="SC-11b"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), typed: '25' }) },
-    { id: 'stake-simple-unhealthy', primary: 1, need: '[data-sc="SC-160"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 20]), list: [...slist(), STAKE_T()] }) },
+    { id: 'stake-simple-unhealthy', primary: 1, need: '[data-sc="SC-160s"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 20]), list: [...slist(), STAKE_T()] }) },
     { id: 'stake-simple-replacement', primary: 1, need: '.stake-proposal [data-group="removed"] .ui-chip', build: () => stakeWorld({ data: sstaker([1, 2, 3, 20]), list: [...slist(), STAKE_T()],
         steps: (w) => w.q('[data-stake-action="replace"]').click() }) },
     { id: 'stake-simple-short-pool', primary: 1, need: '[data-sc="SC-37"]', build: () => stakeWorld({ data: sfirst(), list: slist(Object.fromEntries(SAPR.map((_, i) => [i + 1, i < 3 ? {} : { active: false }]))) }) },
@@ -576,7 +596,15 @@ const STAKE_SCENES = [
     { id: 'stake-simple-over-limit', primary: 1, need: '[data-sc="SC-102"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.55' }) },
     { id: 'stake-simple-low-reserve', primary: 1, need: '[data-sc="SC-104"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.45' }) },
     { id: 'stake-simple-staked-no-validators', primary: 1, need: '[data-sc="SC-140"]', build: () => stakeWorld({ data: sstaker([]) }) },
-    { id: 'stake-simple-manual-selection', primary: 1, need: '[data-sc="SC-30b"]', build: () => stakeWorld({ data: sfirst(), typed: '250', steps: (w) => w.dropOne() }) }
+    { id: 'stake-simple-manual-selection', primary: 1, need: '[data-sc="SC-30b"]', build: () => stakeWorld({ data: sfirst(), typed: '250', steps: (w) => w.dropOne() }) },
+    // Designer round 2, P2: the stake could not be read (SC-109b under the primary, SC-109c where the figure goes), the account
+    // changed while the card was open (SC-39b, drawn by the real press), a rewards change made in Advanced (SC-14f).
+    { id: 'stake-simple-bonded-unknown', primary: 1, need: '[data-sc="SC-109b"]', build: () => stakeWorld({ typed: '150',
+        data: { ...sstaker([1, 2], 0), staking: { totalStaked: 0, nominating: [], ledgerRead: 'failed', controller: null } } }) },
+    { id: 'stake-simple-account-changed', primary: 1, need: '[data-sc="SC-39b"]', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { w.card.press(sstaker([1, 2, 3])); } }) },
+    { id: 'stake-simple-rewards-pending', primary: 1, need: '[data-sc="SC-14f"]', build: () => stakeWorld({ data: sstaker([1, 2, 3]), payee: { kind: 'stash', account: '' },
+        steps: async (w) => { const tick = () => new Promise(r => setTimeout(r, 0)); w.q('#stake-view-switch').click(); await tick(); w.payee('staked'); await tick(); w.q('#stake-view-switch').click(); await tick(); } }) }
 ].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
 // WP3 (design 10.3): the advanced view. Chips: Waiting, Blocked, Raised recently, Raising now, Slashed, 100% commission,
 // Low return, Many payout pages, No history yet, Same identity, Chosen for you, each once in the list.
@@ -594,7 +622,7 @@ const STAKE_ADV_SCENES = [
         steps: (w) => { w.payee('account'); w.account(THEM); } }) },
     { id: 'stake-advanced-call-details', primary: 1, need: '#stake-sign details.stake-call-details[open] [data-call="staking.nominate"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced', typed: '25',
         steps: (w) => { w.payee('stash'); w.add(10); w.q('#stake-sign details.stake-call-details').open = true; } }), scroll: '#stake-sign' },
-    { id: 'stake-advanced-list-failed', primary: 1, need: '#stake-validator-list .stake-empty', build: () => stakeWorld({ data: sstaker([1, 2, 3]), view: 'advanced', failed: true }) },
+    { id: 'stake-advanced-list-failed', primary: 1, need: '#stake-validator-list [data-stake-action="retry"]', build: () => stakeWorld({ data: sstaker([1, 2, 3]), view: 'advanced', failed: true }) },
     { id: 'stake-advanced-confirm-automatic', primary: 1, need: '[data-sc="SC-40"]', build: () => stakeWorld({ data: sstaker([10, 11, 12]), view: 'advanced',
         steps: (w) => { w.q('[data-stake-action="auto"]').click(); } }) }
 ].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
@@ -675,11 +703,106 @@ const NOWALLET4_SCENES = [
     { id: 'stake-no-wallet', primary: 1, need: '[data-sc="SC-120"]', build: () => setup({ phone: true }, async (w) => { withMs(w); w.doc.getElementById('wallet-dashboard').insertAdjacentHTML('afterbegin', stakeIntentNoteHtml('SC-120', escapeHtml)); }) }
 ];
 
+// ── My Account that updates itself (fidelity review 2026-11-24, P1; UX 2026-11-22-post-action-refresh-ux.md, sections 2,
+// 3 and 9): the REAL lib/wallet-sections.js frame on the real shell, its REAL patches, indicators and proxy list, the REAL
+// stake and payout parts. The core is a stand-in that says to the subscribers exactly what lib/post-action.js says
+// (state 'updating' after a behind read, 'could-not-refresh' at the deadline); T1 is run, nothing else is timed. The
+// Recent Staking Rewards and Recent Transactions tables and the APR body are fixture copies of script.js's markup.
+const SEC_BLOCK = 4_210_377;
+const secPayload = (over = {}) => ({ address: ME, identity: 'Unknown',
+    balance: { free: 1104.55, reserved: 1150, total: 2254.55, transferable: 1103.55, transferableAllowDeath: 1104.55 },
+    staking: { isStaker: true, isNominator: true, totalStaked: 1150, activeStaked: 1150, unlocking: 0, ledgerRead: 'ok', controller: ME, nominating: [1, 2, 3].map(n => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}` })) },
+    rewards: { claimedTotal: 41.2, unpaidTotal: 0, unpaidCount: 0, unclaimedFresh: true, unpaidEntries: [], recentClaimed: [{ era: 1882, amount: 1.2311, timestamp: 1763900000000 }, { era: 1881, amount: 1.2290, timestamp: 1763813600000 }] },
+    recentTransactions: [{ hash: '0x' + '9a'.repeat(32), block: 4_210_101, from: THEM, to: ME, amount: '120 PDEX', timestamp: 1763900000000, direction: 'Received' }],
+    network: { minStake: 100, activeNominators: 312, totalNominators: 401, activeValidators: 48, totalValidators: 61, eraDurationMs: 86_400_000, unbondingMs: 28 * 86_400_000, currentEra: 1883 },
+    freshness: { v: 1, chainHead: SEC_BLOCK - 10, indexed: { chain: SEC_BLOCK - 10, rewards: SEC_BLOCK - 10, tx: SEC_BLOCK - 10 }, pending: [] }, ...over });
+const secFmt = { ...r1fmt, duration: sdur };
+const SEC_PROXIES = [{ delegate: P1, proxyType: 'Staking', delay: 0 }, { delegate: P2, proxyType: 'Governance', delay: 0 }];
+const secTable = (head, rows) => `<div class="table-responsive"><table class="data-table"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+async function sectionsWorld({ steps = null } = {}) {
+    const window = new Window({ url: 'https://explorer.test/wallet' });
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    let data = secPayload();
+    let next = null;
+    const timers = [];
+    const setTimer = (f, ms) => { const t = { f, ms, live: true }; timers.push(t); return t; };
+    const clearTimer = (t) => { if (t) t.live = false; };
+    const subs = [];
+    const post = { subscribe: (domains, o) => { subs.push({ domains: [].concat(domains), o }); return () => {}; } };
+    const store = createKnownResults({ storage: null, now: () => 10_000_000 });
+    const sr = createStakeRefresh({ doc, post, data: () => data, setData: (d) => { data = d; }, read: async () => { throw new Error('no chain read in a scene'); }, fmt: secFmt });
+    const pr = createPayoutRefresh({ doc, known: store, post, data: () => data, fmt: r1fmt, now: () => 10_000_000 });
+    const sections = createWalletSections({ doc, win: window, post, known: store, data: () => data, setData: (d) => { data = d; }, stake: sr, payout: pr, fmt: secFmt,
+        fetchWallet: async () => ({ ok: true, status: 200, json: async () => next }), setTimer, clearTimer, now: () => 10_000_000,
+        parts: { bar: (d) => actionBarHtml(d, { esc: escapeHtml, stakeable: 1, payoutButton: pr.buttonHtml(d) }) } });
+    doc.querySelector('#wallet-dashboard').innerHTML = sections.frameHtml(data, { bar: actionBarHtml(data, { esc: escapeHtml, stakeable: 1, payoutButton: pr.buttonHtml(data) }),
+        price: { history: [], configured: true }, isOwn: true, canSwitch: true, help: helpIcon('my-account', 'About My Account') })
+        + `<div class="list-container glass"><div class="list-header"><h2>Proxies</h2></div><div id="wallet-proxy-list" style="padding: 8px 24px 20px;"></div></div>`;
+    pr.paint({ reason: 'render' });
+    doc.getElementById('wallet-recent-rewards-table').innerHTML = secTable(['Era', 'Amount', 'Date'], data.rewards.recentClaimed.map(r => [String(r.era), `<span class="staking-amount">${r1fmt.pdex(r.amount)} PDEX</span>`, '2026-11-23']));
+    doc.getElementById('wallet-recent-tx-table').innerHTML = secTable(['Hash', 'Direction', 'Amount', 'Date'], data.recentTransactions.map(r => [`<a href="#" class="item-link" style="color:var(--brand-secondary);">${shortAddr(r.hash)}</a>`, `<span class="reward-badge claimed">${r.direction}</span>`, escapeHtml(r.amount), '2026-11-23']));
+    doc.getElementById('wallet-apr-periods').innerHTML = ['7D', '30D', '90D', 'All'].map((l, i) => `<button type="button" class="reward-filter-btn${i === 1 ? ' active' : ''}">${l}</button>`).join('');
+    doc.getElementById('wallet-apr-body').innerHTML = `<div class="wallet-stat"><span>Average APR (30 days)</span><strong>17.42%</strong></div>`;
+    const proxyEl = doc.getElementById('wallet-proxy-list');
+    sections.paintProxies(proxyEl, { address: ME, isOwn: true, payload: { proxies: SEC_PROXIES, deposit: 5.02, freshness: data.freshness }, ctx: {} });
+    const say = async (domain, state, info = {}) => { for (const x of subs) if (x.domains.includes(domain) && typeof x.o.state === 'function') x.o.state(state, { block: SEC_BLOCK, domains: [domain], gaveUp: state === 'could-not-refresh' ? [domain] : [], ...info }); await tick(5); };
+    const t1 = async () => { for (const t of timers.filter(x => x.live && x.ms === REFRESH_UI.showDelayMs)) { t.live = false; t.f(); } await tick(5); };
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), visible: (x) => !!x && !x.closest('[hidden]'), d: { account: { status: 'connected', address: ME } },
+        sections, store, proxyEl, say, t1, serve: (p) => { next = p; }, data: () => data };
+    if (steps) await steps(w);
+    return w;
+}
+const SECTIONS_SCENES = [
+    // A send of 120 PDEX in block #4,210,377: the chain read has it (Total Balance, washed), the transactions index not yet.
+    { id: 'send-included', primary: 1, need: '#wsec-recent-tx .list-header .ui-chip.is-wait', build: () => sectionsWorld({ steps: async (w) => {
+        const was = w.data();
+        w.serve({ ...was, balance: { ...was.balance, free: 984.53, total: 2134.53, transferable: 983.53, transferableAllowDeath: 984.53 },
+            freshness: { v: 1, chainHead: SEC_BLOCK, indexed: { chain: SEC_BLOCK, rewards: SEC_BLOCK - 10, tx: SEC_BLOCK - 10 }, pending: [] } });
+        await w.sections.refresh(ME);
+        await w.say('tx.recent', 'updating');
+        await w.t1();
+    } }) },
+    // The proxy P1 removed in block #4,210,377: its row holds "Removed in block #N" (T3) while the server still lists it.
+    { id: 'proxy-removed', primary: 1, need: '#wallet-proxy-list .ui-chip.is-positive', build: () => sectionsWorld({ steps: async (w) => {
+        w.store.add([{ account: ME, domain: 'proxies', op: 'remove', key: `${P1}:Staking:0`, block: SEC_BLOCK, txHash: '0x' + '12'.repeat(32) }]);
+        w.sections.paintProxies(w.proxyEl, { address: ME, isOwn: true, payload: { proxies: SEC_PROXIES, deposit: 5.02, freshness: w.data().freshness }, ctx: { reason: 'inBlock', block: SEC_BLOCK } });
+        await tick(5);
+    } }) },
+    // A payout and a send in a block, both indexes behind for longer than T1.
+    { id: 'updating', primary: 1, need: '#wallet-claimed-label .ui-chip.is-bare', build: () => sectionsWorld({ steps: async (w) => {
+        await w.say('tx.recent', 'updating'); await w.say('rewards.claimed', 'updating'); await w.t1();
+    } }) },
+    // The same, past the 180 s deadline: the core gave up on both indexes.
+    { id: 'could-not-refresh', primary: 1, need: '#wsec-recent-tx > .ui-panel.is-warn.is-line', build: () => sectionsWorld({ steps: async (w) => {
+        await w.say('tx.recent', 'updating'); await w.say('rewards.claimed', 'updating'); await w.t1();
+        await w.say('tx.recent', 'could-not-refresh'); await w.say('rewards.claimed', 'could-not-refresh');
+    } }) }
+].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+function checkSectionsScene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    for (const id of ['wsec-head', 'wsec-summary', 'wsec-recent-tx', 'wsec-rewards', 'wallet-apr-card']) if (!w.doc.getElementById(id)) err.push(`no #${id}: not the real frame`);
+    const n = w.qa('.wallet-action-btn.primary').filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+    // U14: one accent per card
+    for (const c of ['#wsec-recent-tx', '#wsec-rewards', '#wallet-apr-card']) if (w.q(`${c} .list-header .ui-chip`) && w.q(`${c} > .ui-panel`)) err.push(`${c}: a chip and a line at once`);
+}
+
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
     stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' },
     stake4: { scenes: STAKE4_SCENES, check: checkStakeScene, prefix: '' }, account4: { scenes: ACCOUNT4_SCENES, check: checkAccount4Scene, prefix: '' },
-    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' } };
+    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' }, sections: { scenes: SECTIONS_SCENES, check: checkSectionsScene, prefix: 'sections' } };
+
+// A scene is markup: a radio or checkbox changed after render keeps its old `checked` attribute, so the file would show
+// the first choice selected beside the second's field (fidelity review S12). The property becomes the attribute.
+export function formStateAsMarkup(doc) {
+    for (const i of Array.from(doc.querySelectorAll('input[type="radio"], input[type="checkbox"]'))) {
+        if (i.checked) i.setAttribute('checked', ''); else i.removeAttribute('checked');
+    }
+}
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
@@ -697,6 +820,7 @@ async function renderScene(s, check = null, { paint = true } = {}) {
     if (paint) paintHeader(w, s, wpOf(s));
     const err = [];
     checkHeader(w, s, wpOf(s), err);
+    formStateAsMarkup(w.doc);
     const app = w.doc.querySelector('.app-container');
     if (!app) err.push('no .app-container');
     if (check) {
@@ -796,6 +920,8 @@ async function guardSelfTest() {
     const lockScene = LOCKS_SCENES[0];
     await expectFail('locks: a primary in the panel', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.ui-action').classList.add('validate-primary'); return w; } }, checkLocksScene), /1 primary actions visible/);
     await expectFail('locks: a chain id outside Details', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.lock-line').textContent = 'phrelect'; return w; } }, checkLocksScene), /a chain id outside Details: phrelect/);
+    const confirmScene = LOCKS_SCENES.find(x => x.id === 'confirm-open');
+    await expectFail('locks: the old button drawn beside the strip (L1)', () => renderScene({ ...confirmScene, build: async () => { const w = await confirmScene.build(); w.q('.lock-row-action[hidden]').hidden = false; return w; } }, checkLocksScene), /visible \[data-lock-action\]/);
     const stakeScene = STAKE_SCENES[1];
     await expectFail('stake: two primaries', () => renderScene({ ...stakeScene, build: async () => { const w = await stakeScene.build(); w.q('[data-stake-action="choose"]').classList.add('validate-primary'); return w; } }, checkStakeScene), /2 primary actions visible/);
     await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);

@@ -701,3 +701,56 @@ describe('(review 2) a submission\'s result stays with the account that sent it'
         assert.ok(text(bad.pg.row(LEFT).querySelector('.lock-row-msg')), 'a failed check shows in its row');
     });
 });
+
+// ── Fidelity review 2026-11-24 (cto-team/plans/2026-11-24-fidelity-review-locks-stake-refresh.md), L2 and L6 ──
+describe('fidelity review L2: "Updating" and "Checking" spin, as governance does; a still clock only under reduced motion', () => {
+    for (const reduced of [false, true]) {
+        test(`Updating at 600 ms: ${reduced ? 'bx-time-five, no spin (reduced motion)' : 'bx-loader-alt bx-spin'}`, async () => {
+            const pg = await page({ models: [CEO()], reduced });
+            const open = pg.hold();
+            const again = pg.remount();
+            await pg.clock.advance(600);
+            const chip = pg.el.querySelector('.list-header .ui-chip.is-wait.lock-updating');
+            assert.ok(chip, 'the chip at 600 ms');
+            const i = chip.querySelector('i.bx');
+            if (reduced) assert.ok(i.classList.contains('bx-time-five') && !i.classList.contains('bx-spin'), i.className);
+            else assert.ok(i.classList.contains('bx-loader-alt') && i.classList.contains('bx-spin'), `a static clock: ${i.className}`);
+            open(); await again; await flush();
+        });
+        test(`Checking on the leftover lock: ${reduced ? 'bx-time-five (reduced motion)' : 'bx-loader-alt bx-spin'}`, async () => {
+            let answer;
+            const pg = await page({ models: [ORPHAN(), ORPHAN_GONE()], connected: OTHER, reduced, api: () => ({ query: { balances: { locks: () => new Promise(r => { answer = r; }) } } }) });
+            await pg.press('[data-lock-action="migrate-currency"]');
+            const done = pg.jobs[0].inBlock(42);
+            await flush();
+            const chip = pg.row('Leftover staking lock').querySelector('.lock-row-top > .ui-chip');
+            assert.equal(text(chip), 'Checking');
+            const i = chip.querySelector('i.bx');
+            if (reduced) assert.ok(i.classList.contains('bx-time-five') && !i.classList.contains('bx-spin'), i.className);
+            else assert.ok(i.classList.contains('bx-loader-alt') && i.classList.contains('bx-spin'), `a static clock: ${i.className}`);
+            answer([]);
+            await done;
+            await flush();
+        });
+    }
+});
+
+describe('fidelity review L6: a leaving row collapses from its own height, ease-out', () => {
+    test('at T3 the row gets an inline max-height of 0px (so the collapse runs from a pixel height, not from none)', async () => {
+        const pg = await page({ models: [CEO(), CEO_AFTER()] });
+        await pg.press('[data-lock-action="elections-remove"]');
+        await pg.jobs[0].inBlock(42);
+        assert.equal(pg.row('Council vote').style.maxHeight, '', 'no inline height while it holds its settle word');
+        await pg.clock.advance(1600);
+        const li = pg.row('Council vote');
+        assert.ok(li.classList.contains('is-leaving'));
+        assert.equal(li.style.maxHeight, '0px', 'the collapse animates from the pixel height set inline');
+    });
+    test('the transition eases out (T4), with no ease-in left', () => {
+        const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
+        const rule = parseRules(css).find(r => !r.media && r.selectors.includes('.lock-row.is-leaving'));
+        assert.ok(rule, 'no .lock-row.is-leaving rule');
+        assert.match(rule.decls.transition, /max-height 240ms ease-out/);
+        assert.doesNotMatch(rule.decls.transition, /ease-in\b/);
+    });
+});

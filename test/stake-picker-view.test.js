@@ -33,8 +33,8 @@ describe('row html', () => {
         const h = validatorRowHtml(row(), { esc, shortAddress, window: 28 });
         assert.match(h, /16\.44% a year/);
         assert.match(h, /5\.0% commission/);
-        assert.match(h, /1\.23M PDEX/);
-        assert.match(h, /own stake 1500/);
+        assert.match(h, /total stake 1\.23M PDEX/, 'a labelled figure (fidelity review S3)');
+        assert.match(h, /own stake 1,500 PDEX/, 'grouped, with its unit (fidelity review S3)');
         assert.match(h, /96% reliable/);
         assert.match(h, /12 stakers/);
         assert.match(h, /Not a guarantee/);
@@ -97,7 +97,7 @@ describe('filter bar html', () => {
         assert.ok((h.match(/Why this matters:/g) || []).length >= 11);
         assert.match(h, /data-preset="recommended"[^>]*>Suggested filters</);
         assert.ok(!/>Recommended</.test(h), 'the chip no longer says Recommended');
-        assert.match(h, /Room on one payout page \(at most 256 backers\)/);
+        assert.match(h, /Room on one payout page \(at most 256 stakers\)/, 'stakers, as the rows say (fidelity review S4)');
         assert.match(h, /data-preset="all"/);
         assert.match(h, /href="\/help\/choosing-validators"/);
         assert.match(h, /<details class="stake-filter-more" open>/);

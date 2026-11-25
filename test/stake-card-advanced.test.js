@@ -333,7 +333,7 @@ describe('nothing disappears: the 23 capabilities of section 5.3, in Advanced', 
     test('14. row data and the commission note', async () => {
         const c = await card({ data: firstTimer(), snapshots: [await snapshotOf(fullList({ 9: { commissionHistory: { note: 'held 5% for 30 eras', volatility: 'stable' }, identity: { hasIdentity: true, verified: true, parent: null } } }))] });
         const row = c.q(`#stake-validator-list .stake-validator-item[data-addr="${V(9)}"]`).textContent.replace(/\s+/g, ' ');
-        for (const part of ['Validator I', '16.00% a year', '5.0% commission', '50.0K PDEX', 'own stake 1000', '100% reliable', '20 stakers', 'verified identity', 'held 5% for 30 eras']) {
+        for (const part of ['Validator I', '16.00% a year', '5.0% commission', 'total stake 50.0K PDEX', 'own stake 1,000 PDEX', '100% reliable', '20 stakers', 'verified identity', 'held 5% for 30 eras']) {
             assert.ok(row.includes(part), `${part} in "${row}"`);
         }
         assert.ok(!/APR|comm\b|backers|self \d/.test(row), `old row words: ${row}`);

@@ -33,7 +33,7 @@ import { mountWalletRecentTx } from '../lib/wallet-recent-tx.js';
 import { sendableBalance } from '../lib/balance-locks.js';
 import { pdexToPlanck } from '../lib/wallet-safety.js';
 import { escapeHtml } from '../lib/html-escape.js';
-import { STRINGS, REFRESH_UI } from '../lib/refresh-ui.js';
+import { STRINGS, REFRESH_UI, say } from '../lib/refresh-ui.js';
 import { ME, OTHER, V1, V2, V3, REGISTRY } from './helpers/payout-events.js';
 
 // New in R3; missing before it.
@@ -604,7 +604,9 @@ describe('R3 review 2 (HIGH) and 3 (MEDIUM): a failed section re-read blocks sig
         await p.render();
         await failSend(p);
         assert.ok(banner(p), 'no stale banner after a failed re-read');
-        assert.match(t(banner(p)), /node down/);
+        // Fidelity review R2: the review's words, with no "the page"; the server's reason moves to the title.
+        assert.equal(t(banner(p)), 'Showing a saved snapshot from an earlier visit. Live balances could not be loaded. Reload before acting on these numbers.');
+        assert.match(banner(p).getAttribute('title') || '', /node down/);
         allClosed(p, 'after a failed re-read');
     });
 
@@ -701,5 +703,233 @@ describe('R3 review 4 (LOW) and 5 (LOW): the proxy list', () => {
         assert.equal(hold.length, 1, 'no settle hold armed');
         hold[0].live = false; hold[0].f(); await flush();
         assert.equal(t(p.q('#wallet-proxy-list')), 'Error: proxies down', 'the settle hold drew the last list over the error');
+    });
+});
+
+// ── Fidelity review 2026-11-24 (cto-team/plans/2026-11-24-fidelity-review-locks-stake-refresh.md), area 3 ──
+// R5: what the server catches up with later (UX section 9, CATCH-UP) says so. Recent Transactions (tx.recent), Recent
+// Staking Rewards and Average APR (rewards.claimed): S1 "Updating" in the card header after T1, kept at least T2; at the
+// deadline the chip goes and the card's first line is S11 with S12 "Reload this section". The Claimed Rewards tile: the
+// bare S1 mark in its label row, S14 "May be behind" at the deadline. Driven through the page's own sections and the
+// real core, with a server that is slow (an index behind the block) and one that fails. A payout's inclusion is told
+// to the core as lib/post-action.js tells it (notify with the block), since the payout modal is not on this page.
+// R6: a proxy change included in this tab says A1g "Proxies updated." in #post-action-live; another tab's says nothing.
+// R7: the proxy Remove is the shared action button, "Remove proxy" with its icon, also after a failed submit.
+// R1: the closed buttons say WALLET_ACTIONS_CLOSED, exactly.
+const CARDS = { tx: '#wsec-recent-tx', rewards: '#wsec-rewards', apr: '#wallet-apr-card' };
+const chipIn = (p, card) => p.q(`${card} .list-header .ui-chip`);
+const lineIn = (p, card) => p.q(`${card} > .ui-panel.is-warn.is-line`);
+const tileMark = (p) => p.q('#wallet-claimed-label .ui-chip');
+const fire = async (tms) => { for (const tm of tms) { tm.live = false; tm.f(); } await flush(); await flush(); };
+const core = (p) => vm.runInContext('postAction', p.ctx);
+const said = (p) => t(p.q('#post-action-live')) || '';
+const later = (ms) => mock.timers.setTime(Date.now() + ms);
+const spins = (el) => { const i = el && el.querySelector('i.bx'); return !!i && i.classList.contains('bx-loader-alt') && i.classList.contains('bx-spin') && i.getAttribute('aria-hidden') === 'true'; };
+const payoutIn = async (p, block = 42) => { core(p).notify({ account: ME, domains: ['rewards.claimed'], block, reason: 'inBlock', info: { key: 'staking.payout' } }); await flush(); await flush(); };
+
+describe('fidelity review 2026-11-24, area 3 (R5): the CATCH-UP cards say "Updating", then "could not refresh"', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.UTC(2026, 10, 24, 12, 0, 0) }); });
+    afterEach(() => mock.timers.reset());
+
+    test('send, transactions index behind: no mark before T1; "Updating" in the Recent Transactions header at T1; kept T2 after the index catches up', async () => {
+        const p = walletPage();
+        await p.render();
+        await start(p, 'send');
+        p.srv.head = 42;
+        RACE.send.change(p.srv.state);
+        await p.emit(IN_BLOCK, RACE.send.events);
+        assert.equal(t(p.q('#wallet-total-value')), '994.9900 PDEX', 'the balance follows at once (SWAP)');
+        assert.equal(chipIn(p, CARDS.tx), null, 'a mark before T1');
+        const t1 = p.live(REFRESH_UI.showDelayMs);
+        assert.equal(t1.length, 1, `T1 armed ${t1.length} times for the transactions card`);
+        await fire(t1);
+        const chip = chipIn(p, CARDS.tx);
+        assert.ok(chip, 'no "Updating" in the Recent Transactions header at T1');
+        assert.equal(t(chip), STRINGS.S1);
+        assert.ok(chip.classList.contains('is-wait') && !chip.classList.contains('is-bare'), chip.className);
+        assert.ok(spins(chip), 'the chip is not the spinner');
+        for (const c of [CARDS.rewards, CARDS.apr]) assert.equal(chipIn(p, c), null, `${c}: a send does not touch claimed rewards`);
+        assert.equal(tileMark(p), null, 'the Claimed Rewards tile is not behind after a send');
+        assert.equal(lineIn(p, CARDS.tx), null);
+        assert.equal(t(p.q('#wallet-recent-tx-table')), 'TABLE transactions 1', 'the body is untouched while it waits');
+        later(100);
+        p.srv.tx = 42;
+        p.srv.state.recentTransactions = [{ hash: '0x' + 'bb'.repeat(32), block: 42, from: ME, to: OTHER, amount: '5 PDEX', timestamp: 10 }, ...p.srv.state.recentTransactions];
+        await p.poll();
+        assert.equal(t(p.q('#wallet-recent-tx-table')), 'TABLE transactions 2');
+        assert.ok(chipIn(p, CARDS.tx), 'the chip went before T2 (a flash)');
+        const t2 = p.live(REFRESH_UI.minVisibleMs - 100);
+        assert.equal(t2.length, 1, 'no T2 hold for the rest of the 900 ms');
+        await fire(t2);
+        assert.equal(chipIn(p, CARDS.tx), null, 'the chip stayed after T2');
+        assert.equal(said(p), '', 'a wait under 5 s is not announced (T8)');
+    });
+
+    test('a read that comes back before T1 shows nothing at all', async () => {
+        const p = walletPage();
+        await p.render();
+        await start(p, 'send');
+        p.srv.head = 42;
+        await p.emit(IN_BLOCK, RACE.send.events);
+        assert.equal(p.live(REFRESH_UI.showDelayMs).length, 1, 'T1 armed');
+        p.srv.tx = 42;
+        await p.poll();
+        assert.equal(p.live(REFRESH_UI.showDelayMs).length, 0, 'T1 still armed after the index caught up');
+        assert.equal(chipIn(p, CARDS.tx), null);
+    });
+
+    test('payout, rewards index behind: "Updating" on Recent Staking Rewards and Average APR, the bare mark on Claimed Rewards; at the deadline S11 and S14; Reload this section brings them current', async () => {
+        const p = walletPage();
+        await p.render();
+        p.srv.head = 42;
+        await payoutIn(p);
+        for (const c of [CARDS.rewards, CARDS.apr]) assert.equal(chipIn(p, c), null, `${c}: a mark before T1`);
+        assert.equal(tileMark(p), null, 'a tile mark before T1');
+        await fire(p.live(REFRESH_UI.showDelayMs));
+        for (const c of [CARDS.rewards, CARDS.apr]) {
+            assert.equal(t(chipIn(p, c)), STRINGS.S1, `${c}: no "Updating" in the header`);
+            assert.ok(spins(chipIn(p, c)), `${c}: not the spinner`);
+        }
+        const mark = tileMark(p);
+        assert.ok(mark, 'no mark in the Claimed Rewards label row');
+        assert.equal(t(mark), STRINGS.S1);
+        assert.ok(mark.classList.contains('is-wait') && mark.classList.contains('is-bare'), `the tile mark is the bare chip: ${mark.className}`);
+        assert.ok(spins(mark));
+        assert.equal(t(p.q('#wallet-claimed-value')), '12.5000 PDEX', 'the value stays as it was while it waits');
+        assert.equal(chipIn(p, CARDS.tx), null, 'a payout does not touch Recent Transactions');
+
+        later(181_000);
+        await p.poll();
+        for (const [c, name] of [[CARDS.rewards, 'Recent staking rewards'], [CARDS.apr, 'Average APR']]) {
+            assert.equal(chipIn(p, c), null, `${c}: the chip stays beside the could-not-refresh line (U14)`);
+            const line = lineIn(p, c);
+            assert.ok(line, `${c}: no could-not-refresh line`);
+            assert.equal(line.previousElementSibling && line.previousElementSibling.classList.contains('list-header'), true, `${c}: the line is not the first line of the card body`);
+            assert.equal(t(line.querySelector('.gov-refresh-text')), STRINGS.S11);
+            const btn = line.querySelector('button.validate-secondary');
+            assert.equal(t(btn), STRINGS.S12);
+            assert.ok(said(p).includes(say('A4', { 'Section name': name })), `A4 for ${name} not announced: "${said(p)}"`);
+        }
+        const behind = tileMark(p);
+        assert.equal(t(behind), STRINGS.S14, 'the tile does not say May be behind at the deadline');
+        assert.ok(behind.classList.contains('is-bare') && behind.querySelector('i.bx-error'), behind.outerHTML);
+
+        p.srv.rewards = 42;
+        p.srv.state.rewards = { ...p.srv.state.rewards, claimedTotal: 15 };
+        const btn = lineIn(p, CARDS.rewards).querySelector('button');
+        btn.click();
+        await flush();
+        assert.equal(btn.getAttribute('aria-disabled'), 'true');
+        assert.equal(t(btn), STRINGS.S13);
+        await fire(p.live(400));
+        for (const c of [CARDS.rewards, CARDS.apr]) assert.equal(lineIn(p, c), null, `${c}: the line stayed after a reload that caught up`);
+        assert.equal(tileMark(p), null, 'the tile still says May be behind');
+        assert.equal(t(p.q('#wallet-claimed-value')), '15.0000 PDEX');
+        assert.ok(said(p).includes(say('A5', { 'Section name': 'Recent staking rewards' })), said(p));
+    });
+
+    test('a failing server: the transactions card gives up with S11 and S12, the page stays closed for signing; a reload that fails says S16; one that works clears it all', async () => {
+        const p = walletPage({ realBlock: true });
+        await p.render();
+        await start(p, 'send');
+        p.srv.fail = 'node down';
+        p.srv.head = 42;
+        await p.emit(IN_BLOCK, RACE.send.events);
+        allClosed(p, 'after a failed re-read');
+        later(181_000);
+        await p.poll();
+        const line = lineIn(p, CARDS.tx);
+        assert.ok(line, 'no could-not-refresh line on Recent Transactions');
+        assert.equal(t(line.querySelector('.gov-refresh-text')), STRINGS.S11);
+        assert.ok(said(p).includes(say('A4', { 'Section name': 'Recent transactions' })), said(p));
+        allClosed(p, 'beside the could-not-refresh line (safety outranks U6)');
+        const btn = line.querySelector('button');
+        btn.click();
+        await flush();
+        await fire(p.live(400));
+        assert.match(t(lineIn(p, CARDS.tx).querySelector('.gov-refresh-text')), /^Still could not refresh\. Last tried at \d\d:\d\d\.$/);
+        p.srv.fail = null;
+        p.srv.tx = 42;
+        lineIn(p, CARDS.tx).querySelector('button').click();
+        await flush();
+        await fire(p.live(400));
+        assert.equal(lineIn(p, CARDS.tx), null, 'the line stayed after a reload that worked');
+        assert.equal(banner(p), null, 'the stale banner stayed after a drawn read');
+        assert.ok(said(p).includes(say('A5', { 'Section name': 'Recent transactions' })), said(p));
+    });
+});
+
+describe('fidelity review 2026-11-24, R1: the closed buttons say one sentence', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+    afterEach(() => mock.timers.reset());
+    test('a failed re-read closes every signing button with "Balances could not be refreshed. Reload before sending or staking."', async () => {
+        const p = walletPage({ realBlock: true });
+        await p.render();
+        await start(p, 'send');
+        p.srv.fail = 'node down';
+        p.srv.head = 42;
+        await p.emit(IN_BLOCK, RACE.send.events);
+        for (const b of barButtons(p)) assert.equal(b.getAttribute('title'), 'Balances could not be refreshed. Reload before sending or staking.', b.id);
+        assert.equal(sectionsModule.WALLET_ACTIONS_CLOSED, 'Balances could not be refreshed. Reload before sending or staking.');
+    });
+});
+
+describe('fidelity review 2026-11-24, R6 and R7: the proxy list', () => {
+    beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+    afterEach(() => mock.timers.reset());
+    test('R6: a proxy removed from this tab is announced once in #post-action-live: "Proxies updated."', async () => {
+        const p = walletPage();
+        await p.render();
+        p.q('.proxy-remove-btn').click();
+        await flush();
+        await p.emit({ type: 'Ready' });
+        assert.equal(said(p), '', 'announced before the block');
+        await p.emit(IN_BLOCK, [ev('proxy', 'ProxyRemoved', [ME, V3, 'Staking', 0]), success()]);
+        assert.ok(p.q('#wallet-proxy-list .ui-chip.is-positive'), 'the removed row does not settle');
+        const live = p.q('#post-action-live');
+        assert.ok(live, 'no #post-action-live region');
+        assert.equal(live.getAttribute('aria-live'), 'polite');
+        assert.equal(said(p), say('A1g', { 'Section name': 'Proxies' }));
+        assert.equal(said(p), 'Proxies updated.');
+    });
+    test('R6: a proxy added from this tab is announced when the list shows it', async () => {
+        const p = walletPage();
+        await p.render();
+        p.q('#proxy-add-delegate').value = V2;
+        p.q('#proxy-add-type').value = 'Staking';
+        p.q('#proxy-add-delay').value = '7';
+        p.q('#proxy-add-submit').click();
+        await flush();
+        await p.emit({ type: 'Ready' });
+        p.srv.head = 42;
+        p.srv.proxies = [...p.srv.proxies, { delegate: V2, proxyType: 'Staking', delay: 7 }];
+        await p.emit(IN_BLOCK, [ev('proxy', 'ProxyAdded', [ME, V2, 'Staking', 7]), success()]);
+        assert.equal(p.doc.querySelectorAll('#wallet-proxy-list tbody tr').length, 2);
+        assert.equal(said(p), 'Proxies updated.');
+    });
+    test('R6: another tab\'s proxy change changes the list here and says nothing', async () => {
+        const p = walletPage();
+        await p.render();
+        p.glue.known.add([{ account: ME, domain: 'proxies', op: 'remove', key: `${V3}:Staking:0`, block: 42, txHash: '0x' + 'ef'.repeat(32) }]);
+        core(p).notify({ account: ME, domains: ['proxies'], reason: 'other-tab', origin: 'other-tab' });
+        await flush(); await flush();
+        assert.equal(t(p.q('#wallet-proxy-list')), 'No proxies set. Use the form below to add one.', 'the other tab\'s removal is not drawn');
+        assert.equal(said(p), '', 'another tab\'s action was announced here');
+    });
+    test('R7: Remove is the shared action button "Remove proxy" with bx-user-minus, and stays so after a submit that did not land', async () => {
+        const p = walletPage();
+        await p.render();
+        const btn = p.q('#wallet-proxy-list .proxy-remove-btn');
+        assert.ok(btn.classList.contains('ui-action') && !btn.classList.contains('staking-download-btn'), btn.className);
+        assert.equal(t(btn), 'Remove proxy');
+        assert.ok(btn.querySelector('i.bx.bx-user-minus'), 'no icon');
+        assert.equal(btn.getAttribute('style'), null, 'an inline faint red style');
+        btn.click();
+        await flush();
+        await p.emit({ type: 'Ready' });
+        await p.emit({ type: 'Dropped' });
+        const again = p.q('#wallet-proxy-list .proxy-remove-btn');
+        assert.equal(t(again), 'Remove proxy', 'the button came back as plain "Remove"');
+        assert.ok(again.querySelector('i.bx.bx-user-minus'), 'the icon was lost after the submit');
     });
 });

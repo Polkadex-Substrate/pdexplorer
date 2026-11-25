@@ -72,6 +72,7 @@ import { buildSecondTx } from './lib/democracy-patch.js';
 import { trackSignedTx, recheckSignedTxs, WALLET_CHANGED_STALE } from './lib/tx-submit.js';
 import { createPostAction } from './lib/post-action.js';
 import { createKnownResults } from './lib/known-results.js';
+import { createServerRefresh, applyAddressLabel } from './lib/server-refresh.js';
 import { effectsFor } from './lib/action-effects.js';
 import { caughtUp, pollDeadlineMs, samePayload } from './lib/freshness.js';
 import { rewardsSeries, renderKey, planChartUpdate, applySeries, rewardsChartConfig, newChartSlot, paintChart, releaseChart, releaseCharts } from './lib/chart-update.js';
@@ -82,12 +83,12 @@ import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
-import { buildStakeTx, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK, stakeResultParams, planFullUnbond,
+import { buildStakeTx, stakeListFailedHtml, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK, stakeResultParams, planFullUnbond,
     stakeFormPlan, signerRoles, planProblemMessage } from './lib/stake-plan.js';
 import { payeeOf } from './lib/validator-manage.js';
 import { createStakeCard } from './lib/stake-card-view.js';
 import { createStakeRefresh, readStakeFigures, stakeIntentNoteHtml } from './lib/stake-refresh.js';
-import { createWalletSections, actionBarHtml, bindWalletActions } from './lib/wallet-sections.js';
+import { createWalletSections, actionBarHtml, bindWalletActions, WALLET_ACTIONS_CLOSED, PRICE_COLLECTING } from './lib/wallet-sections.js';
 import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -8019,7 +8020,7 @@ function multisigUIDeps() { return {
     accounts: getInjectedAccounts, selected: getStoredWallet, select: selectWallet,
     canAskWallets: canAskWalletsForSigners, askWallets: askWalletsForSigners,
     submit: submitSignedTx, fetchJson: fetchApiJson,
-    refresh: address => refreshWalletDashboardFor(address), revision: () => walletSession.revision(), post: () => postAction,
+    revision: () => walletSession.revision(), post: () => postAction,
     // A multisig stash's validator change: the Sprint 3 and 4 rules again at the approval that runs it.
     callGuard: (api, call, m) => validatorCallGuard(api, call, m.address),
     callNote: (api, call, m) => validatorCallNote(api, call, m.address)
@@ -8609,9 +8610,10 @@ function showWalletStaleBanner(root, savedAt, mode, detail = '') {
     el.id = WALLET_STALE_BANNER_ID;
     el.className = `wallet-stale-banner ${mode === 'error' ? 'is-error' : 'is-cached'}`;
     el.setAttribute('role', mode === 'error' ? 'alert' : 'status');
+    if (mode === 'error' && detail) el.title = String(detail);   // the server's reason, for support; the sentence is the review's (R2)
     const age = describeAge(savedAt);
     el.innerHTML = mode === 'error'
-        ? `<i class='bx bx-error-circle'></i><span><strong>Showing a saved snapshot from ${stakingEscapeHtml(age)}.</strong> Live balances could not be loaded${detail ? ' (' + stakingEscapeHtml(detail) + ')' : ''}. Reload the page before acting on these numbers.</span>`
+        ? `<i class='bx bx-error-circle'></i><span><strong>Showing a saved snapshot from ${stakingEscapeHtml(age)}.</strong> Live balances could not be loaded. Reload before acting on these numbers.</span>`
         : `<i class='bx bx-time-five'></i><span>Showing a saved snapshot from ${stakingEscapeHtml(age)} while live balances load…</span>`;
     root.prepend(el);
 }
@@ -8743,7 +8745,7 @@ async function fetchWalletDashboard(address, opts) {
                 // must stop offering to sign against numbers we cannot
                 // confirm.
                 showWalletStaleBanner(root, cached && cached.savedAt, 'error', msg);
-                disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
+                disableWalletActions(WALLET_ACTIONS_CLOSED);
             }
             return;
         }
@@ -8770,7 +8772,7 @@ async function fetchWalletDashboard(address, opts) {
             // Same reasoning as the !result.ok branch above (F-068) — a
             // network-level failure is no more refreshable than a 500.
             showWalletStaleBanner(root, cached && cached.savedAt, 'error', msg);
-            disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
+            disableWalletActions(WALLET_ACTIONS_CLOSED);
         }
     });
 
@@ -8803,7 +8805,7 @@ async function fetchWalletDashboard(address, opts) {
 // A sections re-read that failed: as fetchWalletDashboard's, the page says so and stops offering to sign against numbers it cannot confirm (F-068).
 function walletRefreshFailed(root, savedAt, msg) {
     showWalletStaleBanner(root, savedAt, 'error', msg);
-    disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
+    disableWalletActions(WALLET_ACTIONS_CLOSED);
 }
 
 // Targeted repaint for just the PDEX price chart slot inside the wallet
@@ -8817,7 +8819,7 @@ function repaintWalletPriceCard(price) {
     if (history.length) {
         if (!wrap.querySelector('#wallet-price-chart')) wrap.innerHTML = '<canvas id="wallet-price-chart"></canvas>';   // the canvas in place keeps its chart
     } else {
-        wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;text-align:center;padding:0 20px;">${configured ? 'Collecting price history — the chart fills in as data is polled.' : 'Price feed not configured.'}</div>`;
+        wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;text-align:center;padding:0 20px;">${configured ? PRICE_COLLECTING : 'Price feed not configured.'}</div>`;
     }
     renderWalletPriceChart(history);   // updates in place, or releases the chart when the card went empty
     // Refresh the headline price badge in the list-header too.
@@ -9115,12 +9117,14 @@ function renderWalletPriceChart(history) {
 let currentWalletData = null;
 // Post-action refresh (lib/post-action.js): what a block proved, shown in place and kept across a reload and other tabs.
 const knownResults = createKnownResults({ key: 'pdex_known_results', storage: () => window.localStorage, same: isSameAddress, listen: (f) => window.addEventListener('storage', f), genesis: () => (globalApi && globalApi.genesisHash ? globalApi.genesisHash.toHex() : null) });
-const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e), caughtUp, deadlineMs: pollDeadlineMs });
+const postAction = createPostAction({ effects: effectsFor, known: knownResults, same: isSameAddress, visible: () => document.visibilityState !== 'hidden', setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), log: (e) => console.warn('[post-action]', e), caughtUp, deadlineMs: pollDeadlineMs, session: () => (getDiscussSession() || {}).address || null });
+// R6: labels, posts and the discussion sign-in follow the server's answer here and in the other open tabs.
+const serverRefresh = createServerRefresh({ doc: document, post: postAction, session: () => (getDiscussSession() || {}).address || null, same: isSameAddress, labels: { invalidate: invalidateAddressLabelCache, top: (a) => fetchAddressLabel(a, { withSource: true }), editor: renderAccountLabelEditor }, threads: { load: (id, root, o) => fetchDiscussionThread(id, false, root, o) } });
 const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, post: postAction, data: () => currentWalletData, same: isSameAddress, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, short: stakingShortAddress, esc: stakingEscapeHtml }, refetch: (a) => refreshWalletDashboardFor(a, true) });
 // After a stake (lib/stake-refresh.js): the figures, the Stake button and the card follow a chain read at inclusion, in place.
 const stakeRefresh = createStakeRefresh({ doc: document, post: postAction, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, read: (a) => readStakeFigures(globalApi, a), same: isSameAddress, fmt: { pdex: stakingFormatPDEX, esc: stakingEscapeHtml, short: stakingShortAddress, usd: (n) => renderUsdSubscript(n) }, onData: (d, tracked) => { if (stakeCard) stakeCard.refreshed(d, tracked); }, nominations: (a) => mountWalletNominations(a, true) });   // Send and Unstake: the bar's delegated listener
 // R3: My Account in sections (lib/wallet-sections.js): after an action each section follows the server's copy in place, the name follows the block.
-const walletSections = createWalletSections({ doc: document, win: window, post: postAction, known: knownResults, same: isSameAddress, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, fetchWallet: (a) => fetch('/api/wallet/' + encodeURIComponent(a)), refetch: (a) => refreshWalletDashboardFor(a, true), stake: stakeRefresh, payout: payoutRefresh, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, esc: stakingEscapeHtml, short: stakingShortAddress, duration: (ms) => formatDuration(ms) }, multisigName: (a) => (multisigStore.find(a) || {}).name || null, setTimer: (f, ms) => setTimeout(f, ms), parts: { bar: (d) => buildWalletActionBarMarkup(d), gen: () => walletFetchGen, block: () => applyWalletActionBlock(), ok: () => { clearWalletStaleBanner(document.getElementById('wallet-dashboard')); clearWalletActionBlock(); }, failed: (a, msg) => walletRefreshFailed(document.getElementById('wallet-dashboard'), (readWalletCache(a) || {}).savedAt, msg), cache: (a, w) => writeWalletCache(a, { wallet: w }), nominations: (a) => mountWalletNominations(a, isSameAddress(getStoredWallet(), a)), rewards: (d) => mountWalletRewardsTable(d), tx: (d) => mountWalletTxTable(d, true), apr: (a) => fetch('/api/staking-rewards/' + encodeURIComponent(a)).then(r => r.json()).then(r => { if (r && currentWalletData && isSameAddress(currentWalletData.address, a)) { walletAprData = r; renderWalletAprCard(); } }).catch(() => {}) } });
+const walletSections = createWalletSections({ doc: document, win: window, post: postAction, known: knownResults, same: isSameAddress, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, fetchWallet: (a) => fetch('/api/wallet/' + encodeURIComponent(a)), refetch: (a) => refreshWalletDashboardFor(a, true), stake: stakeRefresh, payout: payoutRefresh, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, esc: stakingEscapeHtml, short: stakingShortAddress, duration: (ms) => formatDuration(ms) }, multisigName: (a) => (multisigStore.find(a) || {}).name || null, setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), now: () => Date.now(), parts: { bar: (d) => buildWalletActionBarMarkup(d), gen: () => walletFetchGen, block: () => applyWalletActionBlock(), ok: () => { clearWalletStaleBanner(document.getElementById('wallet-dashboard')); clearWalletActionBlock(); }, failed: (a, msg) => walletRefreshFailed(document.getElementById('wallet-dashboard'), (readWalletCache(a) || {}).savedAt, msg), cache: (a, w) => writeWalletCache(a, { wallet: w }), nominations: (a) => mountWalletNominations(a, isSameAddress(getStoredWallet(), a)), rewards: (d) => mountWalletRewardsTable(d), tx: (d) => mountWalletTxTable(d, true), apr: (a) => fetch('/api/staking-rewards/' + encodeURIComponent(a)).then(r => r.json()).then(r => { if (r && currentWalletData && isSameAddress(currentWalletData.address, a)) { walletAprData = r; renderWalletAprCard(); } }).catch(() => {}) } });
 const govRefresh = createGovRefresh({ doc: document, post: postAction, known: knownResults, same: isSameAddress, nameOf: (a) => { const d = currentWalletData, n = d && d.address && isSameAddress(d.address, a) && d.identity && d.identity !== 'Unknown' ? d.identity : null; return n || (multisigStore.find(a) || {}).name || null; }, short: (a) => stakingShortAddress(a), selected: () => getStoredWallet(), api: () => globalApi, onPage: (p) => readRouteFromLocation() === p, caughtUp, setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), pages: { council: (o) => Promise.all([fetchCouncilData(o), fetchTechnicalCommitteeData(o)]), democracy: (o) => fetchDemocracyData({ ...o, quiet: true }), treasury: (o) => fetchTreasuryData(o) } });
 let validatorsCache = null;
 let validatorsCacheAt = 0;
@@ -9238,7 +9242,7 @@ async function loadStakeChoice(token = stakeCardView().token()) {
     if (listEl) listEl.innerHTML = `<div class="stake-empty">${stakeCopy('SC-111')}</div>`;
     let pick;
     try { pick = await loadValidatorsForPicker(); } catch (e) {
-        if (listEl) listEl.innerHTML = `<div class="stake-empty">${stakeCopy('SC-112')}</div>`;
+        if (listEl) listEl.innerHTML = stakeListFailedHtml();
         return stakeCardView().setSnapshot(e, token);
     }
     stakeValidators = pick.validators;
@@ -10690,6 +10694,7 @@ async function fetchDiscussionThread(id, focusLink = false, root = document.getE
         const res = await fetch('/api/discussions/' + encodeURIComponent(id), { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
+        if (opts.hold && opts.hold()) return null;   // another tab's re-read: text typed while it was in flight stays (lib/server-refresh.js)
         renderThread(data.thread, data.posts || [], root, { ...opts, earlier: data.earlier || [] });
         if (focusLink) focusLinkedPost(root, readLinkedPostId(window.location.search, window.location.hash), { document });
         return data;
@@ -10734,11 +10739,12 @@ function renderThread(thread, posts, root = document.getElementById('discussions
             ${composer}
         </div>`;
 
+    serverRefresh.threadShown(root, thread.id, opts);
     const postBtn = root.querySelector('#discuss-post-btn');
     if (postBtn) postBtn.addEventListener('click', () => submitDiscussionPost(thread.id, root, opts));
     wireComposer(root.querySelector('.discussion-composer .md-composer'));
     wireEditing(root, { esc: stakingEscapeHtml, fetchFn: (input, init) => fetch(input, init), getSession: getDiscussSession, threadId: thread.id, posts,
-        withSession: (send, onSigning) => discussSend(send, onSigning), onUpdated: d => renderThread({ links: thread.links, ...d.thread }, d.posts || [], root, opts) });
+        withSession: (send, onSigning) => discussSend(send, onSigning), onUpdated: d => { renderThread({ links: thread.links, ...d.thread }, d.posts || [], root, opts); serverRefresh.thread(thread.id, root); } });
     wirePermalinks(root, { threadId: thread.id, origin: window.location.origin, env: { navigator, document } });
     // The item page's header count is taken from what was just drawn.
     if (typeof opts.onRendered === 'function') opts.onRendered(thread, posts, opts.earlier || []);
@@ -10760,7 +10766,8 @@ async function getWalletSigner(address) {
 // whatever it replaces is revoked.
 function discussSignInFor(address) {
     return signInForDiscussion({ address, fetchFn: (u, o) => fetch(u, o), getSigner: getWalletSigner, wallet: getStoredWallet,
-        isSame: isSameAddress, valid: walletSession.signingCheck(address), auth: discussAuthStore(), onEvicted: tokens => tokens.forEach(logoutDiscussToken) });
+        isSame: isSameAddress, valid: walletSession.signingCheck(address), auth: discussAuthStore(), onEvicted: tokens => tokens.forEach(logoutDiscussToken) })
+        .then(r => { serverRefresh.signedIn(address); return r; });   // the other tabs' label editors drop "Sign in"
 }
 
 // The account labels panel's explicit "Sign in with wallet".
@@ -10796,6 +10803,7 @@ async function submitDiscussionPost(threadId, root = document.getElementById('di
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Failed to post.');
         renderThread(data.thread, data.posts || [], root, opts);
+        serverRefresh.thread(threadId, root);   // the same thread in the other tabs (this pane drew the response)
     } catch (e) {
         showErr(discussErrorText(e));
         if (btn) { btn.disabled = false; btn.innerHTML = label; }
@@ -12972,7 +12980,6 @@ async function renderProxyList(address, isOwnWallet, ctx = {}) {
                     action: { key: 'proxy.remove', params: { delegate, type: proxyType, delay } },
                     button: btn,
                     busyText: 'Signing…',
-                    idleText: 'Remove',
                     expectedWallet: address,
                     expectedRevision
                 });
@@ -13219,40 +13226,21 @@ async function fetchLabelsJson(address) {
     return await res.json();
 }
 
-// Apply the top label to every container element on the page that opted in
-// via `class="address-with-label" data-address="<addr>"`. Idempotent — won't
-// double-stamp the pill. A community label gets the `community` modifier
-// class so its CSS can render differently from a self-label.
-function applyAddressLabelToDom(address, top) {
-    if (!address || !top || !top.label) return;
-    const nodes = document.querySelectorAll(`.address-with-label[data-address="${CSS.escape(address)}"]`);
-    nodes.forEach(node => {
-        const existing = node.querySelector('.addr-label');
-        if (existing) existing.remove();
-        const tag = document.createElement('span');
-        tag.className = 'addr-label' + (top.isSelf ? '' : ' community');
-        tag.textContent = top.label;
-        tag.title = top.isSelf
-            ? 'Self-set label (signed by the address owner)'
-            : 'Community-suggested label · click the address to see other suggestions';
-        node.insertBefore(tag, node.firstChild);
-    });
-}
-
 // Helper used by every list page to lazily decorate addresses with their
 // top label. Safe to spam — the cache deduplicates.
 async function ensureAddressLabel(address) {
     if (!address) return;
     const top = await fetchAddressLabel(address, { withSource: true });
-    if (top && top.label) applyAddressLabelToDom(address, top);
+    if (top && top.label) applyAddressLabel(document, address, top);
 }
 
 // ─── Account-details labels panel (v2) ──────────────────────────────────────
 // One self-label row at the top (if any), then a vote-sorted list of
 // community suggestions, plus a "Suggest a label" form when signed in.
-async function renderAccountLabelEditor(address) {
+async function renderAccountLabelEditor(address, opts = {}) {
     const slot = document.getElementById('account-label-editor');
     if (!slot || !address) return;
+    slot.dataset.address = address;   // R6: which account's labels this editor draws (lib/server-refresh.js)
     // The wallet this panel is drawn for; every action re-checks it (liveLabelSession).
     const openedFor = getStoredWallet();
     const session = getDiscussSession();
@@ -13262,9 +13250,11 @@ async function renderAccountLabelEditor(address) {
     let data;
     try { data = await fetchLabelsJson(address); }
     catch (e) {
+        if (opts.hold && opts.hold()) return;
         slot.innerHTML = `<div style="margin-top:10px;color:var(--text-muted);font-size:0.78rem;">Couldn't load labels: ${stakingEscapeHtml(e.message)}</div>`;
         return;
     }
+    if (opts.hold && opts.hold()) return;   // another tab's re-read: a label typed while it was in flight stays (lib/server-refresh.js)
     const labels = Array.isArray(data.labels) ? data.labels : [];
     addressLabelsCache.set(address, labels);
     const selfRow = labels.find(l => l.isSelf) || null;
@@ -13420,10 +13410,8 @@ async function renderAccountLabelEditor(address) {
             if (res.status === 401) { discussAuthStore().forgetToken(live.token); throw new Error('Session expired - please sign in again.'); }
             if (res.status === 429) throw new Error(data.error || 'Slow down — try again in a minute.');
             if (!res.ok || data.error) throw new Error(data.error || 'Failed to save label.');
-            invalidateAddressLabelCache(address);
             if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = 'var(--success)'; }
-            renderAccountLabelEditor(address);
-            ensureAddressLabel(address);
+            serverRefresh.labels(address);   // the editor and every pill of this address, here and in the other tabs
         } catch (e) {
             if (statusEl) { statusEl.textContent = e.message; statusEl.style.color = 'var(--error)'; }
         } finally {
@@ -13474,9 +13462,7 @@ async function labelVote(address, signer, vote, btn, openedFor) {
         const data = await res.json();
         if (res.status === 401) { discussAuthStore().forgetToken(session.token); throw new Error('Session expired - please sign in again.'); }
         if (!res.ok || data.error) throw new Error(data.error || 'Vote failed.');
-        invalidateAddressLabelCache(address);
-        renderAccountLabelEditor(address);
-        ensureAddressLabel(address);
+        serverRefresh.labels(address);
     } catch (e) {
         alert(e.message);
     } finally {
@@ -13498,10 +13484,7 @@ async function labelDeleteMine(address, signer, btn, openedFor) {
         if (res.status === 401) { discussAuthStore().forgetToken(session.token); throw new Error('Session expired - please sign in again.'); }
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Delete failed.');
-        invalidateAddressLabelCache(address);
-        renderAccountLabelEditor(address);
-        document.querySelectorAll(`.address-with-label[data-address="${CSS.escape(address)}"] .addr-label`).forEach(n => n.remove());
-        ensureAddressLabel(address);
+        serverRefresh.labels(address);   // a pill with no label left is removed
     } catch (e) {
         alert(e.message);
         btn.disabled = false;
@@ -13534,8 +13517,7 @@ async function labelReport(address, signer, btn, openedFor) {
         });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Report failed.');
-        invalidateAddressLabelCache(address);
-        renderAccountLabelEditor(address);
+        serverRefresh.labels(address);
     } catch (e) {
         alert(e.message);
     } finally {
@@ -13562,9 +13544,7 @@ async function labelVeto(address, signer, btn, openedFor) {
         });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Veto failed.');
-        invalidateAddressLabelCache(address);
-        renderAccountLabelEditor(address);
-        ensureAddressLabel(address);
+        serverRefresh.labels(address);
     } catch (e) {
         alert(e.message);
         btn.disabled = false;
