@@ -93,7 +93,7 @@ describe('a winning vote still under conviction is never in the batch', () => {
     test('an earlier lock over, #7 still running: Unlock alone, and the row says to press Unlock', () => {
         const m = describeAccountLocks(snap(direct([WON7], REFS, { until: 1200, amount: s(500n * PDEX) }), 1201, 500n * PDEX));
         assert.deepEqual(m.actions.democracy.remove, []);
-        assert.equal(spec(m).label, 'Unlock');
+        assert.equal(spec(m).label, 'Unlock voted PDEX');   // the button's words (locked balances redesign, B2)
         assert.match(m.items.find(i => i.id === 'democrac').unlock, /^10 PDEX stays locked until block 2000 \([^)]*\); the rest can be unlocked now: use Unlock below\.$/);
     });
     test('beside a running earlier lock, the row lists both and says when each vote can go', () => {
