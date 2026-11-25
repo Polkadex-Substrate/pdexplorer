@@ -10693,6 +10693,7 @@ async function fetchDiscussionThread(id, focusLink = false, root = document.getE
         const res = await fetch('/api/discussions/' + encodeURIComponent(id), { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
+        if (opts.hold && opts.hold()) return null;   // another tab's re-read: text typed while it was in flight stays (lib/server-refresh.js)
         renderThread(data.thread, data.posts || [], root, { ...opts, earlier: data.earlier || [] });
         if (focusLink) focusLinkedPost(root, readLinkedPostId(window.location.search, window.location.hash), { document });
         return data;
@@ -13236,7 +13237,7 @@ async function ensureAddressLabel(address) {
 // ─── Account-details labels panel (v2) ──────────────────────────────────────
 // One self-label row at the top (if any), then a vote-sorted list of
 // community suggestions, plus a "Suggest a label" form when signed in.
-async function renderAccountLabelEditor(address) {
+async function renderAccountLabelEditor(address, opts = {}) {
     const slot = document.getElementById('account-label-editor');
     if (!slot || !address) return;
     slot.dataset.address = address;   // R6: which account's labels this editor draws (lib/server-refresh.js)
@@ -13249,9 +13250,11 @@ async function renderAccountLabelEditor(address) {
     let data;
     try { data = await fetchLabelsJson(address); }
     catch (e) {
+        if (opts.hold && opts.hold()) return;
         slot.innerHTML = `<div style="margin-top:10px;color:var(--text-muted);font-size:0.78rem;">Couldn't load labels: ${stakingEscapeHtml(e.message)}</div>`;
         return;
     }
+    if (opts.hold && opts.hold()) return;   // another tab's re-read: a label typed while it was in flight stays (lib/server-refresh.js)
     const labels = Array.isArray(data.labels) ? data.labels : [];
     addressLabelsCache.set(address, labels);
     const selfRow = labels.find(l => l.isSelf) || null;
