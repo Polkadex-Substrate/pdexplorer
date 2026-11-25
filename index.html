@@ -808,7 +808,7 @@
             </div>
 
             <!-- Stake / Nominate Modal -->
-            <div id="stake-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
+            <div id="stake-modal" class="modal ui-modal" style="display: none;">
                 <div class="glass stake-modal-body is-simple" role="dialog" aria-modal="true" aria-labelledby="stake-title">
                     <button type="button" id="close-stake-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
                     <div class="stake-title-row">
@@ -881,15 +881,15 @@
             </div>
 
             <!-- Payout Rewards Modal -->
-            <div id="payout-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 540px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
+            <div id="payout-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card">
                     <button type="button" id="close-payout-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Pay Out Rewards <a href="/help/claiming-rewards" class="help-inline-icon" title="Learn about claiming rewards" aria-label="Help: claiming rewards"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Triggers <code>staking.payoutStakers</code> for every unclaimed (era, validator) pair in one batch. Anyone can trigger a payout; the rewards always go to the nominator's stash regardless of who signs.</p>
+                    <h3>Pay Out Rewards <a href="/help/claiming-rewards" class="help-inline-icon" title="Learn about claiming rewards" aria-label="Help: claiming rewards"><i class='bx bx-help-circle'></i></a></h3>
+                    <p class="ui-section-caption">Triggers <code>staking.payoutStakers</code> for every unclaimed (era, validator) pair in one batch. Anyone can trigger a payout; the rewards always go to the nominator's stash regardless of who signs.</p>
 
                     <div class="payout-summary">
                         <div><span>Unclaimed entries</span><strong id="payout-count">--</strong></div>
-                        <div><span>Total to claim</span><strong id="payout-total" style="color:var(--brand-secondary);">--</strong></div>
+                        <div><span>Total to claim</span><strong id="payout-total" class="payout-total">--</strong></div>
                     </div>
 
                     <div id="payout-entries" class="payout-entries"></div>
@@ -908,11 +908,11 @@
             </div>
 
             <!-- Send PDEX Modal -->
-            <div id="send-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 540px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
+            <div id="send-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card">
                     <button type="button" id="close-send-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Send PDEX <a href="/help/sending-pdex" class="help-inline-icon" title="Learn about sending PDEX" aria-label="Help: sending PDEX"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Transfer PDEX from the connected wallet to any Polkadex address. The transaction is signed and submitted by your wallet extension.</p>
+                    <h3>Send PDEX <a href="/help/sending-pdex" class="help-inline-icon" title="Learn about sending PDEX" aria-label="Help: sending PDEX"><i class='bx bx-help-circle'></i></a></h3>
+                    <p class="ui-section-caption">Transfer PDEX from the connected wallet to any Polkadex address. The transaction is signed and submitted by your wallet extension.</p>
 
                     <label class="stake-label">Recipient address</label>
                     <div class="stake-amount-wrap">
@@ -933,8 +933,8 @@
                         <div><span>Recipient receives</span><strong id="send-recv-preview">—</strong></div>
                     </div>
 
-                    <label style="display:flex; align-items:flex-start; gap:10px; margin-top:16px; cursor:pointer; font-size:0.85rem; color:var(--text-secondary);">
-                        <input type="checkbox" id="send-keep-alive" checked style="margin-top:3px;">
+                    <label class="send-keep-alive">
+                        <input type="checkbox" id="send-keep-alive" checked>
                         <span>Keep my account alive — fail the transfer if it would drop my balance below the existential deposit. Uncheck only if you intend to empty this account.</span>
                     </label>
 
@@ -944,11 +944,11 @@
             </div>
 
             <!-- Unstake Modal -->
-            <div id="unstake-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 500px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
+            <div id="unstake-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card is-narrow">
                     <button type="button" id="close-unstake-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 6px; font-size: 1.3rem;">Unstake <a href="/help/unstaking" class="help-inline-icon" title="Learn about unstaking" aria-label="Help: unstaking"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Start unbonding the amount below. It stays locked for the unbonding period, then you withdraw it here.</p>
+                    <h3>Unstake <a href="/help/unstaking" class="help-inline-icon" title="Learn about unstaking" aria-label="Help: unstaking"><i class='bx bx-help-circle'></i></a></h3>
+                    <p class="ui-section-caption">Start unbonding the amount below. It stays locked for the unbonding period, then you withdraw it here.</p>
 
                     <div class="stake-summary" id="unstake-summary" style="margin-bottom: 18px;">
                         <div><span>Active bond</span><strong id="unstake-active">--</strong></div>
@@ -985,57 +985,47 @@
                  across the explorer (validators page, holders page, account
                  details). A small refundable deposit is locked while the
                  identity exists; clearing the identity returns the deposit. -->
-            <div id="identity-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 620px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1); max-height: 92vh; overflow-y: auto;">
+            <div id="identity-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card is-wide">
                     <button type="button" id="close-identity-modal" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 6px; font-size: 1.3rem;">On-chain identity <a href="/help/identity" class="help-inline-icon" title="Learn about on-chain identity" aria-label="Help: on-chain identity"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.88rem;">Register a display name and contact handles for this address. The data is stored on chain so other Polkadex apps see it too — not just this explorer. A small refundable deposit is locked while the identity exists.</p>
+                    <h3>On-chain identity <a href="/help/identity" class="help-inline-icon" title="Learn about on-chain identity" aria-label="Help: on-chain identity"><i class='bx bx-help-circle'></i></a></h3>
+                    <p class="ui-section-caption">Register a display name and contact handles for this address. The data is stored on chain so other Polkadex apps see it too, not just this explorer. A small refundable deposit is locked while the identity exists.</p>
 
                     <!-- Sub-identity warning slot — populated when the current
                          account is a sub-identity of a parent. -->
-                    <div id="identity-modal-parent-warning" style="display:none; margin-bottom: 14px; padding: 10px 14px; background: rgba(245,166,35,0.1); border: 1px solid rgba(245,166,35,0.35); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.85rem; line-height: 1.5;"></div>
+                    <div id="identity-modal-parent-warning" class="ui-panel is-warn" role="status" style="display:none;"></div>
 
                     <!-- Status pill -->
-                    <div style="display:flex; gap:10px; align-items:center; margin-bottom: 16px;">
-                        <span id="identity-modal-status-pill" style="padding: 4px 12px; border-radius: 16px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; background: rgba(255,255,255,0.08); color: var(--text-secondary);">Loading…</span>
-                        <span id="identity-modal-deposit" style="font-size: 0.82rem; color: var(--text-secondary);"></span>
+                    <div class="identity-status-row">
+                        <span id="identity-modal-status-pill" class="ui-chip is-neutral">Loading…</span>
+                        <span id="identity-modal-deposit" class="identity-deposit"></span>
                     </div>
 
                     <!-- Form fields. All optional individually; at least one must be set. -->
-                    <label class="stake-label" for="identity-display">Display name <span style="color: var(--text-muted); font-weight: 400;">— shown across the explorer</span></label>
-                    <input type="text" id="identity-display" data-input-kind="text" maxlength="32" placeholder="Satoshi" autocomplete="off" spellcheck="false"
-                           style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
+                    <div class="ui-form identity-fields">
+                    <div class="ui-field"><label class="ui-field-label" for="identity-display">Display name</label><input type="text" id="identity-display" data-input-kind="text" maxlength="32" placeholder="Satoshi" autocomplete="off" spellcheck="false" aria-describedby="identity-display-hint" class="ui-input"><p class="ui-field-hint" id="identity-display-hint">Shown across the explorer.</p></div>
 
-                    <label class="stake-label" for="identity-legal">Legal name <span style="color: var(--text-muted); font-weight: 400;">— optional</span></label>
-                    <input type="text" id="identity-legal" data-input-kind="text" maxlength="32" placeholder="" autocomplete="off"
-                           style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
+                    <div class="ui-field"><label class="ui-field-label" for="identity-legal">Legal name</label><input type="text" id="identity-legal" data-input-kind="text" maxlength="32" placeholder="" autocomplete="off" aria-describedby="identity-legal-hint" class="ui-input"><p class="ui-field-hint" id="identity-legal-hint">Optional.</p></div>
 
-                    <label class="stake-label" for="identity-email">Email</label>
-                    <input type="email" id="identity-email" data-input-kind="text" maxlength="32" placeholder="you@example.com" autocomplete="off"
-                           style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
+                    <div class="ui-field"><label class="ui-field-label" for="identity-email">Email</label><input type="email" id="identity-email" data-input-kind="text" maxlength="32" placeholder="you@example.com" autocomplete="off" class="ui-input"></div>
 
-                    <label class="stake-label" for="identity-twitter">Twitter / X <span style="color: var(--text-muted); font-weight: 400;">— handle, with or without @</span></label>
-                    <input type="text" id="identity-twitter" data-input-kind="text" maxlength="32" placeholder="@satoshi" autocomplete="off"
-                           style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
+                    <div class="ui-field"><label class="ui-field-label" for="identity-twitter">Twitter / X</label><input type="text" id="identity-twitter" data-input-kind="text" maxlength="32" placeholder="@satoshi" autocomplete="off" aria-describedby="identity-twitter-hint" class="ui-input"><p class="ui-field-hint" id="identity-twitter-hint">The handle, with or without @.</p></div>
 
-                    <label class="stake-label" for="identity-web">Website</label>
-                    <input type="url" id="identity-web" data-input-kind="text" maxlength="32" placeholder="https://example.com" autocomplete="off"
-                           style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 12px;">
+                    <div class="ui-field"><label class="ui-field-label" for="identity-web">Website</label><input type="url" id="identity-web" data-input-kind="text" maxlength="32" placeholder="https://example.com" autocomplete="off" class="ui-input"></div>
 
-                    <label class="stake-label" for="identity-riot">Matrix / Element <span style="color: var(--text-muted); font-weight: 400;">— e.g. @you:matrix.org</span></label>
-                    <input type="text" id="identity-riot" data-input-kind="text" maxlength="32" placeholder="@you:matrix.org" autocomplete="off"
-                           style="width:100%; padding:11px 14px; background: rgba(0,0,0,0.25); border:1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 6px;">
+                    <div class="ui-field"><label class="ui-field-label" for="identity-riot">Matrix / Element</label><input type="text" id="identity-riot" data-input-kind="text" maxlength="32" placeholder="@you:matrix.org" autocomplete="off" aria-describedby="identity-riot-hint" class="ui-input"><p class="ui-field-hint" id="identity-riot-hint">For example @you:matrix.org.</p></div>
 
-                    <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; margin-bottom: 16px;">Each field is limited to 32 bytes by the runtime. Leave any field blank to omit it; you must fill at least one.</p>
+                    <p class="ui-field-hint">Each field is limited to 32 bytes by the runtime. Leave any field blank to omit it; you must fill at least one.</p>
+                    </div>
 
                     <div id="identity-modal-error" class="staking-error" style="display: none; margin-bottom: 12px;"></div>
 
                     <!-- Primary + secondary actions. Clear identity is only
                          visible when one exists; otherwise the button row
                          shows just the save action. -->
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <button id="submit-identity-tx-btn" class="modal-submit-btn" style="flex:1;">Save identity</button>
-                        <button id="clear-identity-tx-btn" class="staking-download-btn" style="display:none; padding: 11px 20px; background: rgba(255,77,77,0.1); color: #FF4D4D; border: 1px solid rgba(255,77,77,0.3); border-radius: var(--radius-sm); cursor: pointer; font-family: inherit; font-weight: 600;">Reset (clear)</button>
+                    <div class="identity-actions">
+                        <button id="submit-identity-tx-btn" class="modal-submit-btn">Save identity</button>
+                        <button type="button" id="clear-identity-tx-btn" class="validate-text-btn" style="display:none;">Reset (clear)</button>
                     </div>
                 </div>
             </div>

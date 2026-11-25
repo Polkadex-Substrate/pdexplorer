@@ -19,6 +19,10 @@
 // locks: the Balance breakdown redesign (locks-<scene>-<width>.html), no primary in any scene.
 // sections: My Account that updates itself (sections-<scene>-<width>.html, fidelity review 2026-11-24 P1): the REAL frame,
 // patches and indicators of lib/wallet-sections.js, the REAL stake and payout parts, told what the core tells them.
+// advanced: the Multisig wallets card and the Advanced card (advanced-<scene>-<width>.html and multisig-<scene>-<width>.html,
+// spec 2026-11-25-multisig-and-advanced-cards.md T8): the REAL lib/multisig-view.js and lib/wallet-advanced-view.js in the
+// sections frame. The page guard of both sets: one visible primary (Send); no primary, gradient or colour written in
+// markup inside the two cards or the head; no .staking-download-btn on the page.
 // stake: the Stake PDEX card's simple view (stake-simple-<scene>-<width>.html, design 10.3 WP2): the real modal markup
 // over the wallet page, the REAL lib/stake-card-view.js over a validator snapshot run through the real loadPickerData.
 // Its advanced view (stake-advanced-<scene>-<width>.html, design 10.3 WP3) adds the REAL picker (lib/stake-picker-view.js)
@@ -70,6 +74,12 @@ import { createStakeRefresh, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, 
 import { classifyThrownError } from '../lib/tx-status.js';
 import { createWalletSections, actionBarHtml, headHtml } from '../lib/wallet-sections.js';
 import { REFRESH_UI } from '../lib/refresh-ui.js';
+import { advancedShellHtml, proxyAddFormHtml, calculatorHtml, bindCalculator, pendingHtml } from '../lib/wallet-advanced-view.js';
+import { createMultisigUI } from '../lib/multisig-view.js';
+import { normalizeMultisig } from '../lib/multisig.js';
+import { isValidPolkadexAddress } from '../lib/wallet-safety.js';
+import { createKeyMulti, sortAddresses, encodeAddress as encodeAddr, decodeAddress as decodeAddr } from '@polkadot/util-crypto';
+import { u8aToHex } from '@polkadot/util';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -733,11 +743,18 @@ async function sectionsWorld({ steps = null } = {}) {
         fetchWallet: async () => ({ ok: true, status: 200, json: async () => next }), setTimer, clearTimer, now: () => 10_000_000,
         parts: { bar: (d) => actionBarHtml(d, { esc: escapeHtml, stakeable: 1, payoutButton: pr.buttonHtml(d) }) } });
     doc.querySelector('#wallet-dashboard').innerHTML = sections.frameHtml(data, { bar: actionBarHtml(data, { esc: escapeHtml, stakeable: 1, payoutButton: pr.buttonHtml(data) }),
-        price: { history: [], configured: true }, isOwn: true, canSwitch: true, help: helpIcon('my-account', 'About My Account') })
-        + `<div class="list-container glass"><div class="list-header"><h2>Proxies</h2></div><div id="wallet-proxy-list" style="padding: 8px 24px 20px;"></div></div>`;
+        price: { history: [], configured: true }, isOwn: true, canSwitch: true, help: helpIcon('my-account', 'About My Account') });
+    // The REAL Advanced card (lib/wallet-advanced-view.js), as script.js renderWalletAdvancedSection draws it for the own wallet.
+    doc.getElementById('wallet-advanced-section').innerHTML = advancedShellHtml({ isOwn: true });
+    doc.getElementById('wallet-proxy-add').innerHTML = proxyAddFormHtml(['Any', 'Governance', 'Staking'], escapeHtml);
+    const calc = doc.getElementById('wallet-multisig-calc');
+    calc.innerHTML = calculatorHtml();
+    bindCalculator(calc, { isValid: isValidPolkadexAddress, keyOf: (a) => u8aToHex(decodeAddr(a)), derive: (lines, n) => encodeAddr(createKeyMulti(sortAddresses(lines, 88), n), 88),
+        write: async () => {}, esc: escapeHtml, short: shortAddr, setTimer });
+    doc.getElementById('wallet-multisig-pending').innerHTML = pendingHtml([], { esc: escapeHtml, short: shortAddr, number: (n) => Number(n).toLocaleString('en-US') });
     pr.paint({ reason: 'render' });
     doc.getElementById('wallet-recent-rewards-table').innerHTML = secTable(['Era', 'Amount', 'Date'], data.rewards.recentClaimed.map(r => [String(r.era), `<span class="staking-amount">${r1fmt.pdex(r.amount)} PDEX</span>`, '2026-11-23']));
-    doc.getElementById('wallet-recent-tx-table').innerHTML = secTable(['Hash', 'Direction', 'Amount', 'Date'], data.recentTransactions.map(r => [`<a href="#" class="item-link" style="color:var(--brand-secondary);">${shortAddr(r.hash)}</a>`, `<span class="reward-badge claimed">${r.direction}</span>`, escapeHtml(r.amount), '2026-11-23']));
+    doc.getElementById('wallet-recent-tx-table').innerHTML = secTable(['Hash', 'Direction', 'Amount', 'Date'], data.recentTransactions.map(r => [`<a href="#" class="item-link">${shortAddr(r.hash)}</a>`, `<span class="reward-badge claimed">${r.direction}</span>`, escapeHtml(r.amount), '2026-11-23']));
     doc.getElementById('wallet-apr-periods').innerHTML = ['7D', '30D', '90D', 'All'].map((l, i) => `<button type="button" class="reward-filter-btn${i === 1 ? ' active' : ''}">${l}</button>`).join('');
     doc.getElementById('wallet-apr-body').innerHTML = `<div class="wallet-stat"><span>Average APR (30 days)</span><strong>17.42%</strong></div>`;
     const proxyEl = doc.getElementById('wallet-proxy-list');
@@ -776,21 +793,74 @@ const SECTIONS_SCENES = [
         await w.say('tx.recent', 'could-not-refresh'); await w.say('rewards.claimed', 'could-not-refresh');
     } }) }
 ].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+// The wallet page's rules (spec 2026-11-25 T8): one visible primary (Send), none in the two cards; no gradient and no
+// colour, background or border written in markup in the cards or the head; no .staking-download-btn anywhere on the page.
+const INLINE_COLOUR = /(^|;)\s*(color|background|border)/i;
+function checkWalletPageRules(w, err) {
+    for (const slot of ['#wallet-multisig-slot', '#wallet-advanced-section']) {
+        const el = w.q(slot);
+        if (!el) { err.push(`no ${slot}`); continue; }
+        if (el.querySelector('.validate-primary, .wallet-action-btn.primary')) err.push(`a primary inside ${slot}`);
+        for (const x of Array.from(el.querySelectorAll('[style]'))) if (/gradient/.test(x.getAttribute('style')) || INLINE_COLOUR.test(x.getAttribute('style'))) err.push(`a colour written in markup inside ${slot}: ${x.outerHTML.slice(0, 80)}`);
+    }
+    const head = w.q('#wsec-head');
+    if (head) for (const x of Array.from(head.querySelectorAll('[style]'))) if (INLINE_COLOUR.test(x.getAttribute('style'))) err.push(`a colour written in markup in the head: ${x.outerHTML.slice(0, 80)}`);
+    const legacy = w.qa('.staking-download-btn').length;
+    if (legacy) err.push(`${legacy} .staking-download-btn on the page`);
+}
 function checkSectionsScene(w, s, err) {
     if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
     for (const id of ['wsec-head', 'wsec-summary', 'wsec-recent-tx', 'wsec-rewards', 'wallet-apr-card']) if (!w.doc.getElementById(id)) err.push(`no #${id}: not the real frame`);
     const n = w.qa('.wallet-action-btn.primary').filter(w.visible).length;
     if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
-    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+    for (const n of [].concat(s.need || [])) if (w.qa(n).filter(w.visible).length < 1) err.push(`no visible ${n}`);
+    checkWalletPageRules(w, err);
     // U14: one accent per card
     for (const c of ['#wsec-recent-tx', '#wsec-rewards', '#wallet-apr-card']) if (w.q(`${c} .list-header .ui-chip`) && w.q(`${c} > .ui-panel`)) err.push(`${c}: a chip and a line at once`);
+}
+
+// ── the Multisig wallets card and the Advanced card (spec 2026-11-25-multisig-and-advanced-cards.md, T8) ──
+// The real multisig card is mounted on the frame's slot with a stand-in search (what lib/multisig-discovery.js answers).
+const MS_TEAM = () => normalizeMultisig({ signers: [ME, P1, P2], threshold: 2, name: 'Team wallet' });
+const MS_TREASURY = () => normalizeMultisig({ signers: [ME, P1, P3], threshold: 2, name: 'Treasury' });
+async function advancedWorld({ discover = async () => ({ wallets: [], scannedEvents: 412 }), steps = null } = {}) {
+    return sectionsWorld({ steps: async (w) => {
+        const api = {};   // one node handle for the card's life (the card ignores a search answered for another one)
+        const ui = createMultisigUI({ store: { list: () => [], find: () => null, save: (v) => v }, storage: {}, api: () => api, accounts: async () => [], selected: () => ME, select() {},
+            submit: async () => {}, refresh() {}, fetchJson: async () => ({}), discover });
+        ui.mountAccounts(w.q('#wallet-multisig-slot'), { address: ME });
+        await tick(5);
+        if (steps) await steps(w);
+        await tick(5);
+    } });
+}
+const ADVANCED_SCENES = [
+    { id: 'advanced-default', need: ['#multisig-calc-go.ui-action'], scroll: '#wallet-advanced-section', build: () => advancedWorld() },
+    { id: 'advanced-derived', need: ['#multisig-result .ui-panel.is-ok [data-address]'], scroll: '#wallet-advanced-section', build: () => advancedWorld({ steps: async (w) => {
+        w.q('#multisig-signers').value = [ME, P1, P2].join('\n'); w.q('#multisig-threshold').value = '2'; w.q('#multisig-calc-go').click();
+    } }) },
+    { id: 'advanced-invalid', need: ['#multisig-signers[aria-invalid="true"]', '#multisig-signers-error .bx-error-circle'], scroll: '#wallet-advanced-section', build: () => advancedWorld({ steps: async (w) => {
+        w.q('#multisig-signers').value = ME; w.q('#multisig-calc-go').click();
+    } }) },
+    { id: 'multisig-discovering', need: ['.multisig-discover[disabled]', '.multisig-discovery-status .bx-spin'], scroll: '#wallet-multisig-slot', build: () => advancedWorld({ discover: () => new Promise(() => {}) }) },
+    { id: 'multisig-found', need: ['.multisig-saved-list [data-multisig]', '.multisig-discovery-status.is-ok'], scroll: '#wallet-multisig-slot', build: () => advancedWorld({ discover: async () => ({ wallets: [MS_TEAM(), MS_TREASURY()], scannedEvents: 412 }) }) },
+    { id: 'multisig-none', need: ['.multisig-discovery-status.is-info'], scroll: '#wallet-multisig-slot', build: () => advancedWorld() },
+    { id: 'multisig-failed', need: ['.multisig-discovery-status.ui-panel.is-warn:not(.is-line)', '.multisig-discover:not([disabled])'], scroll: '#wallet-multisig-slot',
+        build: () => advancedWorld({ discover: async () => { throw Object.assign(new Error('timed out'), { code: 'timeout' }); } }) }
+].map(s => ({ ...s, primary: 1, connected: ME, widths: [1280, 375] }));
+function checkAdvancedScene(w, s, err) {
+    checkSectionsScene(w, s, err);
+    if (!w.q('#wallet-advanced-section .wallet-advanced')) err.push('not the real Advanced card');
+    if (!w.q('#wallet-multisig-slot .multisig-panel')) err.push('not the real Multisig wallets card');
+    if (s.id === 'multisig-found' && w.qa('.multisig-saved-list [data-multisig]').length !== 2) err.push('the found scene does not list two wallets');
 }
 
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
     stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' },
     stake4: { scenes: STAKE4_SCENES, check: checkStakeScene, prefix: '' }, account4: { scenes: ACCOUNT4_SCENES, check: checkAccount4Scene, prefix: '' },
-    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' }, sections: { scenes: SECTIONS_SCENES, check: checkSectionsScene, prefix: 'sections' } };
+    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' }, sections: { scenes: SECTIONS_SCENES, check: checkSectionsScene, prefix: 'sections' },
+    advanced: { scenes: ADVANCED_SCENES, check: checkAdvancedScene, prefix: '' } };
 
 // A scene is markup: a radio or checkbox changed after render keeps its old `checked` attribute, so the file would show
 // the first choice selected beside the second's field (fidelity review S12). The property becomes the attribute.
