@@ -5592,7 +5592,9 @@ a.validate-secondary { text-decoration: none; }
    tokens only; no colour of its own. */
 .validate-manage { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--border-color); }
 .validate-manage-title { display: flex; align-items: center; gap: 12px; margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-primary); }
-/* The manage actions (spec 2026-11-21 section 5.3): a grid of 44 px secondaries, each led by a violet icon. */
+/* The manage actions (spec 2026-11-21 section 5.3): a grid of 44 px secondaries, each led by a violet icon.
+   C-1 (CEO approval 2026-11-25): the routine actions are a 2 by 2 grid (one column on a phone); Stop validating
+   leaves the grid and comes last, alone, under a divider, as a text button with a neutral icon. */
 .validate-manage-actions { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .validate-manage-actions .validate-secondary { width: 100%; min-height: 44px; box-sizing: border-box; justify-content: flex-start; text-align: left; }
 .validate-manage-actions .validate-secondary .bx { flex-shrink: 0; font-size: 18px; color: var(--accent-violet-text); }
@@ -5600,12 +5602,15 @@ a.validate-secondary { text-decoration: none; }
 .validate-manage-ops .validate-secondary { width: auto; }
 .validate-manage-ops .ui-chip { vertical-align: middle; }
 .validate-manage-pending .validate-headline { display: flex; align-items: center; gap: 8px; }
-@media (min-width: 1024px) {
-    .validate-manage-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
 @media (max-width: 480px) {
     .validate-manage-actions { grid-template-columns: 1fr; }
 }
+.validate-manage-stop { margin: 0; border-top: 1px solid var(--border-color); padding-top: 12px; }
+.validate-manage-stop .validate-text-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.validate-manage-stop .validate-text-btn .bx { flex-shrink: 0; font-size: 18px; color: var(--text-secondary); }
+/* The Stop validating confirm step signs from a 44 px secondary with the same neutral icon: no pink gradient button. */
+.validate-manage-panel .validate-secondary[data-manage-action="sign"] { min-height: 44px; box-sizing: border-box; }
+.validate-manage-panel .validate-secondary[data-manage-action="sign"] .bx { flex-shrink: 0; font-size: 18px; color: var(--text-secondary); }
 .validate-manage-links { margin: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.9rem; }
 .validate-manage-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .validate-manage-panel input[type="text"], .validate-manage-panel textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
@@ -5613,7 +5618,7 @@ a.validate-secondary { text-decoration: none; }
 .validate-manage-panel input[aria-invalid="true"], .validate-manage-panel textarea[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-manage-rule { font-weight: 700; color: var(--text-primary); }
 .validate-manage-facts { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
-.validate-manage .validate-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
+.validate-manage .validate-secondary:disabled, .validate-manage .validate-text-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 /* Sprint 7: the stashes the connected account is a proxy for, a card of its own (spec 2026-11-21 section 4):
    chips for the proxy type and the state, a text link per row. No row fill. */
 .validate-proxied h3 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
