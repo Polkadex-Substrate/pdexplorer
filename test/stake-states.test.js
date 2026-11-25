@@ -945,11 +945,12 @@ describe('help: the nominating and choosing-validators topics speak the card\'s 
         assert.ok(!/Stake &amp; Nominate|\bthe APR\b|\bnew\b<\/b>|<b>n\/a<\/b>/.test(t.body), 'the old words are still there');
         assert.ok(t.body.includes('Advanced view of the Stake PDEX card') && t.body.includes('<b>No history yet</b>') && /Past rewards, not a guarantee/.test(t.body));
     });
-    test('the commission-only estimate is explained where it is shown (the Validators page), with its base and "not a measured return"', () => {
+    test('the Validators page explains the Est. APY it shows (the past nominator return of #95), not the commission-only estimate', () => {
         const t = topic('validators');
-        assert.match(t.body, /Est\. APY \(current commission\)<\/b>: the chain's nominal maximum APY \(\d+(\.\d+)?%\)/);
-        assert.match(t.body, /not a measured return/);
-        assert.match(t.body, /The Stake PDEX card does not use it/);
+        assert.match(t.body, /<b>Est\. APY<\/b>: what a nominator of this validator earned per PDEX staked, after commission, over the last 28 eras/);
+        assert.match(t.body, /A validator with fewer than 7 eras of history shows no estimate yet\. Past rewards, not a guarantee\./);
+        assert.ok(!/Est\. APY \(current commission\)|nominal maximum APY/.test(t.body), 'the Validators page still explains Est. APY as the commission-only estimate');
+        assert.ok(!/commission-only Est\. APY of the Validators page/.test(topic('nominating').body), 'the nominating topic still says the Validators page Est. APY is commission-only');
     });
 });
 
