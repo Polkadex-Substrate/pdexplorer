@@ -12,6 +12,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { encodeAddress } from '@polkadot/util-crypto';
+import { Window } from 'happy-dom';
 import { FEATURE_FLAGS } from '../lib/wallet-links.js';
 import { HELP_TOPICS, visibleHelpTopics } from '../lib/help-topics.js';
 import { validateSitemapRoutes } from '../lib/validate-gate.js';
@@ -31,9 +32,12 @@ describe('the flag', () => {
     test('the nav entry and the validators page links are hidden in the shell until the flag shows them', () => {
         const html = readRepo('index.html', import.meta.url);
         assert.match(html, /<a href="\/validate" class="nav-item" data-target="validate" id="nav-validate" hidden>/);
-        const links = [...html.matchAll(/<a [^>]*class="item-link validate-flag-link"[^>]*>/g)].map(m => m[0]);
-        assert.ok(links.length >= 2);
-        for (const l of links) assert.match(l, /\shidden>/, l);
+        // Amended (page head plan 2026-11-25): the two links sit in one actions row that carries the flag class and is hidden.
+        const doc = new Window({ settings: { disableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true, disableCSSFileLoading: true } }).document;
+        doc.body.innerHTML = html.slice(html.indexOf('<body'), html.lastIndexOf('</body>') + 7);
+        const links = [...doc.querySelectorAll('.validators-page a[href="/validate"], .validators-page a[href="/validate/node"]')];
+        assert.equal(links.length, 2);
+        for (const l of links) assert.ok(l.closest('.validate-flag-link[hidden]'), 'not inside a hidden .validate-flag-link: ' + l.outerHTML);
     });
 });
 

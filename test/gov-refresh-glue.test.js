@@ -27,6 +27,7 @@ import { freshPlan } from '../lib/collective-live.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import { STRINGS, REFRESH_UI } from '../lib/refresh-ui.js';
 import { ME, OTHER, V1, V2, REGISTRY } from './helpers/payout-events.js';
+import { pageHeadHtml, tabsHtml, revealActiveTab } from '../lib/ui-parts.js';
 
 const SCRIPT = readRepo('script.js', import.meta.url);
 const HTML = readRepo('index.html', import.meta.url);
@@ -104,7 +105,7 @@ function govPage({ route = 'council', wallet = ME, member = true } = {}) {
         multisigStore: { find: () => null }, multisigUI: { review: async () => {} },
         resolveWalletSigner: async () => ({ account: { address: world.wallet }, signer: {} }),
         trackSignedTx, showTxStatus: (act, st, ev2, err, ex) => buildTxModel(act, st, ev2, err, ex), recheckSignedTxs: () => {},
-        createKnownResults, createPostAction, effectsFor, caughtUp, pollDeadlineMs, samePayload, createGovRefresh, createCouncilCandidacyUI, freshPlan,
+        createKnownResults, createPostAction, effectsFor, pageHeadHtml, tabsHtml, revealActiveTab, caughtUp, pollDeadlineMs, samePayload, createGovRefresh, createCouncilCandidacyUI, freshPlan,
         showTxNotice: (m) => { world.notices.push(m); }, requireWallet: () => true, confirm: () => true,
         stakingEscapeHtml: escapeHtml, stakingFormatNumber: (n) => String(n), copyToClipboard() {}, buildWalletConnectPrompt: noop, helpIcon: noop,
         renderCouncilMotions() {}, renderCollectiveMotions() {}, overlayLiveMotions: (m) => m, liveMotions: () => null,

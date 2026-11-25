@@ -19,6 +19,7 @@
 //                                    that scrollTo sets); result.scroll = { restoration, atLoad }, steps[i].scrollCalls
 //   api: { 'url substring': json }   answers for fetch, first match wins (else {})
 //   probe: [selector]                per selector: how many, how many not hidden, the first one's text
+//   steps may also hold { dump: selector }: the first match's outerHTML is appended to result.dumps (null if none)
 // }
 // The result also carries every URL fetched, every WebSocket URL and the data-page on screen.
 // Prints one line: RESULT {"first": header, "steps": [header...], "final": {...}}.
@@ -134,6 +135,7 @@ const first = header();   // after every top-level statement, before any await r
 await tick(30);
 const atLoad = scroll.calls.splice(0);
 const steps = [];
+const dumps = [];
 for (const step of scenario.steps || []) {
     if (step.setScroll !== undefined) {
         scroll.y = step.setScroll;
@@ -148,6 +150,9 @@ for (const step of scenario.steps || []) {
     } else if (step.go) {
         win.history.pushState(null, '', step.go);
         win.dispatchEvent(new win.Event('popstate'));
+    } else if (step.dump) {
+        const el = document.querySelector(step.dump);
+        dumps.push(el ? el.outerHTML : null);
     } else if (step.storage) {
         // Another tab wrote (its writes succeed): change the shared storage, then
         // one 'storage' event per key, as the browser sends them.
@@ -174,6 +179,7 @@ const result = {
         dashboard: dashboard()
     },
     errors,
+    dumps,
     fetched,
     sockets,
     page: (Array.from(document.querySelectorAll('.page-section')).find(p => p.style.display && p.style.display !== 'none') || { getAttribute: () => null }).getAttribute('data-page'),

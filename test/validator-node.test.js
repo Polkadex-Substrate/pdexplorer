@@ -535,7 +535,8 @@ describe('wiring: server, docs, shell, script, help, brand', () => {
         for (const f of ['README.md', 'public/llms.txt']) assert.ok(readRepo(f, import.meta.url).includes('/api/telemetry/node'), f);
     });
     test('index.html: the flagged "Run a validator" link on the Validators page', () => {
-        assert.match(html, /<a href="\/validate\/node" class="item-link validate-flag-link" hidden>Run a validator<\/a>/);
+        // Amended (page head plan 2026-11-25): the link sits in the flagged, hidden actions row of the shared head.
+        assert.match(html, /<div class="ui-page-head-actions validate-flag-link" hidden>[\s\S]*?<a href="\/validate\/node" class="item-link">Run a validator <i class="bx bx-chevron-right" aria-hidden="true"><\/i><\/a>/);
     });
     test('script.js: /validate/node mounts the guide; ?node= reaches the guide and the status; under 15,000 lines', () => {
         assert.match(script, /import \{ mountNodeGuide \} from '\.\/lib\/validator-node-guide\.js'/);
