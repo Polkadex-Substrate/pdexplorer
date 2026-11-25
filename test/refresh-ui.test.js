@@ -32,6 +32,7 @@ const COPY = {
     S15: 'This list may be behind the chain. An era that is already paid is skipped, and you still pay the network fee.',
     S16: 'Still could not refresh. Last tried at {HH:MM}.',
     S17: 'The block with your {payout} was replaced by the network. It is being sent again, so the items below are listed until it is back in a block.',
+    S17b: 'The block with your {payout} was replaced by the network. It is being sent again, so this card shows the earlier state until it is back in a block.',
     S18: 'Payout in progress',
     S20: 'Confirming',
     S21: 'Sent {amount} PDEX to {short address}. In block #{n}. This row is replaced when the explorer has indexed it.',

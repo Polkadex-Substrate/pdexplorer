@@ -331,7 +331,7 @@ describe('R5: the validator status card follows a manage action (rows 27 to 29)'
         assert.match(w.card(), /Commission\s*5%\./, 'the replaced block\'s result is not kept');
         const line = w.doc.querySelector('.validate-dash .ui-panel.is-warn');
         assert.ok(line, 'the reorg line');
-        assert.equal(line.textContent.trim(), say('S17', { payout: 'transaction' }));
+        assert.equal(line.textContent.trim(), say('S17b', { payout: 'transaction' }), 'the card is not a list: S17b (fidelity review R3)');
         w.server.head = 43; w.server.pct[STASH] = 7;
         await r.emit(IN2, [prefsSet(), success()]);
         assert.match(w.card(), /Commission\s*7%\./);

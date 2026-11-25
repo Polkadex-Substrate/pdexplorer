@@ -11,6 +11,8 @@ import { readRepo, bodyOf } from './helpers/source.js';
 import * as chartUpdate from '../lib/chart-update.js';
 import { REFRESH_UI } from '../lib/refresh-ui.js';
 import { escapeHtml } from '../lib/html-escape.js';
+// The price card's empty sentence is one constant (fidelity review 2026-11-24, R1); undefined before it.
+const { PRICE_COLLECTING } = await import('../lib/wallet-sections.js');
 import { formatNominatorApy, nominatorApyCaption } from '../lib/nominator-apy.js';
 
 const chartConfigs = await import('../lib/chart-configs.js').catch(() => ({}));
@@ -40,7 +42,7 @@ function world({ reduced = false } = {}) {
     }
     const ctx = {
         console, Promise, Object, JSON, Array, Map, Set, String, Number, Math, Date, encodeURIComponent, Error, isFinite: Number.isFinite,
-        window: win, document: doc, Chart: FakeChart, ...chartUpdate, ...chartConfigs, REFRESH_UI,
+        window: win, document: doc, Chart: FakeChart, ...chartUpdate, ...chartConfigs, REFRESH_UI, PRICE_COLLECTING,
         formatNominatorApy, nominatorApyCaption, stakingEscapeHtml: escapeHtml, stakingFormatPDEX: (v) => String(v), stakingFormatNumber: (v) => String(v),
         updateSeoMeta() {}, formatLocalDateTime: () => 'now', watchlistStarButton: () => '', renderValidatorScorecard: () => '', mountValidatorManageLink() {}, copyToClipboard() {},
         renderApiError: (c, e) => { c.textContent = 'ERR ' + e.message; },
@@ -274,6 +276,15 @@ describe('in place: the wallet price card keeps its canvas across a wallet refre
         w.s.wallet({ history: hist(5, 1), configured: true });
         assert.equal(w.live.size, 1); assert.ok(w.doc.getElementById('wallet-price-chart'));
     });
+    test('fidelity review 2026-11-24 R1: the empty card says the review\'s sentence, with no dash', () => {
+        const w = world();
+        w.doc.body.innerHTML = '<div id="wallet-price-chart-wrap"><canvas id="wallet-price-chart"></canvas></div>';
+        w.s.setWallet(ADDR);
+        w.s.wallet({ history: [], configured: true });
+        const text = w.doc.getElementById('wallet-price-chart-wrap').textContent.trim();
+        assert.equal(text, 'Collecting price history. The chart fills in as data arrives.');
+        assert.doesNotMatch(text, /[\u2013\u2014]/);
+    });
 });
 
 describe('in place: the democracy statistics follow a quiet poll', () => {
@@ -443,6 +454,11 @@ describe('lib/chart-configs.js: plain config builders, motion passed in', () => 
     test('democracy turnout % is turnout over issuance, 0 when there is no issuance', () => {
         assert.deepEqual(chartConfigs.democracyTurnoutPctChartConfig([{ refIndex: 1, turnout: 50 }], 1000, false).data.datasets[0].data, [5]);
         assert.deepEqual(chartConfigs.democracyTurnoutPctChartConfig([{ refIndex: 1, turnout: 50 }], 0, false).data.datasets[0].data, [0]);
+    });
+    test('fidelity review 2026-11-24 C1: the vote trend title has no dash: "Vote trend: Ayes vs Nays (PDEX)"', () => {
+        const c = chartConfigs.democracyVoteChartConfig(refs(3, 5), false);
+        assert.equal(c.options.plugins.title.text, 'Vote trend: Ayes vs Nays (PDEX)');
+        for (const name of Object.keys(build)) assert.doesNotMatch(JSON.stringify(build[name](false).options), /[\u2013\u2014]/, name);
     });
     test('the validator chart reads the history oldest first', () => {
         const c = chartConfigs.validatorChartConfig([{ era: 3, commission: 3, apy: 3 }, { era: 2, commission: 2, apy: 2 }], false);

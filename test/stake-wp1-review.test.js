@@ -282,7 +282,7 @@ describe('finding 5: an unknown stake plans nothing; a different controller is r
             const p = planStakeCalls({ hasBond: null, amountPlanck, targets: [V1] });
             assert.deepEqual(p.calls, [], 'bond would fail AlreadyBonded on a staked account, for a fee');
             assert.deepEqual(p.problems, ['bonded-unknown']);
-            assert.equal(planProblemMessage(p), 'Your account is still loading. Try again in a moment.', 'SC-109');
+            assert.equal(planProblemMessage(p), 'The explorer cannot confirm yet what this account has staked, so nothing is signed from here. Close this card and open it again in a minute.', 'SC-109b (fidelity review ruling c)');
             assert.throws(() => buildStakeTx(api, p));
         }
     });
@@ -291,7 +291,7 @@ describe('finding 5: an unknown stake plans nothing; a different controller is r
         await w.fn('submitStakeTx')();
         await flush();
         assert.equal(w.sent.length + w.built.length + w.reviews.length, 0, 'a bond was built for an account whose stake is unknown');
-        assert.equal(w.errorOf('stake-modal-error'), 'Your account is still loading. Try again in a moment.', 'SC-109');
+        assert.equal(w.errorOf('stake-modal-error'), 'The explorer cannot confirm yet what this account has staked, so nothing is signed from here. Close this card and open it again in a minute.', 'SC-109b (fidelity review ruling c)');
         w.close();
     });
     test('the modal: a stash whose controller is another account is refused before signing nominate (existing controller message)', async () => {

@@ -267,13 +267,13 @@ describe('copy', () => {
         // WP3 (the advanced view) adds SC-02, SC-40 to SC-43, SC-61 to SC-76, the SC-78 and SC-79 parts and SC-90 to SC-94.
         // WP4 (states) adds SC-120, SC-121, SC-141, and SC-150 and SC-151 with their lines (s).
         assert.deepEqual(Object.keys(STAKE_COPY), ['SC-01', 'SC-02', 'SC-03', 'SC-03b', 'SC-03c', 'SC-04', 'SC-05', 'SC-10', 'SC-11', 'SC-11b', 'SC-12', 'SC-13',
-            'SC-14', 'SC-14b', 'SC-14c', 'SC-14d', 'SC-14e', 'SC-20', 'SC-21', 'SC-21b', 'SC-22', 'SC-23', 'SC-24a', 'SC-24b', 'SC-25',
-            'SC-30', 'SC-30b', 'SC-30c', 'SC-30d', 'SC-31', 'SC-32', 'SC-33', 'SC-35', 'SC-36', 'SC-37', 'SC-38', 'SC-39', 'SC-40', 'SC-41', 'SC-42', 'SC-43',
+            'SC-14', 'SC-14b', 'SC-14c', 'SC-14d', 'SC-14e', 'SC-14f', 'SC-20', 'SC-21', 'SC-21b', 'SC-22', 'SC-23', 'SC-24a', 'SC-24b', 'SC-25',
+            'SC-30', 'SC-30b', 'SC-30c', 'SC-30d', 'SC-31', 'SC-32', 'SC-33', 'SC-35', 'SC-36', 'SC-37', 'SC-38', 'SC-39', 'SC-39b', 'SC-40', 'SC-41', 'SC-42', 'SC-43',
             'SC-50', 'SC-51', 'SC-52', 'SC-53', 'SC-55a', 'SC-55b', 'SC-60', 'SC-60t', 'SC-61', 'SC-62', 'SC-63', 'SC-64', 'SC-65', 'SC-66', 'SC-67', 'SC-68',
             'SC-69', 'SC-70', 'SC-71', 'SC-73', 'SC-74', 'SC-75', 'SC-76', 'SC-78a', 'SC-78b', 'SC-78c', 'SC-78d', 'SC-78e', 'SC-79a', 'SC-79b',
             'SC-80a', 'SC-80b', 'SC-80c', 'SC-80d', 'SC-80e', 'SC-90', 'SC-91', 'SC-92', 'SC-93', 'SC-94', 'SC-95',
-            'SC-100', 'SC-101', 'SC-102', 'SC-104', 'SC-105', 'SC-106', 'SC-107', 'SC-108', 'SC-109', 'SC-110', 'SC-111', 'SC-112', 'SC-113', 'SC-114', 'SC-115',
-            'SC-120', 'SC-121', 'SC-122', 'SC-130', 'SC-131', 'SC-132', 'SC-133', 'SC-134', 'SC-140', 'SC-141', 'SC-150', 'SC-150s', 'SC-151', 'SC-151s', 'SC-160', 'SC-161a', 'SC-161b', 'SC-163a', 'SC-163b', 'SC-163c',
+            'SC-100', 'SC-101', 'SC-102', 'SC-104', 'SC-105', 'SC-106', 'SC-107', 'SC-108', 'SC-109', 'SC-109b', 'SC-109c', 'SC-110', 'SC-111', 'SC-112', 'SC-113', 'SC-114', 'SC-115',
+            'SC-120', 'SC-121', 'SC-122', 'SC-130', 'SC-131', 'SC-132', 'SC-133', 'SC-134', 'SC-140', 'SC-141', 'SC-150', 'SC-150s', 'SC-151', 'SC-151s', 'SC-160', 'SC-160s', 'SC-161a', 'SC-161b', 'SC-163a', 'SC-163b', 'SC-163c',
             'SC-164a', 'SC-164b', 'SC-164c', 'SC-164d', 'SC-164e', 'SC-164f']);
         assert.equal(stakeCopy('SC-32'), 'Chosen by past return, highest first, from validators that are active now, have at least 7 eras of reward history, accept new stake, take 10% commission or less with no recent raise, were not penalised in the last 84 eras, rarely miss blocks, and paid at least three quarters of the typical return. One per operator identity.');
         assert.equal(stakeCopy('SC-115', { need: '101.05', min: '100', have: '101.02' }), 'To stake you need at least 101.05 PDEX free: the smallest stake of 100 PDEX, 1 PDEX that must stay in the account, and the network fee. This account has 101.02 PDEX free.');
@@ -291,7 +291,7 @@ describe('copy', () => {
             'SC-69': 'Rewards account', 'SC-70': 'Rewards will go to an account that is not this one. Check that you control it.',
             'SC-71': 'Enter a valid Polkadex address.', 'SC-73': 'All validators', 'SC-74': 'Your selection, {n} of {max}', 'SC-75': 'Remove all',
             'SC-76': 'No validators selected. Add from the list, or use the automatic choice.',
-            'SC-78a': '{x}% a year', 'SC-78b': 'No history yet', 'SC-78c': '{y}% commission', 'SC-78d': 'own stake {z}', 'SC-78e': '{n} stakers',
+            'SC-78a': '{x}% a year', 'SC-78b': 'No history yet', 'SC-78c': '{y}% commission', 'SC-78d': 'own stake {z} PDEX', 'SC-78e': '{n} stakers',
             'SC-79a': 'Past return over', 'SC-79b': 'Highest past return',
             'SC-90': '{k} of your {n} validators are not active this era and earn nothing until they are elected.',
             'SC-91': '{k} have no reward history yet and are not in the past return figure.',
