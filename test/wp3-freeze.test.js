@@ -58,7 +58,7 @@ const HASHED = {
     'lib/validator-setup-chain.js': '9fbe94f5721400638d7201e36ee8e6194868da0505ad9a6fc3521cab5fad1c64',
     'lib/validator-manage.js': 'cd1fc7cae7587318075e96f92d85a167343132907da23cc8248891cc4ad45c56',
     'lib/validator-manage-chain.js': 'd3de9f260db4c62f9f9e2c270f21cec8bc12bb8f74e8639761cb6243b1963019',
-    'lib/validator-delegate.js': '1a7d435740f64947b9fb4de6029ddf2325fc8876ff35c25f75d00b390ea0ea80',
+    'lib/validator-delegate.js': 'ecbd376003238af103bdb198e605128a0ed642ba0d3042bc5f000d3896fa0f3d',
     'lib/validator-delegate-chain.js': '8db6e24bdef45e7e3cf21268f3eea15f7d37e73b73f8eae26ad0eb198a37e701',
     'lib/tx-submit.js': '11ed4abe0df4cb4f536cfdd61c54a44cf4910b87e86ee54b4e3d618e5a5d2567',
     'lib/fee-preflight.js': '0dc171b6c86ebeaabd883554c04ddbea245374b110e1c36137ee96b055c75b27'

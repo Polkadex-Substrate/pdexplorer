@@ -75,7 +75,9 @@ describe('Q6, Q16, Q21, Q22: static copy in index.html', () => {
         for (const t of ['Sign and table motion', 'Sign and stake', 'Sign and pay out', 'Sign and send', 'Sign and unstake']) assert.match(INDEX, new RegExp('>' + t + '<'), t);
         const code = stripComments(SCRIPT);
         for (const old of ["'Sign & Submit'", "'Sign & Pay Out'", "'Sign & Unstake'", "'Sign & Send'"]) assert.ok(!code.includes('idleText: ' + old), old);
-        for (const t of ['Sign and stake', 'Sign and pay out', 'Sign and unstake', 'Sign and send']) assert.ok(code.includes(`idleText: '${t}'`), t);
+        for (const t of ['Sign and pay out', 'Sign and unstake', 'Sign and send']) assert.ok(code.includes(`idleText: '${t}'`), t);
+        // The stake card's button reads its plan (SC-50 "Sign and stake" to SC-53), so it resets to that label.
+        assert.ok(code.includes('idleText: stakeCopy(plan.primary)'), 'the stake button resets to the plan\'s label');
         assert.ok(!stripComments(read('lib/treasury-spend-view.js')).includes('Sign & table motion'));
         assert.ok(read('lib/treasury-spend-view.js').includes("idleText: 'Sign and table motion'"));
     });
@@ -96,7 +98,8 @@ describe('Q23, Q33, Q34: My Account', () => {
         assert.ok(SCRIPT.includes('<div class="list-header"><h2>Network staking</h2></div>'));
         assert.ok(!SCRIPT.includes('<h2>Staking Overview</h2>'));
         assert.ok(!SCRIPT.includes('<div class="wallet-stat"><span>Total Staked</span>'));
-        assert.ok(SCRIPT.includes('<div class="label">Total Staked</div>'), 'the summary card keeps the one Total Staked');
+        // stake WP4: the tile is drawn by lib/stake-refresh.js (stakedTileHtml), which renderWalletDashboard calls.
+        assert.ok(/<div class="label"[^>]*>Total Staked<\/div>/.test(readFileSync(new URL('../lib/stake-refresh.js', import.meta.url), 'utf8')) && SCRIPT.includes('stakedTileHtml(data'), 'the summary card keeps the one Total Staked');
     });
 });
 
