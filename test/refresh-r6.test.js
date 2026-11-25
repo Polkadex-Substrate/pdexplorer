@@ -76,6 +76,7 @@ function browser() {
     world.fetch = (tab) => async (url, init = {}) => {
         const method = (init.method || 'GET').toUpperCase();
         world.fetches.push({ tab: tab.name, method, url: String(url) });
+        if (method === 'GET' && world.gate) await world.gate(tab.name, String(url));   // a read held in flight (holdReads)
         let m = String(url).match(/^\/api\/labels\/([^/?]+)$/);
         if (m) {
             const a = decodeURIComponent(m[1]);
@@ -332,6 +333,76 @@ describe('R6 rows 31, 32: a discussion post appears in the thread, here and in t
         assert.ok(at !== -1, 'onUpdated draws and notifies in one block');
         const block = code.slice(at, code.indexOf('});', at));
         assert.ok(block.indexOf('renderThread(') !== -1 && block.indexOf('serverRefresh.thread(thread.id, root)') > block.indexOf('renderThread('), block);
+    });
+});
+
+// Holds one tab's reads in flight until released: what the reader does between another tab's notice and the
+// response of the quiet re-read it started.
+function holdReads(w, name) {
+    const held = [];
+    w.gate = (tab) => (tab === name ? new Promise(r => held.push(r)) : undefined);
+    return { held, release: async () => { w.gate = null; held.splice(0).forEach(r => r()); for (let i = 0; i < 4; i++) await flush(); } };
+}
+
+describe('R6 review: another tab\'s change never replaces text typed while the quiet re-read was in flight (U5)', () => {
+    const TYPED = 'typed while the read was in flight';
+    test('thread: a reply typed between the notice and the response survives', async () => {
+        needSR();
+        const w = browser(); w.signIn();
+        const A = openTab(w, 'A'), B = openTab(w, 'B');
+        await threadPage(A, 'ref-7'); await threadPage(B, 'ref-7');
+        const gate = holdReads(w, 'B');
+        A.q('#discuss-post-input').value = 'Posted in A';
+        await A.api.submitDiscussionPost('ref-7', A.q('#discussions-content'));
+        await w.deliver();
+        assert.equal(gate.held.length, 1, 'the other tab did not start its quiet re-read (nothing was typed at the notice)');
+        const draft = B.q('#discuss-post-input');
+        draft.value = TYPED;
+        await gate.release();
+        assert.ok(B.q('#discuss-post-input') === draft, 'the response of the re-read replaced the reply being typed');
+        assert.equal(B.q('#discuss-post-input').value, TYPED);
+    });
+    test('thread control: nothing typed, the response is drawn', async () => {
+        needSR();
+        const w = browser(); w.signIn();
+        const A = openTab(w, 'A'), B = openTab(w, 'B');
+        await threadPage(A, 'ref-7'); await threadPage(B, 'ref-7');
+        const gate = holdReads(w, 'B');
+        A.q('#discuss-post-input').value = 'Posted in A';
+        await A.api.submitDiscussionPost('ref-7', A.q('#discussions-content'));
+        await w.deliver();
+        assert.equal(gate.held.length, 1);
+        await gate.release();
+        assert.match(postsText(B), /Posted in A/, 'the other tab did not draw the re-read');
+    });
+    test('label editor: a label typed between the notice and the response survives; the pill still follows', async () => {
+        needSR();
+        const w = browser(); w.signIn();
+        const A = openTab(w, 'A'), B = openTab(w, 'B');
+        await accountPage(A, X); await accountPage(B, X);
+        const gate = holdReads(w, 'B');
+        await saveLabel(A, 'Validator');
+        await w.deliver();
+        assert.ok(gate.held.length >= 1, 'the other tab did not start its re-read of the labels (nothing was typed at the notice)');
+        const typing = B.q('#account-label-input');
+        typing.value = TYPED;
+        await gate.release();
+        assert.ok(B.q('#account-label-input') === typing, 'the response of the re-read replaced the label being typed');
+        assert.equal(B.q('#account-label-input').value, TYPED);
+        assert.equal(pill(B, X), 'Validator', 'the pill did not follow');
+    });
+    test('label editor control: nothing typed, the editor and the pill are drawn', async () => {
+        needSR();
+        const w = browser(); w.signIn();
+        const A = openTab(w, 'A'), B = openTab(w, 'B');
+        await accountPage(A, X); await accountPage(B, X);
+        const gate = holdReads(w, 'B');
+        await saveLabel(A, 'Validator');
+        await w.deliver();
+        assert.ok(gate.held.length >= 1);
+        await gate.release();
+        assert.match(editorText(B), /Validator/, 'the other tab did not redraw its editor');
+        assert.equal(pill(B, X), 'Validator');
     });
 });
 
