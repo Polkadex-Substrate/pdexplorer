@@ -437,11 +437,13 @@
             <!-- Validators Page -->
             <div class="validators-page page-section" data-page="validators" style="display: none;">
                 <div class="list-container glass">
-                    <div class="list-header">
-                        <h2>Active Validators</h2>
-                        <a href="/validate" class="item-link validate-flag-link" hidden>Validator status and session keys check</a>
-                        <a href="/validate/node" class="item-link validate-flag-link" hidden>Run a validator</a>
-                        <span class="validator-count">Loading...</span>
+                    <div class="list-header ui-page-head is-ruled">
+                        <div class="ui-page-head-title"><h2>Active Validators</h2></div>
+                        <p class="ui-page-head-meta"><span class="validator-count">Loading...</span></p>
+                        <div class="ui-page-head-actions validate-flag-link" hidden>
+                            <a href="/validate" class="item-link">Validator status and session keys check <i class="bx bx-chevron-right" aria-hidden="true"></i></a>
+                            <a href="/validate/node" class="item-link">Run a validator <i class="bx bx-chevron-right" aria-hidden="true"></i></a>
+                        </div>
                     </div>
                     <div id="validators-table">
                         <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching validators from indexer…</div>
@@ -480,23 +482,23 @@
 
             <!-- Council Page -->
             <div class="council-page page-section" data-page="council" style="display: none;">
-                <div class="list-header council-page-header">
-                    <h2>Council</h2>
-                    <div class="council-header-actions" role="group" aria-label="Council actions">
-                        <button id="council-submit-candidacy-btn" class="glass council-action-button" type="button">Submit Candidacy</button>
-                        <button id="council-withdraw-btn" class="glass council-action-button" type="button">Withdraw candidacy</button>
+                <div class="list-header ui-page-head is-outside council-page-header">
+                    <div class="ui-page-head-title"><h2>Council</h2></div>
+                    <div class="ui-page-head-actions council-header-actions" role="group" aria-label="Council actions">
+                        <button id="council-submit-candidacy-btn" class="ui-action council-action-button" type="button">Submit Candidacy</button>
+                        <button id="council-withdraw-btn" class="ui-action council-action-button" type="button">Withdraw candidacy</button>
                         <button id="council-vote-btn" class="glass council-action-button council-vote-button" type="button">Vote</button>
                     </div>
                 </div>
                 <div class="list-container glass">
-                    <div class="account-tabs" style="margin: 0 24px;">
-                        <button class="account-tab active" data-tab="council-members">Members</button>
-                        <button class="account-tab" data-tab="council-motions">Motions</button>
-                        <button class="account-tab" data-tab="council-tc">Technical Committee</button>
+                    <div class="account-tabs" role="tablist" aria-label="Council sections">
+                        <button type="button" role="tab" class="account-tab active" aria-selected="true" data-tab="council-members">Members</button>
+                        <button type="button" role="tab" class="account-tab" aria-selected="false" data-tab="council-motions">Motions</button>
+                        <button type="button" role="tab" class="account-tab" aria-selected="false" data-tab="council-tc">Technical Committee</button>
                     </div>
                     
                     <!-- Council Members Tab -->
-                    <div id="council-members" class="account-tab-content active" style="padding: 24px;">
+                    <div id="council-members" class="account-tab-content ui-page-body active">
                         <!-- Summary Stats -->
                         <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 30px;">
                             <div class="glass" style="flex: 1; padding: 20px; border-radius: var(--radius-md); text-align: center; border: 1px solid var(--border-color);">
@@ -577,7 +579,7 @@
                     </div>
 
                     <!-- Council Motions Tab -->
-                    <div id="council-motions" class="account-tab-content" style="padding: 24px;">
+                    <div id="council-motions" class="account-tab-content ui-page-body">
                         <div id="council-motions-content">
                             <div style="padding: 40px; text-align: center; color: var(--text-secondary);">Fetching council motions…</div>
                         </div>
@@ -586,7 +588,7 @@
                     <!-- Technical Committee Tab: members (set by governance, no
                          elections or stakes; an optional prime) and its motions,
                          rendered by the same code as council motions. -->
-                    <div id="council-tc" class="account-tab-content" style="padding: 24px;">
+                    <div id="council-tc" class="account-tab-content ui-page-body">
                         <div class="staking-summary-grid" style="margin-bottom: 20px;">
                             <div class="staking-summary-card"><div class="label">Members</div><div class="value" id="tc-members-count">--</div></div>
                             <div class="staking-summary-card"><div class="label">Motions since genesis</div><div class="value" id="tc-motions-total">--</div></div>

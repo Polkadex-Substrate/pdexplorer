@@ -2212,9 +2212,6 @@ h1, h2, h3 { font-weight: 600; }
 
 /* --- Council page tabs + tables --- */
 .council-page-header {
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 0;
     border-bottom: none;
 }
 .council-header-actions { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -2244,8 +2241,6 @@ h1, h2, h3 { font-weight: 600; }
         z-index: 91;
         background: var(--bg-dark);
         padding: 12px 0;
-        flex-direction: column;
-        align-items: stretch;
     }
     .council-header-actions { gap: 8px; }
     .council-action-button {
@@ -2255,29 +2250,6 @@ h1, h2, h3 { font-weight: 600; }
         white-space: normal;
         overflow-wrap: anywhere;
     }
-}
-.account-tabs {
-    display: flex;
-    gap: 6px;
-    border-bottom: 1px solid var(--border-color);
-    margin-bottom: 4px;
-}
-.account-tab {
-    padding: 10px 18px;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-secondary);
-    font-size: 0.88rem;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: color var(--transition-fast), border-color var(--transition-fast);
-}
-.account-tab:hover { color: var(--text-primary); }
-.account-tab.active {
-    color: var(--brand-primary);
-    border-bottom-color: var(--brand-primary);
 }
 .account-tab-content { display: none; }
 .account-tab-content.active { display: block; }
@@ -4849,6 +4821,55 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 @media (forced-colors: active) {
     .ui-action { border: 1px solid ButtonText; background: ButtonFace; color: ButtonText; }
 }
+
+/* Page head and tabs: one left edge (plan 2026-11-25-page-header-alignment) */
+.list-container, .council-page { --page-gutter: 24px; }
+.ui-page-head { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; padding: 20px var(--page-gutter) 16px; border-bottom: 0; }
+.ui-page-head.is-ruled { padding-bottom: 20px; border-bottom: 1px solid var(--border-color); }
+.ui-page-head.is-outside { padding: 0 24px; }
+.ui-page-head-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.ui-page-head-title h2 { margin: 0; }
+.ui-page-head .help-inline-icon { width: 28px; height: 28px; margin-left: 0; color: var(--text-secondary); opacity: 1; }
+.ui-page-head .help-inline-icon i { font-size: 18px; }
+.ui-page-head-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; color: var(--text-secondary); font-size: 0.82rem; line-height: 1.5; }
+.ui-page-head-meta > span + span { padding-left: 16px; border-left: 1px solid var(--border-color); }
+.ui-page-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; max-width: 100%; }
+.ui-page-head-actions[hidden] { display: none; }
+.ui-page-head-actions .ui-panel.is-line { flex: 1 1 280px; min-width: 0; margin: 0; }
+.ui-page-body { padding: 24px var(--page-gutter); }
+#account-details-container { --page-gutter: 20px; }
+#account-details-container .address-cell { overflow-wrap: anywhere; }   /* the full address in the first table has no break point at 375 (found by the phone-width scene check) */
+
+/* An action this account can never use here: outlined and readable, not dimmed (the 0.55 dim stays for "held while another runs") */
+.ui-action.is-unavailable[aria-disabled="true"] { opacity: 1; background: transparent; border-color: rgba(255, 255, 255, 0.36); color: var(--text-secondary); cursor: not-allowed; }
+.ui-action.is-unavailable[aria-disabled="true"] .bx { color: var(--text-secondary); }
+.ui-action.is-unavailable[aria-disabled="true"]:hover { box-shadow: none; }
+
+.account-tabs { position: relative; display: flex; gap: 24px; margin: 0 0 4px; padding: 0 var(--page-gutter); border-bottom: 1px solid var(--border-color); overflow-x: auto; scrollbar-width: none; }
+.account-tabs::-webkit-scrollbar { display: none; }
+.account-tab { flex: 0 0 auto; min-height: 44px; padding: 10px 0; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--text-secondary); font-family: inherit; font-size: 0.88rem; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color var(--transition-fast), border-color var(--transition-fast); }
+.account-tab.active { color: var(--text-primary); border-bottom-color: var(--brand-primary); }
+@media (hover: hover) { .account-tab:not(.active):hover { border-bottom-color: rgba(255, 255, 255, 0.24); } }
+.account-tab:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
+
+@media (max-width: 900px) {
+    .ui-page-head.is-outside.council-page-header { padding: 12px 24px; }
+    .ui-page-head-meta { flex-direction: column; }
+    .ui-page-head-meta > span + span { padding-left: 0; border-left: 0; }
+}
+@media (max-width: 600px) {
+    /* the card itself pads 16 px here (.glass), so the parts inside add nothing */
+    .list-container.glass { --page-gutter: 0px; }
+    .ui-page-head { padding: 0 0 12px; }
+    .ui-page-head.is-outside, .ui-page-head.is-outside.council-page-header { padding: 12px 16px; }
+    .ui-page-head .help-inline-icon { width: 44px; height: 44px; margin: -8px 0; }
+    .ui-page-head-actions { flex-direction: column; align-items: stretch; width: 100%; }
+    .ui-page-head-actions .ui-action { width: 100%; }
+    .ui-page-head-actions .ui-panel.is-line { flex: 0 0 auto; }
+    .account-tabs { gap: 20px; padding-right: 24px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+    .ui-page-body { padding: 16px 0; }
+}
+@media (forced-colors: active) { .account-tab.active { border-bottom-color: Highlight; } }
 /* The proxy list (phone-width spec 3): a table on desktop, stacked rows at 640 px and below, as .balance-locks-table does. */
 .proxy-deposit { margin-bottom: 6px; font-size: 0.78rem; color: var(--text-muted); }
 .proxy-table { margin: 0; }

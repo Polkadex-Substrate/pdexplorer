@@ -103,7 +103,7 @@ import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE } from './lib/validator-status-view.js';
-import { headerLook, PAGE_PRIMARY_SELECTOR, icon, panelHtml, linePanelHtml } from './lib/ui-parts.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR, icon, panelHtml, linePanelHtml, chipHtml, pageHeadHtml, tabsHtml, revealActiveTab } from './lib/ui-parts.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
@@ -6202,7 +6202,9 @@ window.switchAccountTab = function (tabName) {
     document.querySelectorAll('.account-tab-btn').forEach(btn => {
         const isActive = (btn.dataset.accountTab || btn.innerText.trim().toLowerCase()) === tabName.toLowerCase();
         btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-selected', String(isActive));
     });
+    revealActiveTab(document.getElementById('account-details-container'));
 
     document.getElementById('account-tab-transactions').style.display = tabName === 'transactions' ? 'block' : 'none';
     document.getElementById('account-tab-events').style.display = tabName === 'events' ? 'block' : 'none';
@@ -6292,10 +6294,9 @@ async function fetchAccountDetails(address) {
             <div id="account-locks-slot" style="margin-bottom: 20px;"></div>
             <div id="account-nominations-slot" style="margin-bottom: 20px;"></div>
             <div style="margin-bottom: 20px;">
-                <div class="account-tabs" style="padding: 0 20px; margin-bottom: 15px;">
-                    <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transfers (${tabCount('transactions')})</button>
-                    <button type="button" class="account-tab account-tab-btn" data-account-tab="events">Events (${tabCount('events')})</button>
-                </div>
+                ${tabsHtml([
+                    { key: 'transactions', label: `Transfers (${tabCount('transactions')})` }, { key: 'events', label: `Events (${tabCount('events')})` }
+                ], 'transactions', 'data-account-tab', { label: 'Account activity', extra: 'account-tab-btn' })}
                 
                 <div id="account-tab-transactions">
                     <div id="account-tx-table"></div>
@@ -10823,14 +10824,10 @@ wireGovRowClicks(document, { open: (href) => window.open(href, '_blank', 'noopen
 // than the bare word "Error" floating in the header.
 function indexerStatusBadge(rawStatus, errorMessage) {
     const status = String(rawStatus || 'Unknown');
-    if (status === 'Synced') {
-        return `<span title="Indexer is up-to-date" style="display:inline-flex;align-items:center;gap:6px;color:var(--success);font-size:0.78rem;">
-            <i class='bx bx-check-circle'></i> Synced</span>`;
-    }
-    if (status === 'Initializing' || status === 'Syncing' || status === 'Backfilling') {
-        return `<span title="${stakingEscapeHtml(status)}" style="display:inline-flex;align-items:center;gap:6px;color:#f5a623;font-size:0.78rem;">
-            <i class='bx bx-loader-alt bx-spin'></i> ${stakingEscapeHtml(status)}</span>`;
-    }
+    // A chip (icon and word, never colour alone); the tooltip keeps the explanation.
+    const chip = (tip, cls, iconName, word) => chipHtml(cls, iconName, word, stakingEscapeHtml).replace('<span class="ui-chip', `<span title="${stakingEscapeHtml(tip)}" class="ui-chip`);
+    if (status === 'Synced') return chip('Indexer is up-to-date', 'is-positive', 'bx-check-circle', 'Synced');
+    if (status === 'Initializing' || status === 'Syncing' || status === 'Backfilling') return chip(status, 'is-wait', 'bx-loader-alt bx-spin', status);
     // Audit F-050/F-004 (round 2). deriveIndexStatus can return 'Repairing' and
     // 'Degraded', and this function knew about neither — so every honest
     // "there is a hole and we are working on it" was rendered as a red
@@ -10842,16 +10839,13 @@ function indexerStatusBadge(rawStatus, errorMessage) {
     // `detail` from the sync state is passed through as the tooltip, because
     // "Repairing" without a number is the same false comfort "Synced" was.
     if (status === 'Repairing') {
-        return `<span title="${stakingEscapeHtml(errorMessage || 'Known gaps are being re-fetched. Data below the gap is complete; the gap itself is not yet.')}" style="display:inline-flex;align-items:center;gap:6px;color:#f5a623;font-size:0.78rem;cursor:help;">
-            <i class='bx bx-wrench'></i> Repairing</span>`;
+        return chip(errorMessage || 'Known gaps are being re-fetched. Data below the gap is complete; the gap itself is not yet.', 'is-wait', 'bx-wrench', 'Repairing');
     }
     if (status === 'Degraded') {
-        return `<span title="${stakingEscapeHtml(errorMessage || 'Some blocks could not be indexed after repeated attempts — usually a pruned (non-archive) RPC node. This will not resolve on its own.')}" style="display:inline-flex;align-items:center;gap:6px;color:var(--error);font-size:0.78rem;cursor:help;">
-            <i class='bx bx-error'></i> Degraded</span>`;
+        return chip(errorMessage || 'Some blocks could not be indexed after repeated attempts — usually a pruned (non-archive) RPC node. This will not resolve on its own.', 'is-error', 'bx-error', 'Degraded');
     }
-    // 'Error' and any other unrecognised value — clearer wording + tooltip.
-    return `<span title="${stakingEscapeHtml(errorMessage || 'Indexer encountered an error on the last tick. It will retry automatically.')}" style="display:inline-flex;align-items:center;gap:6px;color:var(--error);font-size:0.78rem;cursor:help;">
-        <i class='bx bx-error-circle'></i> Indexer error</span>`;
+    // 'Error' is an error; a value this page does not know is shown neutral, with the same words.
+    return chip(errorMessage || 'Indexer encountered an error on the last tick. It will retry automatically.', status === 'Error' ? 'is-error' : 'is-neutral', 'bx-error-circle', 'Indexer error');
 }
 
 function initDemocracyPage() {
@@ -10901,7 +10895,6 @@ function renderDemocracy() {
     const root = document.getElementById('democracy-content');
     if (!root || !democracyData) return;
     const d = democracyView.data() || democracyData;
-    const tabBtn = (key, label) => `<button class="account-tab${democracyTab === key ? ' active' : ''}" data-demtab="${key}">${label}</button>`;
     let body;
     if (democracyTab === 'referenda') body = renderDemocracyReferenda(d);
     else if (democracyTab === 'proposals') body = renderDemocracyProposals(d);
@@ -10911,20 +10904,18 @@ function renderDemocracy() {
     releaseCharts(Object.values(democracySlots));   // the page is redrawn: its canvases go
     root.innerHTML = `
         <div class="list-container glass">
-            <div class="list-header" style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <h2 style="margin:0;">Democracy</h2>
-                    ${indexerStatusBadge(d.status, d.error)}
-                </div>
-                <button type="button" class="email-alerts-cta" data-email-subscribe="democracy">
-                    <i class='bx bx-envelope'></i> Get email alerts ${helpIcon('email-alerts', 'About email alerts')}
-                </button>
-            </div>
-            <div class="account-tabs" style="margin:0 24px;">
-                ${tabBtn('overview', 'Overview')}${tabBtn('referenda', 'Referenda')}${tabBtn('proposals', 'Public Proposals')}${tabBtn('statistics', 'Statistics')}
-            </div>
-            <div style="padding:24px;">${body}</div>
+            ${pageHeadHtml({
+                title: 'Democracy', esc: stakingEscapeHtml,
+                titleExtra: indexerStatusBadge(d.status, d.error),
+                actions: `<button type="button" class="ui-action" data-email-subscribe="democracy">${icon('bx-envelope')}Get email alerts</button>${helpIcon('email-alerts', 'About email alerts')}`
+            })}
+            ${tabsHtml([
+                { key: 'overview', label: 'Overview' }, { key: 'referenda', label: 'Referenda' },
+                { key: 'proposals', label: 'Public Proposals' }, { key: 'statistics', label: 'Statistics' }
+            ], democracyTab, 'data-demtab', { label: 'Democracy sections' })}
+            <div class="ui-page-body">${body}</div>
         </div>`;
+    revealActiveTab(root);
 
     // Mount the sortable tables for the active tab now that the placeholder
     // div is in the DOM.
@@ -11811,8 +11802,10 @@ function motionStage(view, hash, kind) {
 const councilTabs = document.querySelectorAll('.council-page .account-tab');
 councilTabs.forEach(tab => {
     tab.addEventListener('click', () => {
-        councilTabs.forEach(t => t.classList.remove('active'));
+        councilTabs.forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
         tab.classList.add('active');
+        tab.setAttribute('aria-selected', 'true');
+        revealActiveTab(tab.parentElement);
         const targetId = tab.getAttribute('data-tab');
         document.querySelectorAll('.council-page .account-tab-content').forEach(c => {
             c.classList.remove('active');
@@ -12355,7 +12348,6 @@ function renderTreasury() {
     const approvedProposals = all.filter(p => p.status === 'approved');
     const historyProposals = all.filter(p => p.status === 'awarded' || p.status === 'rejected');
 
-    const tabBtn = (key, label) => `<button class="account-tab${treasuryTab === key ? ' active' : ''}" data-treastab="${key}">${label}</button>`;
     let body;
     if (treasuryTab === 'proposals') body = renderTreasuryProposals(openProposals);
     else if (treasuryTab === 'approved') body = renderTreasuryApproved(approvedProposals);
@@ -12365,19 +12357,20 @@ function renderTreasury() {
 
     root.innerHTML = `
         <div class="list-container glass">
-            <div class="list-header">
-                <h2>Treasury</h2>
-                <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
-                    <span style="color:var(--text-secondary);font-size:0.78rem;">${stakingFormatNumber(d.proposalCount)} lifetime proposals</span>
-                    <span style="color:var(--text-muted);font-size:0.78rem;">${SPEND_RULE_TEXT} ${helpIcon('treasury', 'Who can spend from the treasury')}</span>
-                    <span id="treasury-spend-action"></span>
-                </div>
-            </div>
-            <div class="account-tabs" style="margin:0 24px;">
-                ${tabBtn('overview', 'Overview')}${tabBtn('proposals', `Open (${openProposals.length})`)}${tabBtn('approved', `Approved (${approvedProposals.length})`)}${tabBtn('history', `History (${historyProposals.length})`)}${tabBtn('spends', 'Spends')}
-            </div>
-            <div style="padding:24px;">${governanceIndexNote(d.history, 'proposals')}${body}</div>
+            ${pageHeadHtml({
+                title: 'Treasury', esc: stakingEscapeHtml,
+                help: helpIcon('treasury', 'Who can spend from the treasury'),
+                meta: [`${stakingFormatNumber(d.proposalCount)} lifetime proposals`, stakingEscapeHtml(SPEND_RULE_TEXT)],
+                actionsAttrs: ' id="treasury-spend-action" aria-live="polite"'
+            })}
+            ${tabsHtml([
+                { key: 'overview', label: 'Overview' }, { key: 'proposals', label: `Open (${openProposals.length})` },
+                { key: 'approved', label: `Approved (${approvedProposals.length})` }, { key: 'history', label: `History (${historyProposals.length})` },
+                { key: 'spends', label: 'Spends' }
+            ], treasuryTab, 'data-treastab', { label: 'Treasury sections' })}
+            <div class="ui-page-body">${governanceIndexNote(d.history, 'proposals')}${body}</div>
         </div>`;
+    revealActiveTab(root);
 
     spendMotionUI.mount(root.querySelector('#treasury-spend-action'));
     // Tables are mounted AFTER the outer innerHTML lands so their container
