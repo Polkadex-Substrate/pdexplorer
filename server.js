@@ -17,6 +17,7 @@ import { validateSitemapRoutes } from './lib/validate-gate.js';
 import { proxyTypesOf } from './lib/validator-delegate.js';
 import { govSyncsForEvents, govCallsOf, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
+import { withNominatorApy, nominatorApyFields, nominatorApyForAddress, withPerEraNominatorApy } from './lib/nominator-apy.js';
 import { deriveIndexStatus, describeIndexStatus, coverageOf } from './lib/index-status.js';
 import { isRpcUnavailableError } from './lib/rpc-errors.js';
 import { summarizeRewards, buildClaimedIndex, claimedRewardKey } from './lib/reward-dedup.js';
@@ -3743,6 +3744,26 @@ app.get('/api/diag/rpc-health', async (req, res) => {
     res.status(out.healthy ? 200 : 503).json(out);
 });
 
+// Inputs of the stake-aware Est. APY (lib/nominator-apy.js) for the validators
+// list and the validator page: the stake-picker snapshot the indexer stores in
+// KV (per-validator realized APR, reward per active validator, eras per year),
+// and, for the page's per-era rows, the stored era summaries. Both change at
+// most once per validator sync, so they are read at most once a minute per
+// worker rather than per request. No chain reads.
+const NOMINATOR_APY_MEMO_MS = 60_000;
+let nominatorApyMemo = { at: 0, snapshot: null, summaries: null };
+function nominatorApyInputs() {
+    const now = Date.now();
+    if (nominatorApyMemo.snapshot && now - nominatorApyMemo.at < NOMINATOR_APY_MEMO_MS) return nominatorApyMemo;
+    nominatorApyMemo = { at: now, snapshot: db.getKv('validator_choice') || null, summaries: null };
+    return nominatorApyMemo;
+}
+function nominatorApySummaries() {
+    const m = nominatorApyInputs();
+    if (!m.summaries) m.summaries = db.getEraRewardSummaries(0);
+    return m.summaries;
+}
+
 // --- LIST ENDPOINTS (served from SQLite) ---
 app.get('/api/validators', (req, res) => {
     try {
@@ -3752,10 +3773,9 @@ app.get('/api/validators', (req, res) => {
         //
         // A nominator told us the list was "useless" because validators raise
         // commission right after being nominated — and they were right that the
-        // page gave them no way to see it. Every number on this list (including
-        // the APY, which F-044 relabelled) derives from the CURRENT commission,
-        // so it could not distinguish a validator that has held 1% for forty
-        // eras from one that dropped to 1% yesterday.
+        // page gave them no way to see it. The commission column shows the
+        // CURRENT commission, so it could not distinguish a validator that has
+        // held 1% for forty eras from one that dropped to 1% yesterday.
         //
         // Attached here rather than stored: see db.getCommissionHistoryByValidator.
         // Best-effort — a failure must degrade the extra column, never the list
@@ -3801,6 +3821,14 @@ app.get('/api/validators', (req, res) => {
             payload.commissionHistoryEra = activeEra;
         } catch (e) {
             console.warn('[api] commission-history enrichment skipped:', e && e.message);
+        }
+        // Stake-aware Est. APY (estimatedNominatorApy). estimatedApyAtCurrentCommission
+        // stays as it was: a commission-only ceiling, the same for every validator
+        // at one commission whatever its stake. Best-effort, like the block above.
+        try {
+            payload.validators = withNominatorApy(payload.validators, nominatorApyInputs().snapshot);
+        } catch (e) {
+            console.warn('[api] nominator APY enrichment skipped:', e && e.message);
         }
 
         cacheMedium(res);
@@ -4308,6 +4336,16 @@ app.get('/api/validator/:address', async (req, res) => {
         // than on the frontend so every caller (UI, API consumers, future
         // alerts) gets identical numbers.
         const scorecard = computeValidatorScorecard(history, triggers);
+        // Stake-aware Est. APY beside the kept commission-only scorecard.estimatedApy,
+        // and each era's own return on the history rows. Best-effort.
+        try {
+            const apyIn = nominatorApyInputs();
+            const latest = history[0] || {};
+            if (scorecard) Object.assign(scorecard, nominatorApyFields(nominatorApyForAddress(apyIn.snapshot, address, { commission: latest.commission, totalStake: latest.stake })));
+            history = withPerEraNominatorApy(history, nominatorApySummaries(), address, apyIn.snapshot && apyIn.snapshot.erasPerYear);
+        } catch (e) {
+            console.warn('[api] validator nominator APY skipped:', e && e.message);
+        }
 
         res.json({ address, identity, controller, history, triggers, scorecard });
     } catch (err) { serverError(res, err, req.path); }
@@ -4343,7 +4381,10 @@ function computeValidatorScorecard(history, triggers) {
     const minCommission = commissions.length ? Math.min(...commissions) : 0;
     const maxCommission = commissions.length ? Math.max(...commissions) : 0;
 
-    // APY estimate — average across the active eras. Using the active subset
+    // Commission-only ceiling (MAX_APY_BASE x (1 - commission)), averaged across
+    // the active eras; kept for API compatibility. It ignores stake: the page
+    // shows estimatedNominatorApy (lib/nominator-apy.js), attached by the route.
+    // Using the active subset
     // avoids the misleading "0% APY" pull from idle eras (which encode no
     // payout, not a payout of zero).
     const apys = activeEntries.map(h => Number(h.apy) || 0);

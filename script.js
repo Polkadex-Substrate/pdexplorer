@@ -38,7 +38,8 @@ import { createGovDetailPage, wireGovRowClicks, govRowLinkHtml, GOV_ROW_CLASS } 
 import { renderCallHtml, installCallArgCopy } from './lib/call-args-format.js';
 import { callToTree } from './lib/call-tree.js';
 import { fanStage, refreshCollectiveForSubmit } from './lib/gov-actions.js';
-import { MAX_APY_BASE, estimatedApy, APY_FIELD } from './lib/apy.js';
+import { MAX_APY_BASE, estimatedApy } from './lib/apy.js';
+import { NOMINATOR_APY_FIELD, compareNominatorApy, formatNominatorApy, nominatorApyCaption } from './lib/nominator-apy.js';
 import { validatorsWithStakeState } from './lib/stake-display.js';
 import { developersBodies } from './lib/developers-bodies.js';
 import { ogCardFor, ogImageUrl } from './lib/og-route.js';
@@ -452,8 +453,9 @@ function makeTable(config) {
         const col = columns.find(c => c.key === sortKey);
         if (!col || !col.sort) return input;
         const cmp = col.sort;
-        const sorted = input.slice().sort(cmp);
-        if (sortDir === 'desc') sorted.reverse();
+        // A `directional` column's comparator takes the direction itself (to keep missing values last).
+        const sorted = input.slice().sort(col.directional ? (a, b) => cmp(a, b, sortDir) : cmp);
+        if (sortDir === 'desc' && !col.directional) sorted.reverse();
         return sorted;
     }
 
@@ -2253,41 +2255,19 @@ function renderValidators() {
                     format: row => commissionCell(row)
                 },
                 {
-                    // Audit F-044: this column was labelled "Real APY (30d)"
-                    // while the number is the nominal max APY adjusted for the
-                    // validator's CURRENT commission — a projection, not a
-                    // realized 30-day average. Label what it is.
-                    key: 'avg30DayApy', label: 'Est. APY (current commission)',
-                    sort: (a, b) => ((a[APY_FIELD] ?? a.avg30DayApy) || 0) - ((b[APY_FIELD] ?? b.avg30DayApy) || 0),
-                    // A null APY means the commission did not load. Render the
-                    // dash, not `Number(null).toFixed(2)` — which is "0.00%",
-                    // i.e. a validator that looks like it pays nothing. Same
-                    // class of mistake as estimatedApy(null) returning the full
-                    // 23.09%: coercing absent data into a plausible number.
+                    // Stake-aware estimate (lib/nominator-apy.js): past eras' actual reward per PDEX
+                    // behind this validator, or the same formula with its current stake. It used to be
+                    // the nominal max x (1 - commission), identical for every validator at one commission
+                    // whatever its stake (F-044 relabelled it; this replaces it). Null renders the dash.
+                    key: NOMINATOR_APY_FIELD, label: 'Est. APY',
+                    sort: compareNominatorApy, directional: true,
                     format: row => {
-                        const v = row[APY_FIELD] ?? row.avg30DayApy;
-                        return Number.isFinite(Number(v)) && v !== null && v !== ''
-                            ? `<span style="color: var(--success); font-weight: 500;">${Number(v).toFixed(2)}%</span>`
+                        const v = formatNominatorApy(row[NOMINATOR_APY_FIELD]);
+                        return v != null
+                            ? `<span style="color: var(--success); font-weight: 500;">${v}</span>`
                             : '<span style="color: var(--text-secondary);">—</span>';
                     }
                 },
-                // Audit F-044 (round 2): a "Now vs Real" column used to sit here,
-                // rendering `realApy` beside `avg30DayApy` as though they were a
-                // current figure and a measured 30-day one. syncValidators sets
-                // BOTH from the same expression — `23.09 * (1 - commission/100)`
-                // — so the column always printed the identical number twice with
-                // a slash between it, which reads as corroboration. Round 1
-                // renamed the column above and left this one, still saying
-                // "Real". Deleted rather than relabelled: there is no second
-                // quantity to show.
-                //
-                // The API keeps returning `realApy` for one more release so
-                // existing integrators are not broken by a field vanishing. A
-                // genuine realised APY needs per-era reward and stake totals the
-                // indexer does not store — `validator_history.apy` is itself the
-                // same commission formula, so averaging it would produce a
-                // 30-era COMMISSION average wearing an APY label, which is the
-                // same lie one layer down. Recorded as separate work.
             ]
         });
     } else {
@@ -3554,7 +3534,7 @@ const ROUTE_SEO = {
     'events':             { title: 'On-chain Events — Polkadex Mainnet Explorer',
                             description: 'Live event log from the Polkadex Mainnet runtime: balances, staking rewards, council motions, treasury approvals, democracy referenda — filterable by section and method.' },
     'validators':         { title: 'Validators — Polkadex Mainnet Explorer',
-                            description: 'Active and waiting validators on the Polkadex Mainnet: commission, total stake (own + nominated), real 30-day APY, slash history, and identity. The data you need to pick who to nominate.' },
+                            description: 'Active and waiting validators on the Polkadex Mainnet: commission, total stake (own + nominated), estimated APY, slash history, and identity. The data you need to pick who to nominate.' },
     'validate':           { title: 'Validator status | Polkadex Mainnet Explorer', description: 'The status of a Polkadex validator stash, and a session keys checker.', noindex: true },
     'staking-rewards':    { title: 'Staking Rewards Lookup — Polkadex Mainnet Explorer',
                             description: 'Look up any Polkadex address to see full staking reward history, realized 30-day / 90-day / all-time APR, claim payouts, stake more, unstake, and export year-end tax CSV.' },
@@ -6725,7 +6705,7 @@ const validatorChartSlot = newChartSlot();
 function renderValidatorScorecard(scorecard) {
     if (!scorecard) return '';
     const pad = n => (Number.isFinite(n) ? n : 0);
-    const apy = pad(scorecard.estimatedApy).toFixed(2);
+    const apy = formatNominatorApy(scorecard[NOMINATOR_APY_FIELD]) ?? '\u2014';
     const avgComm = pad(scorecard.avgCommission).toFixed(2);
     const commBand = (scorecard.minCommission === scorecard.maxCommission)
         ? `${avgComm}%`
@@ -6751,8 +6731,8 @@ function renderValidatorScorecard(scorecard) {
             <div class="staking-summary-grid">
                 <div class="staking-summary-card">
                     <div class="label">Est. APY</div>
-                    <div class="value accent">${apy}%</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">nominator return after commission</div>
+                    <div class="value accent">${apy}</div>
+                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">${nominatorApyCaption(scorecard)}</div>
                 </div>
                 <div class="staking-summary-card">
                     <div class="label">Commission</div>
@@ -6888,7 +6868,7 @@ async function fetchValidatorDetails(address) {
                     <td style="padding: 12px 10px;">${h.era}</td>
                     <td style="padding: 12px 10px;">${h.commission.toFixed(2)}%</td>
                     <td style="padding: 12px 10px;">${(h.stake / 1000).toFixed(4)} kPDEX</td>
-                    <td style="padding: 12px 10px;">${h.apy.toFixed(2)}%</td>
+                    <td style="padding: 12px 10px;">${formatNominatorApy(h.nominatorApy) ?? '\u2014'}</td>
                 </tr>
             `;
         });
