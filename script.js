@@ -83,7 +83,7 @@ import { motionDataId, patchMotionCards } from './lib/motion-patch.js';
 import { transferColumns, mountAccountLoadOlder } from './lib/account-transfers.js';
 import { mountWalletRecentTx } from './lib/wallet-recent-tx.js';
 import { createStakePicker, loadPickerData, maxNominationsFrom } from './lib/stake-picker-view.js';
-import { buildStakeTx, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK, stakeResultParams, planFullUnbond,
+import { buildStakeTx, stakeListFailedHtml, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, stakeCopy, STAKE_FEE_RESERVE_PLANCK, stakeResultParams, planFullUnbond,
     stakeFormPlan, signerRoles, planProblemMessage } from './lib/stake-plan.js';
 import { payeeOf } from './lib/validator-manage.js';
 import { createStakeCard } from './lib/stake-card-view.js';
@@ -9242,7 +9242,7 @@ async function loadStakeChoice(token = stakeCardView().token()) {
     if (listEl) listEl.innerHTML = `<div class="stake-empty">${stakeCopy('SC-111')}</div>`;
     let pick;
     try { pick = await loadValidatorsForPicker(); } catch (e) {
-        if (listEl) listEl.innerHTML = `<div class="stake-empty"><span data-sc="SC-112">${stakeCopy('SC-112')}</span> <button type="button" class="validate-secondary" data-stake-action="retry" data-sc="SC-113"><i class="bx bx-refresh" aria-hidden="true"></i>${stakeCopy('SC-113')}</button></div>`;
+        if (listEl) listEl.innerHTML = stakeListFailedHtml();
         return stakeCardView().setSnapshot(e, token);
     }
     stakeValidators = pick.validators;

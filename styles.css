@@ -5596,9 +5596,22 @@ a.validate-secondary { text-decoration: none; }
    small for a chip: same icon, word and role text colour, no background. The wash marks a figure whose value just
    changed: neutral, never a hue ("changed" is not a role), one shot of 1200 ms, none with reduced motion. */
 .ui-chip.is-bare { height: auto; padding: 0; background: none; }
-#wallet-unpaid-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-#wallet-unpaid-label .ui-chip.is-bare, #wallet-staked-label .ui-chip.is-bare { font-size: 0.72rem; }
-#wallet-unpaid-label .ui-chip.is-bare .bx, #wallet-staked-label .ui-chip.is-bare .bx { font-size: 14px; }
+#wallet-unpaid-label, #wallet-claimed-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#wallet-unpaid-label .ui-chip.is-bare, #wallet-claimed-label .ui-chip.is-bare, #wallet-staked-label .ui-chip.is-bare { font-size: 0.72rem; }
+#wallet-unpaid-label .ui-chip.is-bare .bx, #wallet-claimed-label .ui-chip.is-bare .bx, #wallet-staked-label .ui-chip.is-bare .bx { font-size: 14px; }
+/* The "could not refresh" line (lib/gov-post-action.js) sits straight under a card header: inset like the header, not flush with the card edge.
+   Wallet cards, then the council, democracy, treasury and validator status cards that host the same line. */
+#wsec-recent-tx > .ui-panel.is-line, #wsec-rewards > .ui-panel.is-line, #wallet-apr-card > .ui-panel.is-line,
+.council-page .list-container > .ui-panel.is-line, #democracy-content .list-container > .ui-panel.is-line, #treasury-content .list-container > .ui-panel.is-line,
+.validate-dash > .ui-panel.is-line { padding: 12px 24px 0; }
+@media (max-width: 640px) {
+    #wsec-recent-tx > .ui-panel.is-line, #wsec-rewards > .ui-panel.is-line, #wallet-apr-card > .ui-panel.is-line,
+    .council-page .list-container > .ui-panel.is-line, #democracy-content .list-container > .ui-panel.is-line, #treasury-content .list-container > .ui-panel.is-line,
+    .validate-dash > .ui-panel.is-line { padding: 12px 16px 0; }
+    /* "Updating" and the 7D, 30D, 90D and All buttons wrap under the title instead of running past a 375 px card. */
+    #wsec-recent-tx .list-header, #wsec-rewards .list-header, #wallet-apr-card .list-header { flex-wrap: wrap; gap: 8px 12px; }
+    #wsec-recent-tx .list-header h2, #wsec-rewards .list-header h2, #wallet-apr-card .list-header h2 { flex-wrap: wrap; }
+}
 #wallet-payout-reorg { margin: 12px 24px 0; }
 #payout-behind-line { margin: 0 0 12px; }
 @keyframes post-action-wash { from { background-color: rgba(255, 255, 255, 0.08); } to { background-color: transparent; } }

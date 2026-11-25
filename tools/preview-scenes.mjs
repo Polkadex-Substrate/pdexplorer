@@ -60,6 +60,7 @@ import { describeAccountLocks } from '../lib/balance-locks.js';
 import { mountBalanceLocks } from '../lib/balance-locks-view.js';
 import { caughtUp, pollDeadlineMs } from '../lib/freshness.js';
 import { createStakeCard } from '../lib/stake-card-view.js';
+import { stakeListFailedHtml } from '../lib/stake-plan.js';
 import { loadPickerData, createStakePicker } from '../lib/stake-picker-view.js';
 import { ApiPromise } from '@polkadot/api';
 import { loadFixture } from '../test/helpers/extrinsic-builders.js';
@@ -562,7 +563,7 @@ async function stakeWorld({ data, list = slist(), full = true, payee = { kind: '
     if (data.staking.totalStaked > 0) card.setPayee(payee);
     if (failed) {
         card.setSnapshot(new Error('down'));
-        doc.getElementById('stake-validator-list').innerHTML = `<div class="stake-empty">${escapeHtml('Could not load the validator list.')}</div>`;
+        doc.getElementById('stake-validator-list').innerHTML = stakeListFailedHtml();   // the markup script.js loadStakeChoice draws
     } else {
         const snap = await ssnap(list, full);
         card.setSnapshot(snap);
@@ -595,7 +596,15 @@ const STAKE_SCENES = [
     { id: 'stake-simple-over-limit', primary: 1, need: '[data-sc="SC-102"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.55' }) },
     { id: 'stake-simple-low-reserve', primary: 1, need: '[data-sc="SC-104"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.45' }) },
     { id: 'stake-simple-staked-no-validators', primary: 1, need: '[data-sc="SC-140"]', build: () => stakeWorld({ data: sstaker([]) }) },
-    { id: 'stake-simple-manual-selection', primary: 1, need: '[data-sc="SC-30b"]', build: () => stakeWorld({ data: sfirst(), typed: '250', steps: (w) => w.dropOne() }) }
+    { id: 'stake-simple-manual-selection', primary: 1, need: '[data-sc="SC-30b"]', build: () => stakeWorld({ data: sfirst(), typed: '250', steps: (w) => w.dropOne() }) },
+    // Designer round 2, P2: the stake could not be read (SC-109b under the primary, SC-109c where the figure goes), the account
+    // changed while the card was open (SC-39b, drawn by the real press), a rewards change made in Advanced (SC-14f).
+    { id: 'stake-simple-bonded-unknown', primary: 1, need: '[data-sc="SC-109b"]', build: () => stakeWorld({ typed: '150',
+        data: { ...sstaker([1, 2], 0), staking: { totalStaked: 0, nominating: [], ledgerRead: 'failed', controller: null } } }) },
+    { id: 'stake-simple-account-changed', primary: 1, need: '[data-sc="SC-39b"]', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { w.card.press(sstaker([1, 2, 3])); } }) },
+    { id: 'stake-simple-rewards-pending', primary: 1, need: '[data-sc="SC-14f"]', build: () => stakeWorld({ data: sstaker([1, 2, 3]), payee: { kind: 'stash', account: '' },
+        steps: async (w) => { const tick = () => new Promise(r => setTimeout(r, 0)); w.q('#stake-view-switch').click(); await tick(); w.payee('staked'); await tick(); w.q('#stake-view-switch').click(); await tick(); } }) }
 ].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
 // WP3 (design 10.3): the advanced view. Chips: Waiting, Blocked, Raised recently, Raising now, Slashed, 100% commission,
 // Low return, Many payout pages, No history yet, Same identity, Chosen for you, each once in the list.
@@ -613,7 +622,7 @@ const STAKE_ADV_SCENES = [
         steps: (w) => { w.payee('account'); w.account(THEM); } }) },
     { id: 'stake-advanced-call-details', primary: 1, need: '#stake-sign details.stake-call-details[open] [data-call="staking.nominate"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced', typed: '25',
         steps: (w) => { w.payee('stash'); w.add(10); w.q('#stake-sign details.stake-call-details').open = true; } }), scroll: '#stake-sign' },
-    { id: 'stake-advanced-list-failed', primary: 1, need: '#stake-validator-list .stake-empty', build: () => stakeWorld({ data: sstaker([1, 2, 3]), view: 'advanced', failed: true }) },
+    { id: 'stake-advanced-list-failed', primary: 1, need: '#stake-validator-list [data-stake-action="retry"]', build: () => stakeWorld({ data: sstaker([1, 2, 3]), view: 'advanced', failed: true }) },
     { id: 'stake-advanced-confirm-automatic', primary: 1, need: '[data-sc="SC-40"]', build: () => stakeWorld({ data: sstaker([10, 11, 12]), view: 'advanced',
         steps: (w) => { w.q('[data-stake-action="auto"]').click(); } }) }
 ].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
