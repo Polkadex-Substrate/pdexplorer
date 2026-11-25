@@ -2967,7 +2967,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .stake-validator-item:hover { background: rgba(255, 255, 255, 0.04); }
 .stake-validator-item.selected {
-    background: rgba(230, 0, 122, 0.08);
+    background: rgba(255, 255, 255, 0.04);
     cursor: default;
 }
 .stake-val-info { flex: 1; min-width: 0; }
@@ -4428,7 +4428,7 @@ h1, h2, h3 { font-weight: 600; }
 .stake-chip[data-preset="recommended"] { border-color: var(--brand-primary); color: var(--brand-primary); }
 .stake-chip:hover, .stake-seg-btn:hover { background: rgba(255, 255, 255, 0.08); }
 .stake-seg { display: inline-flex; align-items: center; gap: 4px; }
-.stake-seg-btn.is-on { background: rgba(230, 0, 122, 0.16); border-color: var(--brand-primary); }
+.stake-seg-btn.is-on { background: var(--accent-violet-tint); border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
 .stake-seg-n { color: var(--text-muted); }
 .stake-f select, .stake-f input[type="number"] {
     padding: 4px 6px;
@@ -4460,7 +4460,7 @@ h1, h2, h3 { font-weight: 600; }
 }
 .stake-why:focus { outline: 1px solid var(--brand-primary); }
 .stake-apr-note { margin-top: 8px; font-size: 0.7rem; color: var(--text-muted); }
-.stake-val-apr { color: var(--brand-secondary); font-weight: 600; cursor: help; }
+.stake-val-apr { color: var(--text-primary); font-weight: 600; cursor: help; }
 .stake-val-extra { margin-top: 1px; }
 .badge.stake-badge-waiting, .badge.stake-badge-info, .badge.stake-badge-warn {
     font-size: 0.62rem; letter-spacing: 0.03em; cursor: help;
@@ -4723,25 +4723,77 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .balance-locks-note:last-of-type { padding-bottom: 10px; }
 .balance-locks-table-wrap { overflow-x: auto; }
 .balance-locks-table td { vertical-align: top; line-height: 1.45; }
-.balance-locks-table td.balance-locks-amount { white-space: nowrap; font-weight: 600; }
-.balance-locks-id { margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }
-.balance-locks-id code { white-space: pre; }
-.balance-locks-refs { margin-top: 6px; font-size: 0.78rem; color: var(--text-secondary); }
 .balance-locks-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
 .balance-locks-orphan { background: var(--accent-amber-tint); color: var(--accent-amber); }
-.balance-locks-legacy { background: var(--accent-amber-tint); color: var(--accent-amber); }
 .balance-locks-unknown { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary); }
 .balance-locks-empty { padding: 16px 24px; color: var(--text-muted); font-size: 0.85rem; }
-.lock-actions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 0.8rem; color: var(--text-secondary); }
-.lock-action-btn { padding: 4px 12px; font-size: 0.78rem; align-self: flex-start; }
-.lock-actions-hint { font-size: 0.75rem; color: var(--text-muted); }
 .lock-actions-msg { padding: 0 24px; font-size: 0.82rem; }
 .lock-actions-msg:empty { display: none; }
 .lock-actions-msg.ok { color: var(--success, #2ecc71); padding-bottom: 10px; }
 .lock-actions-msg.error { color: var(--error); padding-bottom: 10px; }
-.lock-withdraw { padding: 10px 24px; font-size: 0.85rem; display: flex; flex-direction: column; gap: 6px; }
-.lock-withdraw-ready { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.lock-withdraw-pending { color: var(--text-secondary); font-size: 0.8rem; }
+/* The list (spec cto-team/plans/2026-11-22-locked-balances-redesign.md, 1.2 and 1.3): rows you can act on boxed with a tile,
+   the rest compact lines. Surfaces stay neutral: colour is on the tile, the chip and the action only. */
+.balance-locks .lock-note { margin: 12px 24px 0; }
+.lock-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 16px 24px 0; font-size: 0.9rem; line-height: 1.6; color: var(--text-primary); }
+.lock-groups { display: flex; flex-direction: column; gap: 24px; padding: 16px 24px 24px; }
+.lock-group-head { margin: 0 0 12px; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
+.lock-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.lock-list.is-act { gap: 12px; }
+.lock-row { min-width: 0; }
+.lock-row.is-act { display: grid; grid-template-columns: 36px minmax(0, 1fr) 232px; column-gap: 16px; align-items: start; padding: 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); }
+.lock-row.is-rest { display: block; min-height: 56px; box-sizing: border-box; padding: 12px 16px; border-top: 1px solid var(--border-color); }
+.lock-row.is-rest:first-child { border-top: 0; }
+.lock-row-main { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.lock-row-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.lock-row-head { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-weight: 400; }
+.lock-row.is-act .lock-amount { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+.lock-row.is-act .lock-name { font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); }
+.lock-row.is-rest .lock-row-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.lock-row.is-rest .lock-row-head { display: contents; }
+.lock-row.is-rest .lock-name { grid-column: 1; grid-row: 1; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
+.lock-row.is-rest .lock-amount { grid-column: 2; grid-row: 1; font-size: 0.9rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; text-align: right; }
+.lock-row.is-rest .lock-row-top .ui-chip { grid-column: 1 / 3; justify-self: start; }
+.lock-line { margin: 0; max-width: 72ch; font-size: 0.9rem; line-height: 1.6; color: var(--text-primary); }
+.lock-row-action { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.lock-row-action .ui-action { width: 100%; }
+.lock-hint { margin: 0; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
+.lock-connect { margin: 0; display: flex; align-items: flex-start; gap: 8px; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
+.lock-connect .bx { flex-shrink: 0; font-size: 18px; color: var(--text-secondary); }
+.lock-children { list-style: none; margin: 4px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--accent-violet-line); display: flex; flex-direction: column; gap: 8px; font-size: 0.82rem; }
+.lock-child { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.lock-child .lock-line { flex: 1 1 100%; font-size: 0.82rem; }
+.lock-child .lock-row-action { flex: 1 1 100%; }
+.lock-child-head { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; font-weight: 600; color: var(--text-primary); }
+.lock-child-head .lock-amount { font-weight: 700; }
+.lock-link { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; min-height: 44px; font-size: 0.82rem; }
+.lock-details summary { display: flex; align-items: center; min-height: 44px; box-sizing: border-box; }
+.lock-details > p { font-size: 0.82rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.lock-confirm { grid-column: 2 / 4; margin-top: 12px; }
+.lock-confirm:focus { outline: none; }
+.lock-confirm:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+.lock-confirm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 12px; }
+.lock-confirm-actions .validate-text-btn { min-height: 44px; }
+.lock-empty { display: flex; align-items: center; gap: 12px; margin: 0; padding: 16px 24px 24px; font-size: 0.9rem; color: var(--text-primary); }
+/* The action button (spec 2.1, colour roles 2.4): one look for every action that signs or opens a signing dialog here.
+   44 px at every width, violet tint, a bright violet border (6.77:1), the label in --text-primary. Never drawn disabled:
+   the pressed one is busy (aria-busy), the others held (aria-disabled), so focus can stay. */
+.ui-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 16px; box-sizing: border-box; background: var(--accent-violet-tint); border: 1px solid var(--accent-violet-text); border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit; font-size: 0.9rem; font-weight: 600; line-height: 1.2; text-align: center; cursor: pointer; }
+.ui-action .bx { flex-shrink: 0; font-size: 18px; color: var(--accent-violet-text); }
+.ui-action:hover { box-shadow: 0 0 0 3px var(--accent-violet-tint); }
+.ui-action:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+.ui-action[aria-disabled="true"]:not([aria-busy="true"]) { opacity: 0.55; cursor: not-allowed; }
+.ui-action[aria-busy="true"] { cursor: progress; }
+@media (forced-colors: active) {
+    .ui-action { border: 1px solid ButtonText; background: ButtonFace; color: ButtonText; }
+}
+@media (max-width: 640px) {
+    .lock-row.is-act { grid-template-columns: 36px minmax(0, 1fr); row-gap: 12px; }
+    .lock-row.is-act .lock-row-main { grid-column: 2; }
+    .lock-row.is-act > .lock-row-action, .lock-row.is-act > .lock-confirm { grid-column: 1 / 3; margin-top: 0; }
+    .lock-row.is-rest .lock-row-top { grid-template-columns: minmax(0, 1fr); }
+    .lock-row.is-rest .lock-amount { grid-column: 1; grid-row: 2; text-align: left; }
+    .lock-row.is-rest .lock-row-top .ui-chip { grid-column: 1; }
+}
 .nom-status { margin-bottom: 20px; }
 .nom-banner { margin: 10px 24px 0; padding: 10px 14px; border-radius: 8px; font-size: 0.84rem; line-height: 1.5; background: var(--accent-amber-tint); border: 1px solid var(--accent-amber-line); }
 .nom-banner .staking-download-btn { margin-left: 8px; padding: 4px 12px; font-size: 0.78rem; }
@@ -5525,9 +5577,9 @@ a.validate-secondary { text-decoration: none; }
 .validate-alerts-line { margin: 0; font-size: 0.9rem; line-height: 1.6; color: var(--text-primary); }
 .validate-alerts .validate-lookup-row input[type="email"] { flex: 1 1 220px; min-width: 0; }
 
-/* Phone tap targets (UX review Q35): 44 px for the validator and balance-breakdown buttons. */
+/* Phone tap targets (UX review Q35): 44 px for the validator buttons (the balance breakdown's .ui-action is 44 px at every width). */
 @media (max-width: 768px) {
-    .validate-secondary, .validate-text-btn, .lock-action-btn { min-height: 44px; }
+    .validate-secondary, .validate-text-btn { min-height: 44px; }
 }
 
 /* Post-action refresh (cto-team/plans/2026-11-22-post-action-refresh-ux.md, sections 2 and 6). A bare chip for places too
@@ -5535,10 +5587,165 @@ a.validate-secondary { text-decoration: none; }
    changed: neutral, never a hue ("changed" is not a role), one shot of 1200 ms, none with reduced motion. */
 .ui-chip.is-bare { height: auto; padding: 0; background: none; }
 #wallet-unpaid-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-#wallet-unpaid-label .ui-chip.is-bare { font-size: 0.72rem; }
-#wallet-unpaid-label .ui-chip.is-bare .bx { font-size: 14px; }
+#wallet-unpaid-label .ui-chip.is-bare, #wallet-staked-label .ui-chip.is-bare { font-size: 0.72rem; }
+#wallet-unpaid-label .ui-chip.is-bare .bx, #wallet-staked-label .ui-chip.is-bare .bx { font-size: 14px; }
 #wallet-payout-reorg { margin: 12px 24px 0; }
 #payout-behind-line { margin: 0 0 12px; }
 @keyframes post-action-wash { from { background-color: rgba(255, 255, 255, 0.08); } to { background-color: transparent; } }
-.staking-summary-card .value.is-value-changed { animation: post-action-wash 1200ms ease-out 1; border-radius: var(--radius-sm); }
-@media (prefers-reduced-motion: reduce) { .staking-summary-card .value.is-value-changed { animation: none; } }
+.staking-summary-card .value.is-value-changed, .lock-amount.is-value-changed { animation: post-action-wash 1200ms ease-out 1; border-radius: var(--radius-sm); }
+@media (prefers-reduced-motion: reduce) { .staking-summary-card .value.is-value-changed, .lock-amount.is-value-changed { animation: none; } }
+/* The balance breakdown after an action (locked balances spec 4.5 and 5): the first-load bars, the "Updating" chip in
+   the card header, the row message, a released row collapsing (T4), the failed and could-not-refresh lines. */
+.lock-skeleton { display: flex; flex-direction: column; gap: 12px; padding: 16px 24px 24px; }
+.lock-skeleton span { display: block; height: 56px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.06); }
+.balance-locks .list-header .lock-updating { margin-left: auto; }
+.lock-row-msg { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; font-size: 0.82rem; line-height: 1.5; color: var(--text-primary); }
+.lock-row-msg > .bx { flex-shrink: 0; font-size: 18px; }
+.lock-msg.is-positive > .bx { color: var(--accent-green); }
+.lock-msg.is-wait > .bx { color: var(--accent-amber); }
+.lock-msg.is-info > .bx { color: var(--accent-blue-text); }
+.lock-msg.is-error > .bx { color: var(--accent-red); }
+.lock-row-msg .validate-secondary, .lock-failed .validate-secondary, .lock-behind .validate-secondary { min-height: 44px; }
+.lock-failed, .lock-behind { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin: 12px 24px 0; }
+.lock-failed { margin-bottom: 24px; }
+.lock-row.is-leaving { overflow: hidden; max-height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; margin: 0; border-width: 0; opacity: 0; transition: max-height 240ms ease-in, opacity 240ms ease-in, padding 240ms ease-in; }
+@media (prefers-reduced-motion: reduce) { .lock-row.is-leaving { transition: none; } }
+
+/* Stake PDEX card, simple view (lib/stake-card-view.js; design 2026-11-22-stake-card-simple-and-advanced.md, section 8).
+   Neutral surfaces; violet structures (switch, disclosure, call names); amber for the cautions; blue for the rule;
+   green only on the past return figure; the gradient only on the one primary. */
+.stake-modal-body [hidden] { display: none !important; }
+.stake-modal-body.is-simple { max-width: 540px; padding: 24px; }
+.stake-modal-body.is-advanced { max-width: 1040px; padding: 24px; }
+.stake-modal-body.is-simple .stake-row { grid-template-columns: 1fr; margin-bottom: 16px; }
+.stake-title-row { display: flex; align-items: center; gap: 12px; padding-right: 40px; margin-bottom: 16px; }
+.stake-title-row h3 { margin: 0; font-size: 1.2rem; font-weight: 700; }
+.stake-title-row h3:focus { outline: none; }
+.stake-view-switch { margin-left: auto; min-height: 44px; }
+.stake-view-switch .bx { font-size: 16px; color: var(--accent-violet-text); }
+.stake-view-switch[aria-pressed="true"] { border-color: var(--accent-violet-line); color: var(--accent-violet-text); }
+.stake-intro { color: var(--text-secondary); margin: 0 0 16px; font-size: 0.88rem; }
+.stake-tracked:empty { display: none; }
+.stake-tracked .ui-panel { margin: 0 0 16px; }
+.stake-modal-body.is-simple .stake-amount-wrap input { min-height: 48px; box-sizing: border-box; }
+.stake-amount-wrap input[aria-invalid="true"] { border-color: var(--accent-red-line); }
+.stake-amount-wrap input:disabled, .stake-max-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+#stake-amount-msg > * { margin: 8px 0 0; }
+#stake-amount-msg .validate-text-btn { padding: 0 4px; }
+.stake-simple { display: flex; flex-direction: column; gap: 16px; }
+.stake-simple p { margin: 0; }
+.stake-block-head { margin: 0 0 8px; font-size: 0.82rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+.stake-happens-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 0.9rem; line-height: 1.5; }
+.stake-happens-list > li { display: flex; align-items: flex-start; gap: 8px; }
+.stake-happens-list > li:not(.ui-panel) > .bx { flex-shrink: 0; font-size: 16px; margin-top: 3px; color: var(--text-secondary); }
+.stake-happens-list > li.ui-panel { padding: 0; gap: 8px; }
+.stake-happens-list > li.ui-panel > .bx { font-size: 16px; margin-top: 3px; line-height: 1; }
+.stake-return-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stake-return-label { font-size: 0.82rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+.stake-return-value { font-size: 1.25rem; font-weight: 700; color: var(--brand-secondary); }
+.stake-return-none { font-size: 0.9rem; color: var(--text-secondary); }
+.stake-simple .stake-return-basis { margin-top: 4px; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
+.stake-validators { border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.02); }
+.stake-validators > summary { list-style: none; display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 8px 12px; box-sizing: border-box; cursor: pointer; }
+.stake-validators > summary::-webkit-details-marker { display: none; }
+.stake-validators > summary:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+.stake-validators-sum { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stake-validators-title { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
+.stake-validators-cap { font-size: 0.82rem; color: var(--text-secondary); }
+.stake-chevron { flex-shrink: 0; font-size: 20px; color: var(--accent-violet-text); }
+.stake-validators[open] .stake-chevron { transform: rotate(180deg); }
+.stake-validators-body { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; align-items: flex-start; }
+.stake-pick-list, .stake-proposal-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; line-height: 1.5; color: var(--text-primary); }
+.stake-pick-list .ui-chip, .stake-proposal-list .ui-chip { margin-left: 4px; vertical-align: middle; }
+.stake-simple .stake-data-line { font-size: 0.82rem; color: var(--text-secondary); }
+.stake-simple .ui-panel.is-line { padding: 0; }
+.stake-call-details { align-self: stretch; }
+.stake-plan-lines { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+.stake-plan-lines li { display: flex; align-items: center; gap: 8px; }
+.stake-plan-lines .bx { font-size: 16px; color: var(--text-secondary); }
+.stake-calls { margin: 0; padding-left: 20px; font-family: monospace; font-size: 0.82rem; line-height: 1.6; overflow-wrap: anywhere; word-break: break-all; color: var(--text-secondary); }
+.stake-calls code, .stake-call-wrapper code { color: var(--accent-violet-text); }
+.stake-call-targets { margin: 4px 0; padding-left: 16px; }
+.stake-call-targets code { color: var(--text-primary); }
+.stake-simple .stake-call-wrapper { margin-top: 4px; font-size: 0.82rem; }
+.stake-block-status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; font-size: 0.9rem; color: var(--text-secondary); }
+.stake-simple .ui-panel .validate-secondary { margin-top: 8px; min-height: 44px; }
+.stake-proposal { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.stake-proposal-group { display: flex; flex-direction: column; gap: 6px; }
+.stake-proposal-label { font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); }
+.stake-validators-body .validate-secondary, .stake-proposal .validate-secondary, .stake-block-status .validate-secondary { min-height: 44px; }
+.stake-modal-body #submit-stake-tx-btn.validate-primary { width: 100%; min-height: 48px; justify-content: center; margin-top: 16px; box-sizing: border-box; font-size: 0.94rem; }
+.stake-primary-reason { margin: 8px 0 0; font-size: 0.82rem; color: var(--text-secondary); text-align: center; }
+@media (max-width: 640px) {
+    .stake-modal-body.is-simple, .stake-modal-body.is-advanced { padding: 16px; }
+    .stake-return-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .stake-simple .ui-panel .validate-secondary, .stake-proposal .validate-secondary { width: 100%; justify-content: center; }
+}
+@media (max-width: 340px) {
+    .stake-title-row { flex-wrap: wrap; }
+    .stake-view-switch { margin-left: 0; }
+}
+
+/* Stake PDEX card, advanced view (lib/stake-advanced-view.js; design 2026-11-22-stake-card-simple-and-advanced.md, sections 5.2
+   and 8). Neutral rows; violet structures (section edges, call names, the pressed status); amber for cautions and warnings;
+   red for SC-93 and an invalid address; green only on the selection's past return; the gradient only on the one primary.
+   1280: two columns, left 360 px (amount, rewards, what you will sign, primary), right the picker. 640 and below: one
+   column in the order amount, rewards, your selection, filters, all validators, what you will sign, primary. */
+.stake-section-head { margin: 0 0 8px; padding-left: 10px; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent-violet); }
+.stake-modal-body.is-advanced .stake-row { grid-template-columns: 1fr; gap: 12px; margin-bottom: 16px; }
+.stake-modal-body.is-advanced .stake-amount-wrap input { min-height: 48px; box-sizing: border-box; }
+.stake-adv-notes:empty, .stake-sign:empty { display: none; }
+.stake-adv-notes, .stake-rewards, .stake-sign { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.stake-rewards .ui-panel.is-line, .stake-sign .ui-panel.is-line, .stake-selection-extra .ui-panel.is-line { padding: 0; }
+.stake-payee { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; }
+.stake-payee legend { padding: 0; margin-bottom: 4px; font-size: 0.82rem; color: var(--text-secondary); }
+.stake-payee-opt { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 0.9rem; color: var(--text-primary); cursor: pointer; }
+.stake-payee-opt input { margin: 0; accent-color: var(--brand-primary); }
+.stake-payee:disabled .stake-payee-opt { opacity: 0.45; cursor: not-allowed; }
+.stake-payee-account { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.stake-payee-account .stake-label { margin-bottom: 0; }
+.stake-payee-account input { min-height: 44px; box-sizing: border-box; min-width: 0; }
+.stake-payee-account input[aria-invalid="true"] { border-color: var(--accent-red-line); }
+.stake-payee-msg { margin: 0; font-size: 0.82rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.stake-payee-msg .validate-msg { margin: 0; }
+.stake-search-row { margin-bottom: 12px; }
+.stake-search-row input {
+    width: 100%; box-sizing: border-box; min-height: 40px; padding: 8px 10px; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-color);
+    color: var(--text-primary); border-radius: var(--radius-sm); font: inherit; font-size: 0.9rem;
+}
+.stake-search-row input:focus { outline: none; border-color: var(--brand-primary); }
+.stake-val-meta .ui-chip { vertical-align: middle; margin: 2px 0; }
+.stake-selection-extra { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 12px 12px; }
+.stake-selection-extra:empty { display: none; }
+.stake-selection-extra p { margin: 0; }
+.stake-selection-extra .stake-return { align-self: stretch; }
+.stake-selection-extra .stake-return-basis { margin-top: 4px; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
+.stake-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.stake-confirm-actions .validate-secondary, .stake-auto-btn { min-height: 44px; }
+.stake-sign .stake-call-wrapper { margin: 4px 0 0; font-size: 0.82rem; }
+.stake-modal-body.is-advanced #submit-stake-tx-btn.validate-primary { margin-top: 0; }
+@media (min-width: 641px) {
+    .stake-modal-body.is-advanced { display: grid; grid-template-columns: 360px minmax(0, 1fr); grid-template-rows: repeat(9, auto) 1fr; column-gap: 24px; align-content: start; }
+    .stake-modal-body.is-advanced > * { grid-column: 1; min-width: 0; }
+    .stake-modal-body.is-advanced > .stake-title-row, .stake-modal-body.is-advanced > .stake-intro { grid-column: 1 / -1; }
+    .stake-modal-body.is-advanced > .stake-advanced { grid-column: 2; grid-row: 3 / -1; }
+}
+@media (max-width: 640px) {
+    .stake-modal-body.is-advanced { display: flex; flex-direction: column; }
+    .stake-modal-body.is-advanced .stake-advanced, .stake-modal-body.is-advanced .stake-pickers { display: contents; }
+    .stake-modal-body.is-advanced .stake-title-row { order: 1; }
+    .stake-modal-body.is-advanced .stake-intro { order: 2; }
+    .stake-modal-body.is-advanced .stake-adv-notes, .stake-modal-body.is-advanced .stake-tracked { order: 3; }
+    .stake-modal-body.is-advanced .stake-row { order: 4; }
+    .stake-modal-body.is-advanced .stake-rewards { order: 5; }
+    .stake-modal-body.is-advanced .stake-advanced > .stake-section-head { order: 6; }
+    .stake-modal-body.is-advanced #stake-selection { order: 7; margin-bottom: 12px; }
+    .stake-modal-body.is-advanced .stake-search-row { order: 8; }
+    .stake-modal-body.is-advanced #stake-filter-bar { order: 9; }
+    .stake-modal-body.is-advanced .stake-picker-all { order: 10; margin-bottom: 16px; }
+    .stake-modal-body.is-advanced .stake-sign { order: 11; }
+    .stake-modal-body.is-advanced #stake-modal-error { order: 12; }
+    .stake-modal-body.is-advanced #submit-stake-tx-btn { order: 13; }
+    .stake-modal-body.is-advanced .stake-primary-reason { order: 14; }
+    .stake-calls, .stake-payee-msg { overflow-wrap: anywhere; word-break: break-all; }
+}

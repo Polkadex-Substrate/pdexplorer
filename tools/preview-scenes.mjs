@@ -16,6 +16,11 @@
 // Later work packages add their scenes to the WORK_PACKAGES table below (a scene is { id, primary, build }; a
 // package may name its own file prefix, as R1 does: r1-<scene>-<width>.html; a
 // package may bring its own page guard as `check`). WP2: the Validate hub, the dashboard and /validate/keys.
+// locks: the Balance breakdown redesign (locks-<scene>-<width>.html), no primary in any scene.
+// stake: the Stake PDEX card's simple view (stake-simple-<scene>-<width>.html, design 10.3 WP2): the real modal markup
+// over the wallet page, the REAL lib/stake-card-view.js over a validator snapshot run through the real loadPickerData.
+// Its advanced view (stake-advanced-<scene>-<width>.html, design 10.3 WP3) adds the REAL picker (lib/stake-picker-view.js)
+// and a REAL ApiPromise booted from the mainnet 394 metadata, so "Call details" is decoded from a built transaction.
 // WP3: the setup wizard, the separate steps, the manage panel (in its own card) and the node guide, driven
 // through test/helpers/wp3-world.js; a scene may name an element to scroll to (`scroll`), set on load.
 //
@@ -49,6 +54,17 @@ import { createKnownResults } from '../lib/known-results.js';
 import { createPostAction } from '../lib/post-action.js';
 import { effectsFor } from '../lib/action-effects.js';
 import { createPayoutRefresh } from '../lib/payout-refresh.js';
+import { describeAccountLocks } from '../lib/balance-locks.js';
+import { mountBalanceLocks } from '../lib/balance-locks-view.js';
+import { caughtUp, pollDeadlineMs } from '../lib/freshness.js';
+import { createStakeCard } from '../lib/stake-card-view.js';
+import { loadPickerData, createStakePicker } from '../lib/stake-picker-view.js';
+import { ApiPromise } from '@polkadot/api';
+import { loadFixture } from '../test/helpers/extrinsic-builders.js';
+import { mockProvider } from '../test/helpers/mock-provider.js';
+import { FEE_MARGIN } from '../lib/fee-preflight.js';
+import { createStakeRefresh, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, stakeIntentNoteHtml } from '../lib/stake-refresh.js';
+import { classifyThrownError } from '../lib/tx-status.js';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -359,8 +375,311 @@ function checkR1Scene(w, s, err) {
     if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
 }
 
+// ── Locked balances (cto-team/plans/2026-11-22-locked-balances-redesign.md, section 7): the Balance breakdown on
+// My Account, drawn by the REAL lib/balance-locks-view.js from REAL model snapshots (lib/balance-locks.js
+// describeAccountLocks), with the REAL post-action core where a scene needs an action. Own account, header
+// connected (a looked-up or no-wallet scene says so). No scene shows a primary (spec 2.3).
+const LPDEX = 10n ** 12n;
+const ls = (v) => v.toString();
+const LP = (x) => BigInt(Math.round(x * 1e4)) * 10n ** 8n;
+const LNOW = Date.UTC(2026, 10, 22, 12, 0, 0);
+const LDAY = 86400000;
+const llock = (id, amount) => ({ id, amount: ls(amount), reasons: 'All' });
+// A ledger as the chain keeps it: total = active + every unlocking chunk.
+const lbond = (total, chunks, over = {}) => ({ bonded: true, total: ls(total), active: ls(total - chunks.reduce((a, c) => a + BigInt(c.value), 0n)), unlocking: '0', chunks,
+    currentEra: 120, activeEra: 120, activeEraStart: LNOW, spans: 0, controller: ME, stash: ME, ...over });
+function lsnap(over = {}) {
+    return { address: ME, now: LNOW, free: ls(20_000n * LPDEX), reserved: '0', frozen: '0', ed: ls(LPDEX), block: 1_000_000, blockMs: 12000, bondingDays: 28, eraMs: LDAY,
+        locks: [], freezes: [], holds: [], reserves: [], staking: { bonded: false, total: '0', active: '0', unlocking: '0', chunks: [], currentEra: null, activeEra: null, activeEraStart: null, spans: 0, controller: null, stash: null },
+        democracy: null, elections: null, identity: null, proxy: null, pallets: { vesting: false, ormlVesting: false }, ...over };
+}
+const lmodel = (over, head = 41) => ({ address: ME, ...describeAccountLocks(lsnap(over)), freshness: { v: 1, chainHead: head } });
+// The CEO's account as his screenshot shows it: a staking hold and ledger total of 17,348.0818 PDEX, active 17,068.0232,
+// one chunk of 280.0586 PDEX unlocking at era 1907 (about 2026-12-16); a 15,000 PDEX council vote and its 13.59 PDEX deposit.
+const LHOLD = LP(17348.0818);
+const LSTAKE = { holds: [{ id: 'Staking.Staking', amount: ls(LHOLD) }], staking: lbond(LHOLD, [{ value: ls(LP(280.0586)), era: 1907 }], { currentEra: 1883, activeEra: 1883 }) };
+const L_CEO = (head) => lmodel({ ...LSTAKE, reserved: ls(LHOLD + LP(13.59)), frozen: ls(15_000n * LPDEX), locks: [llock('phrelect', 15_000n * LPDEX)],
+    elections: { voter: { votes: 5, stake: ls(15_000n * LPDEX), deposit: ls(LP(13.59)) }, candidacy: null } }, head);
+const L_CEO_AFTER = () => lmodel({ ...LSTAKE, reserved: ls(LHOLD) }, 42);
+const L_DEM = (dem, lockAmount, over = {}) => lmodel({ locks: [llock('democrac', lockAmount)], frozen: ls(lockAmount), democracy: { delegating: false, lockingPeriod: 216000, prior: { until: 0, amount: '0' }, ...dem }, ...over });
+const L_VOTE = (index, aye, conviction, amount) => ({ index, aye, conviction, balance: ls(amount) });
+const L_ORPHAN = (head) => lmodel({ locks: [llock('staking ', 60n * LPDEX)], frozen: ls(60n * LPDEX) }, head);
+const L_READY = (over = {}) => lmodel({ holds: [{ id: 'Staking.Staking', amount: ls(1_000n * LPDEX) }], reserved: ls(1_000n * LPDEX),
+    staking: lbond(1_000n * LPDEX, [{ value: ls(150n * LPDEX), era: 110 }, { value: ls(LP(280.0586)), era: 144 }], over) });
+const L_SCENES_DATA = {
+    'ceo-case': [L_CEO()],
+    'ready-withdraw': [L_READY()],
+    'democracy-unlock-now': [L_DEM({ votes: [L_VOTE(4, false, 'None', 400n * LPDEX)], referenda: { 4: { finished: true, approved: true, end: 900_000 } } }, 400n * LPDEX)],
+    'democracy-mixed': [L_DEM({ prior: { until: 1_000_000 + 7200 * 3, amount: ls(300n * LPDEX) }, votes: [L_VOTE(7, true, 'Locked2x', 120n * LPDEX), L_VOTE(9, true, 'None', 200n * LPDEX)],
+        referenda: { 7: { finished: true, approved: true, end: 950_000 }, 9: { ongoing: true, end: 1_000_000 + 7200 * 5 } } }, 300n * LPDEX)],
+    'democracy-tidy': [L_DEM({ prior: { until: 1_000_000 + 7200 * 9, amount: ls(400n * LPDEX) }, votes: [L_VOTE(4, false, 'None', 100n * LPDEX)], referenda: { 4: { finished: true, approved: true, end: 900_000 } } }, 400n * LPDEX)],
+    delegating: [L_DEM({ delegating: true, target: THEM, conviction: 'Locked2x', balance: ls(250n * LPDEX) }, 250n * LPDEX)],
+    'leftover-lock': [L_ORPHAN()],
+    'old-and-unknown': [lmodel({ locks: [llock('ormlvest', 12n * LPDEX), llock('vesting ', 5n * LPDEX), llock('zzzzzzzz', 3n * LPDEX)], frozen: ls(12n * LPDEX), freezes: [{ id: 'X', amount: ls(LPDEX) }] })],
+    'deposits-all': [lmodel({ reserved: ls(20n * LPDEX), holds: ['Preimage.Preimage', 'Council.ProposalSubmission', 'TechnicalCommittee.ProposalSubmission', 'Session.Keys', 'DelegatedStaking.StakingDelegation', 'SafeMode.EnterOrExtend', 'X.Y'].map(id => ({ id, amount: ls(LPDEX) })),
+        reserves: [{ id: 'abcdefgh', amount: ls(LPDEX) }], identity: { deposit: ls(LPDEX), subsDeposit: ls(2n * LPDEX), subs: 2 }, proxy: { deposit: ls(LPDEX), count: 1, announcementDeposit: ls(LPDEX) },
+        elections: { voter: null, candidacy: { role: 'Member', deposit: ls(LPDEX) } } })],
+    vesting: [lmodel({ locks: [llock('vesting ', 500n * LPDEX)], frozen: ls(500n * LPDEX), pallets: { vesting: true } })],
+    empty: [lmodel({})],
+    'fee-blocked': [lmodel({ free: ls(100n * LPDEX), reserved: ls(50n * LPDEX), frozen: ls(300n * LPDEX), locks: [llock('democrac', 300n * LPDEX)], holds: [{ id: 'Staking.Staking', amount: ls(50n * LPDEX) }],
+        staking: lbond(50n * LPDEX, []) })]
+};
+// A world: the wallet page, the panel mounted with a manual clock and the real core; steps act on it.
+async function locksWorld(models, { connected = ME, page = 'wallet', steps = null, api = () => ({}), submit = null, pending = false } = {}) {
+    const window = new Window({ url: 'https://explorer.test/wallet' });
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    doc.querySelector('#wallet-dashboard').innerHTML = '<div id="wallet-locks-slot"></div>';
+    const el = doc.querySelector('#wallet-locks-slot');
+    let t = 0, seq = 0;
+    const timers = new Map();
+    const clock = { now: () => t, set: (f, ms) => { const id = ++seq; timers.set(id, { at: t + Math.max(0, Number(ms) || 0), f }); return id; }, clear: (id) => timers.delete(id) };
+    const tickTo = async (ms) => { const end = t + ms; for (;;) { const d = [...timers.entries()].filter(([, x]) => x.at <= end).sort((a, b) => a[1].at - b[1].at)[0]; if (!d) break; timers.delete(d[0]); t = d[1].at; d[1].f(); await tick(5); } t = end; };
+    const queue = models.slice();
+    const fetchJson = async () => { if (pending) return new Promise(() => {}); const m = queue.length > 1 ? queue.shift() : queue[0]; if (m instanceof Error) throw m; return m; };
+    const known = createKnownResults({ storage: null, now: clock.now });
+    const post = createPostAction({ effects: effectsFor, known, same: (a, b) => a === b, now: clock.now, setTimer: clock.set, clearTimer: clock.clear, caughtUp, deadlineMs: pollDeadlineMs });
+    const jobs = [];
+    const fakeSubmit = submit || (async (o) => {
+        const seen = post.observe({ key: o.action.key, params: o.action.params });
+        const show = seen.show((a, st) => ({ stage: st, outcome: { ok: true } }));
+        const stage = seen.stage(o.onStage);
+        jobs.push({ o, inBlock: async (block) => { show({}, 'inBlock', [{ event: { section: 'system', method: 'ExtrinsicSuccess', data: [] } }], null, { blockNumber: block, txHash: '0x' + 'ab'.repeat(32), address: connected }); stage('inBlock', { stage: 'inBlock', outcome: { ok: true } }); await o.onSuccess(); await tick(5); } });
+    });
+    const opts = { fetchJson, helpIcon, page, post, unstake: () => page === 'wallet' && connected === ME, openUnstake: () => {},
+        now: clock.now, setTimer: clock.set, clearTimer: clock.clear, reducedMotion: () => false,
+        actions: { submit: fakeSubmit, connected: () => connected, isSame: (a, b) => a === b, api } };
+    const mounting = mountBalanceLocks(el, ME, opts);
+    if (!pending) await mounting;
+    await tick(5);
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const w = { window, doc, el, qa, remount: () => mountBalanceLocks(el, ME, opts), visible: (x) => !!x && !x.closest('[hidden]'), q: (sel) => doc.querySelector(sel), jobs, tickTo, d: { account: connected ? { status: 'connected', address: connected } : { status: 'none' } } };
+    if (steps) await steps(w);
+    return w;
+}
+// A deliberate confirm: a second after the press that opened the strip (a quicker one is the same gesture and ignored).
+const lpress = async (w, sel, confirm = true) => { w.q(sel).click(); await tick(5); const yes = confirm && w.q('.lock-confirm .ui-action'); if (yes) { await w.tickTo(1000); yes.click(); await tick(5); } };
+const LOCKS_SCENES = [
+    ...Object.entries(L_SCENES_DATA).map(([id, models]) => ({ id, primary: 0, connected: ME, build: () => locksWorld(models) })),
+    { id: 'first-load', primary: 0, connected: ME, need: '.lock-skeleton', build: () => locksWorld([L_CEO()], { pending: true }) },
+    { id: 'read-failed', primary: 0, connected: ME, need: '.lock-failed', build: () => locksWorld([new Error('down')]) },
+    { id: 'looked-up', primary: 0, connected: THEM, need: '.lock-connect', build: () => locksWorld([L_CEO()], { connected: THEM, page: 'account' }) },
+    { id: 'no-wallet', primary: 0, need: '.lock-connect', build: () => locksWorld([L_ORPHAN()], { connected: null, page: 'account' }) },
+    { id: 'controller-differs', primary: 0, connected: ME, need: '.lock-connect', build: () => locksWorld([L_READY({ controller: THEM })]) },
+    { id: 'confirm-open', primary: 0, connected: ME, need: '.lock-confirm', build: () => locksWorld([L_CEO()], { steps: async (w) => { w.q('[data-lock-action="elections-remove"]').click(); await tick(5); } }) },
+    { id: 'busy', primary: 0, connected: ME, need: '.ui-action[aria-busy="true"]', build: () => locksWorld([L_CEO()], { submit: () => new Promise(() => {}), steps: (w) => lpress(w, '[data-lock-action="elections-remove"]') }) },
+    { id: 'settled', primary: 0, connected: ME, need: '.lock-row.is-settled', build: () => locksWorld([L_CEO(), L_CEO_AFTER()], { steps: async (w) => { await lpress(w, '[data-lock-action="elections-remove"]'); await w.jobs[0].inBlock(42); } }) },
+    { id: 'changed-in-place', primary: 0, connected: ME, need: '.lock-row-msg.is-positive', build: () => locksWorld([L_DEM({ votes: [L_VOTE(4, false, 'None', 400n * LPDEX), L_VOTE(7, true, 'Locked2x', 120n * LPDEX)], referenda: { 4: { finished: true, approved: true, end: 900_000 }, 7: { finished: true, approved: true, end: 950_000 } } }, 400n * LPDEX),
+        L_DEM({ votes: [L_VOTE(7, true, 'Locked2x', 120n * LPDEX)], referenda: { 7: { finished: true, approved: true, end: 950_000 } } }, 120n * LPDEX, {}), ], { steps: async (w) => { await lpress(w, '[data-lock-action="democracy-unlock"]'); await w.jobs[0].inBlock(42); } }) },
+    { id: 'checking', primary: 0, connected: ME, need: '.ui-chip.is-bare', build: () => locksWorld([L_ORPHAN(), lmodel({}, 42)], { api: () => ({ query: { balances: { locks: () => new Promise(() => {}) } } }), steps: async (w) => { await lpress(w, '[data-lock-action="migrate-currency"]'); w.jobs[0].inBlock(42); await tick(10); } }) },
+    { id: 'failed', primary: 0, connected: ME, need: '.lock-row-msg[role="alert"]', build: () => locksWorld([L_CEO()], { submit: async (o) => { o.onError('The transaction failed on chain: you have no council vote to remove.'); }, steps: (w) => lpress(w, '[data-lock-action="elections-remove"]') }) },
+    { id: 'not-confirmed', primary: 0, connected: ME, need: '.lock-row-msg.is-wait', build: () => locksWorld([L_ORPHAN()], { submit: async (o) => { o.onStage('unconfirmed'); }, steps: (w) => lpress(w, '[data-lock-action="migrate-currency"]') }) },
+    { id: 'could-not-refresh', primary: 0, connected: ME, need: '.lock-behind', build: () => locksWorld([L_CEO(), new Error('down')], { steps: async (w) => { await w.remount(); await tick(5); } }) }
+].map(s => ({ ...s, widths: [1280, 375] }));
+// The scene guard (spec 7): the panel is there, no primary, no table, no chain id outside Details, every button an
+// action button (whose 44 px is the stylesheet's, test/lock-rows.test.js), and the scene's own element.
+const LOCK_CHAIN_ID = /phrelect|Staking\.Staking|democrac\b|withdrawUnbonded|removeVoter|migrateCurrency|ormlvest|zzzzzzzz|Preimage\.Preimage|\.ProposalSubmission/;
+function checkLocksScene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    const panel = w.doc.querySelector('.page-section[data-page="wallet"] #wallet-locks-slot section.balance-locks');
+    if (!panel) { err.push('no Balance breakdown panel'); return; }
+    const n = w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (panel.querySelector('table, [role="table"]')) err.push('a table in the panel');
+    const shown = panel.cloneNode(true);
+    for (const d of shown.querySelectorAll('details')) d.remove();
+    if (LOCK_CHAIN_ID.test(shown.textContent)) err.push(`a chain id outside Details: ${shown.textContent.match(LOCK_CHAIN_ID)[0]}`);
+    for (const b of panel.querySelectorAll('button')) if (!b.classList.contains('ui-action') && !b.classList.contains('validate-secondary') && !b.classList.contains('validate-text-btn')) err.push(`a button that is not an action button: ${b.className}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+
+// ── Stake card WP2 (cto-team/plans/2026-11-22-stake-card-simple-and-advanced.md, section 10.3): the simple view of the
+// Stake PDEX card open over My Account, own account connected. The card is the REAL lib/stake-card-view.js in the REAL
+// modal markup of index.html; the validators are "Validator A" to "Validator L" (and T) at filler addresses.
+const STAKE_NET = { minStake: 100, eraDurationMs: 86_400_000, unbondingMs: 28 * 86_400_000 };
+const sdur = (ms) => { const h = ms / 3600000; return h < 48 ? (Math.round(h * 10) / 10) + ' hours' : (Math.round(h / 24 * 10) / 10) + ' days'; };
+const sval = (n, apr, over = {}) => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}`, active: true, commission: [5, 3, 7, 5, 10, 4, 6, 5, 8, 2, 9, 5][(n - 1) % 12], blocked: false,
+    selfStake: 1000 + n, totalStake: 50000, exposurePages: n === 6 ? 2 : 1, exposureNominators: 20, backers: 20, identity: { hasIdentity: false, verified: false, parent: null }, slashEras: [],
+    commissionHistory: { raisedRecently: false, pendingRaise: false }, perf: { 28: { status: 'ok', apr, erasUsed: 28, electedEras: 28, missedEras: 0, reliability: 100 } }, ...over });
+const SAPR = [19.42, 18.97, 18.61, 18.2, 17.88, 17.5, 17.31, 16.9, 16.4, 15.8, 15.1, 14.6];
+const slist = (over = {}) => SAPR.map((apr, i) => sval(i + 1, apr, over[i + 1] || {}));
+const STAKE_T = (over = {}) => sval(20, 17.9, { name: 'Validator T', active: false, ...over });
+const ssnap = (list, full = true) => loadPickerData(async (url) => (url.endsWith('validator-choice')
+    ? (full ? { validators: list, activeEra: 1884, maxNominations: 16, exposurePageSize: 256 } : { status: 'Initializing', validators: [] })
+    : { validators: list.map(v => ({ address: v.address, name: v.name, commission: v.commission, totalStake: v.totalStake })), commissionHistoryEra: 1884 }));
+const sfirst = (balance = { free: 1204.55, transferable: 1203.55 }) => ({ address: ME, balance, staking: { totalStaked: 0, nominating: [], ledgerRead: 'ok', controller: null }, network: STAKE_NET });
+const sstaker = (ns, totalStaked = 1150) => ({ address: ME, balance: { free: 1204.55, transferable: 54.55 },
+    staking: { totalStaked, nominating: ns.map(n => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}` })), ledgerRead: 'ok', controller: totalStaked > 0 ? ME : null }, network: STAKE_NET });
+// One ApiPromise for every advanced scene: Call details decodes what buildStakeTx builds on it.
+let stakeApiP = null;
+const stakeApi = () => (stakeApiP = stakeApiP || (async () => {
+    const fx = loadFixture('metadata-mainnet-394.json');
+    const mock = mockProvider({ metadataHex: fx.metadata, specVersion: fx.specVersion, specName: fx.specName, transactionVersion: fx.transactionVersion });
+    return ApiPromise.create({ provider: mock.provider, noInitWarn: true });
+})());
+async function stakeWorld({ data, list = slist(), full = true, payee = { kind: 'staked', account: '' }, typed = '', steps = null, view = 'simple', failed = false, dashboard = null, tracked = null }) {
+    const window = new Window({ url: 'https://explorer.test/wallet' });
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    doc.querySelector('#wallet-dashboard').innerHTML = dashboard || `<div class="list-container glass"><div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2></div></div>`;
+    const html = rd('index.html');
+    const modal = html.slice(html.indexOf('<div id="stake-modal"'), html.indexOf('<!-- Payout Rewards Modal -->')).replace('style="display: none;', 'style="display: flex;');
+    doc.querySelector('.app-container').insertAdjacentHTML('beforeend', modal);
+    let selected = [];
+    const storage = { getItem: (k) => (k === 'pdex_stake_view_v1' ? view : null), setItem() {} };
+    const api = view === 'advanced' ? await stakeApi() : null;
+    let picker = null;
+    const sel = () => new Map(selected.map(r => [r.address, r]));
+    const relist = () => { if (picker) picker.render(doc.getElementById('stake-validator-search').value, sel()); };
+    const card = createStakeCard({ root: doc.getElementById('stake-modal'), storage, esc: escapeHtml, short: shortAddr, duration: sdur, same: (a, b) => a === b,
+        connected: () => ME, feeFloorPlanck: FEE_MARGIN, quota: () => 16, reload: () => {}, api: () => api, onView: () => relist(),
+        selection: { get: () => selected.slice(), set: (rows) => { selected = rows.map(r => ({ address: r.address, name: r.name })); card && card.render(); } } });
+    picker = createStakePicker({ barEl: doc.getElementById('stake-filter-bar'), listEl: doc.getElementById('stake-validator-list'), noteEl: doc.getElementById('stake-spread-note'),
+        storage: null, escapeHtml, shortAddress: shortAddr, helpIcon: (slug, label) => `<a href="/help/${slug}" class="help-inline-icon" aria-label="${escapeHtml(label)}"><i class='bx bx-help-circle'></i></a>`,
+        onAdd: (a) => { if (!selected.some(r => r.address === a)) { const v = list.find(x => x.address === a); selected.push({ address: a, name: v ? v.name : null }); card.markManual(); relist(); } },
+        marks: () => card.marks() });
+    selected = (data.staking.nominating || []).map(v => ({ address: v.address, name: v.name }));
+    card.open({ data, tracked });
+    if (data.staking.totalStaked > 0) card.setPayee(payee);
+    if (failed) {
+        card.setSnapshot(new Error('down'));
+        doc.getElementById('stake-validator-list').innerHTML = `<div class="stake-empty">${escapeHtml('Could not load the validator list.')}</div>`;
+    } else {
+        const snap = await ssnap(list, full);
+        card.setSnapshot(snap);
+        picker.setData(snap);
+        relist();
+    }
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), card, visible: (x) => !!x && !x.closest('[hidden]'), d: { account: { status: 'connected', address: ME } },
+        type: (v) => { const i = doc.getElementById('stake-amount-input'); i.value = v; i.dispatchEvent(new window.Event('input', { bubbles: true })); },
+        payee: (v) => { const r = doc.querySelector(`#stake-rewards input[value="${v}"]`); r.checked = true; r.dispatchEvent(new window.Event('change', { bubbles: true })); },
+        account: (v) => { const i = doc.getElementById('stake-payee-account'); i.value = v; i.dispatchEvent(new window.Event('input', { bubbles: true })); },
+        add: (n) => { doc.querySelector(`#stake-validator-list .stake-validator-item[data-addr="${vaddr(40 + n)}"]`).click(); },
+        dropOne: () => { selected = selected.slice(0, -1); card.markManual(); } };
+    if (typed) w.type(typed);
+    if (steps) await steps(w);
+    return w;
+}
+const STAKE_SCENES = [
+    { id: 'stake-simple-first-empty', primary: 1, build: () => stakeWorld({ data: sfirst() }) },
+    { id: 'stake-simple-first-amount', primary: 1, need: '[data-sc="SC-23"]', build: () => stakeWorld({ data: sfirst(), typed: '250' }) },
+    { id: 'stake-simple-picks-open', primary: 1, need: 'details.stake-validators[open] [data-sc="SC-32"]', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { w.q('details.stake-validators').open = true; w.q('details.stake-call-details').open = true; } }) },
+    { id: 'stake-simple-existing-add', primary: 1, need: '[data-sc="SC-11b"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), typed: '25' }) },
+    { id: 'stake-simple-unhealthy', primary: 1, need: '[data-sc="SC-160"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 20]), list: [...slist(), STAKE_T()] }) },
+    { id: 'stake-simple-replacement', primary: 1, need: '.stake-proposal [data-group="removed"] .ui-chip', build: () => stakeWorld({ data: sstaker([1, 2, 3, 20]), list: [...slist(), STAKE_T()],
+        steps: (w) => w.q('[data-stake-action="replace"]').click() }) },
+    { id: 'stake-simple-short-pool', primary: 1, need: '[data-sc="SC-37"]', build: () => stakeWorld({ data: sfirst(), list: slist(Object.fromEntries(SAPR.map((_, i) => [i + 1, i < 3 ? {} : { active: false }]))) }) },
+    { id: 'stake-simple-no-data', primary: 1, need: '[data-sc="SC-114"]', build: () => stakeWorld({ data: sfirst(), full: false, typed: '250' }) },
+    { id: 'stake-simple-cannot-stake', primary: 0, need: '[data-sc="SC-115"]', build: () => stakeWorld({ data: sfirst({ free: 61.3, transferable: 60.3 }) }) },
+    { id: 'stake-simple-over-limit', primary: 1, need: '[data-sc="SC-102"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.55' }) },
+    { id: 'stake-simple-low-reserve', primary: 1, need: '[data-sc="SC-104"]', build: () => stakeWorld({ data: sfirst(), typed: '1203.45' }) },
+    { id: 'stake-simple-staked-no-validators', primary: 1, need: '[data-sc="SC-140"]', build: () => stakeWorld({ data: sstaker([]) }) },
+    { id: 'stake-simple-manual-selection', primary: 1, need: '[data-sc="SC-30b"]', build: () => stakeWorld({ data: sfirst(), typed: '250', steps: (w) => w.dropOne() }) }
+].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+// WP3 (design 10.3): the advanced view. Chips: Waiting, Blocked, Raised recently, Raising now, Slashed, 100% commission,
+// Low return, Many payout pages, No history yet, Same identity, Chosen for you, each once in the list.
+const CHIP_LIST = () => slist({ 1: { identity: { hasIdentity: true, verified: true, parent: null } }, 2: { identity: { hasIdentity: true, verified: false, parent: vaddr(41) } },
+    3: { active: false }, 4: { blocked: true }, 5: { commissionHistory: { raisedRecently: true, pendingRaise: false } }, 7: { commissionHistory: { raisedRecently: false, pendingRaise: true } },
+    8: { slashEras: [1850] }, 9: { commission: 100 }, 10: { perf: { 28: { status: 'ok', apr: 4.2, erasUsed: 28, electedEras: 28, missedEras: 0, reliability: 100 } } },
+    11: { perf: { 28: { status: 'new', apr: null, erasUsed: 3, electedEras: 3, reliability: 100 } } } });
+const showAll = (w) => { w.q('[data-preset="all"]').click(); };
+const STAKE_ADV_SCENES = [
+    { id: 'stake-advanced-first', primary: 1, need: '[data-chip="chosen"]', build: () => stakeWorld({ data: sfirst(), typed: '250', view: 'advanced' }) },
+    { id: 'stake-advanced-existing-unchanged', primary: 1, need: '[data-sc="SC-74"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced' }) },
+    { id: 'stake-advanced-row-chips', primary: 1, need: '#stake-validator-list [data-chip="low"]', build: () => stakeWorld({ data: sfirst(), list: CHIP_LIST(), view: 'advanced', typed: '250',
+        steps: (w) => { showAll(w); } }) },
+    { id: 'stake-advanced-rewards-other-account', primary: 1, need: '[data-sc="SC-70"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced',
+        steps: (w) => { w.payee('account'); w.account(THEM); } }) },
+    { id: 'stake-advanced-call-details', primary: 1, need: '#stake-sign details.stake-call-details[open] [data-call="staking.nominate"]', build: () => stakeWorld({ data: sstaker([1, 2, 3, 4, 5, 7, 8, 9]), view: 'advanced', typed: '25',
+        steps: (w) => { w.payee('stash'); w.add(10); w.q('#stake-sign details.stake-call-details').open = true; } }), scroll: '#stake-sign' },
+    { id: 'stake-advanced-list-failed', primary: 1, need: '#stake-validator-list .stake-empty', build: () => stakeWorld({ data: sstaker([1, 2, 3]), view: 'advanced', failed: true }) },
+    { id: 'stake-advanced-confirm-automatic', primary: 1, need: '[data-sc="SC-40"]', build: () => stakeWorld({ data: sstaker([10, 11, 12]), view: 'advanced',
+        steps: (w) => { w.q('[data-stake-action="auto"]').click(); } }) }
+].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+function checkStakeScene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    const modal = w.doc.querySelector('#stake-modal');
+    if (!modal || modal.style.display !== 'flex') { err.push('the stake card is not open'); return; }
+    const n = w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    for (const b of w.qa('#stake-modal button').filter(w.visible)) if (/\bis-(positive|wait|info|ok|warn)\b/.test(b.className)) err.push(`a coloured action: ${b.className}`);
+    for (const c of w.qa('#stake-modal .ui-chip').filter(w.visible)) if (!c.querySelector('.bx') || !c.textContent.trim()) err.push('a chip without an icon and a word');
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+
+// WP4 (design 10.3, state rows 14 to 20): signing, failed, My Account after a stake (lib/stake-refresh.js drawing the
+// real tiles, button and list in place after a chain read at inclusion), the card reopened while that stake is
+// tracked (SC-141), /stake with no wallet (SC-120 above the real chooser) and a read-only account (SC-121). Around the
+// real parts, the dashboard is a fixture copy of renderWalletDashboard's markup with the same classes and ids.
+const STAKE4_PICKS = [1, 2, 3, 4, 5, 6, 7, 8];
+const stake4after = () => ({ address: ME, balance: { free: 954.53, reserved: 250, total: 1204.53, transferable: 953.53, transferableAllowDeath: 954.53 },
+    staking: { totalStaked: 250, activeStaked: 250, activeStakedPlanck: String(250n * PDEX), nominating: STAKE4_PICKS.map(n => ({ address: vaddr(40 + n), name: `Validator ${String.fromCharCode(64 + n)}` })), ledgerRead: 'ok', controller: ME },
+    network: STAKE_NET, freshness: { v: 1, chainHead: 4_210_370 } });
+const s4fmt = { pdex: (v) => Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 }), esc: escapeHtml, short: shortAddr };
+function stake4dashboard(data, { readOnly = false } = {}) {
+    const btn = (id, icon, title, sub, extra = '') => `<button class="wallet-action-btn${extra}" id="${id}"><i class='bx ${icon}'></i><div><strong>${title}</strong><span>${sub}</span></div></button>`;
+    const bar = readOnly
+        ? `<div class="wallet-readonly-callout"><div class="wallet-readonly-head"><i class='bx bx-show'></i><div><strong>Read-only mode</strong><p>You're viewing this account in <strong>read-only</strong> mode. To send PDEX, stake, claim rewards, or unbond, connect a Substrate browser extension (Polkadot.js, Talisman, SubWallet) or open this page in a mobile wallet's in-app browser.</p></div></div>${stakeIntentNoteHtml('SC-121', escapeHtml)}</div>`
+        : `<div class="wallet-action-bar" id="wallet-action-bar">${btn('wallet-act-send', 'bx-paper-plane', 'Send PDEX', 'Transfer to any Polkadex address', ' primary')}${stakeButtonHtml(data.staking, escapeHtml)}`
+            + `${btn('wallet-act-payout', 'bx-gift', 'Pay out rewards', '0 unclaimed entries')}${btn('wallet-act-unstake', 'bx-minus-circle', 'Unstake', 'Begin the unbonding period')}${btn('wallet-act-identity', 'bx-id-card', 'Set identity', 'Display name, email, twitter')}</div>`;
+    return `<div class="list-container glass">
+        <div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2><div style="display:flex; gap:14px; align-items:center;"><button class="staking-download-btn">Switch wallet</button><button class="staking-download-btn">Disconnect</button></div></div>
+        <div style="padding: 12px 24px 0;"><a href="#" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${ME}</a></div>
+        <div class="staking-summary-grid"><div class="staking-summary-card"><div class="label">Total Balance</div><div class="value accent" id="wallet-total-value">${s4fmt.pdex(data.balance.total)} PDEX</div><div class="value-usd" data-pdex-amount="${data.balance.total}"></div></div>
+        ${stakedTileHtml(data, s4fmt)}<div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">0.0000 PDEX</div></div><div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards</div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">0.0000 PDEX</div></div></div>
+    </div>
+    <div id="wallet-actions-slot">${bar}</div>
+    <div class="wallet-grid"><div class="list-container glass"><div class="list-header"><h2>My Validators</h2><span id="wallet-my-validators-count" style="color:var(--text-secondary);font-size:0.78rem;">${(data.staking.nominating || []).length} nominated</span></div>
+        <div id="wallet-my-validators" style="padding: 8px 24px 20px;">${myValidatorsHtml(data.staking.nominating, s4fmt)}</div></div></div>`;
+}
+// My Account as a first-time staker, then the stake of 250 PDEX in block #4,210,377: the REAL stake refresh, told by a
+// core stand-in exactly as lib/post-action.js tells it (reload with reason inBlock), reads a fake chain and paints.
+async function stake4account({ readOnly = false, after = true } = {}) {
+    const window = new Window({ url: 'https://explorer.test/wallet' });
+    const doc = window.document;
+    doc.body.innerHTML = shellHtml('wallet', '#nav-my-account');
+    let data = { ...sfirst(), balance: { free: 1204.55, reserved: 0, total: 1204.55, transferable: 1203.55 }, freshness: { v: 1, chainHead: 4_210_370 } };
+    doc.querySelector('#wallet-dashboard').innerHTML = stake4dashboard(data, { readOnly });
+    let sub = null;
+    const later = stake4after();
+    const sr = createStakeRefresh({ doc, post: { subscribe: (d, o) => { sub = o; return () => {}; } }, data: () => data, setData: (d) => { data = d; },
+        read: async () => ({ block: 4_210_377, balance: later.balance, staking: { ...later.staking, nominating: later.staking.nominating.map(v => v.address) } }), fmt: s4fmt });
+    if (after) await sub.reload({ reason: 'inBlock', info: { key: 'staking.bondNominate' }, block: 4_210_377 });
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    return { window, doc, qa, q: (sel) => doc.querySelector(sel), visible: (x) => !!x && !x.closest('[hidden]'), d: { account: { status: 'connected', address: ME } }, data: () => data, sr };
+}
+const STAKE4_SCENES = [
+    { id: 'stake-signing', primary: 1, need: '#submit-stake-tx-btn[aria-busy="true"]', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { w.card.recheck(() => new Promise(() => {})); const b = w.q('#submit-stake-tx-btn'); b.setAttribute('aria-busy', 'true'); b.disabled = true; b.textContent = 'Signing\u2026'; } }) },
+    { id: 'stake-failed', primary: 1, need: '#stake-modal-error', build: () => stakeWorld({ data: sfirst(), typed: '250',
+        steps: (w) => { const e = w.q('#stake-modal-error'); e.textContent = classifyThrownError(new Error('Cancelled')).text; e.style.display = 'block'; } }) },
+    { id: 'account-after-stake-reopened', primary: 1, need: '[data-sc="SC-141"]', build: async () => {
+        const a = await stake4account();
+        return stakeWorld({ data: a.data(), dashboard: a.q('#wallet-dashboard').innerHTML, tracked: { block: 4_210_377 }, typed: '' });
+    } }
+].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+const ACCOUNT4_SCENES = [
+    { id: 'account-after-stake', primary: 1, need: '#wallet-staked-value.is-value-changed', build: () => stake4account() },
+    { id: 'account-read-only-stake-intent', primary: 0, need: '.wallet-readonly-callout [data-sc="SC-121"]', build: () => stake4account({ readOnly: true, after: false }) }
+].map(s => ({ ...s, widths: [1280, 375] }));
+function checkAccount4Scene(w, s, err) {
+    if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
+    if (!w.doc.querySelector('#wallet-dashboard #wallet-staked-value')) err.push('no #wallet-staked-value in the wallet dashboard');
+    const n = w.qa('.wallet-action-btn.primary').filter(w.visible).length;
+    if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
+    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+}
+const NOWALLET4_SCENES = [
+    { id: 'stake-no-wallet', primary: 1, need: '[data-sc="SC-120"]', build: () => setup({ phone: true }, async (w) => { withMs(w); w.doc.getElementById('wallet-dashboard').insertAdjacentHTML('afterbegin', stakeIntentNoteHtml('SC-120', escapeHtml)); }) }
+];
+
 // ── work packages: later rounds add theirs here ──
-const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' } };
+const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
+    stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' },
+    stake4: { scenes: STAKE4_SCENES, check: checkStakeScene, prefix: '' }, account4: { scenes: ACCOUNT4_SCENES, check: checkAccount4Scene, prefix: '' },
+    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' } };
 
 // ── a scene file ──
 const Q = (w, sel) => w.qa(sel).filter(w.visible).length;
@@ -474,6 +793,11 @@ async function guardSelfTest() {
     await expectFail('wp3: two primaries', () => renderScene({ ...wizScene, build: async () => { const w = await wizScene.build(); w.q('[data-setup-action="check-node"]').classList.add('validate-primary'); return w; } }, checkWp3Scene), /2 primary actions visible/);
     await expectFail('wp3: header solid on a connected wizard', () => renderScene(wizScene, checkWp3Scene, { paint: false }), /the header is drawn solid, the page rule says connected/);
     await expectFail('r1: payout tile missing', () => renderScene({ ...R1_SCENES[0], build: async () => { const w = await R1_SCENES[0].build(); w.q('#wallet-unpaid-tile').remove(); return w; } }, checkR1Scene), /no #wallet-unpaid-tile/);
+    const lockScene = LOCKS_SCENES[0];
+    await expectFail('locks: a primary in the panel', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.ui-action').classList.add('validate-primary'); return w; } }, checkLocksScene), /1 primary actions visible/);
+    await expectFail('locks: a chain id outside Details', () => renderScene({ ...lockScene, build: async () => { const w = await lockScene.build(); w.q('.lock-line').textContent = 'phrelect'; return w; } }, checkLocksScene), /a chain id outside Details: phrelect/);
+    const stakeScene = STAKE_SCENES[1];
+    await expectFail('stake: two primaries', () => renderScene({ ...stakeScene, build: async () => { const w = await stakeScene.build(); w.q('[data-stake-action="choose"]').classList.add('validate-primary'); return w; } }, checkStakeScene), /2 primary actions visible/);
     await expectFail('hub: nav not active', () => renderScene({ ...hubScene, build: async () => { const w = await hubScene.build(); w.q('#nav-validate').classList.remove('active'); return w; } }, checkValidateScene), /no active #nav-validate/);
 }
 
@@ -491,7 +815,7 @@ async function main() {
         for (const s of wp.scenes) {
             if (only && s.id !== only) continue;
             const inner = await renderScene(s, wp.check);
-            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`${wp.prefix || 'wp' + n}-${s.id}-${width}.html`, html]); }
+            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`${wp.prefix === '' ? '' : (wp.prefix || 'wp' + n) + '-'}${s.id}-${width}.html`, html]); }
         }
         if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); files.push([`wp${n}-palette.html`, html]); }
     }

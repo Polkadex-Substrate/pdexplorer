@@ -20,6 +20,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import { Window } from 'happy-dom';
 import { lockActions, lockActionSpec } from '../lib/lock-actions.js';
 import { describeAccountLocks } from '../lib/balance-locks.js';
 import { registerBalanceLocksRoute } from '../lib/balance-locks-api.js';
@@ -307,13 +308,12 @@ describe('the refresh after an action asks for fresh data', () => {
         t.mock.timers.enable({ apis: ['setTimeout'] });
         const model = { address: ME, ...describeAccountLocks(VOTED_FREE) };
         const reads = [], submits = [];
-        let handler = null;
-        const el = { isConnected: true, innerHTML: '', addEventListener: (type, fn) => { if (type === 'click') handler = fn; },
-            querySelectorAll: () => [], querySelector: () => ({ textContent: '', className: '' }) };
+        const w = new Window();
+        w.document.body.innerHTML = '<div id="slot"></div>';
+        const el = w.document.getElementById('slot');
         await mountBalanceLocks(el, ME, { fetchJson: async (url, o) => { reads.push([url, o]); return model; }, helpIcon: () => '',
             actions: { submit: async (o) => { submits.push(o); }, connected: () => ME, isSame: same, api: () => ({}) } });
-        const button = { textContent: 'Remove votes and unlock', getAttribute: (k) => (k === 'data-lock-action' ? 'democracy-unlock' : null), closest() { return this; } };
-        handler({ target: button });
+        el.querySelector('[data-lock-action="democracy-unlock"]').click();
         await new Promise(r => setImmediate(r));
         assert.equal(submits.length, 1);
         await submits[0].onSuccess();

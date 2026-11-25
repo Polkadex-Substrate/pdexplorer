@@ -246,6 +246,12 @@ describe('2.4 the shared ui-* parts', () => {
         assert.equal(find('.validate-primary', 'background'), 'var(--brand-gradient)');
         assert.equal(find('.validate-primary:hover', 'box-shadow'), '0 0 0 3px var(--brand-primary-glow)');
         assert.equal(find('.validate-primary:disabled', 'opacity'), '0.45');
+        // The action button (locked balances redesign 2.1): violet tint, a bright violet border, 44 px at every width.
+        assert.equal(find('.ui-action', 'background'), 'var(--accent-violet-tint)');
+        assert.equal(find('.ui-action', 'border'), '1px solid var(--accent-violet-text)');
+        assert.equal(find('.ui-action', 'color'), 'var(--text-primary)');
+        assert.equal(find('.ui-action', 'min-height'), '44px');
+        assert.equal(find('.ui-action:hover', 'box-shadow'), '0 0 0 3px var(--accent-violet-tint)');
     });
     test('11: forced colours, chips, tiles, step markers and panels fall back to the system palette', () => {
         const hit = RULES.filter(r => /forced-colors/.test(r.media) && ['.ui-chip', '.ui-tile', '.ui-step', '.ui-panel'].every(s => r.selectors.includes(s)));

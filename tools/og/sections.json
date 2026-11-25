@@ -17,7 +17,7 @@
       "tagline": "The live runtime event log, filterable by pallet and method.",
       "routes": [ { "path": "/events", "seo": "events" } ] },
     { "id": "validators", "icon": "check-shield", "title": "Validators",
-      "tagline": "Commission, stake, real APY and slash history for every validator.",
+      "tagline": "Commission, stake, estimated APY and slash history for every validator.",
       "routes": [ { "path": "/validators", "seo": "validators" } ] },
     { "id": "staking-rewards", "icon": "coin-stack", "title": "Staking Rewards",
       "tagline": "Full reward history and realized APR for any Polkadex address.",
