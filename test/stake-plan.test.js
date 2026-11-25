@@ -417,3 +417,24 @@ describe('the plan encodes against the real mainnet 394 metadata', () => {
         for (const tx of built) assert.equal(api.registry.createType('Call', tx.method.toHex()).toHex(), tx.method.toHex());
     });
 });
+
+// Regression guard: plan params feed what is signed, so they stay ungrouped. The display layer groups its own copy.
+describe('planStakeCalls: plan params stay ungrouped at 1000 PDEX or more (regression guard)', () => {
+    const PLANCK = 1203n * PDEX + 450000000000n; // 1203.45 PDEX
+    test('SC-80a fresh bond: amount is 1203.45 with no comma, and the bond call carries the exact planck value', () => {
+        const plan = planStakeCalls({ hasBond: false, amountPlanck: PLANCK, targets: [A] });
+        const line = plan.lines.find(l => l.id === 'SC-80a');
+        assert.equal(line.params.amount, '1203.45', 'SC-80a plan param must not be grouped');
+        assert.equal(plan.calls[0].args.value, '1203450000000000');
+        const tx = buildStakeTx(recordingApi(), plan, { stash: ME });
+        assert.equal(tx.args[0][0].args[0], '1203450000000000');
+    });
+    test('SC-80b bondExtra: amount is 1203.45 with no comma, and the bondExtra call carries the exact planck value', () => {
+        const plan = planStakeCalls({ hasBond: true, amountPlanck: PLANCK, currentTargets: [A], targets: [A] });
+        const line = plan.lines.find(l => l.id === 'SC-80b');
+        assert.equal(line.params.amount, '1203.45', 'SC-80b plan param must not be grouped');
+        assert.equal(plan.calls[0].args.value, '1203450000000000');
+        const tx = buildStakeTx(recordingApi(), plan, { stash: ME });
+        assert.equal(tx.args[0], '1203450000000000');
+    });
+});
