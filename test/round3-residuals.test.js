@@ -112,20 +112,21 @@ describe('F-044 — estimatedApy refuses to invent a number', () => {
 });
 
 describe('F-044 — the prose agrees with the code', () => {
-    test('the help article interpolates the constant rather than restating it', () => {
-        // A template literal is required for this: in a plain quoted string
-        // `${MAX_APY_BASE}` renders LITERALLY on the help page. Assert the
-        // rendered output, not the source text, so that mistake cannot pass.
+    // Est. APY is now the stake-aware estimate (lib/nominator-apy.js), not
+    // MAX_APY_BASE x (1 - commission), so the help no longer quotes the base
+    // or calls the number "not a measured return": it is past rewards.
+    test('the help article renders no un-interpolated placeholder', () => {
         const all = JSON.stringify(HELP_TOPICS);
-        assert.ok(all.includes(`(${MAX_APY_BASE}%)`),
-            'the help article does not show the APY base');
         assert.ok(!all.includes('${'),
             'an un-interpolated ${...} placeholder is being rendered to users');
     });
 
-    test('the help article still says it is a projection', () => {
+    test('the help article says Est. APY depends on stake and is past rewards', () => {
         const all = JSON.stringify(HELP_TOPICS);
-        assert.match(all, /not a measured return/);
+        assert.match(all, /a validator with a large stake pays each nominator less/);
+        assert.match(all, /Past rewards, not a guarantee/);
+        assert.ok(!/nominal maximum APY \(\$\{|adjusted for the validator's <em>current<\/em> commission/.test(all),
+            'the help still describes Est. APY as the commission-only figure');
     });
 });
 

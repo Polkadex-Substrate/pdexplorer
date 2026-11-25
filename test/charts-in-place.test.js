@@ -11,6 +11,7 @@ import { readRepo, bodyOf } from './helpers/source.js';
 import * as chartUpdate from '../lib/chart-update.js';
 import { REFRESH_UI } from '../lib/refresh-ui.js';
 import { escapeHtml } from '../lib/html-escape.js';
+import { formatNominatorApy, nominatorApyCaption } from '../lib/nominator-apy.js';
 
 const chartConfigs = await import('../lib/chart-configs.js').catch(() => ({}));
 const SCRIPT = readRepo('script.js', import.meta.url);
@@ -40,7 +41,7 @@ function world({ reduced = false } = {}) {
     const ctx = {
         console, Promise, Object, JSON, Array, Map, Set, String, Number, Math, Date, encodeURIComponent, Error, isFinite: Number.isFinite,
         window: win, document: doc, Chart: FakeChart, ...chartUpdate, ...chartConfigs, REFRESH_UI,
-        stakingEscapeHtml: escapeHtml, stakingFormatPDEX: (v) => String(v), stakingFormatNumber: (v) => String(v),
+        formatNominatorApy, nominatorApyCaption, stakingEscapeHtml: escapeHtml, stakingFormatPDEX: (v) => String(v), stakingFormatNumber: (v) => String(v),
         updateSeoMeta() {}, formatLocalDateTime: () => 'now', watchlistStarButton: () => '', renderValidatorScorecard: () => '', mountValidatorManageLink() {}, copyToClipboard() {},
         renderApiError: (c, e) => { c.textContent = 'ERR ' + e.message; },
         fetchApiJson: (...a) => ctx.__fetch(...a), parseJsonResponse: async (r) => r.body,

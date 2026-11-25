@@ -217,7 +217,7 @@ describe('who can sign from the card', () => {
 describe('the commission-only estimate never reaches the stake card (M10)', () => {
     test('no stake card file imports lib/apy.js or names its fields; the modal code path does not either', () => {
         const files = ['lib/stake-pick.js', 'lib/stake-plan.js', 'lib/stake-card-view.js', 'lib/stake-filters.js', 'lib/stake-apr.js', 'lib/stake-picker-view.js', 'lib/stake-choice-sync.js'];
-        const BAD = /apy\.js|estimatedApy|APY_FIELD|apyFields|realApy|currentApy|avg30DayApy/;
+        const BAD = /\/apy\.js|estimatedApy|APY_FIELD|apyFields|realApy|currentApy|avg30DayApy/;
         for (const f of files) {
             const code = stripComments(readFileSync(new URL('../' + f, import.meta.url), 'utf8'));
             assert.ok(!BAD.test(code), `${f} reads the commission-only estimate`);
