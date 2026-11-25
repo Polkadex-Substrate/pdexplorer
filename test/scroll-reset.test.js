@@ -19,6 +19,10 @@ import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 import { shouldResetScroll, createScrollMemory } from '../lib/scroll-reset.js';
 import { readRepo, bodyOf, stripComments } from './helpers/source.js';
+import { renderNodeGuide } from '../lib/validator-node-guide.js';
+import { renderKeysPage } from '../lib/validator-status-view.js';
+import { escapeHtml } from '../lib/html-escape.js';
+import * as M from '../lib/validator-manage.js';
 
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
@@ -35,6 +39,13 @@ function world(path = '/blocks', retryMs = 5) {
     win.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
     const flush = () => { while (frames.length) frames.shift()(); };
     const mem = createScrollMemory({ win, retryMs });
+    // An anchor element in the page; scrollIntoView is recorded (happy-dom has no layout).
+    const shown = [];
+    const anchor = (id) => {
+        const el = win.document.createElement('h3'); el.id = id;
+        el.scrollIntoView = (arg) => { shown.push({ id, el, arg }); };
+        win.document.body.appendChild(el); return el;
+    };
     // The router as script.js wires it.
     const go = (target, opts = {}) => {
         const state = mem.beforeNavigate(opts);
@@ -44,7 +55,7 @@ function world(path = '/blocks', retryMs = 5) {
     win.addEventListener('popstate', () => { mem.beforePopstate(); mem.afterPopstate(); });
     const back = async () => { win.history.back(); await tick(10); };
     const forward = async () => { win.history.forward(); await tick(10); };
-    return { win, calls, s, flush, mem, go, back, forward };
+    return { win, calls, s, flush, mem, go, back, forward, anchor, shown };
 }
 
 describe('shouldResetScroll', () => {
@@ -85,11 +96,68 @@ describe('createScrollMemory', () => {
         assert.deepEqual(w.calls, []);
     });
 
-    test('a navigation to a #fragment leaves the scroll to the anchor', () => {
+    test('a navigation to a #fragment scrolls the anchor to the top of the view and never to 0 (F1)', () => {
         const w = world(); w.mem.boot();
+        w.s.y = 1800;
+        const el = w.anchor('cors');
         w.go('developers#cors');
+        assert.deepEqual(w.shown.map(x => [x.id, x.arg]), [['cors', { block: 'start' }]], 'the anchor is scrolled into view, block start');
+        assert.deepEqual(w.calls, [], 'no scroll to the top when the anchor exists');
+        w.flush();
+        assert.ok(w.shown.every(x => x.el === el && x.arg.block === 'start'), 'a retry in the next frame, if any, goes to the same anchor');
+        assert.deepEqual(w.calls, []);
+    });
+
+    test('a #fragment whose element is not there goes to the top, at once and again in the next frame (F1)', () => {
+        const w = world(); w.mem.boot();
+        w.s.y = 1800;
+        w.go('validate/node#node-step-check');
+        assert.deepEqual(w.calls, [[0, 0]], 'at once');
+        assert.deepEqual(w.shown, []);
+        w.flush();
+        assert.deepEqual(w.calls, [[0, 0], [0, 0]], 'and once more after the render');
+    });
+
+    test('an anchor that the render adds after the push is found on the next frame (F1)', () => {
+        const w = world(); w.mem.boot();
+        w.go('validate/node#node-step-check');
+        w.anchor('node-step-check');
+        w.flush();
+        assert.deepEqual(w.shown.map(x => x.id), ['node-step-check']);
+        assert.deepEqual(w.shown[0].arg, { block: 'start' });
+    });
+
+    test('an encoded fragment is decoded before the lookup (F1)', () => {
+        const w = world(); w.mem.boot();
+        w.anchor('step one');
+        w.go('guide#step%20one');
+        assert.deepEqual(w.shown.map(x => x.id), ['step one']);
+    });
+
+    test('an empty fragment ("#") goes to the top (F1)', () => {
+        const w = world(); w.mem.boot();
+        w.s.y = 500;
+        w.go('guide#');
+        assert.deepEqual(w.calls, [[0, 0]]);
+    });
+
+    test('a replace to a #fragment never scrolls, anchor or not (F1)', () => {
+        const w = world(); w.mem.boot();
+        w.anchor('cors');
+        w.go('developers#cors', { replace: true });
         w.flush();
         assert.deepEqual(w.calls, []);
+        assert.deepEqual(w.shown, []);
+    });
+
+    test('the reader scrolling before the next frame stops the retry (F1)', () => {
+        const w = world(); w.mem.boot();
+        w.go('validate/node#node-step-check');
+        w.win.dispatchEvent(new w.win.Event('wheel'));
+        w.anchor('node-step-check');
+        w.flush();
+        assert.deepEqual(w.shown, []);
+        assert.deepEqual(w.calls, [[0, 0]], 'only the first, immediate scroll');
     });
 
     test('each pushed entry gets its own key; a replace keeps the entry\'s existing state (and its key)', () => {
@@ -191,6 +259,30 @@ describe('createScrollMemory', () => {
 
 // script.js wiring: navigateTo, popstate and boot use the module; the other
 // routeTo callers (boot, the wallet-change re-render) must not scroll.
+describe('the validator links that end in a node guide #fragment land on it (F1)', () => {
+    // The two real hrefs: "Check my node" (manage panel, offline) and the keys page's "Session keys in the node guide".
+    const checkHref = M.manageMenu('active', { offline: true }).primary.href;
+    const keysHtml = renderKeysPage({ params: { layout: { ok: true } }, esc: escapeHtml });
+    const keysHref = (/href="(\/validate\/node#[^"]+)"/.exec(keysHtml) || [])[1];
+    for (const [name, href] of [['Check my node', checkHref], ['the keys page link', keysHref]]) {
+        test(name + ': following it in the app scrolls the guide section into view', () => {
+            assert.match(String(href), /^\/validate\/node#node-step-/, 'the href is a node guide step');
+            const w = world('/validate'); w.mem.boot();
+            w.s.y = 1500;
+            // The guide is on the page when the link is followed; its step headings carry the ids.
+            w.win.document.body.innerHTML = renderNodeGuide({ esc: escapeHtml, helpIcon: () => '' });
+            const id = href.split('#')[1];
+            const el = w.win.document.getElementById(id);
+            assert.ok(el, 'the id exists in the guide: ' + id);
+            const seen = [];
+            el.scrollIntoView = (arg) => { seen.push(arg); };
+            w.go(href.slice(1));
+            assert.deepEqual(seen, [{ block: 'start' }], 'the section is scrolled to the top of the view');
+            assert.deepEqual(w.calls, [], 'and the page is not sent to 0');
+        });
+    }
+});
+
 describe('script.js wiring', () => {
     const SCRIPT = readRepo('script.js', import.meta.url);
     const code = stripComments(SCRIPT);

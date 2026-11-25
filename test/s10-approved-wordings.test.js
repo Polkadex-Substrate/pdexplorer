@@ -21,6 +21,8 @@ import { parseRules } from './helpers/css-rules.js';
 import { renderNodeGuide } from '../lib/validator-node-guide.js';
 import { escapeHtml } from '../lib/html-escape.js';
 import * as M from '../lib/validator-manage.js';
+import { trackSignedTx } from '../lib/tx-submit.js';
+import { buildTxModel } from '../lib/tx-status.js';
 
 const SNAP = JSON.parse(readFileSync(new URL('./snapshots/wp3-frozen-text.json', import.meta.url), 'utf8'));
 const RULES = parseRules(readFileSync(new URL('../styles.css', import.meta.url), 'utf8'));
@@ -267,7 +269,8 @@ describe('nothing changes in what is signed: the same submit, the same call', ()
         assert.equal(w.submits.length, 1);
         const s = w.submits[0];
         assert.equal(s.label, 'Stop validating');
-        assert.equal(s.idleText, 'Stop validating');
+        // Review fix (c), amended from 'Stop validating': undefined, so the frozen tracker restores the captured innerHTML (icon and text).
+        assert.equal(s.idleText, undefined);
         assert.equal(s.action.key, M.MANAGE_ACTION);
         assert.equal(s.action.params.kind, 'chill');
         assert.deepEqual(s.action.params.expectEvents, ['staking.Chilled']);
@@ -293,4 +296,53 @@ describe('nothing changes in what is signed: the same submit, the same call', ()
         assert.equal(tx.method, 'setPayee');
         assert.equal(tx.toHex(), orig.staking.setPayee({ Account: PAYEE }).toHex());
     }));
+});
+
+// ── review fixes (designer review of the s10 branch) ──
+describe('review fix (c): a failed sign gives Stop validating its pause icon back', () => {
+    const failSign = async (s) => {
+        const api = { registry: {}, on() {}, off() {}, rpc: { chain: { getHeader: () => Promise.resolve({ number: { toNumber: () => 1 } }) } } };
+        const errors = [];
+        const run = trackSignedTx({ api, button: s.button, idleText: s.idleText, action: s.action,
+            show: (a, st, ev, err, ex) => buildTxModel(a, st, ev, err, ex), onError: (t) => errors.push(t), onSuccess() {}, onStage() {} });
+        run.start();
+        assert.ok(s.button.disabled, 'busy while the wallet is asked');
+        await run.send({ signAndSend: () => Promise.reject(new Error('Unable to retrieve keypair for this account')) }, 'addr', {});
+        for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r));
+        return errors;
+    };
+    test('chill: no idleText is passed, so the tracker restores what the button held', () => withState('man-chill', async (w) => {
+        await w.click('[data-manage-action="sign"]');
+        assert.equal(w.submits[w.submits.length - 1].idleText, undefined);
+    }));
+    test('the other kinds still restore the text "Sign and submit"', () => withState('man-payee-review', async (w) => {
+        await w.click('[data-manage-action="sign"]');
+        assert.equal(w.submits[w.submits.length - 1].idleText, 'Sign and submit');
+    }));
+    test('chill, wallet refuses to sign: the button is enabled again with the pause icon and the words Stop validating', () => withState('man-chill', async (w) => {
+        const btn = w.el.querySelector('[data-manage-action="sign"]');
+        assert.ok(btn.querySelector('.bx-pause-circle'), 'the icon before');
+        await w.click('[data-manage-action="sign"]');
+        const s = w.submits[w.submits.length - 1];
+        assert.equal(s.button, btn);
+        const errors = await failSign(s);
+        assert.equal(errors.length, 1, 'the failure is reported once');
+        assert.equal(btn.disabled, false);
+        assert.ok(btn.querySelector('.bx-pause-circle'), 'the pause icon survived the failed sign');
+        assert.equal(txt(btn), 'Stop validating');
+        assert.ok(btn.classList.contains('validate-secondary'));
+    }));
+});
+
+describe('review fix S1: the wizard header help icon opens in a new tab like the step help (Q30)', () => {
+    for (const id of ['wiz-step1', 'wiz-step2', 'wiz-step3']) {
+        test(id, () => withState(id, (w) => {
+            const a = w.el.querySelector('.validate-setup > .list-header a.help-inline-icon');
+            assert.ok(a, 'the header help icon');
+            assert.equal(a.getAttribute('href'), '/help/validator-setup');
+            assert.equal(a.getAttribute('target'), '_blank');
+            assert.equal(a.getAttribute('rel'), 'noopener');
+            assert.ok(!a.hasAttribute('data-spa-link'));
+        }));
+    }
 });
