@@ -21,6 +21,7 @@ import {
 } from '../lib/nominator-apy.js';
 import { performanceForAll } from '../lib/stake-apr.js';
 import { apyFields, estimatedApy, APY_FIELD, MAX_APY_BASE } from '../lib/apy.js';
+import { validatorChartConfig } from '../lib/chart-configs.js';
 
 const server = readRepo('server.js', import.meta.url);
 // One route handler: from its app.get line to the first line that closes it.
@@ -211,7 +212,10 @@ describe('views', () => {
     test('validator page history table and chart use the per-era return', () => {
         const code = stripComments(script);
         assert.match(code, /formatNominatorApy\(h\.nominatorApy\) \?\? '\\u2014'/);
-        assert.match(code, /chronHistory\.map\(h => h\.nominatorApy \?\? null\)/);
+        // The chart config moved to lib/chart-configs.js (in-place chart updates): test the real builder.
+        const cfg = validatorChartConfig([{ era: 2, commission: 5, apy: 21.94, nominatorApy: 1.93 }, { era: 1, commission: 5, apy: 21.94 }], false);
+        const apyLine = cfg.data.datasets.find(d => d.label === 'APY (%)');
+        assert.deepEqual(apyLine.data, [null, 1.93], 'the validator chart must plot the per-era nominator return, never the commission-only apy');
     });
 });
 
