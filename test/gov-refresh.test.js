@@ -10,7 +10,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { GOV_TRIGGER_SECTIONS, GOV_MIN_INTERVAL_MS, govSyncsForEvents, makeSyncRunner as makeRunner, isFreshRequest } from '../lib/gov-refresh.js';
+import { GOV_TRIGGER_SECTIONS, GOV_MIN_INTERVAL_MS, govSyncsForEvents, govCallsOf, makeSyncRunner as makeRunner, isFreshRequest } from '../lib/gov-refresh.js';
 import { CACHE_TIERS } from '../lib/api-reference.js';
 
 const serverSrc = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
@@ -237,7 +237,7 @@ describe('server.js wiring', () => {
     test('the per-block hook asks govSyncsForEvents and runs each named sync', () => {
         const at = serverSrc.indexOf('const forward = await scanChainRange(');
         const hook = serverSrc.slice(at, serverSrc.indexOf('if (forward.failedNumbers', at));
-        assert.match(hook, /govSyncsForEvents\(forward\.events\)/);
+        assert.match(hook, /govSyncsForEvents\(forward\.events\.concat\(forward\.calls \|\| \[\]\)\)/, 'the forward pass does not pass the blocks\' governance calls');
         assert.match(hook, /runGovSync\(/);
         assert.ok(!/syncCouncil\(\)\.catch/.test(hook), 'the old direct council call is still there');
     });
@@ -261,5 +261,43 @@ describe('server.js wiring', () => {
         const tierOf = (r) => CACHE_TIERS.find(t => t.routes.includes(r));
         assert.equal(tierOf('/api/democracy').name, 'Short');
         assert.equal(tierOf('/api/treasury').name, 'Short');
+    });
+});
+
+// R4: a council candidacy, a council vote (elections.vote) and elections.removeVoter emit NO event, so a block
+// holding one never started the council sync and the snapshot stayed behind until its 5-minute timer: the
+// page's catch-up would always end in "could not be refreshed". The forward pass now also reads the block's
+// signed top-level calls (already decoded, no RPC) and a governance call starts the same syncs an event would.
+describe('R4: signed governance calls start the syncs too', () => {
+    const xt = (section, method, signed = true) => ({ isSigned: signed, method: { section, method } });
+    test('govCallsOf: the signed top-level calls of a governance pallet, as { section, method }', () => {
+        const calls = govCallsOf([xt('timestamp', 'set', false), xt('elections', 'submitCandidacy'), xt('balances', 'transferKeepAlive'),
+            xt('phragmenElection', 'vote'), xt('elections', 'removeVoter', false)]);
+        assert.deepEqual(calls.map(c => `${c.section}.${c.method}`), ['elections.submitCandidacy', 'phragmenElection.vote']);
+        assert.deepEqual(govSyncsForEvents(calls), ['council', 'treasury', 'democracy']);
+    });
+    test('never throws: a stub that cannot be read, a codec that throws, not a list', () => {
+        const bad = { get isSigned() { throw new Error('boom'); } };
+        const stub = { isSigned: true, method: null };
+        assert.deepEqual(govCallsOf([bad, stub, null, 7, xt('council', 'vote')]).map(c => c.section), ['council']);
+        for (const v of [null, undefined, 7, 'x', {}]) assert.deepEqual(govCallsOf(v), []);
+    });
+    test('scanChainRange gathers the calls of every block it scanned; a failed block adds none', async () => {
+        const vm = await import('node:vm');
+        const at = serverSrc.indexOf('async function scanChainRange(');
+        let i = serverSrc.indexOf('{', serverSrc.indexOf(')', at)), depth = 0;
+        for (; i < serverSrc.length; i++) { if (serverSrc[i] === '{') depth++; else if (serverSrc[i] === '}' && --depth === 0) break; }
+        const ctx = { Promise, Map, Math, console: { warn() {} }, BLOCKS_FETCH_CONCURRENCY: 2, shortErrorMessage: (e) => String(e && e.message), isRpcUnavailableError: () => false,
+            scanSingleBlock: async (n) => { if (n === 11) throw new Error('bad block'); return { block: { number: n }, events: [], calls: n === 12 ? [{ section: 'elections', method: 'vote' }] : [] }; } };
+        vm.createContext(ctx);
+        vm.runInContext(serverSrc.slice(at, i + 1), ctx);
+        const r = await ctx.scanChainRange(10, 12, 10);
+        const plain = (v) => JSON.parse(JSON.stringify(v));   // the vm realm has its own Array and Object
+        assert.deepEqual(plain(r.calls), [{ section: 'elections', method: 'vote' }]);
+        assert.deepEqual(plain(r.failedNumbers), [11]);
+    });
+    test('scanSingleBlock hands back its block\'s calls from the extrinsics it already decoded', () => {
+        const body = serverSrc.slice(serverSrc.indexOf('async function scanSingleBlock('), serverSrc.indexOf('async function getBlockTolerant('));
+        assert.match(body, /return \{ block, events, eventsIncomplete, calls: govCallsOf\(extrinsics\) \};/);
     });
 });

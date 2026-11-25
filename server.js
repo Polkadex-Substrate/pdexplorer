@@ -15,7 +15,7 @@ import { FEATURE_FLAGS } from './lib/wallet-links.js';
 import { HELP_TOPICS } from './lib/help-topics.js';
 import { validateSitemapRoutes } from './lib/validate-gate.js';
 import { proxyTypesOf } from './lib/validator-delegate.js';
-import { govSyncsForEvents, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
+import { govSyncsForEvents, govCallsOf, makeSyncRunner, isFreshRequest, GOV_MIN_INTERVAL_MS } from './lib/gov-refresh.js';
 import { MAX_APY_BASE, estimatedApy, apyFields, APY_CAVEAT } from './lib/apy.js';
 import { withNominatorApy, nominatorApyFields, nominatorApyForAddress, withPerEraNominatorApy } from './lib/nominator-apy.js';
 import { deriveIndexStatus, describeIndexStatus, coverageOf } from './lib/index-status.js';
@@ -40,7 +40,7 @@ import { proposalHashOf, boundedParts, isExternalProposeCall, externalThreadId, 
     lifecycleLinks, isThreadKind, withEarlierCounts, earlierBoards } from './lib/discussion-lifecycle.js';
 import { registerGovDetailRoutes, democracyEnactmentTaskIds } from './lib/gov-detail-api.js';
 import { registerBalanceLocksRoute } from './lib/balance-locks-api.js';
-import { buildFreshness, lowestTailFrom } from './lib/freshness.js';
+import { buildFreshness, lowestTailFrom, kvMark } from './lib/freshness.js';
 import { rewardNotesForBlock, storedRewardStash, REWARD_NOTES_MAX_PER_BLOCK } from './lib/reward-events.js';
 import { balanceBreakdown, accountBalances } from './lib/balance-locks.js';
 import { registerStakingStatusRoute } from './lib/nomination-status-api.js';
@@ -1342,6 +1342,15 @@ function freshnessNow({ chainHead = null, pending = [] } = {}) {
 }
 async function routeFreshness(pending = []) {
     return freshnessNow({ chainHead: await freshnessHead(), pending });
+}
+// R4: a governance route's freshness. kv[name] is the snapshot's atBlock (the head its sync read before its
+// queries); a route that also serves the governance history index (motion and proposal history) is lowered to
+// that index's verified watermark. A snapshot written before R4 has no atBlock: unknown, never caught up.
+function govFreshness(name, atBlock, withHistory = true) {
+    try {
+        const history = withHistory ? (db.getSyncState('governance') || {}).latestScannedBlock : atBlock;
+        return buildFreshness({ syncState: () => null, kv: { [name]: kvMark(atBlock, history) } });
+    } catch (_) { return null; }
 }
 
 // Audit F-114: the fallback was Date.now() — so a block whose timestamp.set
@@ -4878,6 +4887,7 @@ app.get('/api/council', (req, res) => {
         const data = db.getKv('council') || { members: [], runnersUp: [], candidates: [], motions: [], blocksRemaining: 0, termDuration: 0, desiredMembers: 0, desiredRunnersUp: 0, collectivePallet: null };
         data.motionHistory = db.getCouncilMotions();
         data.history = governanceHistoryMeta();
+        data.freshness = govFreshness('council', data.atBlock);
         // Short tier, not long. This payload carries LIVE vote tallies on open
         // motions; cacheLong meant a fresh vote could hide behind up to 5 min
         // of browser cache + 10 min of CDN cache — council members watched
@@ -4900,6 +4910,7 @@ app.get('/api/technical-committee', (req, res) => {
         const data = db.getKv('technicalCommittee') || { members: [], prime: null, motions: [], proposalCount: null, currentBlock: 0, collectivePallet: null };
         data.motionHistory = db.getCollectiveMotions('technicalCommittee');
         data.history = governanceHistoryMeta();
+        data.freshness = govFreshness('technicalCommittee', data.atBlock);
         // Short tier for the same reason as /api/council: live vote tallies.
         if (isFreshRequest(req.query)) res.set('Cache-Control', 'no-store'); else cacheShort(res);
         res.json(data);
@@ -4922,6 +4933,7 @@ app.get('/api/treasury', (req, res) => {
         };
         data.allProposals = db.getTreasuryProposals();
         data.history = governanceHistoryMeta();
+        data.freshness = govFreshness('treasury', data.atBlock);
         // Short tier with ?fresh=1 (no-store), as /api/council: the indexer
         // now refreshes this snapshot on the block's own governance events.
         if (isFreshRequest(req.query)) res.set('Cache-Control', 'no-store'); else cacheShort(res);
@@ -4961,7 +4973,8 @@ app.get('/api/democracy', (req, res) => {
             externalProposal: meta.externalProposal || null,
             referenda: withReferendumThreads(db.getDemocracyReferenda()),
             lastSync: meta.lastSync || state.lastSync || 0,
-            status: state.status || 'Initializing'
+            status: state.status || 'Initializing',
+            freshness: govFreshness('democracy', meta.atBlock, false)
         });
     } catch (err) {
         console.error('API Error /api/democracy:', err);
@@ -7108,6 +7121,7 @@ async function syncTreasuryPass() {
             return;
         }
 
+        const atBlock = await freshnessHead();   // R4: read before the state queries (a lower bound of the snapshot)
         const [proposalsEntries, approvalsData, currentBlockOpt, proposalCountOpt] = await Promise.all([
             globalApi.query.treasury.proposals.entries(),
             globalApi.query.treasury.approvals(),
@@ -7178,6 +7192,7 @@ async function syncTreasuryPass() {
         }
 
         db.setKv('treasury', {
+            atBlock,
             proposals,
             approvals: approvedProposalIds,
             spendPeriod,
@@ -7333,6 +7348,7 @@ async function syncCouncilPass() {
         const electionsQuery = globalApi.query[electionsModule];
         const electionsConsts = globalApi.consts[electionsModule];
 
+        const atBlock = await freshnessHead();   // R4: read before the state queries (a lower bound of the snapshot)
         const [membersData, runnersUpData, candidatesData, currentBlockObj] = await Promise.all([
             electionsQuery.members(),
             electionsQuery.runnersUp(),
@@ -7398,6 +7414,7 @@ async function syncCouncilPass() {
         }
 
         const councilData = {
+            atBlock,
             members,
             runnersUp,
             candidates,
@@ -7483,6 +7500,7 @@ async function syncTechnicalCommitteePass() {
     }
     isSyncingTechnicalCommittee = true;
     try {
+        const atBlock = await freshnessHead();   // R4: read before the state queries (a lower bound of the snapshot)
         const [membersRaw, primeRaw, countRaw, currentBlockObj] = await Promise.all([
             q.members(), q.prime ? q.prime() : Promise.resolve(null),
             q.proposalCount ? q.proposalCount() : Promise.resolve(null),
@@ -7498,6 +7516,7 @@ async function syncTechnicalCommitteePass() {
         }
         const live = await readLiveCollectiveMotions('technicalCommittee', members[0] ? members[0].address : null);
         const data = {
+            atBlock,
             members,
             prime,
             motions: live.motions,
@@ -8072,6 +8091,7 @@ async function syncDemocracyPass() {
             return;
         }
 
+        const atBlock = await freshnessHead();   // R4: read before the state queries (a lower bound of the snapshot)
         const [refCountRaw, propCountRaw, publicPropsRaw, nextExternalRaw, lowestUnbakedRaw, currentBlockRaw, totalIssuanceRaw] = await Promise.all([
             dem.referendumCount(),
             dem.publicPropCount ? dem.publicPropCount() : Promise.resolve(null),
@@ -8224,6 +8244,7 @@ async function syncDemocracyPass() {
         try { await backfillMotionProposalHashes(); } catch (e) { console.warn('Discussion threads: motion link backfill failed:', e.message); }
 
         db.setKv('democracy_meta', {
+            atBlock,
             referendumCount, publicPropCount, launchPeriod, currentBlock, totalIssuance,
             lowestUnbaked: lowestUnbakedRaw ? lowestUnbakedRaw.toNumber() : 0,
             activeReferenda, activeProposals: publicProposals.length,
@@ -9094,7 +9115,7 @@ async function scanSingleBlock(blockNumber) {
         });
     }
     attachAccounts(events, ACCOUNT_LINK_RULES);
-    return { block, events, eventsIncomplete };
+    return { block, events, eventsIncomplete, calls: govCallsOf(extrinsics) };
 }
 
 // Fallback for scanSingleBlock: fetch the block undecoded, then decode each
@@ -9144,6 +9165,7 @@ async function scanChainRange(startBlock, endBlock, maxAttempts) {
 
     const blocks = [];
     const events = [];
+    const calls = [];   // R4: each block's signed governance calls (govCallsOf), for the event-driven gov refresh
     const failedNumbers = [];
     const incompleteNumbers = [];
     // Heights the node simply couldn't serve right now. Kept separate from
@@ -9174,6 +9196,7 @@ async function scanChainRange(startBlock, endBlock, maxAttempts) {
             if (r && !r.__error) {
                 blocks.push(r.block);
                 for (const e of r.events) events.push(e);
+                if (Array.isArray(r.calls)) for (const c of r.calls) calls.push(c);
                 succeeded++;
                 if (r.eventsIncomplete) incompleteNumbers.push(chunk[j]);
             } else if (r && r.transient) {
@@ -9188,7 +9211,7 @@ async function scanChainRange(startBlock, endBlock, maxAttempts) {
         console.warn(`[chain-index] deferred ${transientNumbers.length} block(s) (node unavailable, attempts not counted)`);
     }
     return {
-        blocks, events, attempts: numbers.length, succeeded,
+        blocks, events, calls, attempts: numbers.length, succeeded,
         failedNumbers, incompleteNumbers, transientNumbers, failureReasons
     };
 }
@@ -9646,7 +9669,8 @@ async function syncChainIndex() {
             // event starts the affected syncs now. govSyncsForEvents names
             // each sync once per pass; the runner never overlaps two runs of
             // one sync (lib/gov-refresh.js).
-            const govSyncs = govSyncsForEvents(forward.events);
+            // R4: a candidacy or a council vote emits no event; its signed call starts the same syncs.
+            const govSyncs = govSyncsForEvents(forward.events.concat(forward.calls || []));
             if (govSyncs.length) {
                 console.log(`[chain-index] governance event in fresh block - refreshing ${govSyncs.join(', ')} now`);
                 for (const name of govSyncs) runGovSync(name);
