@@ -4678,6 +4678,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .multisig-dialog .ui-field { margin: 12px 0; }
 .multisig-dialog .validate-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 .multisig-error:empty, #multisig-review-error:empty { display: none; }
+.multisig-panel p.ui-field-error { color: var(--text-primary); font-size: 0.82rem; }
 .multisig-modal { position: fixed; inset: 0; z-index: 1100; align-items: center; justify-content: center; background: rgba(0,0,0,.8); padding: 16px; }
 .multisig-dialog { position: relative; width: 100%; max-width: 680px; max-height: 90vh; overflow-y: auto; padding: 28px; border-radius: var(--radius-lg); }
 .multisig-dialog h2 { padding-right: 30px; margin-bottom: 16px; }
@@ -4687,6 +4688,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
     .multisig-panel { padding: 16px; }
     .multisig-head { flex-direction: column; align-items: stretch; }
     .multisig-panel .validate-secondary, .multisig-panel .ui-action, .wallet-advanced .validate-secondary, .wallet-advanced .ui-action { min-height: 44px; width: 100%; justify-content: center; }
+    .multisig-dialog .validate-secondary, .api-error .validate-secondary { min-height: 44px; }
 }
 .validate-secondary:disabled, .validate-secondary[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 
@@ -5055,7 +5057,6 @@ textarea.ui-input { resize: vertical; font-family: monospace; font-size: 0.82rem
 .wallet-advanced .api-error, .api-error { display: grid; gap: 12px; justify-items: start; }
 .wallet-advanced .validate-setup-note { margin: 8px 0 0; font-size: 0.82rem; }
 .proxy-add-grid { display: grid; grid-template-columns: minmax(0, 1fr) 180px 120px auto; gap: 12px; align-items: end; }
-.proxy-add-grid #proxy-add-error { grid-column: 1 / -1; }
 #proxy-add-error { margin-top: 8px; }
 .calc-address { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .calc-address code { min-width: 0; font-family: monospace; font-size: 0.82rem; color: var(--text-primary); overflow-wrap: anywhere; }
