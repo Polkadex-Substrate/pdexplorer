@@ -26,7 +26,7 @@ import { createWalletSections } from '../lib/wallet-sections.js';
 import * as sectionsModule from '../lib/wallet-sections.js';
 import { addr } from './helpers/wallet-world.js';
 import { readRepo, bodyOf } from './helpers/source.js';
-import { declsAt, declsIn, RULES, STYLES } from './helpers/phone-width.js';
+import { declsAt, declsIn, declared, RULES, STYLES } from './helpers/phone-width.js';
 
 const tool = await import('../tools/preview-scenes.mjs');
 const V = await import('../lib/wallet-advanced-view.js').then((m) => m, () => ({}));
@@ -1201,5 +1201,64 @@ describe('glossary: "approvals needed", not "threshold"; "calculate", not "deriv
         assert.ok(topic, 'no proxies-and-multisig topic');
         const text = JSON.stringify(Object.fromEntries(Object.entries(topic).filter(([k]) => k !== 'keywords')));
         for (const word of [/\bthreshold/i, /\bderived?\b/i, /\bdepositor\b/i]) assert.doesNotMatch(text, word);
+    });
+});
+
+// ── Follow-ups of the designer review (2026-11-25): two cascade gaps, one dead rule, one threshold wording ──
+describe('follow-ups: field error colour, 44 px secondaries, the dead proxy rule, "2 of 3" wording', () => {
+    test('a field error inside the multisig panel is primary text at 0.82rem (.multisig-panel p no longer outranks .ui-field-error), rendered and parsed', async () => {
+        const w = msWorld();
+        try {
+            w.ui.mountAccounts(w.slot);
+            await flush();
+            const err = w.slot.querySelector('.multisig-panel p.ui-field-error');
+            assert.ok(err, 'the panel has no p.ui-field-error to render');
+            assert.equal(declared(err, 'color', 1280), 'var(--text-primary)', 'the error is drawn in the panel paragraph colour');
+            assert.equal(declared(err, 'font-size', 1280), '0.82rem', 'the error is drawn in the panel paragraph size');
+            assert.equal(declsIn('.multisig-panel p.ui-field-error', '').color, 'var(--text-primary)');
+            assert.equal(declsIn('.multisig-panel p.ui-field-error', '')['font-size'], '0.82rem');
+        } finally { w.restore(); }
+    });
+    for (const width of [640, 360]) {
+        test(`at ${width}: .validate-secondary in the multisig dialog and in .api-error is 44 px (parsed styles.css, inside the 640 px block)`, () => {
+            assert.equal(declsIn('.multisig-dialog .validate-secondary', '@media (max-width: 640px)')['min-height'], '44px');
+            assert.equal(declsIn('.api-error .validate-secondary', '@media (max-width: 640px)')['min-height'], '44px');
+            assert.equal(declsAt('.multisig-dialog .validate-secondary', width)['min-height'], '44px');
+            assert.equal(declsAt('.api-error .validate-secondary', width)['min-height'], '44px');
+            assert.equal(declsAt('.multisig-dialog .validate-secondary', 1280)['min-height'], undefined, 'the 44 px rule leaks to desktop');
+        });
+    }
+    test('.proxy-add-grid #proxy-add-error is gone because the error node is outside the grid (rendered markup); the plain #proxy-add-error rule stays', () => {
+        const { doc } = page(need('proxyAddFormHtml')(['Any', 'Staking']));
+        const err = doc.getElementById('proxy-add-error');
+        assert.ok(err, 'no #proxy-add-error in the form');
+        assert.equal(err.closest('.proxy-add-grid'), null, 'the error node is inside the grid, so the rule is live');
+        assert.ok(doc.querySelector('.proxy-add-grid'), 'no grid rendered');
+        assert.deepEqual(RULES.filter(r => r.selectors.includes('.proxy-add-grid #proxy-add-error')).map(r => r.line), [], 'the dead rule is still in styles.css');
+        assert.equal(declsIn('#proxy-add-error', '')['margin-top'], '8px');
+    });
+    test('the multisig threshold reads "2 of 3" like the card rows: panel heading, review dialog (signers and find-my-signer steps); no "2-of-3"', async () => {
+        const w = msWorld();
+        try {
+            await w.ui.mountPending(w.slot, w.ms);
+            await flush();
+            const h3 = w.slot.querySelector('.multisig-panel h3');
+            assert.equal(t(h3), 'Team wallet 2 of 3');
+            assert.equal(t(h3.querySelector('.ms-tag')), '2 of 3');
+            await w.ui.review({ multisig: w.ms, callHex: CALL });
+            await flush();
+            const lead = w.q('#multisig-review-content > p');
+            assert.equal(t(lead), 'Team wallet 2 of 3');
+            assert.equal(t(lead.querySelector('.ms-tag')), '2 of 3');
+            assert.doesNotMatch(w.slot.textContent + w.q('#multisig-review-content').textContent, /\d-of-\d|\u00b7 \d of \d/);
+        } finally { w.restore(); }
+        const a = msWorld({ accounts: [], askWallets: async () => [] });
+        try {
+            await a.ui.review({ multisig: a.ms, callHex: CALL });
+            await flush();
+            const lead = a.q('#multisig-review-content > p');
+            assert.equal(t(lead), 'Team wallet 2 of 3');
+            assert.equal(t(lead.querySelector('.ms-tag')), '2 of 3');
+        } finally { a.restore(); }
     });
 });
