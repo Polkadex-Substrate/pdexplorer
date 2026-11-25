@@ -68,7 +68,7 @@ import { mockProvider } from '../test/helpers/mock-provider.js';
 import { FEE_MARGIN } from '../lib/fee-preflight.js';
 import { createStakeRefresh, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, stakeIntentNoteHtml } from '../lib/stake-refresh.js';
 import { classifyThrownError } from '../lib/tx-status.js';
-import { createWalletSections, actionBarHtml } from '../lib/wallet-sections.js';
+import { createWalletSections, actionBarHtml, headHtml } from '../lib/wallet-sections.js';
 import { REFRESH_UI } from '../lib/refresh-ui.js';
 
 const root = new URL('../', import.meta.url);
@@ -354,9 +354,7 @@ function r1world({ known = [], ageMs = 0, server = R1_ENTRIES } = {}) {
     const pr = createPayoutRefresh({ doc, known: store, post: core, data: () => wallet, fmt: r1fmt, now: clock });
     const tile = (label, value, cls = '') => `<div class="staking-summary-card"><div class="label">${label}</div><div class="value${cls}">${value}</div></div>`;
     const btn = (id, icon, title, sub, primary = '') => `<button class="wallet-action-btn${primary}" id="${id}"><i class='bx ${icon}'></i><div><strong>${title}</strong><span>${sub}</span></div></button>`;
-    doc.querySelector('#wallet-dashboard').innerHTML = `<div class="list-container glass">
-        <div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2><div style="display:flex; gap:14px; align-items:center;"><button class="staking-download-btn">Switch wallet</button><button class="staking-download-btn">Disconnect</button></div></div>
-        <div style="padding: 12px 24px 0;"><a href="#" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${ME}</a></div>
+    doc.querySelector('#wallet-dashboard').innerHTML = `${headHtml({ address: ME }, { isOwn: true, canSwitch: true }, { esc: escapeHtml })}
         <div class="staking-summary-grid">${tile('Total Balance', '1,204.5521 PDEX', ' accent')}${tile('Total Staked', '1,150.0000 PDEX')}${tile('Claimed Rewards', '41.2000 PDEX')}${pr.tileHtml(wallet)}</div>
         <div id="wallet-actions-slot"><div class="wallet-action-bar" id="wallet-action-bar">${btn('wallet-act-send', 'bx-paper-plane', 'Send PDEX', 'Transfer to any Polkadex address', ' primary')}${btn('wallet-act-stake', 'bx-plus-circle', 'Stake more', 'Add bond &amp; choose validators')}${pr.buttonHtml(wallet)}${btn('wallet-act-unstake', 'bx-minus-circle', 'Unstake', 'Begin the unbonding period')}${btn('wallet-act-identity', 'bx-id-card', 'Set identity', 'Display name, email, twitter')}</div></div>
     </div>`;
@@ -652,9 +650,7 @@ function stake4dashboard(data, { readOnly = false } = {}) {
         ? `<div class="wallet-readonly-callout"><div class="wallet-readonly-head"><i class='bx bx-show'></i><div><strong>Read-only mode</strong><p>You're viewing this account in <strong>read-only</strong> mode. To send PDEX, stake, claim rewards, or unbond, connect a Substrate browser extension (Polkadot.js, Talisman, SubWallet) or open this page in a mobile wallet's in-app browser.</p></div></div>${stakeIntentNoteHtml('SC-121', escapeHtml)}</div>`
         : `<div class="wallet-action-bar" id="wallet-action-bar">${btn('wallet-act-send', 'bx-paper-plane', 'Send PDEX', 'Transfer to any Polkadex address', ' primary')}${stakeButtonHtml(data.staking, escapeHtml)}`
             + `${btn('wallet-act-payout', 'bx-gift', 'Pay out rewards', '0 unclaimed entries')}${btn('wallet-act-unstake', 'bx-minus-circle', 'Unstake', 'Begin the unbonding period')}${btn('wallet-act-identity', 'bx-id-card', 'Set identity', 'Display name, email, twitter')}</div>`;
-    return `<div class="list-container glass">
-        <div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2><div style="display:flex; gap:14px; align-items:center;"><button class="staking-download-btn">Switch wallet</button><button class="staking-download-btn">Disconnect</button></div></div>
-        <div style="padding: 12px 24px 0;"><a href="#" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${ME}</a></div>
+    return `${headHtml({ address: ME }, { isOwn: true, canSwitch: true }, { esc: escapeHtml })}
         <div class="staking-summary-grid"><div class="staking-summary-card"><div class="label">Total Balance</div><div class="value accent" id="wallet-total-value">${s4fmt.pdex(data.balance.total)} PDEX</div><div class="value-usd" data-pdex-amount="${data.balance.total}"></div></div>
         ${stakedTileHtml(data, s4fmt)}<div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">0.0000 PDEX</div></div><div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards</div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">0.0000 PDEX</div></div></div>
     </div>

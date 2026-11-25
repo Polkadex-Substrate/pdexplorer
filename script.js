@@ -8882,6 +8882,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     if (switchBtn) switchBtn.addEventListener('click', openWalletPicker);   // keeps the current wallet until another is chosen
     const disconnectBtn = document.getElementById('wallet-disconnect-btn');
     if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectWallet);
+    walletSections.bindHead();   // Copy address: text only (lib/wallet-sections.js)
     if (isOwnWallet) {
         bindWalletActionHandlers();
         bindViewOnlyCalloutHandlers();

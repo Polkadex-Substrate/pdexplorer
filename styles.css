@@ -4796,6 +4796,31 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 @media (forced-colors: active) {
     .ui-action { border: 1px solid ButtonText; background: ButtonFace; color: ButtonText; }
 }
+/* The proxy list (phone-width spec 3): a table on desktop, stacked rows at 640 px and below, as .balance-locks-table does. */
+.proxy-deposit { margin-bottom: 6px; font-size: 0.78rem; color: var(--text-muted); }
+.proxy-table { margin: 0; }
+.proxy-table tbody td { padding: 8px 4px; }
+.proxy-table .address-cell { color: var(--brand-secondary); font-size: 0.82rem; }
+.proxy-table .proxy-cell-type code { font-size: 0.78rem; color: var(--text-secondary); }
+.proxy-table .proxy-cell-delay { text-align: right; }
+.proxy-table td.proxy-cell-delay { font-size: 0.78rem; color: var(--text-secondary); }
+.proxy-table .proxy-cell-action { text-align: right; }
+.proxy-label { display: none; }
+@media (max-width: 640px) {
+    .proxy-table thead { display: none; }
+    .proxy-table, .proxy-table tbody { display: block; width: 100%; }
+    .proxy-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+    .proxy-table tbody tr:last-child { border-bottom: 0; }
+    .proxy-table tbody td { display: block; min-width: 0; padding: 0; border-bottom: 0; text-align: left; }
+    .proxy-table tbody tr:hover td { background: none; }
+    .proxy-table .proxy-cell-delegate, .proxy-table .proxy-cell-action { grid-column: 1 / -1; }
+    .proxy-table .proxy-cell-action { margin-top: 8px; }
+    .proxy-table .proxy-cell-action:empty { display: none; }
+    .proxy-table .address-cell { display: inline-flex; align-items: center; min-height: 44px; }
+    .proxy-label { display: block; font-size: 0.72rem; color: var(--text-secondary); }
+    .proxy-table .proxy-remove-btn { width: 100%; }
+    .proxy-table .ui-chip { height: auto; min-height: 24px; padding: 4px 8px; line-height: 1.3; white-space: normal; }
+}
 @media (max-width: 640px) {
     .lock-row.is-act { grid-template-columns: 36px minmax(0, 1fr); row-gap: 12px; }
     .lock-row.is-act .lock-row-main { grid-column: 2; }
@@ -4847,6 +4872,23 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-viewing-note.is-readonly { padding: 12px 16px; border: 1px solid var(--accent-amber-line); border-radius: var(--radius-sm); background: linear-gradient(var(--accent-amber-wash), var(--accent-amber-wash)), var(--bg-surface); box-shadow: inset 3px 0 0 var(--accent-amber); color: var(--text-primary); }
 .wallet-viewing-note.is-readonly .bx { font-size: 16px; vertical-align: -2px; color: var(--accent-amber); }
 #wallet-switch-btn[hidden] { display: none; }
+/* The My Account head (phone-width spec 2): one row on desktop; at 640 px and below it stacks, the address wraps in full. */
+.wallet-head-actions { display: flex; align-items: center; gap: 14px; }
+.wallet-head-address { padding: 12px 24px 0; }
+.wallet-head-addr-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.wallet-head-addr { min-width: 0; color: var(--text-secondary); font-size: 0.78rem; overflow-wrap: anywhere; }
+.wallet-head-copy { padding: 6px 12px; font-size: 0.78rem; }
+.wallet-head-copy .bx { font-size: 16px; }
+@media (max-width: 640px) {
+    #wsec-head .list-header { flex-direction: column; align-items: stretch; gap: 12px; }
+    #wsec-head .list-header h2 { min-width: 0; flex-wrap: wrap; overflow-wrap: anywhere; }
+    .wallet-head-actions { flex-wrap: wrap; gap: 8px; }
+    .wallet-head-actions .staking-download-btn { flex: 1 1 128px; min-width: 0; min-height: 44px; padding: 0 12px; box-sizing: border-box; justify-content: center; }
+    .wallet-head-actions .wallet-history-link { flex: 1 0 100%; display: inline-flex; align-items: center; min-height: 44px; }
+    .wallet-head-address { padding: 12px 16px 0; }
+    .wallet-head-addr { flex: 1 0 100%; padding: 12px 0; line-height: 1.6; }
+    .wallet-head-copy { min-height: 44px; padding: 0 16px; font-size: 0.82rem; }
+}
 
 /* ── Colour roles: the shared ui-* parts (spec 2026-11-21, section 2.4) ──
    Colour is carried by small full-strength parts on neutral surfaces: a chip, a tile, a step marker, a dot, a
@@ -5318,6 +5360,7 @@ a.validate-secondary { text-decoration: none; }
 .validate-advanced summary { padding: 12px 16px; cursor: pointer; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
 .validate-advanced summary:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
 .validate-advanced-body { display: flex; flex-direction: column; gap: 12px; padding: 0 16px 16px; }
+.validate-advanced-body code { overflow-wrap: anywhere; }
 .validate-node-result { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .validate-node-verdict { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
 .validate-node-table td, .validate-node-table th { overflow-wrap: anywhere; }
@@ -5348,7 +5391,8 @@ a.validate-secondary { text-decoration: none; }
 .validate-setup-step input[type="text"], .validate-setup-step textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
 .validate-setup-step input[aria-invalid="true"], .validate-setup-step textarea[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.validate-setup-note { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
+.validate-setup-note { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
+.validate-setup-step > p { overflow-wrap: anywhere; }
 .validate-setup-cmd { margin: 0; padding: 12px 16px; overflow-x: auto; white-space: pre; font-size: 0.82rem; line-height: 1.6; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); }
 .validate-setup-cmd:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
 .validate-setup-payee { margin: 0; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 8px; }
@@ -5684,7 +5728,7 @@ a.validate-secondary { text-decoration: none; }
 .stake-simple .ui-panel.is-line { padding: 0; }
 .stake-call-details { align-self: stretch; }
 .stake-plan-lines { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
-.stake-plan-lines li { display: flex; align-items: center; gap: 8px; }
+.stake-plan-lines li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .stake-plan-lines .bx { font-size: 16px; color: var(--text-secondary); }
 .stake-calls { margin: 0; padding-left: 20px; font-family: monospace; font-size: 0.82rem; line-height: 1.6; overflow-wrap: anywhere; word-break: break-all; color: var(--text-secondary); }
 .stake-calls code, .stake-call-wrapper code { color: var(--accent-violet-text); }
