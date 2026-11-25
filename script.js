@@ -88,7 +88,7 @@ import { buildStakeTx, stakeMaxPlanck, transferablePlanckOf, planckToPdexText, s
 import { payeeOf } from './lib/validator-manage.js';
 import { createStakeCard } from './lib/stake-card-view.js';
 import { createStakeRefresh, readStakeFigures, stakeIntentNoteHtml } from './lib/stake-refresh.js';
-import { createWalletSections, actionBarHtml, bindWalletActions } from './lib/wallet-sections.js';
+import { createWalletSections, actionBarHtml, bindWalletActions, WALLET_ACTIONS_CLOSED, PRICE_COLLECTING } from './lib/wallet-sections.js';
 import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -8610,9 +8610,10 @@ function showWalletStaleBanner(root, savedAt, mode, detail = '') {
     el.id = WALLET_STALE_BANNER_ID;
     el.className = `wallet-stale-banner ${mode === 'error' ? 'is-error' : 'is-cached'}`;
     el.setAttribute('role', mode === 'error' ? 'alert' : 'status');
+    if (mode === 'error' && detail) el.title = String(detail);   // the server's reason, for support; the sentence is the review's (R2)
     const age = describeAge(savedAt);
     el.innerHTML = mode === 'error'
-        ? `<i class='bx bx-error-circle'></i><span><strong>Showing a saved snapshot from ${stakingEscapeHtml(age)}.</strong> Live balances could not be loaded${detail ? ' (' + stakingEscapeHtml(detail) + ')' : ''}. Reload the page before acting on these numbers.</span>`
+        ? `<i class='bx bx-error-circle'></i><span><strong>Showing a saved snapshot from ${stakingEscapeHtml(age)}.</strong> Live balances could not be loaded. Reload before acting on these numbers.</span>`
         : `<i class='bx bx-time-five'></i><span>Showing a saved snapshot from ${stakingEscapeHtml(age)} while live balances load…</span>`;
     root.prepend(el);
 }
@@ -8744,7 +8745,7 @@ async function fetchWalletDashboard(address, opts) {
                 // must stop offering to sign against numbers we cannot
                 // confirm.
                 showWalletStaleBanner(root, cached && cached.savedAt, 'error', msg);
-                disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
+                disableWalletActions(WALLET_ACTIONS_CLOSED);
             }
             return;
         }
@@ -8771,7 +8772,7 @@ async function fetchWalletDashboard(address, opts) {
             // Same reasoning as the !result.ok branch above (F-068) — a
             // network-level failure is no more refreshable than a 500.
             showWalletStaleBanner(root, cached && cached.savedAt, 'error', msg);
-            disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
+            disableWalletActions(WALLET_ACTIONS_CLOSED);
         }
     });
 
@@ -8804,7 +8805,7 @@ async function fetchWalletDashboard(address, opts) {
 // A sections re-read that failed: as fetchWalletDashboard's, the page says so and stops offering to sign against numbers it cannot confirm (F-068).
 function walletRefreshFailed(root, savedAt, msg) {
     showWalletStaleBanner(root, savedAt, 'error', msg);
-    disableWalletActions('Balances could not be refreshed — reload before sending or staking.');
+    disableWalletActions(WALLET_ACTIONS_CLOSED);
 }
 
 // Targeted repaint for just the PDEX price chart slot inside the wallet
@@ -8818,7 +8819,7 @@ function repaintWalletPriceCard(price) {
     if (history.length) {
         if (!wrap.querySelector('#wallet-price-chart')) wrap.innerHTML = '<canvas id="wallet-price-chart"></canvas>';   // the canvas in place keeps its chart
     } else {
-        wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;text-align:center;padding:0 20px;">${configured ? 'Collecting price history — the chart fills in as data is polled.' : 'Price feed not configured.'}</div>`;
+        wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;text-align:center;padding:0 20px;">${configured ? PRICE_COLLECTING : 'Price feed not configured.'}</div>`;
     }
     renderWalletPriceChart(history);   // updates in place, or releases the chart when the card went empty
     // Refresh the headline price badge in the list-header too.
@@ -9123,7 +9124,7 @@ const payoutRefresh = createPayoutRefresh({ doc: document, known: knownResults, 
 // After a stake (lib/stake-refresh.js): the figures, the Stake button and the card follow a chain read at inclusion, in place.
 const stakeRefresh = createStakeRefresh({ doc: document, post: postAction, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, read: (a) => readStakeFigures(globalApi, a), same: isSameAddress, fmt: { pdex: stakingFormatPDEX, esc: stakingEscapeHtml, short: stakingShortAddress, usd: (n) => renderUsdSubscript(n) }, onData: (d, tracked) => { if (stakeCard) stakeCard.refreshed(d, tracked); }, nominations: (a) => mountWalletNominations(a, true) });   // Send and Unstake: the bar's delegated listener
 // R3: My Account in sections (lib/wallet-sections.js): after an action each section follows the server's copy in place, the name follows the block.
-const walletSections = createWalletSections({ doc: document, win: window, post: postAction, known: knownResults, same: isSameAddress, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, fetchWallet: (a) => fetch('/api/wallet/' + encodeURIComponent(a)), refetch: (a) => refreshWalletDashboardFor(a, true), stake: stakeRefresh, payout: payoutRefresh, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, esc: stakingEscapeHtml, short: stakingShortAddress, duration: (ms) => formatDuration(ms) }, multisigName: (a) => (multisigStore.find(a) || {}).name || null, setTimer: (f, ms) => setTimeout(f, ms), parts: { bar: (d) => buildWalletActionBarMarkup(d), gen: () => walletFetchGen, block: () => applyWalletActionBlock(), ok: () => { clearWalletStaleBanner(document.getElementById('wallet-dashboard')); clearWalletActionBlock(); }, failed: (a, msg) => walletRefreshFailed(document.getElementById('wallet-dashboard'), (readWalletCache(a) || {}).savedAt, msg), cache: (a, w) => writeWalletCache(a, { wallet: w }), nominations: (a) => mountWalletNominations(a, isSameAddress(getStoredWallet(), a)), rewards: (d) => mountWalletRewardsTable(d), tx: (d) => mountWalletTxTable(d, true), apr: (a) => fetch('/api/staking-rewards/' + encodeURIComponent(a)).then(r => r.json()).then(r => { if (r && currentWalletData && isSameAddress(currentWalletData.address, a)) { walletAprData = r; renderWalletAprCard(); } }).catch(() => {}) } });
+const walletSections = createWalletSections({ doc: document, win: window, post: postAction, known: knownResults, same: isSameAddress, data: () => currentWalletData, setData: (d) => { currentWalletData = d; }, fetchWallet: (a) => fetch('/api/wallet/' + encodeURIComponent(a)), refetch: (a) => refreshWalletDashboardFor(a, true), stake: stakeRefresh, payout: payoutRefresh, fmt: { pdex: stakingFormatPDEX, number: stakingFormatNumber, esc: stakingEscapeHtml, short: stakingShortAddress, duration: (ms) => formatDuration(ms) }, multisigName: (a) => (multisigStore.find(a) || {}).name || null, setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), now: () => Date.now(), parts: { bar: (d) => buildWalletActionBarMarkup(d), gen: () => walletFetchGen, block: () => applyWalletActionBlock(), ok: () => { clearWalletStaleBanner(document.getElementById('wallet-dashboard')); clearWalletActionBlock(); }, failed: (a, msg) => walletRefreshFailed(document.getElementById('wallet-dashboard'), (readWalletCache(a) || {}).savedAt, msg), cache: (a, w) => writeWalletCache(a, { wallet: w }), nominations: (a) => mountWalletNominations(a, isSameAddress(getStoredWallet(), a)), rewards: (d) => mountWalletRewardsTable(d), tx: (d) => mountWalletTxTable(d, true), apr: (a) => fetch('/api/staking-rewards/' + encodeURIComponent(a)).then(r => r.json()).then(r => { if (r && currentWalletData && isSameAddress(currentWalletData.address, a)) { walletAprData = r; renderWalletAprCard(); } }).catch(() => {}) } });
 const govRefresh = createGovRefresh({ doc: document, post: postAction, known: knownResults, same: isSameAddress, nameOf: (a) => { const d = currentWalletData, n = d && d.address && isSameAddress(d.address, a) && d.identity && d.identity !== 'Unknown' ? d.identity : null; return n || (multisigStore.find(a) || {}).name || null; }, short: (a) => stakingShortAddress(a), selected: () => getStoredWallet(), api: () => globalApi, onPage: (p) => readRouteFromLocation() === p, caughtUp, setTimer: (f, ms) => setTimeout(f, ms), clearTimer: (t) => clearTimeout(t), pages: { council: (o) => Promise.all([fetchCouncilData(o), fetchTechnicalCommitteeData(o)]), democracy: (o) => fetchDemocracyData({ ...o, quiet: true }), treasury: (o) => fetchTreasuryData(o) } });
 let validatorsCache = null;
 let validatorsCacheAt = 0;
@@ -9241,7 +9242,7 @@ async function loadStakeChoice(token = stakeCardView().token()) {
     if (listEl) listEl.innerHTML = `<div class="stake-empty">${stakeCopy('SC-111')}</div>`;
     let pick;
     try { pick = await loadValidatorsForPicker(); } catch (e) {
-        if (listEl) listEl.innerHTML = `<div class="stake-empty">${stakeCopy('SC-112')}</div>`;
+        if (listEl) listEl.innerHTML = `<div class="stake-empty"><span data-sc="SC-112">${stakeCopy('SC-112')}</span> <button type="button" class="validate-secondary" data-stake-action="retry" data-sc="SC-113"><i class="bx bx-refresh" aria-hidden="true"></i>${stakeCopy('SC-113')}</button></div>`;
         return stakeCardView().setSnapshot(e, token);
     }
     stakeValidators = pick.validators;
@@ -12979,7 +12980,6 @@ async function renderProxyList(address, isOwnWallet, ctx = {}) {
                     action: { key: 'proxy.remove', params: { delegate, type: proxyType, delay } },
                     button: btn,
                     busyText: 'Signing…',
-                    idleText: 'Remove',
                     expectedWallet: address,
                     expectedRevision
                 });
