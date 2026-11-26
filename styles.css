@@ -4614,7 +4614,6 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .council-withdraw-ack input { margin-top: 4px; flex-shrink: 0; }
 .council-withdraw-close { position: absolute; top: 18px; right: 18px; border: none; background: none; color: var(--text-secondary); font-size: 24px; cursor: pointer; }
 .council-withdraw-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
-.council-withdraw-actions button:disabled { opacity: .5; cursor: not-allowed; }
 #council-withdraw-error:empty { display: none; }
 
 /* Multisig account import and transaction review. The card is a kit card (spec 2026-11-25-multisig-and-advanced-cards.md,
@@ -5098,7 +5097,6 @@ a.ui-action { text-decoration: none; }
 .referendum-vote-trigger { padding: 4px 10px; font-size: 0.78rem; }
 .referendum-vote-trigger.is-aye { color: var(--accent-green); border-color: var(--accent-green-line); }
 .referendum-vote-trigger.is-nay { color: var(--accent-red); border-color: var(--accent-red-line); }
-.ui-modal-card > .modal-submit-btn:first-child { margin-top: 0; }
 .email-subscribe-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
 .email-subscribe-actions .validate-primary { flex: 1; justify-content: center; }
 #email-subscribe-content > h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 1.3rem; }

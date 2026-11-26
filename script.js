@@ -9324,7 +9324,7 @@ function openPayoutModal() {
     document.getElementById('payout-count').textContent = stakingFormatNumber(entries.length);
     document.getElementById('payout-total').textContent = stakingFormatPDEX(total) + ' PDEX';
     const errEl = document.getElementById('payout-modal-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; errEl.removeAttribute('data-state'); }
     const listEl = document.getElementById('payout-entries');
     const submitBtn = document.getElementById('submit-payout-tx-btn');
     if (!entries.length) {
@@ -9350,7 +9350,7 @@ async function submitPayoutTx() {
     const errEl = document.getElementById('payout-modal-error');
     // A failure is data-state="error" with its icon (row I31); the stylesheet colours it, nothing is set from script.
     const fail = (m) => { if (errEl) { errEl.setAttribute('data-state', 'error'); errEl.innerHTML = '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'; errEl.appendChild(document.createTextNode(m)); errEl.style.display = 'block'; } };
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; errEl.removeAttribute('data-state'); }
     const data = currentWalletData;
     if (!data) return fail('Wallet data is not loaded.');
     // F2: never more than the modal lists (lib/payout-refresh.js payoutSignSet).
@@ -9408,7 +9408,7 @@ function openUnstakeModal() {
     const data = currentWalletData;
     if (!data) return showTxNotice('Wallet data is not loaded yet.');
     const errEl = document.getElementById('unstake-modal-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; errEl.removeAttribute('data-state'); }
     // Reset Max-intent state every time the modal is opened so a previous
     // session's flag doesn't leak into a fresh partial-unbond.
     unstakeFullUnbondIntent = false;
@@ -9511,7 +9511,7 @@ async function submitWithdrawUnbonded() {
     const errEl = document.getElementById('unstake-modal-error');
     const fail = (m) => { if (errEl) { errEl.setAttribute('data-state', 'error'); errEl.innerHTML = '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'; errEl.appendChild(document.createTextNode(m)); errEl.style.display = 'block'; } };
     // Clear any stale message first (submitUnstakeTx does; this didn't).
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; errEl.removeAttribute('data-state'); }
     const data = currentWalletData;
     if (!data) return fail('Wallet data is not loaded.');
 
@@ -9547,8 +9547,8 @@ async function submitWithdrawUnbonded() {
 
 async function submitUnstakeTx() {
     const errEl = document.getElementById('unstake-modal-error');
-    const fail = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } };
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    const fail = (m) => { if (errEl) { errEl.setAttribute('data-state', 'error'); errEl.innerHTML = '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'; errEl.appendChild(errEl.ownerDocument.createTextNode(m)); errEl.style.display = 'block'; } };
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; errEl.removeAttribute('data-state'); }
     const data = currentWalletData;
     if (!data) return fail('Wallet data is not loaded.');
     if (!isSameAddress(getStoredWallet(), data.address)) return fail('Connect this wallet to perform staking actions.');
@@ -10052,7 +10052,7 @@ function validateSendRecipient() {
     if (problem) {
         sendValidRecipient = false;
         if (hintEl) {
-            if (problem.refusal) renderRecipientRefusal(hintEl, problem.refusal);
+            if (problem.refusal) { renderRecipientRefusal(hintEl, problem.refusal); hintEl.insertAdjacentHTML('afterbegin', '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'); }
             else { hintEl.innerHTML = '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'; hintEl.appendChild(document.createTextNode(problem.text)); }
             hintEl.setAttribute('data-state', 'error');   // the colour is the stylesheet's (row I31)
         }
