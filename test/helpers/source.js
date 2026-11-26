@@ -18,6 +18,17 @@
 // test that fails loudly, not as a wrong answer.
 
 import { readFileSync } from 'node:fs';
+import * as UI from '../../lib/ui-parts.js';
+import { escapeHtml as uiEscape } from '../../lib/html-escape.js';
+
+// Sprint 11 WP2: script.js draws its states, chips and panels through the kit helpers it imports (lib/ui-parts.js).
+// Tests that lift a function out of script.js with bodyOf evaluate it with only the names they pass in, so the real
+// helpers are offered as globals: a name a test passes itself still wins, and no test's assertion is touched.
+for (const [name, value] of Object.entries({
+    icon: UI.icon, chipHtml: UI.chipHtml, panelHtml: UI.panelHtml, linePanelHtml: UI.linePanelHtml, pageHeadHtml: UI.pageHeadHtml,
+    stateHtml: UI.stateHtml, loadFailedHtml: UI.loadFailedHtml, setHint: UI.setHint,
+    stateLine: (kind, text, roomy = false) => UI.stateHtml(kind, text, { roomy, esc: uiEscape })
+})) if (!(name in globalThis)) globalThis[name] = value;
 
 // Remove comment lines so a "must not contain" or ordering check sees CODE.
 //

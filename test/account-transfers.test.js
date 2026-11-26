@@ -74,7 +74,7 @@ describe('the account transfers cells', () => {
 
     test('Value splits the integer, the fraction and the unit, and escapes each', () => {
         assert.equal(transferValueCell('1,341.7476 PDEX'),
-            '1,341<span style="color: var(--text-secondary);">.7476</span> <span style="color: var(--brand-primary);">PDEX</span>');
+            '1,341<span class="ui-quiet">.7476</span> <span class="ui-quiet">PDEX</span>');
         assert.match(transferValueCell('5 <b>PDEX</b>'), /^5<span[^>]*><\/span> <span[^>]*>&lt;b&gt;PDEX&lt;\/b&gt;<\/span>$/);
         assert.equal(transferValueCell('<i>x</i>'), '&lt;i&gt;x&lt;/i&gt;');
     });

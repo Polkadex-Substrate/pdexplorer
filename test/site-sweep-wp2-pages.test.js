@@ -33,14 +33,15 @@ const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 // Never hand a happy-dom node to assert.equal or deepEqual: a failing assertion inspects it, and that can exhaust memory.
 const describeEl = (e) => `<${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}${e.className ? '.' + String(e.className).trim().split(/\s+/).join('.') : ''} style="${e.getAttribute('style')}"> ${text(e).slice(0, 40)}`;
 const colourStyle = (e) => e.hasAttribute('style') && COLOUR.test(';' + e.getAttribute('style'));
+const colourDecls = (s) => String(s || '').split(';').map(x => x.trim()).filter(x => COLOUR.test(';' + x)).sort().join(';');
 const written = (root) => Array.from(root.querySelectorAll('[style]')).filter(e => COLOUR.test(';' + e.getAttribute('style'))
-    && (!e.hasAttribute('data-static') || e.getAttribute('style') !== e.getAttribute('data-static-style')));
+    && (!e.hasAttribute('data-static') || colourDecls(e.getAttribute('style')) !== colourDecls(e.getAttribute('data-static-style'))));
 const LABELS = { labels: [
     { signer: O1, label: 'Exchange wallet', score: 2, viewerVote: 0, reportCount: 0, vetoed: false, createdAt: 1700000000000 },
     { signer: O2, label: 'Old name', score: 0, viewerVote: 0, reportCount: 1, vetoed: true, createdAt: 1700000000000 },
     { signer: ME, label: 'My label', score: 1, viewerVote: 1, reportCount: 0, vetoed: false, createdAt: 1700000000000 }] };
 const WALLET = { pdex_wallet_address: ME, pdex_wallet_source: 'polkadot-js' };
-const tx = (hash, status, n) => ({ hash, block: 100 - n, from: A, to: B, amount: `${n}.0000 PDEX`, numericAmount: n, value: `$${n}`, timestamp: NOW, ...(status ? { status } : {}) });
+const tx = (hash, status, n) => ({ hash, block: 100 - n, from: A, to: B, amount: `${n}.0000 PDEX`, numericAmount: n, value: `$${n}`, timestamp: NOW, method: 'balances.transferKeepAlive', ...(status ? { status } : {}) });
 const COUNCIL_MOTION = '0x' + '11'.repeat(32);
 const councilWith = () => ({
     '/api/council': { members: [{ address: A, name: 'Alice' }], runnersUp: [{ address: B, name: 'Bob', stake: 5 }], candidates: [], desiredMembers: 3, termDuration: 100, blocksRemaining: 50, pallet: 'elections', collectivePallet: 'council', currentBlock: 100,
@@ -81,11 +82,11 @@ const SCENARIOS = {
     'tx-notfound': { path: 'tx/100/' + H, api: { '/api/extrinsic/': { __status: 404, error: 'Extrinsic not found in block' } } },
     'tx-badhash': { path: 'tx/123/not-a-hash' },
     'block': { path: 'block/100', api: { '/api/block/': { hash: H, date: NOW, block: { header: { number: 100 }, extrinsics: [] } } } },
-    'validator': { path: 'validator/' + A, clipboard: true, steps: [{ click: '#validator-details-container .js-copy-address' }, { dump: '#validator-details-container' }],
+    'validator': { path: 'validator/' + A, clipboard: true, steps: [{ dump: '#validator-details-container' }, { click: '#validator-details-container .js-copy-address' }, { wait: 30 }, { dump: '#validator-details-container' }],
         api: { '/api/validator/': { address: A, controller: B, identity: 'Alpha', history: [{ era: 1, commission: 60, stake: 1000000, timestamp: NOW }, { era: 2, commission: 5, stake: 1000000, timestamp: NOW }],
             triggers: [{ era: 1, prevCommission: 5, newCommission: 60, timestamp: NOW }], nominators: [],
             scorecard: { totalEras: 30, activeEras: 10, activeEraRate: 0.3, avgCommission: 5, minCommission: 1, maxCommission: 60, commissionSpikeCount: 2, estimatedNominatorApy: 10 } } } },
-    'account': { path: 'account/' + ME, clipboard: true, steps: [{ click: '#account-details-container .js-copy-address' }, { dump: '#account-details-container' }],
+    'account': { path: 'account/' + ME, clipboard: true, steps: [{ dump: '#account-details-container' }, { click: '#account-details-container .js-copy-address' }, { wait: 30 }, { dump: '#account-details-container' }, { click: '#account-details-container .watchlist-star' }, { wait: 30 }, { dump: '#account-details-container' }],
         api: { '/api/account/': { account: ME, display: 'Alice', balanceTotal: 1, balanceFree: 1, balanceReserved: 0, balanceFrozen: 0, roles: 'none', rank: '0', status: 'Synced', events: [],
             transactions: [{ hash: H, block: 1, from: A, to: ME, amount: '1.2345 PDEX', numericAmount: 1, value: '$1', timestamp: NOW, status: 'success', method: 'balances.transfer' }] } } },
     'labels-owner': { path: 'account/' + ME, api: { ...accountApi(), '/api/labels/': LABELS }, wallets: { 'polkadot-js': [ME] }, seed: { ...WALLET, pdex_discuss_session: JSON.stringify({ v: 3, token: 'tok', address: ME, expiresAt: FAR }) }, steps: [{ wait: 400 }] },
@@ -106,7 +107,7 @@ const SCENARIOS = {
     'analytics': { path: 'analytics', api: { '/api/analytics/snapshot': { lastSync: NOW, indexedBlocks: 10, indexedTransactions: 5, validatorCount: 3, totalValidators: 4, nominatorCount: 5, totalNominators: 6, activeEra: 9, totalStaked: 100, totalIssuance: 1000, stakingRatio: 0.1, countsReady: true },
         '/api/analytics/timeseries': { series: { txCount: [], txVolume: [], activeAddresses: [], blocks: [], avgExtrinsics: [], treasuryAwarded: [] } } } },
     'watch': { path: 'watchlist', seed: { pdex_watchlist_v1: JSON.stringify({ ['address:' + A]: { kind: 'address', id: A, label: 'Alice', addedAt: NOW } }) },
-        steps: [{ click: '#watchlist-content .watchlist-star' }, { dump: '#watchlist-content' }] },
+        steps: [] },
     'watch-empty': { path: 'watchlist' },
     'email-prefs': { path: 'email-preferences?token=tok', api: { '/api/email/preferences': { email: 'a@b.co', validators: [A], events: { commission: true } } } },
     'email-prefs-none': { path: 'email-preferences' },
@@ -153,7 +154,9 @@ describe('T9: no colour written in markup by script.js, on every page that draws
     for (const k of Object.keys(SCENARIOS)) {
         test(`${k}: the page threw nothing and script.js wrote no colour, background or border`, () => {
             assert.deepEqual(R[k].r.errors, [], `the ${k} page threw`);
-            const offs = [written(R[k].doc), ...R[k].dumps.filter(Boolean).map(written)].flat().map(describeEl);
+            // The brand page shows the brand's own colours: its swatches and logo cards are exempt (spec 2.5, renderBrandPage).
+            const mine = (e) => k !== 'brand' || !e.closest('.brand-swatch-row, .brand-logo-card, .brand-swatch');
+            const offs = [written(R[k].doc), ...R[k].dumps.filter(Boolean).map(written)].flat().filter(mine).map(describeEl);
             assert.deepEqual(offs, []);
         });
     }
@@ -212,7 +215,7 @@ describe('I14, P6, I18, P9, P4: the status chips and the cells of the transactio
         assert.deepEqual(chips.sort(), [['is-error', 'Failed'], ['is-neutral', 'unknown'], ['is-positive', 'Success']]);
         assert.equal(all('txs-ok', '.ui-chip.is-positive .bx-check').length, 1);
         assert.equal(all('txs-ok', '.ui-chip.is-error .bx-x').length, 1);
-        assert.match(need('txs-ok', '.ui-chip.is-neutral').getAttribute('title') || '', /dispatch result has not been read yet/);
+        assert.match(need('txs-ok', PG.transactions + ' tbody .ui-chip.is-neutral').getAttribute('title') || '', /dispatch result has not been read yet/);
     });
     test('P6 transactions: the date and the value are .ui-quiet', () => {
         const rows = all('txs-ok', PG.transactions + ' tbody tr');
@@ -283,7 +286,7 @@ describe('I12, I14, I23, I24, I25, I26, I27, I28, P5, P10, P15, P16: the transac
     });
     test('I23, S2: the word after an address is a text button "Copy" (a span with a click handler was not reachable by keyboard)', () => {
         for (const [k, sel] of [['validator', '#validator-details-container .js-copy-address'], ['account', '#account-details-container .js-copy-address'], ['council', '#council-members-list .js-copy-address']]) {
-            const b = need(k, sel);
+            const b = k === 'council' ? need(k, sel) : need(k, '.js-copy-address', 0);   // dump 0: before the click
             assert.equal(b.tagName, 'BUTTON', `${k}: ${b.tagName}`);
             assert.equal(b.getAttribute('type'), 'button');
             assert.ok(b.classList.contains('validate-text-btn'));
@@ -293,7 +296,7 @@ describe('I12, I14, I23, I24, I25, I26, I27, I28, P5, P10, P15, P16: the transac
     });
     test('I23, S3, T12: a click swaps the word to "Copied", still a button, no inline colour', () => {
         for (const k of ['validator', 'account']) {
-            const b = need(k, '.js-copy-address', 0);
+            const b = need(k, '.js-copy-address', 1);
             assert.equal(b.tagName, 'BUTTON');
             assert.equal(text(b), 'Copied', `${k}: ${text(b)}`);
             assert.equal(b.hasAttribute('style'), false, `${k}: ${b.getAttribute('style')}`);
@@ -419,8 +422,9 @@ describe('3.3, I38, I22, I39, P1: Analytics, Watchlist, Brand, Price', () => {
         const star = need('watch', '#watchlist-content .watchlist-star');
         assert.equal(star.getAttribute('aria-pressed'), 'true');
         assert.equal(star.hasAttribute('style'), false);
-        const after = need('watch', '.watchlist-star', 0);
-        assert.equal(after.getAttribute('aria-pressed'), 'false', 'the click did not turn the star off');
+        // On the account page (a click on /watchlist redraws the page, so the in-place update is read there).
+        const after = need('account', '.watchlist-star', 2);
+        assert.equal(after.getAttribute('aria-pressed'), 'true', 'the click did not turn the star on');
         assert.equal(colourStyle(after), false);
     });
     test('I39: the empty watchlist: a neutral tile holds the star, the sentence is .ui-lede, the inline star is a muted glyph', () => {

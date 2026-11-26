@@ -138,6 +138,8 @@ if (scenario.tagStatic) for (const e of win.document.querySelectorAll('*')) { e.
 const realSetTimeout = g.setTimeout;
 g.setTimeout = (fn, ms, ...a) => realSetTimeout(fn, ms === 6000 ? 0 : ms, ...a);
 await import(SCRIPT_URL.href);
+// script.js declares window.copyToClipboard and calls it by its bare name; in a browser window is the global object, here it is not.
+Object.defineProperty(g, 'copyToClipboard', { get: () => win.copyToClipboard, configurable: true });
 g.setTimeout = realSetTimeout;
 const first = header();   // after every top-level statement, before any await resolved
 

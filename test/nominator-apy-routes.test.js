@@ -203,7 +203,7 @@ describe('views', () => {
         assert.match(col, /sort: compareNominatorApy/);
         assert.match(col, /directional: true/);
         assert.match(col, /formatNominatorApy\(row\[NOMINATOR_APY_FIELD\]\)/);
-        assert.match(col, /'<span style="color: var\(--text-secondary\);">\u2014<\/span>'/, 'no estimate must render the dash, as before');
+        assert.match(col, /'<span class="ui-quiet">\u2014<\/span>'/, 'no estimate must render the dash, as before');
         // makeTable hands a directional column the direction instead of reversing, so nulls stay last.
         assert.match(stripComments(bodyOf(script, 'makeTable')), /col\.directional \? \(a, b\) => cmp\(a, b, sortDir\) : cmp/);
         assert.equal(typeof compareNominatorApy, 'function');
