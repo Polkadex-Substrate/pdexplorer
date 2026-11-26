@@ -191,5 +191,7 @@ const result = {
 if (scenario.scrollLog) result.scroll = { restoration: win.history.scrollRestoration, atLoad };
 // The preview generator asks for the rendered shell (test/helpers/preview-chooser.mjs).
 if (scenario.dumpHtml) { const app = document.querySelector('.app-container'); result.appHtml = app ? app.outerHTML : ''; }
-process.stdout.write('RESULT ' + JSON.stringify(result) + '\n');
-process.exit(0);
+// Exit only once the line is flushed: stdout to a pipe is asynchronous, and process.exit() right after a large write
+// (dumpHtml, about 140 kB) could cut the line, so the parent's JSON.parse threw inside its callback and the caller
+// waited for an answer that never came (sprint 11: seen under load on the account page).
+process.stdout.write('RESULT ' + JSON.stringify(result) + '\n', () => process.exit(0));

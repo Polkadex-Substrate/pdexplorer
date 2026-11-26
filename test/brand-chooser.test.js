@@ -322,7 +322,7 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         assert.equal(r.decls.display, 'inline-block');
         assert.equal(r.decls['min-height'], '44px');
         assert.equal(r.decls['line-height'], '44px');
-        assert.ok(RULES.some(x => x.selectors.includes('#wallet-switch-btn[hidden]') && x.decls.display === 'none'), 'a hidden Switch wallet still shows (.staking-download-btn sets display)');
+        assert.ok(RULES.some(x => x.selectors.includes('#wallet-switch-btn[hidden]') && x.decls.display === 'none'), 'a hidden Switch wallet still shows (its button class sets display)');   // message reworded only (sprint 11: the class it named is deleted)
     });
 });
 

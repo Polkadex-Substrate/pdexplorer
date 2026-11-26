@@ -1,0 +1,1330 @@
+{
+  "referendum.static": {
+    "ids": [
+      "close-referendum-vote-modal",
+      "referendum-vote-modal-idx",
+      "referendum-vote-modal-wallet-warning",
+      "referendum-vote-side-aye",
+      "referendum-vote-side-nay",
+      "referendum-vote-amount",
+      "referendum-vote-conviction",
+      "referendum-vote-active-wallet",
+      "referendum-vote-error",
+      "submit-referendum-vote-btn"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-referendum-vote-modal",
+        "",
+        "Close",
+        false,
+        false
+      ],
+      [
+        "a",
+        "",
+        "",
+        "Help: referendum voting",
+        false,
+        false
+      ],
+      [
+        "button",
+        "referendum-vote-side-aye",
+        "button",
+        "Aye",
+        false,
+        false
+      ],
+      [
+        "button",
+        "referendum-vote-side-nay",
+        "button",
+        "Nay",
+        false,
+        false
+      ],
+      [
+        "input",
+        "referendum-vote-amount",
+        "number",
+        "100.0",
+        false,
+        false
+      ],
+      [
+        "select",
+        "referendum-vote-conviction",
+        "",
+        "0.1× weight, no lock 1× weight, locked 1 lock period if your side wins 2× weight, locked 2 lock periods if your side wins 3× weight, locked 4 lock periods if your side wins 4× weight, locked 8 lock periods if your side wins 5× weight, locked 16 lock periods if your side wins 6× weight, locked 32 lock periods if your side wins",
+        false,
+        false
+      ],
+      [
+        "button",
+        "submit-referendum-vote-btn",
+        "",
+        "Sign and submit vote",
+        false,
+        false
+      ]
+    ],
+    "text": "Vote on Referendum Lock PDEX behind your vote. Higher conviction multiplies your vote weight and keeps your PDEX locked longer after the referendum ends, if your side wins. Please connect your wallet first. Vote Aye Nay Amount to lock (PDEX) Conviction (vote weight and lock) 0.1× weight, no lock 1× weight, locked 1 lock period if your side wins 2× weight, locked 2 lock periods if your side wins 3× weight, locked 4 lock periods if your side wins 4× weight, locked 8 lock periods if your side wins 5× weight, locked 16 lock periods if your side wins 6× weight, locked 32 lock periods if your side wins Every vote keeps its PDEX locked until the referendum ends. After that only the winning side stays locked, for the time shown, counted from the referendum's end; a lock period is the chain's VoteLockingPeriod. A vote on the losing side, or at 0.1×, can be unlocked as soon as the referendum ends. Active wallet -- Sign and submit vote"
+  },
+  "referendum.open-nay": {
+    "ids": [
+      "close-referendum-vote-modal",
+      "referendum-vote-modal-idx",
+      "referendum-vote-modal-wallet-warning",
+      "referendum-vote-side-aye",
+      "referendum-vote-side-nay",
+      "referendum-vote-amount",
+      "referendum-vote-conviction",
+      "referendum-vote-active-wallet",
+      "referendum-vote-error",
+      "submit-referendum-vote-btn"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-referendum-vote-modal",
+        "",
+        "Close",
+        false,
+        true
+      ],
+      [
+        "a",
+        "",
+        "",
+        "Help: referendum voting",
+        false,
+        true
+      ],
+      [
+        "button",
+        "referendum-vote-side-aye",
+        "button",
+        "Aye",
+        false,
+        true
+      ],
+      [
+        "button",
+        "referendum-vote-side-nay",
+        "button",
+        "Nay",
+        false,
+        true
+      ],
+      [
+        "input",
+        "referendum-vote-amount",
+        "number",
+        "100.0",
+        false,
+        true
+      ],
+      [
+        "select",
+        "referendum-vote-conviction",
+        "",
+        "0.1× weight, no lock 1× weight, locked 30 days if your side wins 2× weight, locked 60 days if your side wins 3× weight, locked 120 days if your side wins 4× weight, locked 240 days if your side wins 5× weight, locked 480 days if your side wins 6× weight, locked 960 days if your side wins",
+        false,
+        true
+      ],
+      [
+        "button",
+        "submit-referendum-vote-btn",
+        "",
+        "Sign and submit vote",
+        false,
+        true
+      ]
+    ],
+    "text": "Vote on Referendum #7 Lock PDEX behind your vote. Higher conviction multiplies your vote weight and keeps your PDEX locked longer after the referendum ends, if your side wins. Please connect your wallet first. Vote Aye Nay Amount to lock (PDEX) Conviction (vote weight and lock) 0.1× weight, no lock 1× weight, locked 30 days if your side wins 2× weight, locked 60 days if your side wins 3× weight, locked 120 days if your side wins 4× weight, locked 240 days if your side wins 5× weight, locked 480 days if your side wins 6× weight, locked 960 days if your side wins Every vote keeps its PDEX locked until the referendum ends. After that only the winning side stays locked, for the time shown, counted from the referendum's end; a lock period is the chain's VoteLockingPeriod. A vote on the losing side, or at 0.1×, can be unlocked as soon as the referendum ends. Active wallet esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV Sign and submit vote"
+  },
+  "referendum.call": {
+    "section": "democracy",
+    "method": "vote",
+    "args": [
+      7,
+      {
+        "standard": {
+          "vote": "0x82",
+          "balance": 12500000000000
+        }
+      }
+    ],
+    "hex": "0x1e021c008200480f625e0b00000000000000000000",
+    "label": "Referendum #7 aye vote",
+    "action": {
+      "key": "democracy.vote",
+      "params": {
+        "aye": true,
+        "ref": 7,
+        "amount": "12.5",
+        "conviction": "Locked2x",
+        "lockPeriodDays": 30
+      }
+    },
+    "button": "submit-referendum-vote-btn",
+    "busyText": "Signing…",
+    "idleText": "Sign and submit vote",
+    "signingAccount": null,
+    "expectedWallet": null
+  },
+  "referendum.guards": {
+    "first": "Enter a positive PDEX amount to lock behind your vote.",
+    "second": "That amount exceeds plausible balances — double-check the value.",
+    "calls": 0
+  },
+  "referendum.no-wallet": {
+    "text": "Please connect your wallet first. Connect a wallet and you'll be returned to this page.",
+    "link": "/wallet?returnTo=%2Fdemocracy"
+  },
+  "council-vote.static": {
+    "ids": [
+      "close-vote-modal",
+      "vote-modal-wallet-warning",
+      "council-vote-available-count",
+      "council-vote-search",
+      "council-vote-available-list",
+      "council-vote-selected-count",
+      "council-vote-clear",
+      "council-vote-selected-list",
+      "council-vote-votable",
+      "vote-stake-input",
+      "submit-vote-tx-btn"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-vote-modal",
+        "",
+        "Close",
+        false,
+        false
+      ],
+      [
+        "input",
+        "council-vote-search",
+        "text",
+        "Search by identity or address…",
+        false,
+        false
+      ],
+      [
+        "button",
+        "council-vote-clear",
+        "button",
+        "Clear all",
+        false,
+        false
+      ],
+      [
+        "input",
+        "vote-stake-input",
+        "number",
+        "100.0",
+        false,
+        false
+      ],
+      [
+        "button",
+        "submit-vote-tx-btn",
+        "",
+        "Sign and submit vote",
+        false,
+        false
+      ]
+    ],
+    "text": "Vote for Council Pick up to 16 candidates from the list on the left. Click a row to add it to your votes on the right — click the × to remove. Voting locks the backing stake until you change or withdraw your vote. Please connect your wallet first. Available candidates — Loading candidates… Your votes 0 / 16 Clear all No candidates selected yet — click rows on the left to add them. Backing Stake (PDEX) Available: — PDEX The full stake is locked across all candidates you vote for, weighted equally. Locked until you submit a new vote or call removeVoter. Voting locks overlap with staking — the larger lock wins, so you don't double-pay. Sign and submit vote"
+  },
+  "council-vote.open": {
+    "ids": [
+      "close-vote-modal",
+      "vote-modal-wallet-warning",
+      "council-vote-available-count",
+      "council-vote-search",
+      "council-vote-available-list",
+      "council-vote-selected-count",
+      "council-vote-clear",
+      "council-vote-selected-list",
+      "council-vote-votable",
+      "vote-stake-input",
+      "submit-vote-tx-btn"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-vote-modal",
+        "",
+        "Close",
+        false,
+        true
+      ],
+      [
+        "input",
+        "council-vote-search",
+        "text",
+        "Search by identity or address…",
+        false,
+        true
+      ],
+      [
+        "button",
+        "",
+        "button",
+        "Alpha member 100.0000 PDEX backing +",
+        false,
+        true
+      ],
+      [
+        "button",
+        "",
+        "button",
+        "esmigL4e…E4fydA runner-up 50.0000 PDEX backing +",
+        false,
+        true
+      ],
+      [
+        "button",
+        "",
+        "button",
+        "Gamma candidate +",
+        false,
+        true
+      ],
+      [
+        "button",
+        "council-vote-clear",
+        "button",
+        "Clear all",
+        false,
+        false
+      ],
+      [
+        "input",
+        "vote-stake-input",
+        "number",
+        "100.0",
+        false,
+        true
+      ],
+      [
+        "button",
+        "submit-vote-tx-btn",
+        "",
+        "Sign and submit vote",
+        false,
+        true
+      ]
+    ],
+    "text": "Vote for Council Pick up to 16 candidates from the list on the left. Click a row to add it to your votes on the right — click the × to remove. Voting locks the backing stake until you change or withdraw your vote. Please connect your wallet first. Available candidates 3 Alpha member 100.0000 PDEX backing + esmigL4e…E4fydA runner-up 50.0000 PDEX backing + Gamma candidate + Your votes 0 / 16 Clear all No candidates selected yet — click rows on the left to add them. Backing Stake (PDEX) Available: 1234.0000 PDEX The full stake is locked across all candidates you vote for, weighted equally. Locked until you submit a new vote or call removeVoter. Voting locks overlap with staking — the larger lock wins, so you don't double-pay. Sign and submit vote"
+  },
+  "council-vote.no-wallet": {
+    "warn": "Please connect your wallet first. Connect a wallet and you'll be returned to this page.",
+    "votable": "Connect a wallet to see your votable balance."
+  },
+  "council-vote.failed": "Could not load candidates: HTTP 503",
+  "council-vote.call": {
+    "section": "elections",
+    "method": "vote",
+    "args": [
+      [
+        "esmjzg8xskbWnZiCyvkJrWSwrKaTFQH5QVYGifLzZ2U1v941a",
+        "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+      ],
+      250500000000000
+    ],
+    "hex": "0x0d00082b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b29292929292929292929292929292929292929292929292929292929292929290b00288413d4e3",
+    "label": "Council vote",
+    "action": {
+      "key": "elections.vote",
+      "params": {
+        "n": 2,
+        "stake": "250.5"
+      }
+    },
+    "button": "submit-vote-tx-btn",
+    "busyText": "Signing...",
+    "idleText": "Sign and submit vote",
+    "signingAccount": null,
+    "expectedWallet": null
+  },
+  "council-vote.guards": {
+    "notices": [
+      "Pick at least one candidate from the list on the left.",
+      "Enter a backing stake.",
+      "Invalid stake amount."
+    ],
+    "calls": 0
+  },
+  "candidacy.static": {
+    "ids": [
+      "close-candidacy-modal",
+      "candidacy-modal-wallet-warning",
+      "candidacy-active-wallet",
+      "submit-candidacy-tx-btn"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-candidacy-modal",
+        "",
+        "Close",
+        false,
+        false
+      ],
+      [
+        "button",
+        "submit-candidacy-tx-btn",
+        "",
+        "Sign and submit candidacy",
+        false,
+        false
+      ]
+    ],
+    "text": "Submit Candidacy Submit your candidacy for the Polkadex Council. This action requires a connected wallet extension. Please connect your wallet first. Active Wallet -- Sign and submit candidacy"
+  },
+  "candidacy.wallet": {
+    "active": "esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV",
+    "noneActive": "--",
+    "warn": "Please connect your wallet first. Connect a wallet and you'll be returned to this page."
+  },
+  "candidacy.call": {
+    "section": "elections",
+    "method": "submitCandidacy",
+    "args": [
+      2
+    ],
+    "hex": "0x0d0208",
+    "label": "Council candidacy",
+    "action": {
+      "key": "elections.candidacy"
+    },
+    "button": "submit-candidacy-tx-btn",
+    "busyText": "Signing...",
+    "idleText": "Sign and submit candidacy",
+    "signingAccount": null,
+    "expectedWallet": null
+  },
+  "payout.static": {
+    "ids": [
+      "close-payout-modal",
+      "payout-count",
+      "payout-total",
+      "payout-entries",
+      "payout-modal-error",
+      "submit-payout-tx-btn"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-payout-modal",
+        "button",
+        "Close",
+        false,
+        false
+      ],
+      [
+        "a",
+        "",
+        "",
+        "Help: claiming rewards",
+        false,
+        false
+      ],
+      [
+        "button",
+        "submit-payout-tx-btn",
+        "",
+        "Sign and pay out",
+        false,
+        false
+      ]
+    ],
+    "text": "Pay Out Rewards Triggers staking.payoutStakers for every unclaimed (era, validator) pair in one batch. Anyone can trigger a payout; the rewards always go to the nominator's stash regardless of who signs. Unclaimed entries-- Total to claim-- Sign and pay out"
+  },
+  "payout.empty": {
+    "text": "No unclaimed rewards available to pay out. The indexer recomputes unpaid rewards in the background; try again in a minute.",
+    "disabled": true
+  },
+  "payout.note": {
+    "text": "This claims the first 30 of 33 entries — one transaction cannot safely carry more. Run Pay Out again afterwards for the rest.",
+    "shown": "block"
+  },
+  "payout.call": {
+    "section": "utility",
+    "method": "forceBatch",
+    "args": [
+      [
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 500
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 501
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 502
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 503
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 504
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 505
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 506
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 507
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 508
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 509
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 510
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 511
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 512
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 513
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 514
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 515
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 516
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 517
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 518
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 519
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 520
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 521
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 522
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 523
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 524
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 525
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 526
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 527
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA",
+            "era": 528
+          }
+        },
+        {
+          "callIndex": "0x0912",
+          "args": {
+            "validator_stash": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh",
+            "era": 529
+          }
+        }
+      ]
+    ],
+    "hex": "0x01047809122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2af401000009122929292929292929292929292929292929292929292929292929292929292929f501000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2af601000009122929292929292929292929292929292929292929292929292929292929292929f701000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2af801000009122929292929292929292929292929292929292929292929292929292929292929f901000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2afa01000009122929292929292929292929292929292929292929292929292929292929292929fb01000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2afc01000009122929292929292929292929292929292929292929292929292929292929292929fd01000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2afe01000009122929292929292929292929292929292929292929292929292929292929292929ff01000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a00020000091229292929292929292929292929292929292929292929292929292929292929290102000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a02020000091229292929292929292929292929292929292929292929292929292929292929290302000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a04020000091229292929292929292929292929292929292929292929292929292929292929290502000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a06020000091229292929292929292929292929292929292929292929292929292929292929290702000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a08020000091229292929292929292929292929292929292929292929292929292929292929290902000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a0a020000091229292929292929292929292929292929292929292929292929292929292929290b02000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a0c020000091229292929292929292929292929292929292929292929292929292929292929290d02000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a0e020000091229292929292929292929292929292929292929292929292929292929292929290f02000009122a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a100200000912292929292929292929292929292929292929292929292929292929292929292911020000",
+    "label": "Payout rewards (30 of 33)",
+    "action": {
+      "key": "staking.payout",
+      "params": {
+        "k": 30,
+        "remaining": 3,
+        "account": "esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV",
+        "pairs": [
+          {
+            "era": 500,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 501,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 502,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 503,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 504,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 505,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 506,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 507,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 508,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 509,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 510,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 511,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 512,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 513,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 514,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 515,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 516,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 517,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 518,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 519,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 520,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 521,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 522,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 523,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 524,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 525,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 526,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 527,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          },
+          {
+            "era": 528,
+            "validator": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+          },
+          {
+            "era": 529,
+            "validator": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+          }
+        ]
+      }
+    },
+    "button": "submit-payout-tx-btn",
+    "busyText": "Signing…",
+    "idleText": "Sign and pay out",
+    "signingAccount": null,
+    "expectedWallet": null,
+    "note": "Claiming the first 30 of 33 entries — run Pay Out again afterwards for the rest."
+  },
+  "payout.error": "Rejected in wallet",
+  "withdraw.call": {
+    "section": "staking",
+    "method": "withdrawUnbonded",
+    "args": [
+      3
+    ],
+    "hex": "0x090303000000",
+    "label": "Withdraw unbonded",
+    "action": {
+      "key": "staking.withdraw"
+    },
+    "button": "submit-withdraw-tx-btn",
+    "busyText": "Signing…",
+    "idleText": "Withdraw unbonded funds",
+    "signingAccount": null,
+    "expectedWallet": null
+  },
+  "withdraw.refused": {
+    "text": "This stash's controller is a different account (esmuD6fChho8…). Connect the controller account to withdraw — the runtime only accepts withdrawUnbonded from it.",
+    "calls": 0
+  },
+  "send.static": {
+    "ids": [
+      "close-send-modal",
+      "send-to-input",
+      "send-to-hint",
+      "send-amount-input",
+      "send-max-btn",
+      "send-available",
+      "send-summary",
+      "send-fee",
+      "send-amount-preview",
+      "send-recv-preview",
+      "send-keep-alive",
+      "send-modal-error",
+      "submit-send-tx-btn"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-send-modal",
+        "button",
+        "Close",
+        false,
+        false
+      ],
+      [
+        "a",
+        "",
+        "",
+        "Help: sending PDEX",
+        false,
+        false
+      ],
+      [
+        "input",
+        "send-to-input",
+        "text",
+        "es… Polkadex address",
+        false,
+        false
+      ],
+      [
+        "input",
+        "send-amount-input",
+        "number",
+        "0.0",
+        false,
+        false
+      ],
+      [
+        "button",
+        "send-max-btn",
+        "button",
+        "Max",
+        false,
+        false
+      ],
+      [
+        "input",
+        "send-keep-alive",
+        "checkbox",
+        "",
+        false,
+        false
+      ],
+      [
+        "button",
+        "submit-send-tx-btn",
+        "",
+        "Sign and send",
+        false,
+        false
+      ]
+    ],
+    "text": "Send PDEX Transfer PDEX from the connected wallet to any Polkadex address. The transaction is signed and submitted by your wallet extension. Recipient address Paste a valid Polkadex (SS58 prefix 88) address. Amount (PDEX) Max Available: -- PDEX. A small buffer is reserved for the network fee. Estimated fee— You'll send— Recipient receives— Keep my account alive — fail the transfer if it would drop my balance below the existential deposit. Uncheck only if you intend to empty this account. Sign and send"
+  },
+  "send.hints": [
+    "Paste a valid Polkadex (SS58 prefix 88) address.",
+    "That address is not valid on Polkadex.",
+    "Address looks good."
+  ],
+  "send.call": {
+    "section": "balances",
+    "method": "transferKeepAlive",
+    "args": [
+      {
+        "id": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+      },
+      12250000000000
+    ],
+    "hex": "0x06030029292929292929292929292929292929292929292929292929292929292929290b0004e62c240b",
+    "label": "Transfer",
+    "action": {
+      "key": "balances.transfer",
+      "params": {
+        "amount": "12.25",
+        "to": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+      }
+    },
+    "button": "submit-send-tx-btn",
+    "busyText": "Signing…",
+    "idleText": "Sign and send",
+    "signingAccount": null,
+    "expectedWallet": null
+  },
+  "withdraw-candidacy.static": {
+    "ids": [
+      "close-council-withdraw",
+      "council-withdraw-title",
+      "council-withdraw-address",
+      "council-withdraw-effect",
+      "council-withdraw-connect",
+      "council-withdraw-review",
+      "council-withdraw-multisig",
+      "council-withdraw-ack-label",
+      "council-withdraw-ack",
+      "council-withdraw-error",
+      "council-withdraw-copy-address",
+      "council-withdraw-retry",
+      "cancel-council-withdraw",
+      "council-withdraw-sign"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-council-withdraw",
+        "button",
+        "Close",
+        false,
+        false
+      ],
+      [
+        "input",
+        "council-withdraw-ack",
+        "checkbox",
+        "",
+        false,
+        false
+      ],
+      [
+        "button",
+        "council-withdraw-copy-address",
+        "button",
+        "Copy address",
+        false,
+        false
+      ],
+      [
+        "button",
+        "council-withdraw-retry",
+        "button",
+        "Refresh review",
+        false,
+        false
+      ],
+      [
+        "button",
+        "cancel-council-withdraw",
+        "button",
+        "Cancel",
+        false,
+        false
+      ],
+      [
+        "button",
+        "council-withdraw-sign",
+        "button",
+        "Sign and withdraw candidacy",
+        true,
+        false
+      ]
+    ],
+    "text": "Withdraw candidacy Selected account Your candidacy bond is released only after the withdrawal succeeds, so it cannot pay this transaction fee. The fee is paid from this account's free PDEX, above the minimum balance. Your existing votes and voting locks are unchanged. This multisig withdraws only after enough signers approve and the transaction executes. If an election or the candidate list changes before execution, you may need to propose the withdrawal again. I understand that this gives up my council seat immediately when executed. Copy address Refresh review Cancel Sign and withdraw candidacy"
+  },
+  "withdraw-candidacy.open": {
+    "ids": [
+      "close-council-withdraw",
+      "council-withdraw-title",
+      "council-withdraw-address",
+      "council-withdraw-effect",
+      "council-withdraw-connect",
+      "council-withdraw-review",
+      "council-withdraw-multisig",
+      "council-withdraw-ack-label",
+      "council-withdraw-ack",
+      "council-withdraw-error",
+      "council-withdraw-copy-address",
+      "council-withdraw-retry",
+      "cancel-council-withdraw",
+      "council-withdraw-sign"
+    ],
+    "controls": [
+      [
+        "button",
+        "close-council-withdraw",
+        "button",
+        "Close",
+        false,
+        true
+      ],
+      [
+        "input",
+        "council-withdraw-ack",
+        "checkbox",
+        "",
+        false,
+        false
+      ],
+      [
+        "button",
+        "council-withdraw-copy-address",
+        "button",
+        "Copy address",
+        false,
+        false
+      ],
+      [
+        "button",
+        "council-withdraw-retry",
+        "button",
+        "Refresh review",
+        false,
+        true
+      ],
+      [
+        "button",
+        "cancel-council-withdraw",
+        "button",
+        "Cancel",
+        false,
+        true
+      ],
+      [
+        "button",
+        "council-withdraw-sign",
+        "button",
+        "Sign and withdraw candidacy",
+        false,
+        true
+      ]
+    ],
+    "text": "Withdraw candidacy Selected account esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV This removes you from the candidate list. You will not stand in the next election unless you submit candidacy again. Your candidacy bond is released only after the withdrawal succeeds, so it cannot pay this transaction fee. The fee is paid from this account's free PDEX, above the minimum balance. Your existing votes and voting locks are unchanged. This multisig withdraws only after enough signers approve and the transaction executes. If an election or the candidate list changes before execution, you may need to propose the withdrawal again. I understand that this gives up my council seat immediately when executed. Copy address Refresh review Cancel Sign and withdraw candidacy"
+  },
+  "withdraw-candidacy.call": {
+    "section": "elections",
+    "method": "renounceCandidacy",
+    "args": [
+      {
+        "candidate": 2
+      }
+    ],
+    "hex": "0x0d030208",
+    "label": "Withdraw candidacy",
+    "action": {
+      "key": "elections.withdraw",
+      "params": {
+        "role": "Candidate"
+      }
+    },
+    "button": "council-withdraw-sign",
+    "busyText": "Signing…",
+    "idleText": "Sign and withdraw candidacy",
+    "signingAccount": null,
+    "expectedWallet": "esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV"
+  },
+  "spend.static": {
+    "ids": [
+      "treasury-spend-close",
+      "treasury-spend-title",
+      "treasury-spend-account",
+      "treasury-spend-effect",
+      "treasury-spend-connect",
+      "treasury-spend-form",
+      "treasury-spend-beneficiary",
+      "treasury-spend-amount",
+      "treasury-spend-cap",
+      "treasury-spend-valid-from",
+      "treasury-spend-threshold",
+      "treasury-spend-threshold-hint",
+      "treasury-spend-review",
+      "treasury-spend-error",
+      "treasury-spend-edit",
+      "treasury-spend-check",
+      "treasury-spend-sign"
+    ],
+    "controls": [
+      [
+        "button",
+        "treasury-spend-close",
+        "button",
+        "Close",
+        false,
+        false
+      ],
+      [
+        "a",
+        "",
+        "",
+        "Help: treasury spends",
+        false,
+        false
+      ],
+      [
+        "input",
+        "treasury-spend-beneficiary",
+        "text",
+        "es… Polkadex address",
+        false,
+        false
+      ],
+      [
+        "input",
+        "treasury-spend-amount",
+        "text",
+        "0.0",
+        false,
+        false
+      ],
+      [
+        "input",
+        "treasury-spend-valid-from",
+        "text",
+        "Empty: claimable as soon as the motion runs",
+        false,
+        false
+      ],
+      [
+        "input",
+        "treasury-spend-threshold",
+        "number",
+        "",
+        false,
+        false
+      ],
+      [
+        "button",
+        "treasury-spend-edit",
+        "button",
+        "Edit",
+        false,
+        false
+      ],
+      [
+        "button",
+        "treasury-spend-check",
+        "button",
+        "Review motion",
+        true,
+        false
+      ],
+      [
+        "button",
+        "treasury-spend-sign",
+        "button",
+        "Sign and table motion",
+        true,
+        false
+      ]
+    ],
+    "text": "Propose a spend Creates a council motion. The spend is approved once enough members vote Aye. Account: -- Beneficiary Amount (PDEX) Valid from block (optional) Threshold (Ayes needed) Edit Review motion Sign and table motion"
+  },
+  "spend.review": {
+    "ids": [
+      "treasury-spend-close",
+      "treasury-spend-title",
+      "treasury-spend-account",
+      "treasury-spend-effect",
+      "treasury-spend-connect",
+      "treasury-spend-form",
+      "treasury-spend-beneficiary",
+      "treasury-spend-amount",
+      "treasury-spend-cap",
+      "treasury-spend-valid-from",
+      "treasury-spend-threshold",
+      "treasury-spend-threshold-hint",
+      "treasury-spend-review",
+      "treasury-spend-error",
+      "treasury-spend-edit",
+      "treasury-spend-check",
+      "treasury-spend-sign"
+    ],
+    "controls": [
+      [
+        "button",
+        "treasury-spend-close",
+        "button",
+        "Close",
+        false,
+        true
+      ],
+      [
+        "a",
+        "",
+        "",
+        "Help: treasury spends",
+        false,
+        true
+      ],
+      [
+        "input",
+        "treasury-spend-beneficiary",
+        "text",
+        "es… Polkadex address",
+        false,
+        true
+      ],
+      [
+        "input",
+        "treasury-spend-amount",
+        "text",
+        "0.0",
+        false,
+        true
+      ],
+      [
+        "input",
+        "treasury-spend-valid-from",
+        "text",
+        "Empty: claimable as soon as the motion runs",
+        false,
+        true
+      ],
+      [
+        "input",
+        "treasury-spend-threshold",
+        "number",
+        "",
+        false,
+        true
+      ],
+      [
+        "button",
+        "treasury-spend-edit",
+        "button",
+        "Edit",
+        false,
+        true
+      ],
+      [
+        "button",
+        "treasury-spend-check",
+        "button",
+        "Review motion",
+        false,
+        true
+      ],
+      [
+        "button",
+        "treasury-spend-sign",
+        "button",
+        "Sign and table motion",
+        false,
+        true
+      ]
+    ],
+    "text": "Propose a spend Creates a council motion. The spend is approved once enough members vote Aye. Account: esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV This account holds one of the 5 council seats. Beneficiary Amount (PDEX) Up to 50,000 PDEX per spend; a larger spend needs a referendum. Valid from block (optional) Threshold (Ayes needed) A spend runs only with Ayes from at least three fifths of all 5 seats (3), and no motion can need more Ayes than there are seats. council.proposeArgumentValuethreshold3lengthBound44This motion runs:treasury.spendArgumentValueassetKindPDEX (the native asset)amount1,500 PDEX (1500000000000000 plancks)beneficiaryeskyEuc6Hhd8ZDApX95PeizeKy7W1XazY4t4heTJnAV8vEbf8validFromnone: claimable as soon as the motion runsMotion hash 0x6239297b2127ffd6e5c9de59202dc40322a4e577df95638d39240241352e21bf Edit Review motion Sign and table motion"
+  },
+  "spend.call": {
+    "section": "council",
+    "method": "propose",
+    "args": [
+      3,
+      {
+        "callIndex": "0x1005",
+        "args": {
+          "asset_kind": null,
+          "amount": 1500000000000000,
+          "beneficiary": {
+            "id": "eskyEuc6Hhd8ZDApX95PeizeKy7W1XazY4t4heTJnAV8vEbf8"
+          },
+          "valid_from": null
+        }
+      },
+      44
+    ],
+    "hex": "0x0b020c10050f00c029f73d540500090909090909090909090909090909090909090909090909090909090909090900b0",
+    "label": "Propose a treasury spend",
+    "action": {
+      "key": "council.propose",
+      "params": {
+        "amount": "1,500",
+        "beneficiary": "eskyEuc6Hhd8ZDApX95PeizeKy7W1XazY4t4heTJnAV8vEbf8",
+        "threshold": 3,
+        "seats": 5,
+        "hash": "0x6239297b2127ffd6e5c9de59202dc40322a4e577df95638d39240241352e21bf"
+      }
+    },
+    "button": "treasury-spend-sign",
+    "busyText": "Signing…",
+    "idleText": "Sign and table motion",
+    "signingAccount": null,
+    "expectedWallet": "esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV"
+  }
+}

@@ -7,7 +7,7 @@
 // "Legacy" is .staking-download-btn (a grey download button) used for anything, or a colour, background or border
 // written in markup (style="...", setAttribute('style', ...), el.style.color = ...). The wallet-page sources are
 // checked in full: the files in WALLET_FILES, and the script.js functions in WALLET_FUNCTIONS, found by name (never
-// by line number). Everywhere else .staking-download-btn may only go down: the repository holds at most CEILING uses
+// by line number). Everywhere else .staking-download-btn no longer exists: the repository holds at most CEILING (0) uses
 // outside the wallet page. The ceiling scan reads every .js, .mjs, .cjs and .html file in the repository except the
 // EXCLUDE list (an exclusion list, not an allowlist: a new file is scanned without anyone adding it).
 //
@@ -26,7 +26,8 @@ export const WALLET_FUNCTIONS = Object.freeze([
     'mountWalletTxTable', 'renderWalletAprCard', 'openIdentityModal', 'renderWalletAdvancedSection', 'renderProxyList',
     'renderAddProxyForm', 'renderMultisigCalculator', 'renderMultisigPending'
 ]);
-export const CEILING = 34;
+// Sprint 11 site sweep (spec 2026-11-26, section 1.2): every use is gone and the class with it; the ceiling is 0.
+export const CEILING = 0;
 // Paths (relative to the repository, forward slashes) the ceiling scan never reads.
 export const EXCLUDE = Object.freeze([/^node_modules\//, /^\.git\//, /^test\//, /^tools\//, /^scripts\//, /^docs\//, /^dist\//, /^public\//, /^\.vite\//]);
 const SCANNED = /\.(m?js|cjs|html)$/;
@@ -102,7 +103,7 @@ export function checkLegacy({ read, list, ceiling = CEILING }) {
         });
     }
     const errors = offenders.slice();
-    if (outside.length > ceiling) errors.push(`.${CLASS} is used ${outside.length} times outside the wallet page; the ceiling is ${ceiling} and may only go down. New uses: pick a tier instead. Uses: ${outside.join(', ')}`);
+    if (outside.length > ceiling) errors.push(`.${CLASS} no longer exists; pick a tier (.validate-primary, .ui-action, .validate-secondary, .validate-text-btn). It is used ${outside.length} times outside the wallet page; the ceiling is ${ceiling}. Uses: ${outside.join(', ')}`);
     return { ok: errors.length === 0, errors, offenders, outside, ranges };
 }
 
