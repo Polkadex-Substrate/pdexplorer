@@ -150,7 +150,12 @@ describe('2.3 rows of index.html, read from the markup as it ships', () => {
             const sec = IDX.querySelector(`.page-section[data-page="${p}"]`);
             const body = sec.querySelector('.legal-body');
             assert.ok(body, `${p}: no .legal-body`);
-            const styled = Array.from(body.querySelectorAll('h2, th, tr, td, code, strong, table, p')).filter(e => e.hasAttribute('style') && e.id !== 'cookies-reset-btn');
+            // Amended before green: the cookie table cells keep their layout-only style="padding: 10px 12px;" (spec 2.2: layout may stay
+            // inline this sprint). test/post-action-wiring.test.js pins those cells as written, and a post-action test is not edited.
+            // T9 still refuses any colour on them.
+            const styled = Array.from(body.querySelectorAll('h2, th, tr, code, strong, table, p')).filter(e => e.hasAttribute('style') && e.id !== 'cookies-reset-btn');
+            const tdStyles = new Set(Array.from(body.querySelectorAll('td[style]')).map(e => e.getAttribute('style')));
+            assert.deepEqual(Array.from(tdStyles), p === 'cookies' ? ['padding: 10px 12px;'] : []);
             assert.deepEqual(styled.map(describeEl), []);
             assert.ok(cls(sec.querySelector('.list-header'), 'is-ruled'), `${p}: the head is not .is-ruled`);
         }

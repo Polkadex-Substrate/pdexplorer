@@ -688,12 +688,15 @@ describe('privacy and cookie pages (audit section 4)', () => {
         assert.ok(COOKIES.includes('the Phone wallet option'));
     });
 
+    // Amended in sprint 11 WP3 (spec 2.2 P12): the legal pages carry no inline colour; every code in the body takes
+    // .legal-body code (the violet text token of .ui-code), so none of these keys is green. The rows and the keys are pinned
+    // in the markup, the colour in the stylesheet.
     test('C10: the WalletConnect rows of the cookie table name their keys in plain text, not green', () => {
         for (const key of ['pdex_wc_enabled', 'pdex_wc_debug', 'pdex_wc_session', 'wc@2:*']) {
-            const m = COOKIES.match(new RegExp('<code style="([^"]*)">' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</code>'));
-            assert.ok(m, key + ' row not found');
-            assert.equal(m[1], 'color: var(--text-primary);', key);
+            const m = COOKIES.match(new RegExp('<code>' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</code>'));
+            assert.ok(m, key + ' row not found (a code with no style)');
         }
+        assert.equal(decl('.legal-body code', 'color'), 'var(--accent-violet-text)');
     });
 
     test('no em or en dash in the new texts', () => {
@@ -798,7 +801,10 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
         return err;
     }
     // Check 6: the gradient as a foreground fill (any layer not clipped to the border-box) only on the one primary action of a view.
-    const PRIMARIES = ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', '.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', '.wallet-onboarding-reload', '.wc-open'];
+    // Amended in sprint 11 WP3b (Q3, approved 2026-11-26, spec 5.1 rows 1 and 17): the top bar's Connect Wallet and the confirm
+    // dialog's action are the primary of their view and take the gradient.
+    const PRIMARIES = ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', '.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', '.wallet-onboarding-reload', '.wc-open',
+        '.connect-wallet-btn', '.confirm-dialog-actions .confirm-dialog-danger'];
     // amended (colour roles 2.4): the gradient is also the page-header tile, the hairline and .validate-primary (the shared Primary); none is a wallet row or pill
     const NON_ACTION_GRADIENT = ['.ui-tile.is-brand', '.ui-hairline::before', '.validate-primary'];
     function checkOnePrimary(css) {

@@ -408,7 +408,8 @@ describe('the heads preview scenes', () => {
                 if (row.querySelector('.account-tab')) assert.equal(row.querySelectorAll('.account-tab.active').length, 1, `${f}: ${row.querySelectorAll('.account-tab.active').length} selected tabs in a row`);
             }
             const hiddenAt = (el) => { for (let e = el; e && e.nodeType === 1; e = e.parentElement) if (e.hasAttribute('hidden') || /display:\s*none/.test(e.getAttribute('style') || '')) return true; return false; };
-            assert.equal(Array.from(d.querySelectorAll('.validate-primary')).filter(e => !hiddenAt(e)).length, 0, `${f}: a .validate-primary drawn on a head scene`);   // amended (sprint 11 WP1): the closed dialogs carry one
+            // Amended in sprint 11 WP3b (Q3, spec 5.1 row 16, open point 2 of this plan): the Council page's Vote is its one gradient primary.
+            assert.equal(Array.from(d.querySelectorAll('.validate-primary')).filter(e => !hiddenAt(e)).length, /^heads-council-header/.test(f) ? 1 : 0, `${f}: the drawn .validate-primary count on a head scene`);   // amended (sprint 11 WP1): the closed dialogs carry one
         }
     });
     test('the hover scene has the pointer on Spends and focus on History', () => {

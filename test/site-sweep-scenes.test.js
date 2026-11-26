@@ -88,7 +88,10 @@ describe('the site scenes of WP1 (tools/preview-scenes.mjs --wp site)', () => {
                 assert.ok(files.includes(name), `no ${name}`);
                 const doc = sceneDoc(name);
                 assert.equal(doc.querySelectorAll('.staking-download-btn').length, 0, 'a .staking-download-btn in the scene');
-                const shown = Array.from(doc.querySelectorAll(PRIMARY)).filter(e => !hidden(e));
+                // Amended in sprint 11 WP3b (Q3): a dialog is its own view (spec 1.0). With the Council page's Vote now a primary, the
+                // page behind an open dialog draws one too; the count is of the open dialog, else of the page.
+                const view = Array.from(doc.querySelectorAll('.modal')).filter(e => !hidden(e)).pop() || doc;
+                const shown = Array.from(view.querySelectorAll(PRIMARY)).filter(e => !hidden(e));
                 assert.ok(shown.length <= 1, `${shown.length} primaries drawn: ${shown.map(e => e.id || e.className).join(', ')}`);
                 const root = doc.querySelector(focus);
                 assert.ok(root && !hidden(root), `${focus} is not drawn`);
