@@ -29,9 +29,11 @@ const isComment = (line) => { const t = line.trim(); return t.startsWith('//') |
 // exempt lines only, WP3 takes index.html and styles.css to the plain rule.
 // At f33320f: G2 script.js 317, index.html 163, lib/ 35 (not counting the exemptions and the layout-only interpolations);
 // G3 script.js 82, index.html 40, lib/ 24, styles.css 73; G4 sources 104. WP1 also took the email alerts modal (row I16).
-export const G2_CEILING = Object.freeze({ 'script.js': 0, 'index.html': 111, 'lib/': 0, other: 0 });
-export const G3_CEILING = Object.freeze({ 'script.js': 0, 'index.html': 14, 'lib/': 17, other: 0, 'styles.css': 67 });
-export const G4_SOURCE_CEILING = 95;
+// WP3 took index.html and styles.css to the plain rule (0) and the source uses of --text-muted to 0. lib/ keeps the 17 lines of
+// lib/chart-configs.js and the Legend colour that no work package of sprint 11 owns.
+export const G2_CEILING = Object.freeze({ 'script.js': 0, 'index.html': 0, 'lib/': 0, other: 0 });
+export const G3_CEILING = Object.freeze({ 'script.js': 0, 'index.html': 0, 'lib/': 17, other: 0, 'styles.css': 0 });
+export const G4_SOURCE_CEILING = 0;
 
 // The exemptions of 2.5, by file and function name (never by line number), each with its reason. An entry that
 // matches nothing fails the guard: no stale exemptions. guards: which guards the entry lifts.
@@ -41,7 +43,8 @@ export const EXEMPT = Object.freeze([
     { file: 'script.js', fn: 'renderBrandPage', guards: ['G2', 'G3'], why: 'Brand page swatches and the light logo card: the colour is the content' },
     { file: 'script.js', fn: 'initDonatePage', match: /colorDark|colorLight/, guards: ['G3'], why: 'QR code colours: a QR code is black on white by function' },
     { file: 'lib/walletconnect-view.js', fn: 'drawQr', match: /colorDark|colorLight/, guards: ['G3'], why: 'QR code colours: a QR code is black on white by function' },
-    { file: 'lib/help-topics.js', match: /<code>#[0-9A-Fa-f]{6}<\/code>/, guards: ['G3'], why: 'Hex shown as text in help: prose inside code, not a style' }
+    { file: 'lib/help-topics.js', match: /<code>#[0-9A-Fa-f]{6}<\/code>/, guards: ['G3'], why: 'Hex shown as text in help: prose inside code, not a style' },
+    { file: 'index.html', match: /<meta name="theme-color"|<link rel="mask-icon"/, guards: ['G3'], why: 'Browser chrome colour (meta theme-color, mask-icon): an attribute that takes a literal colour, not var(); each value is a :root token (--brand-primary, --bg-dark)' }
 ]);
 
 // The five rules of 3.2 that keep --text-muted, each with its reason.
@@ -196,7 +199,8 @@ export function checkSite({ read, list }, { g2 = G2_CEILING, g3 = G3_CEILING, g4
         for (const sel of Object.keys(keep)) if (!keep[sel] || !String(keep[sel]).trim()) cssG4.push(`${sel}: exemption without a reason`);
     }
     errors.push(...g1);
-    const count = (lines) => lines.reduce((m, x) => { const b = bucketOf(x.p); m[b] = (m[b] || 0) + 1; return m; }, {});
+    // Every bucket is reported, an empty one as 0 (a clean bucket is a count, not a missing key).
+    const count = (lines) => lines.reduce((m, x) => { const b = bucketOf(x.p); m[b] = (m[b] || 0) + 1; return m; }, { 'script.js': 0, 'index.html': 0, 'lib/': 0, other: 0 });
     const g2Count = count(g2Lines), g3Count = count(g3Lines);
     for (const b of Object.keys({ ...g2, ...g2Count })) {
         const c = g2Count[b] || 0, max = g2[b] || 0;

@@ -357,6 +357,8 @@ function makeTable(config) {
     const emptyMessage = config.emptyMessage || 'No matching rows.';
     const summarySuffix = config.summarySuffix || 'rows';
     const rowClass = config.rowClass || null;       // optional fn(row) => string
+    // Opt-in phone layout (sprint 11 spec 4.1): stacked rows at 640 px and below; each body cell carries its column label.
+    const stacked = config.stacked === true;
 
     // Pagination config — when present, the table progressively reveals rows
     // instead of dumping the whole filtered set into the DOM. Two modes share
@@ -604,7 +606,8 @@ function makeTable(config) {
                 const rc = rowClass ? rowClass(row) : '';
                 bodyHTML += `<tr${rc ? ` class="${rc}"` : ''}>`;
                 for (const col of columns) {
-                    bodyHTML += '<td>' + (col.format ? col.format(row) : (row[col.key] != null ? stakingEscapeHtml(String(row[col.key])) : '')) + '</td>';
+                    const td = stacked ? `<td${col.cell ? ` class="${col.cell}"` : ''} data-label="${stakingEscapeHtml(col.label || col.key)}">` : '<td>';
+                    bodyHTML += td + (col.format ? col.format(row) : (row[col.key] != null ? stakingEscapeHtml(String(row[col.key])) : '')) + '</td>';
                 }
                 bodyHTML += '</tr>';
             }
@@ -627,7 +630,7 @@ function makeTable(config) {
             ${buildFilterBarHTML()}
             ${summary}
             <div class="table-responsive">
-                <table class="data-table">
+                <table class="data-table${stacked ? ' is-stacked' : ''}">
                     <thead><tr>${buildHeaderHTML()}</tr></thead>
                     <tbody>${bodyHTML}</tbody>
                 </table>
@@ -1683,7 +1686,7 @@ function renderEmailSubscribeForm(source) {
             </fieldset>
 
             <div class="email-subscribe-actions">
-                <button type="submit" id="email-subscribe-submit" class="validate-primary is-solid">
+                <button type="submit" id="email-subscribe-submit" class="validate-primary">
                     Subscribe
                 </button>
                 <button type="button" id="email-subscribe-cancel" class="validate-text-btn">
@@ -5316,7 +5319,7 @@ async function renderChainStatePage() {
             </div>
             <div id="cs-keys" class="cs-keys"></div>
             <div class="cs-actions">
-                <button id="cs-run" class="wallet-action-btn primary" type="button">Query</button>
+                <button id="cs-run" class="ui-action" type="button">Query</button>
                 <button id="cs-entries" class="wallet-action-btn" type="button" title="List the first entries of a map">List entries</button>
                 <button id="cs-copy" class="wallet-action-btn" type="button">Copy link</button>
                 <span class="cs-export" id="cs-export" hidden>
@@ -5687,7 +5690,7 @@ async function renderDecodePage() {
                 </label>
             </div>
             <div class="cs-actions">
-                <button id="dec-run" class="wallet-action-btn primary" type="button">Decode</button>
+                <button id="dec-run" class="ui-action" type="button">Decode</button>
                 <button id="dec-copy" class="wallet-action-btn" type="button">Copy link</button>
                 <span class="cs-export" id="dec-export" hidden>
                     <span class="cs-export-label">Export</span>
@@ -5831,7 +5834,7 @@ async function renderRuntimePage() {
                 </label>
             </div>
             <div class="cs-actions">
-                <button id="rt-run" class="wallet-action-btn primary" type="button">Fetch</button>
+                <button id="rt-run" class="ui-action" type="button">Fetch</button>
                 <span id="rt-status" class="cs-status"></span>
             </div>
             <div id="rt-result" class="cs-result"></div>
@@ -5844,7 +5847,7 @@ async function renderRuntimePage() {
                 <label class="cs-field"><span>Constant</span><select id="rt-const"><option>—</option></select></label>
             </div>
             <div class="cs-actions">
-                <button id="rt-const-run" class="wallet-action-btn primary" type="button">Read</button>
+                <button id="rt-const-run" class="ui-action" type="button">Read</button>
                 <span id="rt-const-status" class="cs-status"></span>
             </div>
             <div id="rt-const-result" class="cs-result"></div>
@@ -5860,7 +5863,7 @@ async function renderRuntimePage() {
                 </label>
             </div>
             <div class="cs-actions">
-                <button id="rpc-run" class="wallet-action-btn primary" type="button">Call</button>
+                <button id="rpc-run" class="ui-action" type="button">Call</button>
                 <span id="rpc-status" class="cs-status"></span>
             </div>
             <div id="rpc-result" class="cs-result"></div>
@@ -5984,7 +5987,7 @@ function renderUtilitiesPage() {
                         <option value="42">42 — generic Substrate</option>
                     </select></label>
             </div>
-            <div class="cs-actions"><button id="ut-addr-run" class="wallet-action-btn primary" type="button">Convert</button>
+            <div class="cs-actions"><button id="ut-addr-run" class="ui-action" type="button">Convert</button>
                 <span id="ut-addr-status" class="cs-status"></span></div>
             <div id="ut-addr-result" class="cs-result"></div>
         </div>
@@ -5995,7 +5998,7 @@ function renderUtilitiesPage() {
                 <label class="cs-field cs-field-at"><span>Input <em>text, or 0x… for raw bytes</em></span>
                     <input id="ut-hash-in" data-input-kind="text" type="text" placeholder="hello  or  0xdeadbeef" autocomplete="off"></label>
             </div>
-            <div class="cs-actions"><button id="ut-hash-run" class="wallet-action-btn primary" type="button">Hash</button>
+            <div class="cs-actions"><button id="ut-hash-run" class="ui-action" type="button">Hash</button>
                 <span id="ut-hash-status" class="cs-status"></span></div>
             <div id="ut-hash-result" class="cs-result"></div>
         </div>
@@ -6007,7 +6010,7 @@ function renderUtilitiesPage() {
                 <label class="cs-field"><span>Message <em>text or 0x…</em></span><input id="ut-vf-msg" data-input-kind="text" type="text" autocomplete="off"></label>
                 <label class="cs-field"><span>Signature <em>0x…</em></span><input id="ut-vf-sig" data-input-kind="hex" type="text" autocomplete="off"></label>
             </div>
-            <div class="cs-actions"><button id="ut-vf-run" class="wallet-action-btn primary" type="button">Verify</button>
+            <div class="cs-actions"><button id="ut-vf-run" class="ui-action" type="button">Verify</button>
                 <span id="ut-vf-status" class="cs-status"></span></div>
             <div id="ut-vf-result" class="cs-result"></div>
         </div>
@@ -7060,7 +7063,7 @@ async function renderEmailPreferencesPage() {
         <form id="email-prefs-form">
             ${fields}
             <div class="cs-actions" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-                <button type="submit" id="email-prefs-save" class="wallet-action-btn primary">Save preferences</button>
+                <button type="submit" id="email-prefs-save" class="validate-primary">Save preferences</button>
                 <span id="email-prefs-status" class="cs-status"></span>
             </div>
             <div id="email-prefs-error" class="staking-error" style="display:none;"></div>
@@ -8883,9 +8886,10 @@ function mountWalletRewardsTable(data) {
         globalSearch: false,
         summarySuffix: 'rewards',
         emptyMessage: 'No claimed rewards indexed yet.',
+        stacked: true,
         columns: [
             {
-                key: 'era', label: 'Era',
+                key: 'era', label: 'Era', cell: 'is-lead',
                 sort: (a, b) => (a.era == null ? -1 : a.era) - (b.era == null ? -1 : b.era),
                 format: row => row.era != null ? String(row.era) : '—'
             },
@@ -8895,7 +8899,7 @@ function mountWalletRewardsTable(data) {
                 format: row => `<span class="staking-amount">${stakingFormatPDEX(row.amount)} PDEX</span>`
             },
             {
-                key: 'timestamp', label: 'Date',
+                key: 'timestamp', label: 'Date', cell: 'is-end',
                 sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
                 format: row => `<span class="wallet-date-cell">${row.timestamp ? stakingEscapeHtml(formatLocalDate(row.timestamp)) : '-'}</span>`
             }
@@ -8921,9 +8925,10 @@ function mountWalletTxTable(data, live) {
         globalSearch: false,
         summarySuffix: 'transactions',
         emptyMessage: 'No recent transactions.',
+        stacked: true,
         columns: [
             {
-                key: 'hash', label: 'Hash',
+                key: 'hash', label: 'Hash', cell: 'is-lead',
                 format: row => {
                     const short = stakingEscapeHtml(stakingShortAddress(row.hash));
                     // Same defence as the account-details table: event-derived
@@ -8934,7 +8939,7 @@ function mountWalletTxTable(data, live) {
                 }
             },
             {
-                key: 'direction', label: 'Direction',
+                key: 'direction', label: 'Direction', cell: 'is-tag',
                 sort: (a, b) => String(a.direction || '').localeCompare(String(b.direction || '')),
                 filter: { type: 'select', options: ['Sent', 'Received'] },
                 format: row => `<span class="reward-badge ${row.direction === 'Sent' ? 'unclaimed' : 'claimed'}">${stakingEscapeHtml(row.direction)}</span>`
@@ -8942,12 +8947,12 @@ function mountWalletTxTable(data, live) {
             {
                 key: 'amount', label: 'Amount',
                 sort: (a, b) => String(a.amount || '').localeCompare(String(b.amount || '')),
-                format: row => stakingEscapeHtml(row.amount || '—')
+                format: row => stakingEscapeHtml(row.amount || '-')
             },
             {
-                key: 'timestamp', label: 'Date',
+                key: 'timestamp', label: 'Date', cell: 'is-end',
                 sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-                format: row => `<span style="white-space:nowrap;">${row.timestamp ? stakingEscapeHtml(formatLocalDate(row.timestamp)) : '—'}</span>`
+                format: row => `<span style="white-space:nowrap;">${row.timestamp ? stakingEscapeHtml(formatLocalDate(row.timestamp)) : '-'}</span>`
             }
         ]
         }))
@@ -10437,7 +10442,7 @@ function initDonatePage() {
             <div class="donate-qr" data-address="${addr}"></div>
             <div class="donate-address" title="${addr}">${addr}</div>
             <div class="donate-actions">
-                <button class="donate-copy" data-address="${addr}"><i class='bx bx-copy'></i> Copy address</button>
+                <button type="button" class="validate-secondary donate-copy" data-address="${addr}"><i class='bx bx-copy' aria-hidden="true"></i> Copy address</button>
                 ${openLink}
             </div>
         </div>`;
