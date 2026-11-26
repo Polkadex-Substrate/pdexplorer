@@ -78,6 +78,8 @@ import { REFRESH_UI } from '../lib/refresh-ui.js';
 import { advancedShellHtml, proxyAddFormHtml, calculatorHtml, bindCalculator, pendingHtml } from '../lib/wallet-advanced-view.js';
 import { createMultisigUI } from '../lib/multisig-view.js';
 import { createSpendMotionUI } from '../lib/treasury-spend-view.js';
+import { createCouncilCandidacyUI } from '../lib/council-candidacy-view.js';
+import { buildSpendMotion, decodeSpendMotion } from '../lib/treasury-spend.js';
 import { normalizeMultisig } from '../lib/multisig.js';
 import { isValidPolkadexAddress } from '../lib/wallet-safety.js';
 import { createKeyMulti, sortAddresses, encodeAddress as encodeAddr, decodeAddress as decodeAddr } from '@polkadot/util-crypto';
@@ -881,7 +883,10 @@ async function headsWorld({ path, api, seed = {}, steps = [], seats = undefined,
     doc.body.innerHTML = r.appHtml;
     for (const img of doc.querySelectorAll('img[src="logo.png"]')) img.setAttribute('src', logoUri);
     const qa = (sel) => Array.from(doc.querySelectorAll(sel));
-    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), visible: (el) => !!el && !el.closest('[hidden]') };
+    // Drawn: not [hidden] and not inside a closed dialog (display: none), so the closed signing dialogs every page carries
+    // (sprint 11 WP1 rows 4 and 7: .validate-primary.is-solid) are not counted as the page's primary.
+    const visible = (el) => { if (!el || el.closest('[hidden]')) return false; for (let e = el; e && e.nodeType === 1; e = e.parentElement) if (/display:\s*none/.test(e.getAttribute('style') || '')) return false; return true; };
+    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), visible };
     if (seats) {
         // The page's own action slot, told what the chain says: the real part draws every state.
         const slot = w.q('#treasury-spend-action');
@@ -921,7 +926,7 @@ function checkHeadsScene(w, s, err) {
         const n = row.querySelectorAll('.account-tab.active').length;
         if (row.querySelector('.account-tab') && n !== 1) err.push(`${n} selected tabs in a tab row`);
     }
-    if (w.qa('.validate-primary').length) err.push('a .validate-primary in a head scene');
+    if (w.qa('.validate-primary').filter(w.visible).length) err.push('a .validate-primary in a head scene');
     if (w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length !== s.primary) err.push('the scene wants ' + s.primary + ' primary actions');
     if (s.id === 'treasury-tabs-hover' && !(w.q('[data-treastab="spends"].pv-hover') && w.q('[data-treastab="history"].pv-focus'))) err.push('the pointer is not on Spends or the focus not on History');
     if (s.id.startsWith('treasury-header') && !w.q('#treasury-spend-action .ui-action')) err.push('no .ui-action in the Treasury actions row');
@@ -936,12 +941,82 @@ function checkHeadsScene(w, s, err) {
     }
 }
 
+// ── site: the pages and modals of the sprint 11 site sweep, WP1 (cto-team/plans/2026-11-26-sprint11-site-sweep.md,
+// section 6.3): the REAL page (index.html and script.js through test/helpers/full-page.js), opened by clicks where the page
+// opens a view itself, and the REAL lib views mounted where a view needs a chain. Files site-<scene>-<width>.html.
+const SITE_ME = vaddr(31);
+const SITE_WALLET = { pdex_wallet_address: SITE_ME, pdex_wallet_source: 'polkadot-js', pdex_tour_seen_v1: '1' };
+const SITE_LABELS = { labels: [{ signer: P1, label: 'Exchange wallet', score: 2, viewerVote: 0, reportCount: 0, vetoed: false, createdAt: 1700000000000 }] };
+const SITE_COUNCIL = { ...headsApi.council, '/api/council': { ...headsApi.council['/api/council'], members: [{ address: P1, name: 'Alpha', stake: 1200 }], runnersUp: [{ address: P2, name: 'Unknown', stake: 640 }], candidates: [{ address: P3, name: 'Gamma', stake: 0 }] } };
+const SITE_REF = { '/api/democracy': { referenda: [{ refIndex: 7, index: 7, status: 'Ongoing', ayes: 1200, nays: 300, turnout: 1500, tallyKnown: 1, end: 400, title: 'Raise the treasury burn' }], publicProposals: [], referendumCount: 8, status: 'Synced', currentBlock: 100, launchPeriod: 50 } };
+const SITE_REWARDS = { '/api/staking-rewards/': { address: SITE_ME, identity: 'Alice', summary: { claimedTotal: 12.5, unclaimedTotal: 0, totalRewards: 12.5 }, index: { backfillComplete: true },
+    claimed: [{ era: 100, validator: P1, amount: 1.25, blockNumber: 10, timestamp: 1700000000000, claimed: true }, { era: 101, validator: P2, amount: 1.5, blockNumber: 20, timestamp: 1700086400000, claimed: true }], unclaimed: [] } };
+const siteShow = (w, sel, display = 'flex') => { const el = w.q(sel); if (el) el.style.display = display; };
+const siteWorld = (o) => headsWorld({ seed: SITE_WALLET, ...o });
+const SITE_SCENES = [
+    { id: 'modal-withdraw-candidacy', connected: SITE_ME, build: async () => {
+        const w = await siteWorld({ path: 'council', api: SITE_COUNCIL });
+        const chain = { tx: {}, query: { elections: { members() {}, runnersUp() {}, candidates() {} } }, rpc: { chain: { getBlockHash: async () => '0x' + '22'.repeat(32) } },
+            at: async () => ({ query: { elections: { members: async () => [], runnersUp: async () => [], candidates: async () => [[P1, 10], [SITE_ME, 10]] } } }) };
+        const ui = createCouncilCandidacyUI({ api: () => chain, selected: () => SITE_ME, isMultisig: () => false, document: w.doc, submit: async () => {}, refresh: () => {}, connectPrompt: () => '' });
+        await ui.open(); await tick(10);
+        return w;
+    } },
+    { id: 'modal-propose-spend-review', connected: SITE_ME, build: async () => {
+        const w = await siteWorld({ path: 'treasury', api: headsApi.treasury });
+        const api = await stakeApi();
+        const ui = createSpendMotionUI({ api: () => api, selected: () => SITE_ME, isMultisig: () => false, submit: async () => {}, connectPrompt: () => '', document: w.doc,
+            motion: { readSeats: async () => ({ pallet: 'council', members: [SITE_ME, P1, P2, P3, THEM] }), readHead: async () => 1000, build: buildSpendMotion, decode: decodeSpendMotion } });
+        await ui.open(); await tick(10);
+        w.q('#treasury-spend-beneficiary').value = THEM;
+        w.q('#treasury-spend-amount').value = '1500';
+        w.q('#treasury-spend-check').click(); await tick(20); await tick(20);
+        return w;
+    } },
+    { id: 'modal-referendum-vote-aye', connected: SITE_ME, build: () => siteWorld({ path: 'democracy', api: SITE_REF, steps: [{ click: '[data-demtab="referenda"]' }, { click: '.referendum-vote-trigger[data-side="aye"]' }] }) },
+    { id: 'modal-council-vote', connected: SITE_ME, build: () => siteWorld({ path: 'council', api: SITE_COUNCIL, steps: [{ click: '#council-vote-btn', wait: 200 }] }) },
+    { id: 'modal-candidacy', connected: SITE_ME, build: () => siteWorld({ path: 'council', api: SITE_COUNCIL, steps: [{ click: '#council-submit-candidacy-btn' }] }) },
+    { id: 'email-alerts-modal', build: () => headsWorld({ path: 'democracy', api: headsApi.democracy('Synced'), seed: { pdex_tour_seen_v1: '1' }, steps: [{ click: '[data-email-subscribe="democracy"]' }] }) },
+    { id: 'storage-notice', build: () => headsWorld({ path: '', api: {}, seed: { pdex_tour_seen_v1: '1' }, after: (w) => {
+        const html = rd('index.html');
+        const a = html.indexOf('<div id="storage-notice-banner"');
+        const b = html.indexOf('<div id="tx-status-zone"', a);
+        w.q('.app-container').insertAdjacentHTML('beforeend', html.slice(a, b));
+        siteShow(w, '#storage-notice-banner', 'block');
+    } }) },
+    { id: 'rewards-result', build: () => headsWorld({ path: 'staking-rewards/' + SITE_ME, api: SITE_REWARDS, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'chain-state-result', build: () => headsWorld({ path: 'chain-state', api: {}, seed: { pdex_tour_seen_v1: '1' }, after: (w) => { const x = w.q('#cs-export'); if (x) x.hidden = false; } }) },
+    { id: 'discussions-failed', build: () => headsWorld({ path: 'discussions', api: { '/api/discussions': { error: 'Request failed (503)' } }, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'democracy-failed', build: () => headsWorld({ path: 'democracy', api: { '/api/democracy': { error: 'Request failed (503)' } }, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'treasury-failed', build: () => headsWorld({ path: 'treasury', api: { '/api/treasury': { error: 'Request failed (503)' } }, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'account-labels-signed-out', connected: SITE_ME, build: () => siteWorld({ path: 'account/' + SITE_ME, api: { ...headsApi.account, '/api/labels/': SITE_LABELS }, steps: [{ wait: 300 }] }) },
+    { id: 'watchlist-items', build: () => headsWorld({ path: 'watchlist', api: {}, seed: { pdex_tour_seen_v1: '1', pdex_watchlist_v1: JSON.stringify({ ['address:' + SITE_ME]: { kind: 'address', id: SITE_ME, label: 'Alice', addedAt: 1700000000000 }, ['validator:' + P1]: { kind: 'validator', id: P1, label: 'Validator A', addedAt: 1700000500000 } }) } }) },
+    { id: 'tx-not-found', build: () => headsWorld({ path: 'tx/123/not-a-hash', api: {}, seed: { pdex_tour_seen_v1: '1' } }) }
+].map(s => ({ widths: [1280, 375], ...s }));
+// The part each scene shows (spec 6.3): no legacy class anywhere; at most one primary drawn; the focus drawn, with no
+// colour, background or border written in markup inside it (the rest of a page is WP2 and WP3).
+const SITE_FOCUS = { 'modal-withdraw-candidacy': '#council-withdraw-modal', 'modal-propose-spend-review': '#treasury-spend-modal', 'modal-referendum-vote-aye': '#referendum-vote-modal',
+    'modal-council-vote': '#council-vote-modal', 'modal-candidacy': '#council-candidacy-modal', 'email-alerts-modal': '#email-subscribe-modal', 'storage-notice': '#storage-notice-dismiss',
+    'rewards-result': '.staking-toolbar-actions', 'chain-state-result': '#cs-export', 'discussions-failed': '#discussions-content', 'democracy-failed': '#democracy-content',
+    'treasury-failed': '#treasury-content', 'account-labels-signed-out': '#account-label-signin', 'watchlist-items': '#watchlist-clear-all', 'tx-not-found': '#tx-recover-btn' };
+const siteDrawn = (el) => { for (let e = el; e && e.nodeType === 1; e = e.parentElement) { if (e.hasAttribute('hidden') || /display:\s*none/.test(e.getAttribute('style') || '')) return false; } return true; };
+const SITE_COLOUR = /(^|;)\s*(color|background(-color|-image)?|border(?!-radius)(-[a-z]+)*)\s*:/i;
+function checkSiteScene(w, s, err) {
+    if (w.qa('.staking-download-btn').length) err.push(`${w.qa('.staking-download-btn').length} .staking-download-btn on the page`);
+    const prim = w.qa('.validate-primary, .wallet-option-row.is-primary, .modal-submit-btn').filter(siteDrawn);
+    if (prim.length > 1) err.push(`${prim.length} primaries drawn: ${prim.map(e => e.id || e.className).join(', ')}`);
+    const focus = w.q(SITE_FOCUS[s.id]);
+    if (!focus || !siteDrawn(focus)) { err.push(`${SITE_FOCUS[s.id]} is not drawn`); return; }
+    for (const e of [focus, ...focus.querySelectorAll('[style]')]) if (e.hasAttribute('style') && SITE_COLOUR.test(';' + e.getAttribute('style'))) err.push(`a colour written in markup: <${e.tagName.toLowerCase()} style="${e.getAttribute('style').slice(0, 60)}">`);
+}
+
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
     stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' },
     stake4: { scenes: STAKE4_SCENES, check: checkStakeScene, prefix: '' }, account4: { scenes: ACCOUNT4_SCENES, check: checkAccount4Scene, prefix: '' },
     nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' }, sections: { scenes: SECTIONS_SCENES, check: checkSectionsScene, prefix: 'sections' },
-    advanced: { scenes: ADVANCED_SCENES, check: checkAdvancedScene, prefix: '' }, heads: { scenes: HEADS_SCENES, check: checkHeadsScene, prefix: 'heads' } };
+    advanced: { scenes: ADVANCED_SCENES, check: checkAdvancedScene, prefix: '' }, heads: { scenes: HEADS_SCENES, check: checkHeadsScene, prefix: 'heads' },
+    site: { scenes: SITE_SCENES, check: checkSiteScene, prefix: 'site' } };
 
 // A scene is markup: a radio or checkbox changed after render keeps its old `checked` attribute, so the file would show
 // the first choice selected beside the second's field (fidelity review S12). The property becomes the attribute.

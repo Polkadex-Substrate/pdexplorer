@@ -103,7 +103,7 @@ import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE } from './lib/validator-status-view.js';
-import { headerLook, PAGE_PRIMARY_SELECTOR, icon, panelHtml, linePanelHtml, chipHtml, pageHeadHtml, tabsHtml, revealActiveTab } from './lib/ui-parts.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR, icon, panelHtml, linePanelHtml, chipHtml, pageHeadHtml, tabsHtml, revealActiveTab, loadFailedHtml } from './lib/ui-parts.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
@@ -468,7 +468,7 @@ function makeTable(config) {
             if (col.sort) {
                 indicator = isSortKey
                     ? (sortDir === 'asc' ? ' <i class="bx bx-up-arrow-alt"></i>' : ' <i class="bx bx-down-arrow-alt"></i>')
-                    : ' <i class="bx bx-sort" style="opacity:0.4;"></i>';
+                    : ' <i class="bx bx-sort"></i>';
             }
             const classes = ['table-th'];
             if (col.sort) classes.push('sortable');
@@ -1665,22 +1665,18 @@ function renderEmailSubscribeForm(source) {
     // event types on by default since that's why people sign up. Network
     // milestones default off because they're more operator-focused.
     return `
-        <h2 style="margin:0 0 10px;color:var(--text-primary,#fff);font-size:1.3rem;display:flex;align-items:center;gap:8px;">
-            <i class='bx bx-envelope' style="color:var(--brand-secondary,#00c4ff)"></i>
-            Email me when&hellip;
-        </h2>
-        <p style="margin:0 0 18px;color:var(--text-secondary,rgba(255,255,255,0.65));font-size:0.9rem;line-height:1.45;">
+        <h2>${icon('bx-envelope ui-glyph is-muted')}Email me when&hellip;</h2>
+        <p class="ui-lede">
             Get a short email when on-chain governance events happen. Double opt-in, one-click unsubscribe.
         </p>
-        <div id="email-subscribe-error" style="display:none;margin-bottom:14px;padding:10px 12px;background:rgba(255,82,82,0.12);border:1px solid rgba(255,82,82,0.4);border-radius:8px;color:#ffb4b4;font-size:0.86rem;"></div>
+        <p id="email-subscribe-error" class="ui-panel is-error is-line" role="alert" style="display:none;">${icon('bx-error-circle')}<span class="ui-panel-body"></span></p>
         <form id="email-subscribe-form" novalidate>
-            <label for="email-subscribe-input" style="display:block;margin-bottom:6px;color:var(--text-secondary,rgba(255,255,255,0.7));font-size:0.85rem;">Email address</label>
-            <input type="email" id="email-subscribe-input" data-input-kind="text" required autocomplete="email"
-                placeholder="you@example.com"
-                style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:#fff;font-size:0.95rem;margin-bottom:18px;">
+            <label for="email-subscribe-input" class="ui-field-label">Email address</label>
+            <input type="email" id="email-subscribe-input" class="ui-input" data-input-kind="text" required autocomplete="email"
+                placeholder="you@example.com">
 
-            <fieldset style="border:0;padding:0;margin:0 0 14px;">
-                <legend style="color:var(--text-secondary,rgba(255,255,255,0.7));font-size:0.85rem;padding:0;margin-bottom:8px;">Governance</legend>
+            <fieldset class="ui-fieldset">
+                <legend class="ui-field-label">Governance</legend>
                 <label class="email-pref"><input type="checkbox" data-pref-path="governance.newReferendum" checked> New referendum opens for voting</label>
                 <label class="email-pref"><input type="checkbox" data-pref-path="governance.newProposal" checked> New public proposal tabled</label>
                 <label class="email-pref"><input type="checkbox" data-pref-path="governance.closingReminder" checked> 24-hour reminder before a referendum closes</label>
@@ -1688,25 +1684,23 @@ function renderEmailSubscribeForm(source) {
                 <label class="email-pref"><input type="checkbox" data-pref-path="governance.treasuryProposal"> Treasury proposal activity</label>
                 <label class="email-pref"><input type="checkbox" data-pref-path="governance.councilMotion"> Council motion activity</label>
             </fieldset>
-            <fieldset style="border:0;padding:0;margin:0 0 18px;">
-                <legend style="color:var(--text-secondary,rgba(255,255,255,0.7));font-size:0.85rem;padding:0;margin-bottom:8px;">Network milestones</legend>
+            <fieldset class="ui-fieldset">
+                <legend class="ui-field-label">Network milestones</legend>
                 <label class="email-pref"><input type="checkbox" data-pref-path="network.runtimeUpgrade"> Runtime upgrade</label>
                 <label class="email-pref"><input type="checkbox" data-pref-path="network.eraBoundary"> Era boundary summary</label>
                 <label class="email-pref"><input type="checkbox" data-pref-path="network.chainStalled"> Chain stalled alert (ops)</label>
             </fieldset>
 
-            <div style="display:flex;gap:10px;align-items:center;margin-top:10px;">
-                <button type="submit" id="email-subscribe-submit"
-                    style="flex:1;padding:12px;background:var(--brand-primary,#E6007A);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:0.95rem;">
+            <div class="email-subscribe-actions">
+                <button type="submit" id="email-subscribe-submit" class="validate-primary is-solid">
                     Subscribe
                 </button>
-                <button type="button" id="email-subscribe-cancel"
-                    style="padding:12px 18px;background:transparent;color:var(--text-secondary,rgba(255,255,255,0.7));border:1px solid rgba(255,255,255,0.15);border-radius:8px;cursor:pointer;font-size:0.92rem;">
+                <button type="button" id="email-subscribe-cancel" class="validate-text-btn">
                     Cancel
                 </button>
             </div>
-            <p style="margin:14px 0 0;font-size:0.78rem;color:var(--text-muted,rgba(255,255,255,0.45));line-height:1.45;">
-                We only use your address to send the alerts you've selected. See <a href="/privacy" data-spa-link="true" style="color:var(--brand-secondary,#00c4ff);">privacy</a> for details. One-click unsubscribe is in every email.
+            <p class="ui-caption email-subscribe-note">
+                We only use your address to send the alerts you've selected. See <a href="/privacy" data-spa-link="true" class="item-link is-inline">privacy</a> for details. One-click unsubscribe is in every email.
             </p>
         </form>
     `;
@@ -1720,11 +1714,12 @@ function wireEmailSubscribeForm(source) {
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const err = document.getElementById('email-subscribe-error');
+        const errText = err && (err.querySelector('.ui-panel-body') || err);   // the icon stays (row I16)
         const submitBtn = document.getElementById('email-subscribe-submit');
-        if (err) { err.style.display = 'none'; err.textContent = ''; }
+        if (err) { err.style.display = 'none'; errText.textContent = ''; }
         const email = (document.getElementById('email-subscribe-input').value || '').trim();
         if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            if (err) { err.textContent = 'Please enter a valid email address.'; err.style.display = 'block'; }
+            if (err) { errText.textContent = 'Please enter a valid email address.'; err.style.display = 'block'; }
             return;
         }
         // Collect prefs from checkboxes; merge into the nested structure
@@ -1748,7 +1743,7 @@ function wireEmailSubscribeForm(source) {
             if (!res.ok || data.error) throw new Error(data.error || 'Could not subscribe');
             renderEmailSubscribeSuccess(email, data.status);
         } catch (e2) {
-            if (err) { err.textContent = e2.message || String(e2); err.style.display = 'block'; }
+            if (err) { errText.textContent = e2.message || String(e2); err.style.display = 'block'; }
             if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Subscribe'; }
         }
     });
@@ -1759,21 +1754,21 @@ function renderEmailSubscribeSuccess(email, status) {
     if (!content) return;
     if (status === 'already-confirmed') {
         content.innerHTML = `
-            <h2 style="margin:0 0 12px;color:var(--text-primary,#fff);font-size:1.3rem;">You're already subscribed</h2>
-            <p style="color:var(--text-secondary,rgba(255,255,255,0.7));line-height:1.5;">
+            <h2>You're already subscribed</h2>
+            <p class="ui-lede">
                 We already have <strong>${stakingEscapeHtml(email)}</strong> on the list. You'll keep receiving the alerts you've signed up for.
             </p>
-            <button type="button" id="email-subscribe-done" style="margin-top:18px;padding:11px 22px;background:var(--brand-primary,#E6007A);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Done</button>
+            <button type="button" id="email-subscribe-done" class="validate-secondary">Done</button>
         `;
     } else {
         content.innerHTML = `
-            <h2 style="margin:0 0 12px;color:var(--text-primary,#fff);font-size:1.3rem;display:flex;align-items:center;gap:8px;">
-                <i class='bx bx-mail-send' style="color:#5cf591"></i> Check your inbox
+            <h2>
+                ${icon('bx-mail-send ui-glyph is-green')} Check your inbox
             </h2>
-            <p style="color:var(--text-secondary,rgba(255,255,255,0.75));line-height:1.55;">
+            <p class="ui-lede">
                 We sent a confirmation link to <strong>${stakingEscapeHtml(email)}</strong>. Click it to start receiving alerts. The link is valid for 24 hours; you can request a new one any time from this modal.
             </p>
-            <button type="button" id="email-subscribe-done" style="margin-top:18px;padding:11px 22px;background:var(--brand-primary,#E6007A);color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Done</button>
+            <button type="button" id="email-subscribe-done" class="validate-secondary">Done</button>
         `;
     }
     const done = document.getElementById('email-subscribe-done');
@@ -5334,9 +5329,9 @@ async function renderChainStatePage() {
                 <button id="cs-copy" class="wallet-action-btn" type="button">Copy link</button>
                 <span class="cs-export" id="cs-export" hidden>
                     <span class="cs-export-label">Export</span>
-                    <button id="cs-dl-json" class="staking-download-btn" type="button" title="Full result with provenance">JSON</button>
-                    <button id="cs-dl-csv"  class="staking-download-btn" type="button" title="Flattened rows">CSV</button>
-                    <button id="cs-copy-val" class="staking-download-btn" type="button" title="Copy the decoded value to the clipboard">Copy value</button>
+                    <button id="cs-dl-json" class="validate-secondary" type="button" title="Full result with provenance"><i class='bx bx-download' aria-hidden="true"></i>JSON</button>
+                    <button id="cs-dl-csv"  class="validate-secondary" type="button" title="Flattened rows"><i class='bx bx-download' aria-hidden="true"></i>CSV</button>
+                    <button id="cs-copy-val" class="validate-secondary" type="button" title="Copy the decoded value to the clipboard"><i class='bx bx-copy' aria-hidden="true"></i>Copy value</button>
                 </span>
                 <span id="cs-status" class="cs-status"></span>
             </div>
@@ -5704,7 +5699,7 @@ async function renderDecodePage() {
                 <button id="dec-copy" class="wallet-action-btn" type="button">Copy link</button>
                 <span class="cs-export" id="dec-export" hidden>
                     <span class="cs-export-label">Export</span>
-                    <button id="dec-dl-json" class="staking-download-btn" type="button">JSON</button>
+                    <button id="dec-dl-json" class="validate-secondary" type="button"><i class='bx bx-download' aria-hidden="true"></i>JSON</button>
                 </span>
                 <span id="dec-status" class="cs-status"></span>
             </div>
@@ -6242,7 +6237,7 @@ async function fetchAccountDetails(address) {
         let html = `
             <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2 style="font-size: 18px;">Account Details</h2>
-                <a href="#" data-close-detail="holders" style="color: var(--text-secondary); text-decoration: none; cursor: pointer;" title="Close" aria-label="Close"><i class='bx bx-x' style="font-size: 24px;"></i></a>
+                <a href="#" data-close-detail="holders" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
             <div style="background: rgba(255,255,255,0.02); margin-bottom: 20px; border-radius: 4px; border: 1px solid var(--border-color);">
                 <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
@@ -6421,7 +6416,7 @@ async function fetchBlockDetails(id) {
         let html = `
             <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center;">
                 <h2>Block ${data.block.header.number}</h2>
-                <a href="#" data-close-detail="blocks" style="color: var(--text-secondary); text-decoration: none; cursor: pointer;" title="Close" aria-label="Close"><i class='bx bx-x' style="font-size: 24px;"></i></a>
+                <a href="#" data-close-detail="blocks" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
             <div style="padding: 20px;">
                 <div style="margin-bottom: 10px;"><strong>hash</strong> <span class="address-cell">${data.hash}</span></div>
@@ -6492,7 +6487,7 @@ async function fetchTxDetails(block, hash) {
         let html = `
             <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center;">
                 <h2>Tx: ${data.hash}</h2>
-                <a href="#" data-close-detail="transactions" style="color: var(--text-secondary); text-decoration: none; cursor: pointer;" title="Close" aria-label="Close"><i class='bx bx-x' style="font-size: 24px;"></i></a>
+                <a href="#" data-close-detail="transactions" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
             ${correctionBanner}
             <div style="padding: 20px;">
@@ -6586,10 +6581,10 @@ function renderTxNotFoundCard(block, hash, opts) {
                 <h2 style="margin: 14px 0 8px;">${headline}</h2>
                 <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6;">${body}</p>
                 <div style="display: flex; gap: 10px; justify-content: center; margin-top: 22px; flex-wrap: wrap;">
-                    <button type="button" id="tx-recover-btn" class="staking-download-btn" style="padding: 10px 22px; background: var(--brand-primary); color: white; border-color: var(--brand-primary);">
+                    <button type="button" id="tx-recover-btn" class="ui-action">
                         ${primaryButtonHtml}
                     </button>
-                    <a href="/search?q=${encodeURIComponent(hash || '')}" class="staking-download-btn" style="padding: 10px 22px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+                    <a href="/search?q=${encodeURIComponent(hash || '')}" class="validate-secondary">
                         <i class='bx bx-globe'></i> Deep network search
                     </a>
                 </div>
@@ -6875,7 +6870,7 @@ async function fetchValidatorDetails(address) {
         container.innerHTML = `
             <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center;">
                 <h2 style="font-size: 18px;">Validator history - ${identityStr} ${watchlistStarButton('validator', data.address, (data.identity && data.identity !== 'Unknown') ? data.identity : data.address)}</h2>
-                <a href="#" data-close-detail="validators" style="color: var(--text-secondary); text-decoration: none; cursor: pointer;" title="Close" aria-label="Close"><i class='bx bx-x' style="font-size: 24px;"></i></a>
+                <a href="#" data-close-detail="validators" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
             
             <div style="padding: 20px;">
@@ -7675,7 +7670,7 @@ function renderStakingRewards(data) {
                      (so users from /wallet/:addr and from /account/:addr
                      both go back to the right place) and falls back to
                      /account/:addr for the fresh-tab case. -->
-                <a href="#" data-close-detail="account/${encodeURIComponent(data.address)}" title="Close" aria-label="Close" style="color: var(--text-secondary); text-decoration: none; cursor: pointer; line-height: 1; display: inline-flex; align-items: center;"><i class='bx bx-x' style="font-size: 24px;"></i></a>
+                <a href="#" data-close-detail="account/${encodeURIComponent(data.address)}" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
         </div>
         <div class="staking-summary-grid">
@@ -7691,9 +7686,9 @@ function renderStakingRewards(data) {
         <div class="staking-toolbar">
             <div class="reward-filter">${fbtn('all', 'All')}${fbtn('claimed', 'Claimed')}${fbtn('unclaimed', 'Unpaid')}</div>
             <div class="staking-toolbar-actions">
-                <button class="staking-download-btn" id="staking-dl-csv"><i class='bx bx-download'></i> CSV</button>
-                <button class="staking-download-btn" id="staking-dl-json"><i class='bx bx-download'></i> JSON</button>
-                <button class="staking-download-btn" id="staking-dl-tax" title="Annual rewards summary with PDEX→USD price at era close"><i class='bx bx-receipt'></i> Tax (year…)</button>
+                <button type="button" class="validate-secondary" id="staking-dl-csv"><i class='bx bx-download' aria-hidden="true"></i>CSV</button>
+                <button type="button" class="validate-secondary" id="staking-dl-json"><i class='bx bx-download' aria-hidden="true"></i>JSON</button>
+                <button type="button" class="validate-secondary" id="staking-dl-tax" title="Annual rewards summary with PDEX→USD price at era close"><i class='bx bx-receipt' aria-hidden="true"></i>Tax (year…)</button>
             </div>
         </div>
         <div id="staking-rewards-table-container"></div>`;
@@ -9356,7 +9351,7 @@ function openPayoutModal() {
     const listEl = document.getElementById('payout-entries');
     const submitBtn = document.getElementById('submit-payout-tx-btn');
     if (!entries.length) {
-        listEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:0.85rem;">No unclaimed rewards available to pay out. The indexer recomputes unpaid rewards in the background; try again in a minute.</div>';
+        listEl.innerHTML = '<div class="ui-state is-empty">No unclaimed rewards available to pay out. The indexer recomputes unpaid rewards in the background; try again in a minute.</div>';
         if (submitBtn) submitBtn.disabled = true;
     } else {
         listEl.innerHTML = payoutRefresh.rowsHtml(entries);
@@ -9366,7 +9361,7 @@ function openPayoutModal() {
         // they have clicked Sign.
         if (entries.length > PAYOUT_BATCH_MAX && errEl) {
             errEl.style.display = 'block';
-            errEl.style.color = 'var(--text-secondary)';
+            errEl.setAttribute('data-state', 'note');   // the colour is the stylesheet's (row I31)
             errEl.textContent = `This claims the first ${PAYOUT_BATCH_MAX} of ${entries.length} entries — one transaction cannot safely carry more. Run Pay Out again afterwards for the rest.`;
         }
     }
@@ -9376,7 +9371,8 @@ function openPayoutModal() {
 
 async function submitPayoutTx() {
     const errEl = document.getElementById('payout-modal-error');
-    const fail = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; errEl.style.color = ''; } };
+    // A failure is data-state="error" with its icon (row I31); the stylesheet colours it, nothing is set from script.
+    const fail = (m) => { if (errEl) { errEl.setAttribute('data-state', 'error'); errEl.innerHTML = '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'; errEl.appendChild(document.createTextNode(m)); errEl.style.display = 'block'; } };
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     const data = currentWalletData;
     if (!data) return fail('Wallet data is not loaded.');
@@ -9391,7 +9387,7 @@ async function submitPayoutTx() {
     // on a subsequent real error.
     if (truncated && errEl) {
         errEl.style.display = 'block';
-        errEl.style.color = 'var(--text-secondary)';
+        errEl.setAttribute('data-state', 'note');
         errEl.textContent = `Claiming the first ${batch.length} of ${entries.length} entries — run Pay Out again afterwards for the rest.`;
     }
     await submitSignedTx({
@@ -9536,7 +9532,7 @@ async function refreshWithdrawableUnbonded(address) {
 
 async function submitWithdrawUnbonded() {
     const errEl = document.getElementById('unstake-modal-error');
-    const fail = (m) => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; errEl.style.color = ''; } };
+    const fail = (m) => { if (errEl) { errEl.setAttribute('data-state', 'error'); errEl.innerHTML = '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'; errEl.appendChild(document.createTextNode(m)); errEl.style.display = 'block'; } };
     // Clear any stale message first (submitUnstakeTx does; this didn't).
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     const data = currentWalletData;
@@ -10071,7 +10067,7 @@ function validateSendRecipient() {
     const v = (toEl.value || '').trim();
     if (!v) {
         sendValidRecipient = false;
-        if (hintEl) { hintEl.textContent = 'Paste a valid Polkadex (SS58 prefix 88) address.'; hintEl.style.color = ''; }
+        if (hintEl) { hintEl.textContent = 'Paste a valid Polkadex (SS58 prefix 88) address.'; hintEl.setAttribute('data-state', ''); }
         return;
     }
     const data = currentWalletData;
@@ -10079,13 +10075,14 @@ function validateSendRecipient() {
     if (problem) {
         sendValidRecipient = false;
         if (hintEl) {
-            if (problem.refusal) renderRecipientRefusal(hintEl, problem.refusal); else hintEl.textContent = problem.text;
-            hintEl.style.color = 'var(--error)';
+            if (problem.refusal) renderRecipientRefusal(hintEl, problem.refusal);
+            else { hintEl.innerHTML = '<i class="bx bx-error-circle ui-hint-icon" aria-hidden="true"></i>'; hintEl.appendChild(document.createTextNode(problem.text)); }
+            hintEl.setAttribute('data-state', 'error');   // the colour is the stylesheet's (row I31)
         }
         return;
     }
     sendValidRecipient = true;
-    if (hintEl) { hintEl.textContent = 'Address looks good.'; hintEl.style.color = 'var(--success, #2ecc71)'; }
+    if (hintEl) { hintEl.innerHTML = '<i class="bx bx-check ui-hint-icon" aria-hidden="true"></i>'; hintEl.appendChild(document.createTextNode('Address looks good.')); hintEl.setAttribute('data-state', 'ok'); }
 }
 
 // ─── Audit F-126: one accessibility layer for every .modal ──────────────────
@@ -10259,7 +10256,7 @@ function openSendModal() {
     if (toEl) toEl.value = '';
     if (amtEl) amtEl.value = '';
     const hintEl = document.getElementById('send-to-hint');
-    if (hintEl) { hintEl.textContent = 'Paste a valid Polkadex (SS58 prefix 88) address.'; hintEl.style.color = ''; }
+    if (hintEl) { hintEl.textContent = 'Paste a valid Polkadex (SS58 prefix 88) address.'; hintEl.setAttribute('data-state', ''); }
 
     const available = sendableBalance(data, document.getElementById('send-keep-alive')?.checked !== false);
     const availEl = document.getElementById('send-available');
@@ -10581,13 +10578,7 @@ async function fetchDiscussionThreads() {
         if (!res.ok || data.error) throw new Error(data.error || ('Request failed (' + res.status + ')'));
         renderThreadList(data.threads || []);
     } catch (e) {
-        root.innerHTML = `
-            <div class="list-container glass" style="padding:40px;text-align:center;">
-                <h3 style="color:var(--error);margin-bottom:8px;">Couldn't load discussions</h3>
-                <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:14px;">${stakingEscapeHtml(e.message)}</p>
-                <p style="color:var(--text-muted);font-size:0.82rem;">The backend is likely restarting or timing out. Try again in a moment.</p>
-                <button id="discussions-retry-btn" class="staking-download-btn" style="margin-top:18px;"><i class='bx bx-refresh'></i> Retry</button>
-            </div>`;
+        root.innerHTML = loadFailedHtml({ title: "Couldn't load discussions", detail: e.message, hint: 'The backend is likely restarting or timing out. Try again in a moment.', retryId: 'discussions-retry-btn', esc: stakingEscapeHtml });
         const retry = document.getElementById('discussions-retry-btn');
         if (retry) retry.addEventListener('click', fetchDiscussionThreads);
     }
@@ -10877,15 +10868,7 @@ async function fetchDemocracyData(opts = {}) {
         return data.freshness;
     } catch (e) {
         if (quiet) return console.warn('[democracy] refresh failed:', e && e.message);
-        root.innerHTML = `
-            <div class="list-container glass" style="padding:40px;text-align:center;">
-                <h3 style="color:var(--error);margin-bottom:8px;">Couldn't load democracy data</h3>
-                <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:14px;">${stakingEscapeHtml(e.message)}</p>
-                <p style="color:var(--text-muted);font-size:0.82rem;">The chain indexer is likely restarting or timing out. Try again in a moment.</p>
-                <button id="democracy-retry-btn" class="staking-download-btn" style="margin-top:18px;">
-                    <i class='bx bx-refresh'></i> Retry
-                </button>
-            </div>`;
+        root.innerHTML = loadFailedHtml({ title: "Couldn't load democracy data", detail: e.message, hint: 'The chain indexer is likely restarting or timing out. Try again in a moment.', retryId: 'democracy-retry-btn', esc: stakingEscapeHtml });
         const retry = document.getElementById('democracy-retry-btn');
         if (retry) retry.addEventListener('click', fetchDemocracyData);
     }
@@ -11475,7 +11458,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
             <div class="reward-filter">${statusPills}</div>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
                 <label for="${view.key}-motion-call-filter" style="font-size:0.8rem;color:var(--text-muted);">Call type</label>
-                <select id="${view.key}-motion-call-filter" class="motion-call-select" style="padding:6px 10px;border-radius:var(--radius-sm);background:rgba(0,0,0,0.3);color:var(--text-primary);border:1px solid var(--border-color);font-size:0.82rem;">${callOptions}</select>
+                <select id="${view.key}-motion-call-filter" class="motion-call-select ui-input">${callOptions}</select>
             </div>
         </div>`;
 
@@ -11867,7 +11850,7 @@ async function openCouncilVoteModal() {
     const stakeInputEl = document.getElementById('vote-stake-input');
     if (stakeInputEl) stakeInputEl.value = '';
     const votableEl = document.getElementById('council-vote-votable');
-    if (votableEl) votableEl.innerHTML = 'Available: <strong style="color: var(--text-secondary);">—</strong> PDEX';
+    if (votableEl) votableEl.innerHTML = 'Available: <strong class="ui-quiet">—</strong> PDEX';
     renderCouncilVoteSelected();
 
     const availList = document.getElementById('council-vote-available-list');
@@ -11970,16 +11953,16 @@ async function openCouncilVoteModal() {
             try {
                 const freePlanck = accountInfo.data && accountInfo.data.free ? accountInfo.data.free.toString() : '0';
                 const freePdex = Number(BigInt(freePlanck)) / 1e12;
-                votableEl.innerHTML = `Available: <strong style="color: var(--text-secondary);">${stakingFormatPDEX(freePdex)}</strong> PDEX`;
+                votableEl.innerHTML = `Available: <strong class="ui-quiet">${stakingFormatPDEX(freePdex)}</strong> PDEX`;
             } catch (_e) { /* leave dash */ }
         } else if (!connectedAddress && votableEl) {
-            votableEl.innerHTML = '<span style="color: var(--text-muted);">Connect a wallet to see your votable balance.</span>';
+            votableEl.innerHTML = '<span class="ui-quiet">Connect a wallet to see your votable balance.</span>';
         }
 
         renderCouncilVoteAvailable();
         renderCouncilVoteSelected();
     } catch (err) {
-        if (availList) availList.innerHTML = `<div class="council-vote-empty" style="color:var(--error);">Could not load candidates: ${stakingEscapeHtml(err.message)}</div>`;
+        if (availList) availList.innerHTML = `<div class="council-vote-empty"><p class="ui-panel is-warn is-line"><i class='bx bx-error' aria-hidden="true"></i><span class="ui-panel-body">Could not load candidates: ${stakingEscapeHtml(err.message)}</span></p></div>`;
     }
 }
 
@@ -12108,8 +12091,8 @@ function checkWalletForCouncil(modalType) {
         // that carries ?returnTo=<currentPath> so the user lands back on
         // /council after picking an account in the wallet flow.
         if (warnEl) {
-            warnEl.innerHTML = buildWalletConnectPrompt();
-            warnEl.style.display = 'block';
+            (warnEl.querySelector('.ui-panel-body') || warnEl).innerHTML = buildWalletConnectPrompt();   // the panel keeps its icon (I6)
+            warnEl.style.display = 'flex';
         }
         if (activeDivId) document.getElementById(activeDivId).innerText = '--';
         return;
@@ -12327,13 +12310,7 @@ async function fetchTreasuryData(o = {}) {
         tryOpenFromQueryString('treasury');
     } catch (e) {
         if (o.fresh) return null;   // a poll that failed leaves the page as it is
-        root.innerHTML = `
-            <div class="list-container glass" style="padding:40px;text-align:center;">
-                <h3 style="color:var(--error);margin-bottom:8px;">Couldn't load treasury data</h3>
-                <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:14px;">${stakingEscapeHtml(e.message)}</p>
-                <p style="color:var(--text-muted);font-size:0.82rem;">The chain indexer is likely restarting or timing out. Try again in a moment.</p>
-                <button id="treasury-retry-btn" class="staking-download-btn" style="margin-top:18px;"><i class='bx bx-refresh'></i> Retry</button>
-            </div>`;
+        root.innerHTML = loadFailedHtml({ title: "Couldn't load treasury data", detail: e.message, hint: 'The chain indexer is likely restarting or timing out. Try again in a moment.', retryId: 'treasury-retry-btn', esc: stakingEscapeHtml });
         const retry = document.getElementById('treasury-retry-btn');
         if (retry) retry.addEventListener('click', fetchTreasuryData);
     }
@@ -12669,24 +12646,9 @@ function openReferendumVoteModal(refIndex, side) {
     const idxLabel = document.getElementById('referendum-vote-modal-idx');
     if (idxLabel) idxLabel.textContent = '#' + pendingReferendumVote.refIndex;
 
-    // Preselect the side button the user clicked. Pure styling toggle.
+    // Preselect the side button the user clicked: aria-pressed only; the stylesheet draws the pressed side (row I34).
     document.querySelectorAll('.referendum-side-btn').forEach(b => {
-        const isActive = b.getAttribute('data-side') === pendingReferendumVote.side;
-        if (isActive) {
-            if (pendingReferendumVote.side === 'aye') {
-                b.style.background = 'rgba(46, 204, 113, 0.1)';
-                b.style.borderColor = 'var(--success)';
-                b.style.color = 'var(--success)';
-            } else {
-                b.style.background = 'rgba(231, 76, 60, 0.1)';
-                b.style.borderColor = '#e74c3c';
-                b.style.color = '#e74c3c';
-            }
-        } else {
-            b.style.background = 'rgba(255,255,255,0.02)';
-            b.style.borderColor = 'var(--border-color)';
-            b.style.color = 'var(--text-secondary)';
-        }
+        b.setAttribute('aria-pressed', String(b.getAttribute('data-side') === pendingReferendumVote.side));
     });
 
     const stored = getStoredWallet();
@@ -12700,8 +12662,8 @@ function openReferendumVoteModal(refIndex, side) {
             // Actionable connect prompt with returnTo so the user comes
             // back to /democracy (with the ?ref=N query string preserved
             // when they arrived via a deep link) after picking an account.
-            warn.innerHTML = buildWalletConnectPrompt();
-            warn.style.display = 'block';
+            (warn.querySelector('.ui-panel-body') || warn).innerHTML = buildWalletConnectPrompt();   // the panel keeps its icon (I6)
+            warn.style.display = 'flex';
         }
     }
     if (active) active.textContent = stored || '--';
@@ -13176,9 +13138,9 @@ async function renderAccountLabelEditor(address, opts = {}) {
                 </div>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
-                ${isMine ? `<button type="button" class="label-delete-btn staking-download-btn" style="padding:4px 10px;font-size:0.72rem;color:var(--error);border-color:rgba(231,76,60,0.4);">Remove mine</button>` : ''}
-                ${!isMine && !l.isSelf && session ? `<button type="button" class="label-report-btn staking-download-btn" style="padding:4px 10px;font-size:0.72rem;color:var(--text-muted);">Report</button>` : ''}
-                ${isOwner && !l.isSelf ? `<button type="button" class="label-veto-btn staking-download-btn" style="padding:4px 10px;font-size:0.72rem;color:${l.vetoed ? 'var(--success)' : 'var(--error)'};border-color:rgba(231,76,60,0.4);">${l.vetoed ? 'Un-veto' : 'Veto'}</button>` : ''}
+                ${isMine ? `<button type="button" class="label-delete-btn validate-text-btn is-danger">Remove mine</button>` : ''}
+                ${!isMine && !l.isSelf && session ? `<button type="button" class="label-report-btn validate-text-btn">Report</button>` : ''}
+                ${isOwner && !l.isSelf ? `<button type="button" class="label-veto-btn validate-text-btn${l.vetoed ? '' : ' is-danger'}">${l.vetoed ? 'Un-veto' : 'Veto'}</button>` : ''}
             </div>
         </div>`;
     };
@@ -13199,8 +13161,8 @@ async function renderAccountLabelEditor(address, opts = {}) {
         suggestForm = `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-color);">
                 <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">${isOwner ? 'Set your label' : 'Suggest a label'}</h4>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <input type="text" id="account-label-input" data-input-kind="text" maxlength="64" placeholder="${isOwner ? 'Foundation Wallet, Cold Storage #1, …' : 'Binance hot wallet, Polkadex Sudo, …'}" value="${stakingEscapeHtml(mineLabel ? mineLabel.label : '')}" style="flex:1;min-width:220px;padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
-                    <button type="button" id="account-label-save" class="staking-download-btn" style="padding:8px 16px;font-size:0.82rem;background:var(--brand-primary);color:white;border-color:var(--brand-primary);">${mineLabel ? 'Update' : (isOwner ? 'Set label' : 'Suggest')}</button>
+                    <input type="text" id="account-label-input" data-input-kind="text" maxlength="64" placeholder="${isOwner ? 'Foundation Wallet, Cold Storage #1, …' : 'Binance hot wallet, Polkadex Sudo, …'}" value="${stakingEscapeHtml(mineLabel ? mineLabel.label : '')}" class="ui-input" style="flex:1;min-width:220px;">
+                    <button type="button" id="account-label-save" class="ui-action"><i class='bx bx-check' aria-hidden="true"></i>${mineLabel ? 'Update' : (isOwner ? 'Set label' : 'Suggest')}</button>
                 </div>
                 <div id="account-label-status" style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">${isOwner
                     ? 'Owner labels (verified by signature) always outrank community suggestions.'
@@ -13211,7 +13173,7 @@ async function renderAccountLabelEditor(address, opts = {}) {
         suggestForm = `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-color);">
                 <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Sign in to suggest &amp; vote</h4>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <button type="button" id="account-label-signin" class="staking-download-btn" style="padding:8px 18px;font-size:0.82rem;background:var(--brand-primary);color:white;border-color:var(--brand-primary);"><i class='bx bx-log-in'></i> Sign in with wallet</button>
+                    <button type="button" id="account-label-signin" class="ui-action"><i class='bx bx-log-in' aria-hidden="true"></i>Sign in with wallet</button>
                     <span style="color:var(--text-muted);font-size:0.78rem;">connected as <code style="font-size:0.72rem;">${stakingEscapeHtml(stakingShortAddress(connectedAddress))}</code></span>
                 </div>
                 <div style="margin-top:8px;color:var(--text-muted);font-size:0.78rem;">One-time signature proves you own this address — no transaction, no gas. The same session also lets you post on the discussion board.</div>
@@ -13753,7 +13715,7 @@ function renderWatchlistPage() {
     };
     let html = `<div class="list-container glass">
         <div class="list-header"><h2>Watchlist ${helpIcon('watchlist', 'About the watchlist')} <span style="color:var(--text-muted);font-weight:400;font-size:0.85rem;">(${items.length} item${items.length === 1 ? '' : 's'})</span></h2>
-            <button type="button" id="watchlist-clear-all" class="staking-download-btn" style="padding:6px 14px;font-size:0.78rem;"><i class='bx bx-trash'></i> Clear all</button>
+            <button type="button" id="watchlist-clear-all" class="validate-text-btn is-danger"><i class='bx bx-trash' aria-hidden="true"></i>Clear all</button>
         </div>`;
     for (const [kind, meta] of Object.entries(groups)) {
         const ofKind = items.filter(i => i.kind === kind);

@@ -25,19 +25,18 @@ const SCANNED = /\.(m?js|cjs|html)$/;
 const CLASS = 'staking-download-btn';
 const isComment = (line) => { const t = line.trim(); return t.startsWith('//') || t.startsWith('/*') || t.startsWith('*') || t.startsWith('<!--'); };
 
-// Ceilings: the lines left after WP1 of the sweep (measured at f33320f, less the lines WP1 rewrites). They may only go
-// down; WP2 takes script.js and lib/ to the exempt lines only, WP3 takes index.html and styles.css to the plain rule.
-// At f33320f: G2 script.js 317, index.html 163, lib/ 35 (not counting the exemptions and the layout-only interpolations); G3 script.js 82, index.html 40,
-// lib/ 24, styles.css 166; G4 sources 104.
-export const G2_CEILING = Object.freeze({ 'script.js': 273, 'index.html': 113, 'lib/': 32, other: 0 });
-export const G3_CEILING = Object.freeze({ 'script.js': 69, 'index.html': 14, 'lib/': 21, other: 0, 'styles.css': 160 });
+// Ceilings: the lines left after WP1 of the sweep, measured. They may only go down; WP2 takes script.js and lib/ to the
+// exempt lines only, WP3 takes index.html and styles.css to the plain rule.
+// At f33320f: G2 script.js 317, index.html 163, lib/ 35 (not counting the exemptions and the layout-only interpolations);
+// G3 script.js 82, index.html 40, lib/ 24, styles.css 73; G4 sources 104. WP1 also took the email alerts modal (row I16).
+export const G2_CEILING = Object.freeze({ 'script.js': 252, 'index.html': 113, 'lib/': 32, other: 0 });
+export const G3_CEILING = Object.freeze({ 'script.js': 50, 'index.html': 14, 'lib/': 21, other: 0, 'styles.css': 67 });
 export const G4_SOURCE_CEILING = 95;
 
 // The exemptions of 2.5, by file and function name (never by line number), each with its reason. An entry that
 // matches nothing fails the guard: no stale exemptions. guards: which guards the entry lifts.
 export const EXEMPT = Object.freeze([
     { file: 'lib/validator-alerts.js', fn: 'frame', guards: ['G2', 'G3'], why: 'Email markup: mail clients need inline styles; it is not a page' },
-    { file: 'email.js', guards: ['G2', 'G3'], why: 'Email markup: mail clients need inline styles; it is not a page' },
     { file: 'server.js', guards: ['G2', 'G3'], why: 'Mail server.js sends: mail clients need inline styles; it is not a page' },
     { file: 'script.js', fn: 'renderBrandPage', guards: ['G2', 'G3'], why: 'Brand page swatches and the light logo card: the colour is the content' },
     { file: 'script.js', fn: 'initDonatePage', match: /colorDark|colorLight/, guards: ['G3'], why: 'QR code colours: a QR code is black on white by function' },
@@ -89,9 +88,12 @@ export function kitColours(css) {
     for (const h of hex) rgb.add([0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)).join(','));
     return { hex, rgb, rootEnd: css.slice(0, css.indexOf('}', start)).split('\n').length };
 }
+// A token name is not a hue: "violet" in var(--accent-violet-text) names a kit token.
+const untoken = (line) => line.replace(/var\(--[\w-]+/g, 'var(--token');
 // A source line's hues: hex, rgb/hsl, or a colour name in a declaration or a style assignment.
-export function sourceHues(line) {
-    if (isComment(line)) return [];
+export function sourceHues(raw) {
+    if (isComment(raw)) return [];
+    const line = untoken(raw);
     const out = [];
     for (const m of line.matchAll(HEX)) out.push('#' + m[2]);
     for (const m of line.matchAll(FUNC)) out.push(`${m[1]}(${m[2]})`);
@@ -100,7 +102,8 @@ export function sourceHues(line) {
     return out;
 }
 // A styles.css line's hues that are not kit colours or neutrals.
-export function cssHues(line, kit) {
+export function cssHues(raw, kit) {
+    const line = untoken(raw);
     const out = [];
     for (const m of line.matchAll(HEX)) if (!kit.hex.has(full(m[2]))) out.push('#' + m[2]);
     for (const m of line.matchAll(FUNC)) {
