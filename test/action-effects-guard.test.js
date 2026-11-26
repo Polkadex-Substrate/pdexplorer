@@ -63,6 +63,83 @@ export function callSiteOffenders(sources, effects) {
     return out;
 }
 
+// R6 follow-up (Checker gap): the literal scan above sees only `submitSignedTx({`. A signing call that goes
+// through an alias (`const go = submitSignedTx; go({...})`), a computed name (`window['submit' + 'SignedTx']`), a
+// `.call` / `.apply`, or a dependency named `submit` (`deps.submit({...})`, `d.submit(opts)`, the way the views
+// are handed submitSignedTx) slips past it. This scan closes that, in two parts:
+//  1. every mention of the name submitSignedTx other than its declaration and a literal `submitSignedTx({` call is a
+//     hand-off, and must be on HANDOFFS with its reason (a new alias fails with file and line);
+//  2. every call to a dependency named `submit` (bare or `x.submit(`) in lib/ and script.js is checked like a literal
+//     call: an object literal must name `action: { key: '<key>'`, with an EFFECTS entry. A non-literal argument or a
+//     computed key must be on SUBMIT_DYNAMIC with the reason the key is still known.
+// An entry that matches nothing fails too, so the lists cannot rot.
+export const HANDOFFS = [
+    { file: 'script.js', has: /lockActionDeps = \(\) => \(\{ submit: submitSignedTx/, why: 'dep: the release buttons are handed submitSignedTx (lib/lock-actions.js calls it with the spec key)' },
+    { file: 'script.js', has: /submit: \(o\) => submitSignedTx\(o\)/, why: 'dep: the validator setup view is handed submitSignedTx; its calls are checked as d.submit below' },
+    { file: 'script.js', has: /submit: submitSignedTx, fetchJson: fetchApiJson/, why: 'dep: a view is handed submitSignedTx; its calls are checked as submit below' },
+    { file: 'script.js', has: /isMultisig: address => !!multisigStore\.find\(address\), submit: submitSignedTx,$/, why: 'dep: a view is handed submitSignedTx; its calls are checked as submit below' },
+    { file: 'script.js', has: /submit: submitSignedTx, connectPrompt/, why: 'dep: a view is handed submitSignedTx; its calls are checked as submit below' },
+    { file: 'script.js', has: /submit: submitSignedTx, makeTable/, why: 'dep: a view is handed submitSignedTx; its calls are checked as submit below' }
+];
+export const SUBMIT_DYNAMIC = [
+    { file: 'lib/balance-locks-view.js', has: /key: spec\.key/, why: 'computed key: spec comes from lib/lock-actions.js, whose every key is a literal in script.js-reachable EFFECTS (see lock-actions tests)' },
+    { file: 'lib/validator-setup-view.js', has: /d\.submit\(opts\)/, why: 'opts is built in the same function with action: stepAction(...) (lib/validator-setup-view.js)' },
+    { file: 'lib/validator-setup-view.js', has: /action: stepAction\(plan, kind\)/, why: 'computed: stepAction returns a literal { key } from the setup plan' },
+    { file: 'lib/validator-manage-view.js', has: /key: M\.MANAGE_ACTION/, why: 'computed: M.MANAGE_ACTION is the one manage key' }
+];
+
+export function aliasOffenders(sources, effects, handoffs = HANDOFFS, dynamic = SUBMIT_DYNAMIC) {
+    const have = new Set(Object.keys(effects));
+    const hUsed = handoffs.map(() => 0), dUsed = dynamic.map(() => 0);
+    const out = [];
+    const listed = (list, used, file, text) => { const k = list.findIndex((e, j) => e.file === file && e.has.test(text) && used[j] < (e.n || 1)); if (k === -1) return false; used[k]++; return true; };
+    for (const { file, text } of sources) {
+        const src = String(text).split('\n').map(l => (/^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l)).join('\n');
+        const lines = src.split('\n');
+        const lineOf = (idx) => src.slice(0, idx).split('\n').length;
+        // 1. hand-offs of the name itself
+        for (const m of src.matchAll(/submitSignedTx\b(?!\s*\(\s*\{)/g)) {
+            if (/function\s+$/.test(src.slice(Math.max(0, m.index - 12), m.index))) continue;
+            const ln = lineOf(m.index);
+            if (listed(handoffs, hUsed, file, lines[ln - 1])) continue;
+            out.push(`${file}:${ln}: submitSignedTx used other than as a literal \`submitSignedTx({ action: { key } })\` call (alias, hand-off, .call, a variable argument): ${lines[ln - 1].trim().slice(0, 120)}  <- list it in HANDOFFS with its reason, or call it directly`);
+        }
+        for (const m of src.matchAll(/['"`]submit(?:Signed)?['"`]\s*\+|\[\s*['"`]submit(?:SignedTx)?['"`]\s*\]|['"`]submitSignedTx['"`]/g)) {
+            out.push(`${file}:${lineOf(m.index)}: a computed or quoted name for submit / submitSignedTx (${m[0].trim()})  <- call it by its plain name so the guard can see the action key`);
+        }
+        // 2. calls through a dependency named submit
+        for (const m of src.matchAll(/(?<![\w$])(?:[\w$]+\.)*submit\(\s*(\{|[^)\s])/g)) {
+            if (/function\s+$/.test(src.slice(Math.max(0, m.index - 12), m.index))) continue;
+            const ln = lineOf(m.index);
+            const at = `${file}:${ln}`;
+            if (m[1] !== '{') {
+                if (listed(dynamic, dUsed, file, lines[ln - 1])) continue;
+                out.push(`${at}: submit(<non-literal>) cannot be checked for action: { key }: ${lines[ln - 1].trim().slice(0, 120)}  <- list it in SUBMIT_DYNAMIC with the reason the key is known`);
+                continue;
+            }
+            const open = m.index + m[0].length - 1;
+            let depth = 0, end = open;
+            for (; end < src.length; end++) { if (src[end] === '{') depth++; else if (src[end] === '}' && --depth === 0) break; }
+            const body = src.slice(open, end + 1);
+            const k = body.match(/\baction:\s*(\{\s*key:\s*([^,}]+)|[^,\n]+)/);
+            if (!k) { out.push(`${at}: submit({ without action: { key: ... } (every signing call names its action so the page can follow it)`); continue; }
+            const keyExpr = k[2] !== undefined ? k[2] : null;
+            const keys = keyExpr ? [...keyExpr.matchAll(/'([a-z]+\.[A-Za-z]+)'/g)].map(q => q[1]) : [];
+            if (!keys.length) {
+                const ctx = body.slice(k.index, k.index + 120);
+                if (listed(dynamic, dUsed, file, ctx)) continue;
+                out.push(`${at}: submit action key is not a quoted key: ${k[0].trim().slice(0, 80)}  <- list it in SUBMIT_DYNAMIC with the reason the key is known`);
+                continue;
+            }
+            const missing = keys.filter(q => !have.has(q));
+            if (missing.length) out.push(`${at}: submit action key(s) with no EFFECTS entry: ${missing.join(', ')}`);
+        }
+    }
+    handoffs.forEach((e, j) => { if (!hUsed[j]) out.push(`HANDOFFS entry for ${e.file} (${e.has}) matches nothing any more: remove it`); });
+    dynamic.forEach((e, j) => { if (!dUsed[j]) out.push(`SUBMIT_DYNAMIC entry for ${e.file} (${e.has}) matches nothing any more: remove it`); });
+    return out;
+}
+
 const libSources = readdirSync(new URL('../lib/', import.meta.url)).filter(f => f.endsWith('.js')).sort().map(f => ({ file: 'lib/' + f, text: readRepo('lib/' + f, import.meta.url) }));
 const SCRIPT_SOURCE = { file: 'script.js', text: readRepo('script.js', import.meta.url) };
 const libFiles = libSources.map(s => s.text);
@@ -115,5 +192,30 @@ describe('action effects coverage guard', () => {
     test('self-test: the scanner reads a ternary and ignores comments', () => {
         const keys = callSiteKeys(["x({ action: { key: a ? 'treasury.payout' : 'treasury.checkStatus', params } });\n// action: { key: 'ghost.key' }"]);
         assert.deepEqual([...keys].sort(), ['treasury.checkStatus', 'treasury.payout']);
+    });
+    test('R6 follow-up: no aliased, computed or dependency-named signing call hides from the action-key guard', () => {
+        const err = aliasOffenders([SCRIPT_SOURCE, ...libSources], EFFECTS);
+        assert.deepEqual(err, [], '\n' + err.join('\n'));
+    });
+    test('R6 follow-up self-test: an alias, a computed name, .call, deps.submit without a key and a non-literal argument each fail', () => {
+        const src = [
+            'const go = submitSignedTx;',
+            "await window['submit' + 'SignedTx']({ buildTx: b });",
+            'await submitSignedTx.call(null, { buildTx: b });',
+            'await deps.submit({ buildTx: b, label: "x" });',
+            'await d.submit(opts);',
+            "await deps.submit({ buildTx: b, action: { key: 'ghost.action' } });",
+            "await deps.submit({ buildTx: b, action: { key: 'staking.payout' } });",
+            'async function submitSignedTx({ buildTx }) {}'
+        ].join('\n');
+        const err = aliasOffenders([{ file: 'script.js', text: src }], EFFECTS, [], []);
+        const text = err.join('\n');
+        assert.match(text, /script\.js:1: submitSignedTx used other than as a literal/);
+        assert.match(text, /script\.js:2: a computed or quoted name/);
+        assert.match(text, /script\.js:3: submitSignedTx used other than as a literal/);
+        assert.match(text, /script\.js:4: submit\(\{ without action: \{ key/);
+        assert.match(text, /script\.js:5: submit\(<non-literal>\)/);
+        assert.match(text, /script\.js:6: submit action key\(s\) with no EFFECTS entry: ghost\.action/);
+        assert.doesNotMatch(text, /script\.js:7|script\.js:8/);
     });
 });

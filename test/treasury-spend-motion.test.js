@@ -204,14 +204,16 @@ describe('the Propose a spend action', () => {
         for (const [connected, why] of [[null, /Connect the wallet of a council member/], [OUTSIDER, /holds no council seat/]]) {
             const w = viewWorld({ connected });
             w.ui.mount(w.slot); await tick();
-            assert.match(w.slot.innerHTML, /id="treasury-spend-open"[^>]* disabled/);
+            // Amended (page head plan 2026-11-25): aria-disabled, not disabled, so the action stays focusable and its reason is read with it.
+            assert.match(w.slot.innerHTML, /id="treasury-spend-open"[^>]* aria-disabled="true"/);
+            assert.doesNotMatch(w.slot.innerHTML, /<button[^>]*\sdisabled[\s>=]/);
             assert.match(w.slot.innerHTML, why);
             await w.slot.fire(); await tick();
             assert.notEqual(w.get('modal').style.display, 'flex', 'a disabled action does not open the dialog');
         }
         const m = viewWorld();
         m.ui.mount(m.slot); await tick();
-        assert.doesNotMatch(m.slot.innerHTML, / disabled/);
+        assert.doesNotMatch(m.slot.innerHTML, /aria-disabled|\sdisabled[\s>=]/);
         await m.slot.fire(); await tick();
         assert.equal(m.get('modal').style.display, 'flex');
         assert.equal(m.get('form').style.display, 'block');
@@ -223,11 +225,11 @@ describe('the Propose a spend action', () => {
         const w = viewWorld();
         w.fail = 'node unreachable';
         w.ui.mount(w.slot); await tick();
-        assert.match(w.slot.innerHTML, /id="treasury-spend-open"[^>]* disabled/);
+        assert.match(w.slot.innerHTML, /id="treasury-spend-open"[^>]* aria-disabled="true"/);
         assert.match(w.slot.innerHTML, /Could not read the council seats: node unreachable/);
         w.fail = null;
         w.ui.mount(w.slot); await tick();
-        assert.doesNotMatch(w.slot.innerHTML, / disabled/, 'a tab switch re-renders the header and retries the read');
+        assert.doesNotMatch(w.slot.innerHTML, /aria-disabled/, 'a tab switch re-renders the header and retries the read');
     });
     test('the dialog itself refuses a non-member: no form, nothing to review', async () => {
         const w = viewWorld({ connected: OUTSIDER });

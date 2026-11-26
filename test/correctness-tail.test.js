@@ -789,7 +789,8 @@ describe('F-126 — Escape and focus trap for every modal', () => {
     });
 
     test('every .modal in index.html has a close control the layer can find', () => {
-        const ids = [...htmlSrc.matchAll(/id="([\w-]+)" class="modal"/g)].map(m => m[1]);
+        // A modal may carry more classes after "modal" (the wallet modals are "modal ui-modal", spec 2026-11-25 row 40).
+        const ids = [...htmlSrc.matchAll(/id="([\w-]+)" class="modal(?: [\w-]+)*"/g)].map(m => m[1]);
         assert.ok(ids.length >= 10, `expected the full modal set, found ${ids.length}`);
         for (const id of ids) {
             const at = htmlSrc.indexOf(`id="${id}"`);

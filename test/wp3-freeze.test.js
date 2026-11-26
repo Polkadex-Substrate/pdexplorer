@@ -11,7 +11,10 @@
 //     (In test/snapshots/: test/fixtures/ holds only chain metadata, named by test/fixture-name.test.js.)
 // (b) The pure logic modules are byte for byte the files before the restyle (SHA-256).
 //
-// Written and committed green on the code before WP3, and not edited after.
+// Written and committed green on the code before WP3. Re-baselined once, 2026-11-25, for the CEO-approved
+// wordings and the Stop validating style (Group B Q3 Q14 Q15 Q26 Q30 Q31 Q32 Q36 and C-1 of
+// cto-team/plans/2026-11-25-explorer-open-followups.md): the snapshot entries those items change and the hash
+// of lib/validator-manage.js. test/s10-approved-wordings.test.js proves nothing else in the snapshot moved.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +59,7 @@ const HASHED = {
     'lib/validator-setup-steps.js': '4ad3e541678fcfdd13c972b0093347cfa16ffbd7801a0c5ec01a176913f95d12',
     'lib/validator-setup.js': 'aaf17f814c6a034824d7664a8db14fe3d751633b7b71738e38b48e8a71c4a447',
     'lib/validator-setup-chain.js': '9fbe94f5721400638d7201e36ee8e6194868da0505ad9a6fc3521cab5fad1c64',
-    'lib/validator-manage.js': 'cd1fc7cae7587318075e96f92d85a167343132907da23cc8248891cc4ad45c56',
+    'lib/validator-manage.js': '47b5f72124068f92a585d32bf49bc265dd42606cd846bb578d1dd5c8ad66fa15',   // re-baselined 2026-11-25 (Q3, Q26)
     'lib/validator-manage-chain.js': 'd3de9f260db4c62f9f9e2c270f21cec8bc12bb8f74e8639761cb6243b1963019',
     'lib/validator-delegate.js': 'ecbd376003238af103bdb198e605128a0ed642ba0d3042bc5f000d3896fa0f3d',
     'lib/validator-delegate-chain.js': '8db6e24bdef45e7e3cf21268f3eea15f7d37e73b73f8eae26ad0eb198a37e701',

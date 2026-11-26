@@ -50,11 +50,11 @@ const T = Object.freeze({ activeEra: 500, currentEra: 500, eraEndsIn: 5 * 3600, 
 // ── the menu (design 5.2) ──
 describe('the manage menu follows the headline state: secondary actions, at most one primary', () => {
     const kinds = (m) => m.actions.map(a => a.kind);
-    test('active and elected-next: change commission, rotate keys, bond more, change payee, stop validating; no primary', () => {
+    test('active and elected-next: change commission, rotate keys, bond more, change where rewards go, stop validating; no primary', () => {
         for (const s of ['active', 'elected-next']) {
             const m = M.manageMenu(s);
             assert.deepEqual(kinds(m), ['commission', 'keys', 'bondExtra', 'payee', 'chill'], s);
-            assert.deepEqual(m.actions.map(a => a.label), ['Change commission', 'Rotate keys', 'Bond more', 'Change payee', 'Stop validating'], s);
+            assert.deepEqual(m.actions.map(a => a.label), ['Change commission', 'Rotate keys', 'Bond more', 'Change where rewards go', 'Stop validating'], s);
             assert.equal(m.primary, null, s);
         }
     });
@@ -64,8 +64,8 @@ describe('the manage menu follows the headline state: secondary actions, at most
         assert.equal(m.actions[0].label, 'Add to your bond');
         assert.equal(m.primary, null);
     });
-    test('active and offline this session: one primary, Open the node checklist', () => {
-        assert.deepEqual(M.manageMenu('active', { offline: true }).primary, { label: 'Open the node checklist', href: '/validate/node' });
+    test('active and offline this session: one primary, Check my node, to the check step of the node guide (Q26)', () => {
+        assert.deepEqual(M.manageMenu('active', { offline: true }).primary, { label: 'Check my node', href: '/validate/node#node-step-check' });
     });
     test('active-leaving: no commission (validate would ask to validate again) and no stop', () => {
         assert.deepEqual(kinds(M.manageMenu('active-leaving')), ['keys', 'bondExtra', 'payee']);

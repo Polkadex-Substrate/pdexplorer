@@ -126,7 +126,9 @@ describe('the page and the help state who can spend', () => {
         const script = stripComments(readRepo('script.js', import.meta.url));
         const fn = script.slice(script.indexOf('function renderTreasury()'), script.indexOf('function governanceIndexNote'));
         assert.ok(fn.length > 0);
-        assert.match(fn, /\$\{SPEND_RULE_TEXT\} \$\{helpIcon\('treasury', 'Who can spend from the treasury'\)\}/);
+        // Amended (page head plan 2026-11-25): the rule is the second meta item and the help icon sits beside the title, in pageHeadHtml.
+        assert.match(fn, /help: helpIcon\('treasury', 'Who can spend from the treasury'\)/);
+        assert.match(fn, /meta: \[[^\]]*stakingEscapeHtml\(SPEND_RULE_TEXT\)\]/);
         assert.doesNotMatch(fn, /New spends closed|takes no new spends|Submit proposal/);
     });
 

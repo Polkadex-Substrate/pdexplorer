@@ -88,7 +88,8 @@ import { buildStakeTx, stakeListFailedHtml, stakeMaxPlanck, transferablePlanckOf
 import { payeeOf } from './lib/validator-manage.js';
 import { createStakeCard } from './lib/stake-card-view.js';
 import { createStakeRefresh, readStakeFigures, stakeIntentNoteHtml } from './lib/stake-refresh.js';
-import { createWalletSections, actionBarHtml, bindWalletActions, WALLET_ACTIONS_CLOSED, PRICE_COLLECTING } from './lib/wallet-sections.js';
+import { createWalletSections, actionBarHtml, bindWalletActions, WALLET_ACTIONS_CLOSED, PRICE_COLLECTING, clipboardWrite } from './lib/wallet-sections.js';
+import { advancedShellHtml, proxyAddFormHtml, proxyUnavailableHtml, showFieldError, clearFieldErrors, calculatorHtml, bindCalculator, pendingLoadingHtml, pendingHtml, pendingUnavailableHtml, ADVANCED_TEXT } from './lib/wallet-advanced-view.js';
 import { FEE_MARGIN } from './lib/fee-preflight.js';
 import { mountBalanceLocks } from './lib/balance-locks-view.js';
 import { sendableBalance } from './lib/balance-locks.js';
@@ -102,7 +103,7 @@ import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE } from './lib/validator-status-view.js';
-import { headerLook, PAGE_PRIMARY_SELECTOR } from './lib/ui-parts.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR, icon, panelHtml, linePanelHtml, chipHtml, pageHeadHtml, tabsHtml, revealActiveTab } from './lib/ui-parts.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
@@ -3402,23 +3403,16 @@ function renderApiError(container, err, retryFn) {
     if (!container) return;
     const transient = (err && (err.code === 'RPC_NOT_READY' || err.status === 503));
     const message = (err && err.message) || 'Unknown error';
+    // Amber, not red: a read the explorer could not finish is attention, not a loss (colour roles). Try again is the
+    // secondary tier (spec 2026-11-25-multisig-and-advanced-cards.md, sweep row 18).
+    const again = `<button type="button" class="validate-secondary api-error-retry" data-api-error-retry>${icon('bx-refresh')}Try again</button>`;
     if (transient) {
-        container.innerHTML = `
-            <div style="padding:48px 24px;text-align:center;color:var(--text-secondary);">
-                <i class='bx bx-loader-alt bx-spin' style="font-size:42px;color:var(--brand-primary);"></i>
-                <h3 style="margin:14px 0 8px 0;color:var(--text-primary);">Connecting to the Polkadex node…</h3>
-                <p style="max-width:520px;margin:0 auto 18px auto;font-size:0.9rem;line-height:1.5;">
-                    ${stakingEscapeHtml(message)}
-                </p>
-                <button type="button" class="staking-download-btn" data-api-error-retry>
-                    <i class='bx bx-refresh'></i> Retry
-                </button>
-            </div>`;
-        const btn = container.querySelector('[data-api-error-retry]');
-        if (btn && typeof retryFn === 'function') btn.addEventListener('click', retryFn);
+        container.innerHTML = `<div class="api-error">${panelHtml('is-warn', 'bx-loader-alt bx-spin', `<p>${stakingEscapeHtml(message)}</p>`, { title: 'Connecting to the Polkadex node...' })}${again}</div>`;
     } else {
-        container.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--error);">Error: ${stakingEscapeHtml(message)}</div>`;
+        container.innerHTML = `<div class="api-error">${linePanelHtml('is-warn', 'bx-error', stakingEscapeHtml('Could not load this. ' + message))}${typeof retryFn === 'function' ? again : ''}</div>`;
     }
+    const btn = container.querySelector('[data-api-error-retry]');
+    if (btn && typeof retryFn === 'function') btn.addEventListener('click', retryFn);
 }
 
 // Helper that wraps fetch() so the catch block in a caller can act on the
@@ -6208,7 +6202,9 @@ window.switchAccountTab = function (tabName) {
     document.querySelectorAll('.account-tab-btn').forEach(btn => {
         const isActive = (btn.dataset.accountTab || btn.innerText.trim().toLowerCase()) === tabName.toLowerCase();
         btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-selected', String(isActive));
     });
+    revealActiveTab(document.getElementById('account-details-container'));
 
     document.getElementById('account-tab-transactions').style.display = tabName === 'transactions' ? 'block' : 'none';
     document.getElementById('account-tab-events').style.display = tabName === 'events' ? 'block' : 'none';
@@ -6298,10 +6294,9 @@ async function fetchAccountDetails(address) {
             <div id="account-locks-slot" style="margin-bottom: 20px;"></div>
             <div id="account-nominations-slot" style="margin-bottom: 20px;"></div>
             <div style="margin-bottom: 20px;">
-                <div class="account-tabs" style="padding: 0 20px; margin-bottom: 15px;">
-                    <button type="button" class="account-tab account-tab-btn active" data-account-tab="transactions">Transfers (${tabCount('transactions')})</button>
-                    <button type="button" class="account-tab account-tab-btn" data-account-tab="events">Events (${tabCount('events')})</button>
-                </div>
+                ${tabsHtml([
+                    { key: 'transactions', label: `Transfers (${tabCount('transactions')})` }, { key: 'events', label: `Events (${tabCount('events')})` }
+                ], 'transactions', 'data-account-tab', { label: 'Account activity', extra: 'account-tab-btn' })}
                 
                 <div id="account-tab-transactions">
                     <div id="account-tx-table"></div>
@@ -7497,11 +7492,7 @@ function renderWalletAprCard() {
 
     // No payload yet (fetch failed / RPC down).
     if (!walletAprData) {
-        body.innerHTML = `
-            <div style="text-align:center;color:var(--text-muted);font-size:0.88rem;padding:24px 0;">
-                <i class='bx bx-loader-alt bx-spin' style="font-size:24px;color:var(--brand-primary);"></i>
-                <div style="margin-top:8px;">Couldn't load reward history. Refresh the page to retry.</div>
-            </div>`;
+        body.innerHTML = '<p class="ui-panel is-warn is-line"><i class="bx bx-error" aria-hidden="true"></i><span class="ui-panel-body">Reward history could not be loaded. Reload to try again.</span></p>';
         return;
     }
 
@@ -7511,12 +7502,7 @@ function renderWalletAprCard() {
 
     // No bonded stake — APR is undefined regardless of the period chosen.
     if (!bondedAmount) {
-        body.innerHTML = `
-            <div style="text-align:center;color:var(--text-muted);font-size:0.9rem;padding:24px 0;">
-                <i class='bx bx-info-circle' style="font-size:28px;color:var(--text-muted);"></i>
-                <div style="margin-top:10px;">No bonded stake on this account.</div>
-                <div style="margin-top:4px;font-size:0.78rem;">Stake some PDEX to start earning rewards and measure APR.</div>
-            </div>`;
+        body.innerHTML = '<p class="ui-empty">No staked PDEX on this account.</p><p class="ui-empty">Stake PDEX to start earning rewards.</p>';
         return;
     }
 
@@ -7553,12 +7539,8 @@ function renderWalletAprCard() {
     // No rewards in window → tell the user explicitly which window we
     // looked at, so they know to pick a longer one.
     if (aprPct == null || !Number.isFinite(aprPct)) {
-        body.innerHTML = `
-            <div style="text-align:center;color:var(--text-muted);font-size:0.9rem;padding:24px 0;">
-                <i class='bx bx-info-circle' style="font-size:28px;color:var(--text-muted);"></i>
-                <div style="margin-top:10px;">No claimed rewards in the last ${stakingEscapeHtml(periodLabel)} window.</div>
-                <div style="margin-top:4px;font-size:0.78rem;">Pick a longer period above, or pay out unclaimed rewards from the action bar.</div>
-            </div>`;
+        body.innerHTML = `<p class="ui-empty">No claimed rewards in the last ${stakingEscapeHtml(periodLabel)} window.</p>
+            <p class="ui-empty">Pick a longer period above, or pay out unclaimed rewards from the action bar.</p>`;
         return;
     }
 
@@ -7571,12 +7553,12 @@ function renderWalletAprCard() {
     const bondedSentence = `${stakingFormatPDEX(bondedAmount)} PDEX bonded`;
 
     body.innerHTML = `
-        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
-            <div style="font-size:0.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;">${stakingEscapeHtml(periodLabel)} average</div>
-            <div style="font-size:2.8rem;font-weight:700;color:var(--brand-primary);line-height:1;">${aprPct.toFixed(2)}<span style="font-size:1.4rem;color:var(--text-secondary);">%</span></div>
-            <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:6px;text-align:center;">
+        <div class="wallet-apr-figure">
+            <div class="wallet-apr-period">${stakingEscapeHtml(periodLabel)} average</div>
+            <div class="wallet-apr-value">${aprPct.toFixed(2)}<span class="wallet-apr-unit">%</span></div>
+            <div class="wallet-apr-detail">
                 ${spanSentence ? stakingEscapeHtml(spanSentence) + ' · ' : ''}${stakingEscapeHtml(rewardSentence)}<br>
-                <span style="color:var(--text-muted);font-size:0.78rem;">${stakingEscapeHtml(bondedSentence)}</span>
+                <span class="wallet-apr-bonded">${stakingEscapeHtml(bondedSentence)}</span>
             </div>
         </div>`;
 }
@@ -8734,7 +8716,7 @@ async function fetchWalletDashboard(address, opts) {
             stopLoading();
             const msg = (result.data && result.data.error) || ('Request failed (' + result.status + ')');
             if (!didPaintFromCache) {
-                root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(msg)}</div>`;
+                root.innerHTML = `<div class="list-container glass wallet-load-failed"><div class="ui-panel is-warn"><i class="bx bx-error" aria-hidden="true"></i><div class="ui-panel-body">This account could not be loaded. ${stakingEscapeHtml(msg)}</div></div></div>`;
             } else {
                 // Audit F-068: this branch used to do NOTHING when a cache
                 // paint had already happened. The user was left looking at a
@@ -8767,7 +8749,7 @@ async function fetchWalletDashboard(address, opts) {
         if (stale()) return;
         const msg = err && err.message ? err.message : String(err);
         if (!didPaintFromCache) {
-            root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(msg)}</div>`;
+            root.innerHTML = `<div class="list-container glass wallet-load-failed"><div class="ui-panel is-warn"><i class="bx bx-error" aria-hidden="true"></i><div class="ui-panel-body">This account could not be loaded. ${stakingEscapeHtml(msg)}</div></div></div>`;
         } else {
             // Same reasoning as the !result.ok branch above (F-068) — a
             // network-level failure is no more refreshable than a 500.
@@ -8819,7 +8801,7 @@ function repaintWalletPriceCard(price) {
     if (history.length) {
         if (!wrap.querySelector('#wallet-price-chart')) wrap.innerHTML = '<canvas id="wallet-price-chart"></canvas>';   // the canvas in place keeps its chart
     } else {
-        wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;text-align:center;padding:0 20px;">${configured ? PRICE_COLLECTING : 'Price feed not configured.'}</div>`;
+        wrap.innerHTML = `<div class="wallet-chart-empty">${configured ? PRICE_COLLECTING : 'Price feed not configured.'}</div>`;
     }
     renderWalletPriceChart(history);   // updates in place, or releases the chart when the card went empty
     // Refresh the headline price badge in the list-header too.
@@ -8882,6 +8864,7 @@ function renderWalletDashboard(data, price, rewardsPayload, { live = true } = {}
     if (switchBtn) switchBtn.addEventListener('click', openWalletPicker);   // keeps the current wallet until another is chosen
     const disconnectBtn = document.getElementById('wallet-disconnect-btn');
     if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectWallet);
+    walletSections.bindHead();   // Copy address: text only (lib/wallet-sections.js)
     if (isOwnWallet) {
         bindWalletActionHandlers();
         bindViewOnlyCalloutHandlers();
@@ -8942,7 +8925,7 @@ function mountWalletRewardsTable(data) {
             {
                 key: 'timestamp', label: 'Date',
                 sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-                format: row => `<span style="white-space:nowrap;">${row.timestamp ? stakingEscapeHtml(formatLocalDate(row.timestamp)) : '—'}</span>`
+                format: row => `<span class="wallet-date-cell">${row.timestamp ? stakingEscapeHtml(formatLocalDate(row.timestamp)) : '-'}</span>`
             }
         ]
     });
@@ -8974,8 +8957,8 @@ function mountWalletTxTable(data, live) {
                     // Same defence as the account-details table: event-derived
                     // rows have synthetic 'event-…' hashes — link to block.
                     return (row.eventDerived || !looksLikeTxHash(row.hash))
-                        ? `<a href="/block/${row.block}" class="item-link" style="color:var(--brand-secondary);">${short}</a>`
-                        : `<a href="/tx/${row.block}/${row.hash}" class="item-link" style="color:var(--brand-secondary);">${short}</a>`;
+                        ? `<a href="/block/${row.block}" class="item-link">${short}</a>`
+                        : `<a href="/tx/${row.block}/${row.hash}" class="item-link">${short}</a>`;
                 }
             },
             {
@@ -9799,7 +9782,8 @@ async function openIdentityModal() {
     const parentWarn = document.getElementById('identity-modal-parent-warning');
     const clearBtn = document.getElementById('clear-identity-tx-btn');
     const submitBtn = document.getElementById('submit-identity-tx-btn');
-    if (pill) { pill.textContent = 'Loading…'; pill.style.background = 'rgba(255,255,255,0.08)'; pill.style.color = 'var(--text-secondary)'; }
+    // The status is a ui-chip: its role class, an icon and a word (spec 2026-11-25, sweep row 41), never an inline colour.
+    if (pill) { pill.className = 'ui-chip is-neutral'; pill.textContent = 'Loading…'; }
     if (depositLine) depositLine.textContent = '';
     if (parentWarn) parentWarn.style.display = 'none';
     if (clearBtn) clearBtn.style.display = 'none';
@@ -9819,15 +9803,8 @@ async function openIdentityModal() {
         };
         // Status pill
         if (pill) {
-            if (data.hasIdentity) {
-                pill.textContent = 'Identity set';
-                pill.style.background = 'rgba(0,230,118,0.15)';
-                pill.style.color = '#00E676';
-            } else {
-                pill.textContent = 'Not set';
-                pill.style.background = 'rgba(255,255,255,0.08)';
-                pill.style.color = 'var(--text-secondary)';
-            }
+            pill.className = data.hasIdentity ? 'ui-chip is-positive' : 'ui-chip is-neutral';
+            pill.innerHTML = data.hasIdentity ? '<i class="bx bx-check" aria-hidden="true"></i>Identity set' : 'Not set';
         }
         // Pre-populate fields from existing identity.
         if (data.hasIdentity && data.info) {
@@ -9840,8 +9817,8 @@ async function openIdentityModal() {
         }
         // Sub-identity warning (rare but real).
         if (data.hasParent && parentWarn) {
-            parentWarn.style.display = 'block';
-            parentWarn.innerHTML = '<b>This account is a sub-identity</b> of a parent. Setting a fresh identity here will overwrite the sub-link, and your address will no longer inherit the parent\'s display name.';
+            parentWarn.style.display = 'flex';
+            parentWarn.innerHTML = '<i class="bx bx-error" aria-hidden="true"></i><span class="ui-panel-body"><b>This account is a sub-identity</b> of a parent. Setting a fresh identity here will overwrite the sub-link, and your address will no longer inherit the parent\'s display name.</span>';
         }
         // Initial deposit estimate.
         updateIdentityDepositEstimate();
@@ -10847,14 +10824,10 @@ wireGovRowClicks(document, { open: (href) => window.open(href, '_blank', 'noopen
 // than the bare word "Error" floating in the header.
 function indexerStatusBadge(rawStatus, errorMessage) {
     const status = String(rawStatus || 'Unknown');
-    if (status === 'Synced') {
-        return `<span title="Indexer is up-to-date" style="display:inline-flex;align-items:center;gap:6px;color:var(--success);font-size:0.78rem;">
-            <i class='bx bx-check-circle'></i> Synced</span>`;
-    }
-    if (status === 'Initializing' || status === 'Syncing' || status === 'Backfilling') {
-        return `<span title="${stakingEscapeHtml(status)}" style="display:inline-flex;align-items:center;gap:6px;color:#f5a623;font-size:0.78rem;">
-            <i class='bx bx-loader-alt bx-spin'></i> ${stakingEscapeHtml(status)}</span>`;
-    }
+    // A chip (icon and word, never colour alone); the tooltip keeps the explanation.
+    const chip = (tip, cls, iconName, word) => chipHtml(cls, iconName, word, stakingEscapeHtml).replace('<span class="ui-chip', `<span title="${stakingEscapeHtml(tip)}" class="ui-chip`);
+    if (status === 'Synced') return chip('Indexer is up-to-date', 'is-positive', 'bx-check-circle', 'Synced');
+    if (status === 'Initializing' || status === 'Syncing' || status === 'Backfilling') return chip(status, 'is-wait', 'bx-loader-alt bx-spin', status);
     // Audit F-050/F-004 (round 2). deriveIndexStatus can return 'Repairing' and
     // 'Degraded', and this function knew about neither — so every honest
     // "there is a hole and we are working on it" was rendered as a red
@@ -10866,16 +10839,13 @@ function indexerStatusBadge(rawStatus, errorMessage) {
     // `detail` from the sync state is passed through as the tooltip, because
     // "Repairing" without a number is the same false comfort "Synced" was.
     if (status === 'Repairing') {
-        return `<span title="${stakingEscapeHtml(errorMessage || 'Known gaps are being re-fetched. Data below the gap is complete; the gap itself is not yet.')}" style="display:inline-flex;align-items:center;gap:6px;color:#f5a623;font-size:0.78rem;cursor:help;">
-            <i class='bx bx-wrench'></i> Repairing</span>`;
+        return chip(errorMessage || 'Known gaps are being re-fetched. Data below the gap is complete; the gap itself is not yet.', 'is-wait', 'bx-wrench', 'Repairing');
     }
     if (status === 'Degraded') {
-        return `<span title="${stakingEscapeHtml(errorMessage || 'Some blocks could not be indexed after repeated attempts — usually a pruned (non-archive) RPC node. This will not resolve on its own.')}" style="display:inline-flex;align-items:center;gap:6px;color:var(--error);font-size:0.78rem;cursor:help;">
-            <i class='bx bx-error'></i> Degraded</span>`;
+        return chip(errorMessage || 'Some blocks could not be indexed after repeated attempts — usually a pruned (non-archive) RPC node. This will not resolve on its own.', 'is-error', 'bx-error', 'Degraded');
     }
-    // 'Error' and any other unrecognised value — clearer wording + tooltip.
-    return `<span title="${stakingEscapeHtml(errorMessage || 'Indexer encountered an error on the last tick. It will retry automatically.')}" style="display:inline-flex;align-items:center;gap:6px;color:var(--error);font-size:0.78rem;cursor:help;">
-        <i class='bx bx-error-circle'></i> Indexer error</span>`;
+    // 'Error' is an error; a value this page does not know is shown neutral, with the same words.
+    return chip(errorMessage || 'Indexer encountered an error on the last tick. It will retry automatically.', status === 'Error' ? 'is-error' : 'is-neutral', 'bx-error-circle', 'Indexer error');
 }
 
 function initDemocracyPage() {
@@ -10925,7 +10895,6 @@ function renderDemocracy() {
     const root = document.getElementById('democracy-content');
     if (!root || !democracyData) return;
     const d = democracyView.data() || democracyData;
-    const tabBtn = (key, label) => `<button class="account-tab${democracyTab === key ? ' active' : ''}" data-demtab="${key}">${label}</button>`;
     let body;
     if (democracyTab === 'referenda') body = renderDemocracyReferenda(d);
     else if (democracyTab === 'proposals') body = renderDemocracyProposals(d);
@@ -10935,20 +10904,18 @@ function renderDemocracy() {
     releaseCharts(Object.values(democracySlots));   // the page is redrawn: its canvases go
     root.innerHTML = `
         <div class="list-container glass">
-            <div class="list-header" style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <h2 style="margin:0;">Democracy</h2>
-                    ${indexerStatusBadge(d.status, d.error)}
-                </div>
-                <button type="button" class="email-alerts-cta" data-email-subscribe="democracy">
-                    <i class='bx bx-envelope'></i> Get email alerts ${helpIcon('email-alerts', 'About email alerts')}
-                </button>
-            </div>
-            <div class="account-tabs" style="margin:0 24px;">
-                ${tabBtn('overview', 'Overview')}${tabBtn('referenda', 'Referenda')}${tabBtn('proposals', 'Public Proposals')}${tabBtn('statistics', 'Statistics')}
-            </div>
-            <div style="padding:24px;">${body}</div>
+            ${pageHeadHtml({
+                title: 'Democracy', esc: stakingEscapeHtml,
+                titleExtra: indexerStatusBadge(d.status, d.error),
+                actions: `<button type="button" class="ui-action" data-email-subscribe="democracy">${icon('bx-envelope')}Get email alerts</button>${helpIcon('email-alerts', 'About email alerts')}`
+            })}
+            ${tabsHtml([
+                { key: 'overview', label: 'Overview' }, { key: 'referenda', label: 'Referenda' },
+                { key: 'proposals', label: 'Public Proposals' }, { key: 'statistics', label: 'Statistics' }
+            ], democracyTab, 'data-demtab', { label: 'Democracy sections' })}
+            <div class="ui-page-body">${body}</div>
         </div>`;
+    revealActiveTab(root);
 
     // Mount the sortable tables for the active tab now that the placeholder
     // div is in the DOM.
@@ -11835,8 +11802,10 @@ function motionStage(view, hash, kind) {
 const councilTabs = document.querySelectorAll('.council-page .account-tab');
 councilTabs.forEach(tab => {
     tab.addEventListener('click', () => {
-        councilTabs.forEach(t => t.classList.remove('active'));
+        councilTabs.forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
         tab.classList.add('active');
+        tab.setAttribute('aria-selected', 'true');
+        revealActiveTab(tab.parentElement);
         const targetId = tab.getAttribute('data-tab');
         document.querySelectorAll('.council-page .account-tab-content').forEach(c => {
             c.classList.remove('active');
@@ -12379,7 +12348,6 @@ function renderTreasury() {
     const approvedProposals = all.filter(p => p.status === 'approved');
     const historyProposals = all.filter(p => p.status === 'awarded' || p.status === 'rejected');
 
-    const tabBtn = (key, label) => `<button class="account-tab${treasuryTab === key ? ' active' : ''}" data-treastab="${key}">${label}</button>`;
     let body;
     if (treasuryTab === 'proposals') body = renderTreasuryProposals(openProposals);
     else if (treasuryTab === 'approved') body = renderTreasuryApproved(approvedProposals);
@@ -12389,19 +12357,20 @@ function renderTreasury() {
 
     root.innerHTML = `
         <div class="list-container glass">
-            <div class="list-header">
-                <h2>Treasury</h2>
-                <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
-                    <span style="color:var(--text-secondary);font-size:0.78rem;">${stakingFormatNumber(d.proposalCount)} lifetime proposals</span>
-                    <span style="color:var(--text-muted);font-size:0.78rem;">${SPEND_RULE_TEXT} ${helpIcon('treasury', 'Who can spend from the treasury')}</span>
-                    <span id="treasury-spend-action"></span>
-                </div>
-            </div>
-            <div class="account-tabs" style="margin:0 24px;">
-                ${tabBtn('overview', 'Overview')}${tabBtn('proposals', `Open (${openProposals.length})`)}${tabBtn('approved', `Approved (${approvedProposals.length})`)}${tabBtn('history', `History (${historyProposals.length})`)}${tabBtn('spends', 'Spends')}
-            </div>
-            <div style="padding:24px;">${governanceIndexNote(d.history, 'proposals')}${body}</div>
+            ${pageHeadHtml({
+                title: 'Treasury', esc: stakingEscapeHtml,
+                help: helpIcon('treasury', 'Who can spend from the treasury'),
+                meta: [`${stakingFormatNumber(d.proposalCount)} lifetime proposals`, stakingEscapeHtml(SPEND_RULE_TEXT)],
+                actionsAttrs: ' id="treasury-spend-action" aria-live="polite"'
+            })}
+            ${tabsHtml([
+                { key: 'overview', label: 'Overview' }, { key: 'proposals', label: `Open (${openProposals.length})` },
+                { key: 'approved', label: `Approved (${approvedProposals.length})` }, { key: 'history', label: `History (${historyProposals.length})` },
+                { key: 'spends', label: 'Spends' }
+            ], treasuryTab, 'data-treastab', { label: 'Treasury sections' })}
+            <div class="ui-page-body">${governanceIndexNote(d.history, 'proposals')}${body}</div>
         </div>`;
+    revealActiveTab(root);
 
     spendMotionUI.mount(root.querySelector('#treasury-spend-action'));
     // Tables are mounted AFTER the outer innerHTML lands so their container
@@ -12918,35 +12887,9 @@ function secondPublicProposal(idx, seconds) {
 async function renderWalletAdvancedSection(address, isOwnWallet) {
     const slot = document.getElementById('wallet-advanced-section');
     if (!slot || !address) return;
-    // Render the static shell first so the user sees something immediately;
-    // the proxy + multisig fetches populate their respective sub-cards.
-    slot.innerHTML = `
-        <div class="list-container glass" style="margin-top: 20px;">
-            <div class="list-header">
-                <h2><i class='bx bx-shield-quarter' style="vertical-align:middle;color:var(--brand-secondary);"></i> Advanced</h2>
-                <span style="color:var(--text-muted);font-size:0.78rem;">Delegate signing &amp; coordinate multisig</span>
-            </div>
-
-            <div style="padding: 20px;">
-                <h3 style="font-size:0.95rem;margin:0 0 12px 0;">
-                    <span class="glossary-term" data-term="proxy">Proxies</span>
-                    <span style="color:var(--text-muted);font-weight:400;font-size:0.78rem;">delegates that can sign for this account</span>
-                </h3>
-                <div id="wallet-proxy-list" style="margin-bottom: 14px;">
-                    <div style="color:var(--text-muted);font-size:0.85rem;">Loading proxies…</div>
-                </div>
-                ${isOwnWallet ? `<div id="wallet-proxy-add" style="border-top:1px solid var(--border-color);padding-top:14px;margin-top:6px;"></div>` : ''}
-            </div>
-
-            <div style="padding: 20px; border-top: 1px solid var(--border-color);">
-                <h3 style="font-size:0.95rem;margin:0 0 12px 0;">
-                    <span class="glossary-term" data-term="multisig">Multisig</span>
-                    <span style="color:var(--text-muted);font-weight:400;font-size:0.78rem;">derive the address &amp; view pending calls</span>
-                </h3>
-                <div id="wallet-multisig-calc"></div>
-                <div id="wallet-multisig-pending" style="margin-top: 18px;"></div>
-            </div>
-        </div>`;
+    // The static shell first (lib/wallet-advanced-view.js, spec 2026-11-25 section 4.1): three titled sections; the
+    // proxy and multisig reads fill them.
+    slot.innerHTML = advancedShellHtml({ isOwn: isOwnWallet });
 
     renderProxyList(address, isOwnWallet);
     // R3: the list re-reads itself after a proxy action, on evidence (its rows only; the add form is never repainted)
@@ -12991,7 +12934,7 @@ async function renderProxyList(address, isOwnWallet, ctx = {}) {
         // 501 from the backend when the runtime has no proxy pallet → hide
         // gracefully rather than rendering a scary error.
         if (e && e.status === 501) {
-            el.innerHTML = `<div style="color:var(--text-muted);font-size:0.85rem;">Proxy pallet is not available on this runtime.</div>`;
+            el.innerHTML = proxyUnavailableHtml();
         } else {
             renderApiError(el, e, () => renderProxyList(address, isOwnWallet));
         }
@@ -13010,46 +12953,36 @@ async function renderAddProxyForm(address) {
         if (!cachedProxyTypes && globalApi) cachedProxyTypes = proxyTypesOf(globalApi);
     }
     if (!cachedProxyTypes) { el.textContent = 'The proxy types of this network could not be read. Reload the page to try again.'; return; }
-    el.innerHTML = `
-        <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Add a proxy</h4>
-        <div style="display:grid;grid-template-columns:1fr 180px 100px auto;gap:8px;align-items:center;">
-            <input type="text" id="proxy-add-delegate" data-input-kind="address" placeholder="Delegate address (es…)" autocomplete="off" spellcheck="false" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
-            <select id="proxy-add-type" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
-                ${cachedProxyTypes.map(t => `<option value="${stakingEscapeHtml(t)}">${stakingEscapeHtml(t)}</option>`).join('')}
-            </select>
-            <input type="number" id="proxy-add-delay" data-no-input-actions="numeric stepper: the browser arrows already fill this narrow field" placeholder="Delay" min="0" value="0" title="Delay in blocks before this proxy can sign" style="padding:8px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
-            <button type="button" id="proxy-add-submit" class="staking-download-btn" style="padding:8px 16px;font-size:0.82rem;background:var(--brand-primary);color:white;border-color:var(--brand-primary);">Add proxy</button>
-        </div>
-        <div id="proxy-add-error" class="staking-error" style="display:none;margin-top:8px;font-size:0.78rem;"></div>`;
+    el.innerHTML = proxyAddFormHtml(cachedProxyTypes, stakingEscapeHtml);
 
     // "Add a staking proxy" from the validator manage panel: Staking, delay 0, the limits (design 5.4). Only while the validate flag is on.
     const pre = VALIDATE_ON && proxyPrefill(window.location.search);
     if (pre && cachedProxyTypes.includes(pre.type)) {
         document.getElementById('proxy-add-type').value = pre.type; document.getElementById('proxy-add-delay').value = String(pre.delay);
-        el.insertAdjacentHTML('beforeend', `<p class="validate-setup-note" style="margin-top:8px;font-size:0.82rem;">${stakingEscapeHtml(pre.note)}</p>`);
+        el.insertAdjacentHTML('beforeend', `<p class="validate-setup-note">${stakingEscapeHtml(pre.note)}</p>`);
         if (el.scrollIntoView) el.scrollIntoView({ block: 'center' });
     }
     const submitBtn = document.getElementById('proxy-add-submit');
     if (submitBtn) submitBtn.addEventListener('click', () => {
         const errEl = document.getElementById('proxy-add-error');
-        const showErr = m => { if (errEl) { errEl.textContent = m; errEl.style.display = 'block'; } };
+        const showErr = m => showFieldError(errEl, m);
         const delegateInput = document.getElementById('proxy-add-delegate');
         const typeInput = document.getElementById('proxy-add-type');
         const delayInput = document.getElementById('proxy-add-delay');
+        clearFieldErrors(errEl, [delegateInput, delayInput]);
         const delegate = (delegateInput && delegateInput.value || '').trim();
         const proxyType = (typeInput && typeInput.value || 'Any').trim();
         const delay = parseInt(delayInput && delayInput.value || '0', 10) || 0;
         const delegateProblem = proxyDelegateProblem(delegate, { ss58Prefix: ss58PrefixOf(globalApi) });
-        if (delegateProblem) { showErr(delegateProblem.text); if (delegateProblem.refusal) renderRecipientRefusal(errEl, delegateProblem.refusal); return; }
-        if (delay < 0 || delay > 10_000_000) return showErr('Delay looks unreasonable.');
-        if (errEl) errEl.style.display = 'none';
+        if (delegateProblem) { showFieldError(errEl, delegateProblem.text, delegateInput); if (delegateProblem.refusal) renderRecipientRefusal(errEl, delegateProblem.refusal); return; }
+        if (delay < 0 || delay > 10_000_000) return showFieldError(errEl, ADVANCED_TEXT.delayRange, delayInput);
+        // No idleText: the tracker then puts back the button's own markup, so the icon returns with the label.
         submitSignedTx({
             buildTx: api => api.tx.proxy.addProxy(delegate, proxyType, delay),
             label: `Add ${proxyType} proxy`,
             action: { key: 'proxy.add', params: { delegate, type: proxyType, delay } },
             button: submitBtn,
             busyText: 'Signing…',
-            idleText: 'Add proxy',
             expectedWallet: address,
             expectedRevision,
             onError: showErr,
@@ -13063,58 +12996,18 @@ async function renderAddProxyForm(address) {
 function renderMultisigCalculator() {
     const el = document.getElementById('wallet-multisig-calc');
     if (!el) return;
-    el.innerHTML = `
-        <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Multisig address calculator</h4>
-        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px;">Paste one address per line and pick a threshold. The address below is the deterministic <span class="glossary-term" data-term="multisig">multisig</span> account for those signers.</div>
-        <textarea id="multisig-signers" data-input-kind="address-list" rows="4" placeholder="es… (one per line)" spellcheck="false" style="width:100%;padding:10px 12px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:monospace;font-size:0.82rem;resize:vertical;"></textarea>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
-            <label style="font-size:0.82rem;color:var(--text-secondary);">Threshold</label>
-            <input type="number" id="multisig-threshold" data-no-input-actions="numeric stepper: the browser arrows already fill this narrow field" min="1" value="2" style="width:80px;padding:6px 10px;background:rgba(0,0,0,0.3);border:1px solid var(--border-color);color:var(--text-primary);border-radius:var(--radius-sm);font-family:inherit;font-size:0.85rem;">
-            <button type="button" id="multisig-calc-go" class="staking-download-btn" style="padding:6px 14px;font-size:0.78rem;">Derive address</button>
-        </div>
-        <div id="multisig-result" style="margin-top:10px;font-size:0.85rem;"></div>`;
-    const goBtn = document.getElementById('multisig-calc-go');
-    if (goBtn) goBtn.addEventListener('click', () => {
-        const result = document.getElementById('multisig-result');
-        if (!result) return;
-        const textarea = document.getElementById('multisig-signers');
-        const thrInput = document.getElementById('multisig-threshold');
-        const lines = ((textarea && textarea.value) || '')
-            .split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
-        const threshold = parseInt(thrInput && thrInput.value || '0', 10);
-        if (lines.length < 2) { result.innerHTML = `<span style="color:var(--error);">Add at least two signer addresses.</span>`; return; }
-        if (!Number.isFinite(threshold) || threshold < 1 || threshold > lines.length) {
-            result.innerHTML = `<span style="color:var(--error);">Threshold must be between 1 and ${lines.length}.</span>`;
-            return;
-        }
-        // Validate every line is a real address before passing into the
-        // crypto routine — otherwise decodeAddress throws and the user
-        // sees an opaque error.
-        for (const addr of lines) {
-            if (!isValidPolkadexAddress(addr)) { result.innerHTML = `<span style="color:var(--error);">Not a valid Polkadex address: ${stakingEscapeHtml(stakingShortAddress(addr))}</span>`; return; }
-        }
-        try {
-            // createKeyMulti expects sorted public keys; sortAddresses returns
-            // the address strings sorted by their underlying public-key bytes.
-            const sorted = sortAddresses(lines, POLKADEX_SS58);
-            const multisigPubKey = createKeyMulti(sorted, threshold);
-            const multisigAddr = encodeAddress(multisigPubKey, POLKADEX_SS58);
-            result.innerHTML = `
-                <div style="padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border-color);border-radius:var(--radius-sm);">
-                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">Multisig address (${threshold}-of-${lines.length})</div>
-                    <div class="address-cell" data-address="${stakingEscapeHtml(multisigAddr)}" style="word-break:break-all;color:var(--brand-secondary);font-weight:600;">${stakingEscapeHtml(multisigAddr)} <span class="js-copy-address" style="cursor:pointer;color:var(--text-muted);font-size:0.78rem;margin-left:8px;">copy</span></div>
-                    <div style="margin-top:6px;"><a href="/account/${encodeURIComponent(multisigAddr)}" class="item-link" style="color:var(--brand-secondary);font-size:0.78rem;">View on-chain</a></div>
-                </div>`;
-            // Audit F-122: listener + escaped data-address, no inline onclick.
-            result.querySelectorAll('.js-copy-address').forEach(el => {
-                el.addEventListener('click', function () {
-                    const holder = this.closest('[data-address]');
-                    if (holder) copyToClipboard(this, holder.getAttribute('data-address'));
-                });
-            });
-        } catch (e) {
-            result.innerHTML = `<span style="color:var(--error);">Derivation failed: ${stakingEscapeHtml(e.message || String(e))}</span>`;
-        }
+    el.innerHTML = calculatorHtml();
+    // lib/wallet-advanced-view.js bindCalculator: the checks, the field errors, the green result and Copy address.
+    // createKeyMulti takes the signers sorted by public key; sortAddresses returns them in that order.
+    bindCalculator(el, {
+        isValid: isValidPolkadexAddress,
+        keyOf: (a) => u8aToHex(decodeAddress(a)),
+        derive: (lines, threshold) => encodeAddress(createKeyMulti(sortAddresses(lines, POLKADEX_SS58), threshold), POLKADEX_SS58),
+        write: clipboardWrite({ doc: document, nav: navigator }),
+        announce: (text) => walletSections.announce(text),
+        esc: stakingEscapeHtml,
+        short: stakingShortAddress,
+        setTimer: walletSections.timer   // the page's clock, as the head's Copy address uses it (the 1500 ms Copied hold)
     });
 }
 
@@ -13123,29 +13016,15 @@ function renderMultisigCalculator() {
 async function renderMultisigPending(address) {
     const el = document.getElementById('wallet-multisig-pending');
     if (!el) return;
+    el.innerHTML = pendingLoadingHtml();
     try {
         const data = await fetchApiJson('/api/multisigs/' + encodeURIComponent(address));
-        const list = Array.isArray(data.pending) ? data.pending : [];
-        el.innerHTML = `
-            <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Pending multisig calls <span style="color:var(--text-muted);font-weight:400;font-size:0.72rem;text-transform:none;letter-spacing:0;">(if this address is a multisig)</span></h4>
-            ${list.length === 0
-                ? `<div style="color:var(--text-muted);font-size:0.82rem;padding:6px 0;">No pending multisig approvals against this address.</div>`
-                : `<div class="table-responsive"><table class="data-table" style="margin:0;">
-                    <thead><tr><th>Call hash</th><th>Approvals</th><th style="text-align:right;">Depositor</th><th style="text-align:right;">When</th></tr></thead>
-                    <tbody>${list.map(p => `<tr>
-                        <td style="padding:8px 4px;"><code style="font-size:0.78rem;color:var(--brand-secondary);word-break:break-all;">${stakingEscapeHtml(stakingShortAddress(p.callHash || '') || '—')}</code></td>
-                        <td style="padding:8px 4px;font-size:0.82rem;">${(p.approvals || []).length}</td>
-                        <td style="padding:8px 4px;text-align:right;"><a href="/account/${encodeURIComponent(p.depositor || '')}" class="item-link address-cell" style="color:var(--brand-secondary);font-size:0.78rem;">${stakingEscapeHtml(stakingShortAddress(p.depositor || '') || '—')}</a></td>
-                        <td style="padding:8px 4px;text-align:right;font-size:0.78rem;color:var(--text-secondary);">${p.when ? `block ${stakingFormatNumber(p.when.height)}` : '—'}</td>
-                    </tr>`).join('')}</tbody>
-                </table></div>
-                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;">To approve, execute or cancel, <a href="/wallet?switch=1#multisig" class="item-link">Add a multisig wallet</a> with its full signer list and threshold.</div>`
-            }`;
+        el.innerHTML = pendingHtml(Array.isArray(data.pending) ? data.pending : [], { esc: stakingEscapeHtml, short: stakingShortAddress, number: stakingFormatNumber });
     } catch (e) {
         if (e && e.status === 501) {
-            el.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Multisig pallet is not available on this runtime.</div>`;
+            el.innerHTML = pendingUnavailableHtml();
         } else {
-            renderApiError(el, e, () => renderMultisigPending(address));
+            renderApiError(el.querySelector('.adv-pending-body') || el, e, () => renderMultisigPending(address));
         }
     }
 }
@@ -14123,7 +14002,7 @@ const GLOSSARY = {
     ss58:          'The encoding scheme Substrate uses for human-readable addresses. Polkadex addresses use SS58 prefix 88 and start with "e".',
     pallet:        'A self-contained module of runtime logic (e.g. `staking`, `democracy`, `treasury`). The chain\'s metadata enumerates them all.',
     proxy:         'A delegated signer that can act on behalf of another account, optionally restricted to a subset of calls (e.g. Staking-only).',
-    multisig:      'A deterministic address derived from a set of signers + threshold. Calls execute only after threshold-of-N have approved.'
+    multisig:      'A shared address made from a set of signers and the number of approvals needed. The same signers and number always give the same address, and a call runs only after that many signers approve.'
 };
 
 // Wrap a free-floating piece of text in a glossary-term span. Useful when

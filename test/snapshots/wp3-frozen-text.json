@@ -226,7 +226,7 @@
  },
  "states": {
   "wiz-restoring": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Checking for a connected wallet Checking for a connected wallet...",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Checking for a connected wallet",
    "fields": [],
    "actions": []
   },
@@ -248,12 +248,12 @@
    "actions": []
   },
   "wiz-done-already": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign This stash already validates. It is bonded, its session keys are registered and it is asking to validate. Changes to commission, keys and bond come with the manage panel. Open validator status",
+   "text": "Set up a validator Set up a validator: the steps and what you sign This stash already validates. It is bonded, its session keys are registered and it is asking to validate. To change commission, keys or bond, use Manage this validator on the status page. Open validator status",
    "fields": [],
    "actions": []
   },
   "wiz-step1": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node The explorer takes your word for this step. My node is ready Show me how to set one up",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node Optional check. The explorer cannot see your server, so it takes your word. My node is ready Show me how to set one up",
    "fields": [
     "validate-setup-node"
    ],
@@ -263,7 +263,7 @@
    ]
   },
   "wiz-step1-node-empty": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node Enter the node name first. The explorer takes your word for this step. My node is ready Show me how to set one up",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node Enter the node name first. Optional check. The explorer cannot see your server, so it takes your word. My node is ready Show me how to set one up",
    "fields": [
     "validate-setup-node"
    ],
@@ -273,7 +273,7 @@
    ]
   },
   "wiz-step1-node-found": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node alpha-validator is reporting. Best block #7,999,998 (chain head #8,000,000), finalized #7,999,996, 12 peers, client 0.4.1, last seen 3 s ago. The explorer takes your word for this step. My node is ready Show me how to set one up",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 1 of 5: Your node Your node Session keys Stash and bond Commission Review Start with a running node The explorer cannot reach, start or check your server. It never asks for a seed, a private key or a keystore file. You run the node; you paste one line of public keys here; you sign with your own wallet. You need a server that is synced, started with --validator, and reachable on port 30333. Node name (the value of --name) Clear Check my node alpha-validator is reporting. Best block #7,999,998 (chain head #8,000,000), finalized #7,999,996, 12 peers, client 0.4.1, last seen 3 s ago. Optional check. The explorer cannot see your server, so it takes your word. My node is ready Show me how to set one up",
    "fields": [
     "validate-setup-node"
    ],
@@ -364,7 +364,7 @@
    ]
   },
   "wiz-step3-error": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 999 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Amount to bond (PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Validating needs at least 100 PDEX bonded. Back Continue",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 999 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Amount to bond (PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Validating needs at least 100 PDEX bonded. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Back Continue",
    "fields": [
     "validate-setup-bond",
     "validate-setup-payee=staked",
@@ -379,7 +379,7 @@
    ]
   },
   "wiz-step3-payee": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 999 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Amount to bond (PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Enter a Polkadex address for the rewards account. Polkadex addresses start with e. Back Continue",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 3 of 5: Stash and bond Your node Done Session keys Done on chain Stash and bond Commission Review Bond from your stash Stash: espCA4BVv9gcaPuCgfU3cmBZ3SammppsaYosUpzwFB7Q2ewez . Transferable: 999 PDEX. Use a stash whose key stays offline as much as possible: a Ledger, a multisig or an air-gapped signer. For routine changes, add a separate Staking proxy later. Why a separate stash and proxy A proxy cannot set up a validator: setup needs the stash itself, or its multisig. Amount to bond (PDEX) Clear Max Minimum to validate: 100 PDEX. Lowest elected backing this era: 5,000 PDEX. Enter a Polkadex address for the rewards account. Polkadex addresses start with e. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Back Continue",
    "fields": [
     "validate-setup-bond",
     "validate-setup-payee=staked",
@@ -511,12 +511,12 @@
    ]
   },
   "wiz-result-applied": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Submitted and confirmed in block #8. You are now waiting for election. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Validator set up Submitted and confirmed in block #8. You are now waiting for election. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
    "fields": [],
    "actions": []
   },
   "wiz-result-short": {
-   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Submitted and confirmed in block #8. Bonded 420 PDEX of the 500 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
+   "text": "Set up a validator Set up a validator: the steps and what you sign Step 5 of 5: Review Your node Session keys Stash and bond Commission Review Review Validator set up Submitted and confirmed in block #8. Bonded 420 PDEX of the 500 PDEX you asked for. The balance changed before the block. Your validator entry is set with the smaller bond. To add the rest, bond more from this stash. Keys are used from the session after next (about 6 h). The first era you can be elected for is era 501. Open validator status",
    "fields": [],
    "actions": []
   },
@@ -672,7 +672,7 @@
    "actions": []
   },
   "man-idle": {
-   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Unbond or withdraw Identity and proxies Add a staking proxy",
+   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change where rewards go Stop validating Unbond or withdraw Identity and proxies Add a staking proxy",
    "fields": [],
    "actions": [
     "commission",
@@ -683,7 +683,7 @@
    ]
   },
   "man-offline": {
-   "text": "Manage this validator Open the node checklist Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Unbond or withdraw Identity and proxies Add a staking proxy",
+   "text": "Manage this validator Check my node Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change where rewards go Stop validating Unbond or withdraw Identity and proxies Add a staking proxy",
    "fields": [],
    "actions": [
     "commission",
@@ -694,19 +694,19 @@
    ]
   },
   "man-unbonding": {
-   "text": "Manage this validator Bonded: 400 PDEX. Commission: 5%. Rewards: added to the bond. Unbonding: 100 PDEX. Change commission Rotate keys Bond more Change payee Stop validating Rebond Unbond or withdraw Identity and proxies Add a staking proxy",
+   "text": "Manage this validator Bonded: 400 PDEX. Commission: 5%. Rewards: added to the bond. Unbonding: 100 PDEX. Change commission Rotate keys Bond more Change where rewards go Rebond Stop validating Unbond or withdraw Identity and proxies Add a staking proxy",
    "fields": [],
    "actions": [
     "commission",
     "keys",
     "bondExtra",
     "payee",
-    "chill",
-    "rebond"
+    "rebond",
+    "chill"
    ]
   },
   "man-legacy": {
-   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating This stash is controlled by espJjnZ6egpuVY3EHJtXurAJZVbKnADptCZ256V1PUhMHzbPa (an older setup). Connect that account to change commission or stop validating, or sign 'merge controller into stash' from the stash. Unbond or withdraw Identity and proxies Add a staking proxy",
+   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change where rewards go Stop validating This stash is controlled by espJjnZ6egpuVY3EHJtXurAJZVbKnADptCZ256V1PUhMHzbPa (an older setup). Connect that account to change commission or stop validating, or sign 'merge controller into stash' from the stash. Unbond or withdraw Identity and proxies Add a staking proxy",
    "fields": [],
    "actions": [
     "commission",
@@ -836,7 +836,7 @@
    ]
   },
   "man-payee": {
-   "text": "Manage this validator Change payee Rewards now: added to the bond. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Cancel Review",
+   "text": "Manage this validator Change where rewards go Rewards now: added to the bond. Where rewards go Add rewards to my bond Pay rewards to this stash, unbonded Pay rewards to another account Rewards account Clear Cancel Review",
    "fields": [
     "validate-manage-payee=staked",
     "validate-manage-payee=stash",
@@ -881,7 +881,7 @@
    ]
   },
   "man-result-done": {
-   "text": "Manage this validator Done Submitted and confirmed in block #8,123,999. Commission is now 25%. Applies from era 501, which starts in about 5 h. Rewards until then use the current rate. Back to manage",
+   "text": "Manage this validator Done Change confirmed Submitted and confirmed in block #8,123,999. Commission is now 25%. Applies from era 501, which starts in about 5 h. Rewards until then use the current rate. Back to manage",
    "fields": [],
    "actions": [
     "done"
@@ -896,7 +896,7 @@
    ]
   },
   "man-proxy": {
-   "text": "Manage this validator You are connected as a Staking proxy of this stash. Changes you sign here are sent as proxy.proxy for the stash. Your proxy account pays the network fee. The change is made for the stash. Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Key rotation needs the stash on this runtime. A Staking proxy cannot register session keys. Connect the stash. Unbond or withdraw Identity and proxies",
+   "text": "Manage this validator You are connected as a Staking proxy of this stash. Changes you sign here are sent as proxy.proxy for the stash. Your proxy account pays the network fee. The change is made for the stash. Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change where rewards go Stop validating Key rotation needs the stash on this runtime. A Staking proxy cannot register session keys. Connect the stash. Unbond or withdraw Identity and proxies",
    "fields": [],
    "actions": [
     "commission",
@@ -915,7 +915,7 @@
    ]
   },
   "man-proxy-delay": {
-   "text": "Manage this validator You are connected as a Staking proxy of this stash. Changes you sign here are sent as proxy.proxy for the stash. Your proxy account pays the network fee. The change is made for the stash. Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating This proxy has an announcement delay of 10 blocks: each call must be announced first and made after the delay. The explorer does not make announced proxy calls. Connect the stash to make this change. Key rotation needs the stash on this runtime. A Staking proxy cannot register session keys. Connect the stash. Unbond or withdraw Identity and proxies",
+   "text": "Manage this validator You are connected as a Staking proxy of this stash. Changes you sign here are sent as proxy.proxy for the stash. Your proxy account pays the network fee. The change is made for the stash. Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change where rewards go Stop validating This proxy has an announcement delay of 10 blocks: each call must be announced first and made after the delay. The explorer does not make announced proxy calls. Connect the stash to make this change. Key rotation needs the stash on this runtime. A Staking proxy cannot register session keys. Connect the stash. Unbond or withdraw Identity and proxies",
    "fields": [],
    "actions": [
     "commission",
@@ -941,7 +941,7 @@
    ]
   },
   "man-ms-pending": {
-   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change payee Stop validating Unbond or withdraw Identity and proxies Pending validator changes Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold. Stop validating 1 of 2 approvals. Approved by espSds11...6QoHaj. Waiting for espRKWvh...JZLBWh or espTxD5L...tGGf5k. Started at block #900. Review and approve",
+   "text": "Manage this validator Bonded: 500 PDEX. Commission: 5%. Rewards: added to the bond. Change commission Rotate keys Bond more Change where rewards go Stop validating Unbond or withdraw Identity and proxies Pending validator changes Conditions can change between approvals: the minimum bond, the minimum commission or the keys registered to other accounts. The explorer checks the validator rules again when the last approval runs the call, and refuses it if they no longer hold. Stop validating 1 of 2 approvals. Approved by espSds11...6QoHaj. Waiting for espRKWvh...JZLBWh or espTxD5L...tGGf5k. Started at block #900. Review and approve",
    "fields": [],
    "actions": [
     "commission",

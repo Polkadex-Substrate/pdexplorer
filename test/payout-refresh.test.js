@@ -254,10 +254,10 @@ describe('markup and model', () => {
         assert.equal(norm(p.pr.buttonHtml(w)), norm(`<button class="wallet-action-btn" id="wallet-act-payout"><i class='bx bx-gift'></i><div><strong>Pay out rewards</strong><span>3 unclaimed entries</span></div></button><span id="wallet-payout-why" class="sr-only"></span>`));
         const none = walletWith([]);
         assert.equal(norm(p.pr.buttonHtml(none)), norm(`<button class="wallet-action-btn" id="wallet-act-payout" disabled title="No unclaimed rewards to pay out."><i class='bx bx-gift'></i><div><strong>Pay out rewards</strong><span>0 unclaimed entries</span></div></button><span id="wallet-payout-why" class="sr-only"></span>`));
-        assert.equal(norm(p.pr.tileHtml(w)), norm(`<div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards</div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">6.7500 PDEX</div></div>`));
+        assert.equal(norm(p.pr.tileHtml(w)), norm(`<div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards</div><div class="value is-positive" id="wallet-unpaid-value">6.7500 PDEX</div></div>`));
         const computing = { ...w, rewards: { ...w.rewards, unclaimedFresh: false } };
         // Fidelity review R4: the faint "computing..." note became the bare S1 mark in the label row; the value is the figure alone.
-        assert.equal(norm(p.pr.tileHtml(computing)), norm(`<div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards<span class="ui-chip is-wait is-bare"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Updating</span></div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">6.7500 PDEX</div></div>`));
+        assert.equal(norm(p.pr.tileHtml(computing)), norm(`<div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards<span class="ui-chip is-wait is-bare"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Updating</span></div><div class="value is-positive" id="wallet-unpaid-value">6.7500 PDEX</div></div>`));
     });
     test('the model: counts from unpaidCount (the list is capped at 200), totals by subtraction', () => {
         const rewards = { unpaidTotal: 100, unpaidCount: 250, unpaidEntries: PAIRS.map(x => ({ ...x, amount: 1 })) };
@@ -302,17 +302,22 @@ describe('F2: payoutSignSet signs only what the modal shows', () => {
 });
 
 describe('review minors: the May be behind tile and the mark', () => {
-    test('while S14 shows, the tile value is in --text-primary; back to --brand-primary when it goes', async () => {
+    // Sweep row 14 (spec 2026-11-25-multisig-and-advanced-cards.md): the colour is a role class on the value, never written
+    // in markup. A positive figure carries is-positive; one that may be behind (S14) carries none, so it reads --text-primary.
+    test('while S14 shows, the tile value has no role class; is-positive comes back when it goes; never an inline colour', async () => {
         const p = page();
         await pay(p, PAIRS, forceBatch(...PAIRS.map(otherPageItem)));
         p.now.t += p.known.holdMs;
         p.pr.paint({ reason: 'deadline' });
         const value = p.q('#wallet-unpaid-value');
-        assert.match(value.getAttribute('style'), /var\(--text-primary\)/, 'a figure that may be behind keeps the brand colour');
-        assert.match(p.pr.tileHtml(p.state.wallet), /id="wallet-unpaid-value" style="color:var\(--text-primary\);"/);
+        assert.equal(value.classList.contains('is-positive'), false, 'a figure that may be behind keeps the positive colour');
+        assert.equal(value.getAttribute('style'), null, 'a colour written on the value');
+        assert.match(p.pr.tileHtml(p.state.wallet), /<div class="value" id="wallet-unpaid-value">/);
         p.now.t += p.known.maxAgeMs;
         p.pr.paint({ reason: 'resume' });
-        assert.match(value.getAttribute('style'), /var\(--brand-primary\)/);
+        assert.equal(value.classList.contains('is-positive'), true);
+        assert.equal(value.getAttribute('style'), null);
+        assert.ok(!/style=/.test(p.pr.rowsHtml ? p.pr.rowsHtml([{ era: 1, validator: 'esV', amount: 1 }]) : ''), 'the payout row link keeps an inline colour');
     });
     test('a mark left with another role is swapped in place (setChip): role, icon and word together', async () => {
         const p = page();

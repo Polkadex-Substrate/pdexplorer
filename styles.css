@@ -2212,9 +2212,6 @@ h1, h2, h3 { font-weight: 600; }
 
 /* --- Council page tabs + tables --- */
 .council-page-header {
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 0;
     border-bottom: none;
 }
 .council-header-actions { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -2244,8 +2241,6 @@ h1, h2, h3 { font-weight: 600; }
         z-index: 91;
         background: var(--bg-dark);
         padding: 12px 0;
-        flex-direction: column;
-        align-items: stretch;
     }
     .council-header-actions { gap: 8px; }
     .council-action-button {
@@ -2255,29 +2250,6 @@ h1, h2, h3 { font-weight: 600; }
         white-space: normal;
         overflow-wrap: anywhere;
     }
-}
-.account-tabs {
-    display: flex;
-    gap: 6px;
-    border-bottom: 1px solid var(--border-color);
-    margin-bottom: 4px;
-}
-.account-tab {
-    padding: 10px 18px;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-secondary);
-    font-size: 0.88rem;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: color var(--transition-fast), border-color var(--transition-fast);
-}
-.account-tab:hover { color: var(--text-primary); }
-.account-tab.active {
-    color: var(--brand-primary);
-    border-bottom-color: var(--brand-primary);
 }
 .account-tab-content { display: none; }
 .account-tab-content.active { display: block; }
@@ -4661,31 +4633,86 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .council-withdraw-actions button:disabled { opacity: .5; cursor: not-allowed; }
 #council-withdraw-error:empty { display: none; }
 
-/* Multisig account import and transaction review. */
-.multisig-panel { padding: 20px; margin: 16px 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+/* Multisig account import and transaction review. The card is a kit card (spec 2026-11-25-multisig-and-advanced-cards.md,
+   section 3): its border and margin come from .list-container; buttons are spaced by the gap of their parents. */
+.multisig-panel { padding: 24px; }
+.multisig-panel:not(.list-container) { margin: 16px 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+.multisig-panel.list-container { margin-bottom: 24px; }
+.multisig-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
+.multisig-head h3 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
 .multisig-panel h3, .multisig-panel h4, .multisig-dialog h4 { margin: 12px 0; }
+.multisig-panel .multisig-head h3 { margin: 0; }
 .multisig-panel p, .multisig-dialog p { color: var(--text-secondary); font-size: .85rem; line-height: 1.6; margin: 12px 0; overflow-wrap: anywhere; }
-.multisig-panel summary { cursor: pointer; padding: 12px 0; color: var(--brand-secondary); }
-.multisig-saved-list { display: grid; gap: 10px; margin: 12px 0; }
+.multisig-panel .ui-panel, .multisig-panel p.ui-field-hint, .multisig-panel p.ui-field-error { margin: 0; }
+.multisig-panel summary { cursor: pointer; padding: 12px 0; color: var(--text-primary); }
+.multisig-panel summary::marker { color: var(--accent-violet-text); }
+.multisig-saved-list { display: grid; gap: 10px; margin: 12px 0; padding: 0; list-style: none; }
+.multisig-saved-list:empty { display: none; }
+.multisig-saved-list .wallet-account-btn { width: 100%; min-height: 56px; }
+.multisig-saved-list .wallet-account-main { display: grid; gap: 4px; min-width: 0; flex: 1; text-align: left; }
 .multisig-saved-list .wallet-account-addr { overflow-wrap: anywhere; white-space: normal; }
+.multisig-saved-list .ui-chip { margin-left: 8px; }
+.multisig-discovery-status { margin: 12px 0; }
 .multisig-discovery-status, .multisig-steps { color: var(--text-secondary); font-size: .85rem; line-height: 1.6; }
-.multisig-panel .multisig-discovery-note { padding: 12px 16px; border-left: 3px solid var(--brand-secondary); background: var(--bg-primary); }
+.multisig-discovery-status.ui-panel { color: var(--text-primary); }
+.multisig-discovery-status:empty { display: none; }
 .multisig-steps { padding-left: 22px; }
 .multisig-steps li { margin: 10px 0; }
-.multisig-import, .multisig-dialog label { display: grid; gap: 12px; }
-.multisig-import label { display: grid; gap: 6px; }
-.multisig-panel input, .multisig-panel textarea, .multisig-dialog select, .multisig-dialog textarea { width: 100%; box-sizing: border-box; padding: 10px; background: var(--bg-primary, #11121a); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font: inherit; }
+.multisig-import:not(.ui-form), .multisig-dialog label { display: grid; gap: 12px; }
+.multisig-import:not(.ui-form) label { display: grid; gap: 6px; }
+.multisig-panel .multisig-import { margin-top: 12px; }
+.multisig-panel input:not(.ui-input), .multisig-panel textarea:not(.ui-input), .multisig-dialog select:not(.ui-input), .multisig-dialog textarea:not(.ui-input) { width: 100%; box-sizing: border-box; padding: 10px; background: var(--bg-dark); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font: inherit; }
 .multisig-panel textarea, .multisig-dialog textarea { resize: vertical; }
 .multisig-panel ul { padding-left: 20px; }
+.multisig-panel ul.multisig-saved-list { padding-left: 0; }
 .multisig-address { display: inline-block; max-width: 100%; overflow-wrap: anywhere; font-size: .8rem; }
-.multisig-pending-row { padding: 16px 0; border-bottom: 1px solid var(--border-color); }
-.multisig-panel button, .multisig-dialog button.staking-download-btn { margin: 6px 6px 6px 0; }
+.multisig-pending-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 16px 0 8px; }
+.multisig-pending-head h4 { margin: 0; }
+.multisig-pending-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 16px 0; border-bottom: 1px solid var(--border-color); }
+.multisig-pending-row > code, .multisig-pending-row > p, .multisig-pending-row > details { flex: 1 1 100%; margin: 0; }
+.multisig-new-form { display: grid; gap: 12px; justify-items: start; margin-top: 8px; }
+.multisig-new-form .ui-field { width: 100%; }
+.multisig-cancel-btn:hover { color: var(--accent-red); }
+.multisig-review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.multisig-panel button, .multisig-dialog button { margin: 0; }
+.multisig-dialog .ui-field { margin: 12px 0; }
+.multisig-dialog .validate-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 .multisig-error:empty, #multisig-review-error:empty { display: none; }
+.multisig-panel p.ui-field-error { color: var(--text-primary); font-size: 0.82rem; }
 .multisig-modal { position: fixed; inset: 0; z-index: 1100; align-items: center; justify-content: center; background: rgba(0,0,0,.8); padding: 16px; }
 .multisig-dialog { position: relative; width: 100%; max-width: 680px; max-height: 90vh; overflow-y: auto; padding: 28px; border-radius: var(--radius-lg); }
 .multisig-dialog h2 { padding-right: 30px; margin-bottom: 16px; }
 .multisig-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: rgba(0,0,0,.3); font-size: .8rem; }
 .multisig-dialog button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 640px) {
+    .multisig-panel { padding: 16px; }
+    .multisig-head { flex-direction: column; align-items: stretch; }
+    .multisig-panel .validate-secondary, .multisig-panel .ui-action, .wallet-advanced .validate-secondary, .wallet-advanced .ui-action { min-height: 44px; width: 100%; justify-content: center; }
+    .multisig-dialog .validate-secondary, .api-error .validate-secondary { min-height: 44px; }
+}
+.validate-secondary:disabled, .validate-secondary[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+/* The modals opened from the wallet page (spec 2026-11-25, sweep rows 40 and 41): one backdrop and one card. The page
+   toggles display inline, so .ui-modal never sets it. */
+.ui-modal { position: fixed; inset: 0; z-index: 1000; align-items: center; justify-content: center; background: rgba(0,0,0,.8); backdrop-filter: blur(5px); padding: 20px; }
+.ui-modal-card { position: relative; width: 100%; max-width: 540px; max-height: 92vh; overflow-y: auto; padding: 28px; border-radius: var(--radius-lg); border: 1px solid var(--border-color); box-sizing: border-box; }
+.ui-modal-card.is-narrow { max-width: 500px; }
+.ui-modal-card.is-wide { max-width: 620px; }
+.ui-modal-card > h3 { margin-bottom: 6px; font-size: 1.3rem; }
+.ui-modal-card > .ui-section-caption { margin: 0 0 18px; font-size: 0.88rem; }
+#payout-total.payout-total { color: var(--text-primary); }
+.send-keep-alive { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); }
+.send-keep-alive input { margin-top: 3px; }
+.identity-status-row { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+.identity-deposit { font-size: 0.82rem; color: var(--text-secondary); }
+#identity-modal-parent-warning { margin-bottom: 14px; }
+.identity-fields { margin-bottom: 16px; }
+.identity-actions { display: flex; gap: 10px; align-items: center; }
+.identity-actions .modal-submit-btn { flex: 1; }
+#clear-identity-tx-btn:hover { color: var(--accent-red); }
+@media (max-width: 640px) {
+    .ui-modal-card { padding: 20px 16px; }
+}
 
 /* One close control for every inner page and dialog (lib/close-control.js).
    Same X as the account and block pages; 44px touch target. */
@@ -4796,6 +4823,80 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 @media (forced-colors: active) {
     .ui-action { border: 1px solid ButtonText; background: ButtonFace; color: ButtonText; }
 }
+
+/* Page head and tabs: one left edge (plan 2026-11-25-page-header-alignment) */
+.list-container, .council-page { --page-gutter: 24px; }
+.ui-page-head { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; padding: 20px var(--page-gutter) 16px; border-bottom: 0; }
+.ui-page-head.is-ruled { padding-bottom: 20px; border-bottom: 1px solid var(--border-color); }
+.ui-page-head.is-outside { padding: 0 24px; }
+.ui-page-head-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.ui-page-head-title h2 { margin: 0; }
+.ui-page-head .help-inline-icon { width: 28px; height: 28px; margin-left: 0; color: var(--text-secondary); opacity: 1; }
+.ui-page-head .help-inline-icon i { font-size: 18px; }
+.ui-page-head-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; color: var(--text-secondary); font-size: 0.82rem; line-height: 1.5; }
+.ui-page-head-meta > span + span { padding-left: 16px; border-left: 1px solid var(--border-color); }
+.ui-page-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; max-width: 100%; }
+.ui-page-head-actions[hidden] { display: none; }
+.ui-page-head-actions .ui-panel.is-line { flex: 1 1 280px; min-width: 0; margin: 0; }
+.ui-page-body { padding: 24px var(--page-gutter); }
+#account-details-container { --page-gutter: 20px; }
+#account-details-container .address-cell { overflow-wrap: anywhere; }   /* the full address in the first table has no break point at 375 (found by the phone-width scene check) */
+
+/* An action this account can never use here: outlined and readable, not dimmed (the 0.55 dim stays for "held while another runs") */
+.ui-action.is-unavailable[aria-disabled="true"] { opacity: 1; background: transparent; border-color: rgba(255, 255, 255, 0.36); color: var(--text-secondary); cursor: not-allowed; }
+.ui-action.is-unavailable[aria-disabled="true"] .bx { color: var(--text-secondary); }
+.ui-action.is-unavailable[aria-disabled="true"]:hover { box-shadow: none; }
+
+.account-tabs { position: relative; display: flex; gap: 24px; margin: 0 0 4px; padding: 0 var(--page-gutter); border-bottom: 1px solid var(--border-color); overflow-x: auto; scrollbar-width: none; }
+.account-tabs::-webkit-scrollbar { display: none; }
+.account-tab { flex: 0 0 auto; min-height: 44px; padding: 10px 0; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--text-secondary); font-family: inherit; font-size: 0.88rem; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color var(--transition-fast), border-color var(--transition-fast); }
+.account-tab.active { color: var(--text-primary); border-bottom-color: var(--brand-primary); }
+@media (hover: hover) { .account-tab:not(.active):hover { border-bottom-color: rgba(255, 255, 255, 0.24); } }
+.account-tab:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
+
+@media (max-width: 900px) {
+    .ui-page-head.is-outside.council-page-header { padding: 12px 24px; }
+    .ui-page-head-meta { flex-direction: column; }
+    .ui-page-head-meta > span + span { padding-left: 0; border-left: 0; }
+}
+@media (max-width: 600px) {
+    /* the card itself pads 16 px here (.glass), so the parts inside add nothing */
+    .list-container.glass { --page-gutter: 0px; }
+    .ui-page-head { padding: 0 0 12px; }
+    .ui-page-head.is-outside, .ui-page-head.is-outside.council-page-header { padding: 12px 16px; }
+    .ui-page-head .help-inline-icon { width: 44px; height: 44px; margin: -8px 0; }
+    .ui-page-head-actions { flex-direction: column; align-items: stretch; width: 100%; }
+    .ui-page-head-actions .ui-action { width: 100%; }
+    .ui-page-head-actions .ui-panel.is-line { flex: 0 0 auto; }
+    .account-tabs { gap: 20px; padding-right: 24px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+    .ui-page-body { padding: 16px 0; }
+}
+@media (forced-colors: active) { .account-tab.active { border-bottom-color: Highlight; } }
+/* The proxy list (phone-width spec 3): a table on desktop, stacked rows at 640 px and below, as .balance-locks-table does. */
+.proxy-deposit { margin-bottom: 6px; font-size: 0.78rem; color: var(--text-muted); }
+.proxy-table { margin: 0; }
+.proxy-table tbody td { padding: 8px 4px; }
+.proxy-table .address-cell { color: var(--brand-secondary); font-size: 0.82rem; }
+.proxy-table .proxy-cell-type code { font-size: 0.78rem; color: var(--text-secondary); }
+.proxy-table .proxy-cell-delay { text-align: right; }
+.proxy-table td.proxy-cell-delay { font-size: 0.78rem; color: var(--text-secondary); }
+.proxy-table .proxy-cell-action { text-align: right; }
+.proxy-label { display: none; }
+@media (max-width: 640px) {
+    .proxy-table thead { display: none; }
+    .proxy-table, .proxy-table tbody { display: block; width: 100%; }
+    .proxy-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+    .proxy-table tbody tr:last-child { border-bottom: 0; }
+    .proxy-table tbody td { display: block; min-width: 0; padding: 0; border-bottom: 0; text-align: left; }
+    .proxy-table tbody tr:hover td { background: none; }
+    .proxy-table .proxy-cell-delegate, .proxy-table .proxy-cell-action { grid-column: 1 / -1; }
+    .proxy-table .proxy-cell-action { margin-top: 8px; }
+    .proxy-table .proxy-cell-action:empty { display: none; }
+    .proxy-table .address-cell { display: inline-flex; align-items: center; min-height: 44px; }
+    .proxy-label { display: block; font-size: 0.72rem; color: var(--text-secondary); }
+    .proxy-table .proxy-remove-btn { width: 100%; }
+    .proxy-table .ui-chip { height: auto; min-height: 24px; padding: 4px 8px; line-height: 1.3; white-space: normal; }
+}
 @media (max-width: 640px) {
     .lock-row.is-act { grid-template-columns: 36px minmax(0, 1fr); row-gap: 12px; }
     .lock-row.is-act .lock-row-main { grid-column: 2; }
@@ -4806,7 +4907,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 }
 .nom-status { margin-bottom: 20px; }
 .nom-banner { margin: 10px 24px 0; padding: 10px 14px; border-radius: 8px; font-size: 0.84rem; line-height: 1.5; background: var(--accent-amber-tint); border: 1px solid var(--accent-amber-line); }
-.nom-banner .staking-download-btn { margin-left: 8px; padding: 4px 12px; font-size: 0.78rem; }
+.nom-banner .ui-action { margin-left: 8px; }
 @media (max-width: 640px) {
     .balance-locks-table thead { display: none; }
     .balance-locks-table, .balance-locks-table tbody, .balance-locks-table tr, .balance-locks-table td { display: block; width: 100%; }
@@ -4846,7 +4947,24 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 /* Read only is attention, not an action: amber (fidelity review 7). */
 .wallet-viewing-note.is-readonly { padding: 12px 16px; border: 1px solid var(--accent-amber-line); border-radius: var(--radius-sm); background: linear-gradient(var(--accent-amber-wash), var(--accent-amber-wash)), var(--bg-surface); box-shadow: inset 3px 0 0 var(--accent-amber); color: var(--text-primary); }
 .wallet-viewing-note.is-readonly .bx { font-size: 16px; vertical-align: -2px; color: var(--accent-amber); }
-#wallet-switch-btn[hidden] { display: none; }
+#wallet-switch-btn[hidden], .wallet-head-actions .validate-secondary[hidden] { display: none; }
+/* The My Account head (phone-width spec 2): one row on desktop; at 640 px and below it stacks, the address wraps in full. */
+.wallet-head-actions { display: flex; align-items: center; gap: 14px; }
+.wallet-head-address { padding: 12px 24px 0; }
+.wallet-head-addr-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.wallet-head-addr { min-width: 0; color: var(--text-secondary); font-size: 0.78rem; overflow-wrap: anywhere; }
+.wallet-head-copy { padding: 6px 12px; font-size: 0.78rem; }
+.wallet-head-copy .bx, .wallet-head-actions .validate-secondary .bx { font-size: 16px; }
+@media (max-width: 640px) {
+    #wsec-head .list-header { flex-direction: column; align-items: stretch; gap: 12px; }
+    #wsec-head .list-header h2 { min-width: 0; flex-wrap: wrap; overflow-wrap: anywhere; }
+    .wallet-head-actions { flex-wrap: wrap; gap: 8px; }
+    .wallet-head-actions .validate-secondary { flex: 1 1 128px; min-width: 0; min-height: 44px; padding: 0 12px; box-sizing: border-box; justify-content: center; }
+    .wallet-head-actions .wallet-history-link { flex: 1 0 100%; display: inline-flex; align-items: center; min-height: 44px; }
+    .wallet-head-address { padding: 12px 16px 0; }
+    .wallet-head-addr { flex: 1 0 100%; padding: 12px 0; line-height: 1.6; }
+    .wallet-head-copy { min-height: 44px; padding: 0 16px; font-size: 0.82rem; }
+}
 
 /* ── Colour roles: the shared ui-* parts (spec 2026-11-21, section 2.4) ──
    Colour is carried by small full-strength parts on neutral surfaces: a chip, a tile, a step marker, a dot, a
@@ -4901,6 +5019,82 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .ui-trust p { margin: 0; min-width: 0; }
 .ui-hairline { position: relative; overflow: hidden; }
 .ui-hairline::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--brand-gradient); }
+/* ui-field (spec 2026-11-25-multisig-and-advanced-cards.md, section 2): a label, a hint, the input and its error. An error
+   is aria-invalid on the field, the icon and the sentence in its -error node, focus on the field. Red line, never pink. */
+.ui-form { display: grid; gap: 16px; margin: 0; }
+.ui-field { display: grid; gap: 4px; min-width: 0; }
+.ui-field-label { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
+.ui-field-hint { margin: 0; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); }
+.ui-input { width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px; background: var(--bg-dark); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font: inherit; font-size: 0.9rem; }
+textarea.ui-input { resize: vertical; font-family: monospace; font-size: 0.82rem; overflow-wrap: anywhere; }
+.ui-input:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+.ui-input[aria-invalid="true"] { border-color: var(--accent-red-line); }
+.ui-input.is-narrow { width: 96px; }
+.ui-field-error { margin: 0; font-size: 0.82rem; color: var(--text-primary); }
+.ui-field-error .bx { color: var(--accent-red); font-size: 16px; margin-right: 6px; vertical-align: -3px; }
+.ui-field-error:empty { display: none; }
+.ui-field-error[hidden] { display: none; }
+.ui-section { padding: 24px; border-top: 1px solid var(--border-color); }
+.ui-section:first-of-type { border-top: 0; }
+.ui-section-title { margin: 0 0 4px; font-size: 0.95rem; font-weight: 600; color: var(--text-primary); }
+.ui-section-caption { margin: 0 0 12px; font-size: 0.82rem; color: var(--text-secondary); }
+.ui-empty { margin: 0; padding: 8px 0; font-size: 0.9rem; color: var(--text-secondary); }
+.ui-empty .bx { margin-right: 6px; vertical-align: -2px; }
+@media (max-width: 640px) {
+    .ui-section { padding: 16px; }
+    .ui-input.is-narrow { width: 96px; }
+}
+
+/* The Advanced card (spec 2026-11-25, section 4): a kit card with three titled sections; violet marks the section. */
+.wallet-advanced { margin-top: 24px; }
+.wallet-advanced .list-header { flex-wrap: wrap; row-gap: 4px; }
+.wallet-advanced .list-header h2 .bx { color: var(--accent-violet-text); vertical-align: middle; }
+.wallet-advanced-sub { margin: 0; flex: 1 1 100%; font-size: 0.82rem; color: var(--text-secondary); }
+.wallet-advanced-subtitle { display: block; margin: 16px 0 8px; font-size: 0.9rem; font-weight: 600; }
+#adv-pending-section:has(#wallet-multisig-pending:empty) { display: none; }
+.wallet-advanced .ui-form { margin-bottom: 12px; justify-items: start; }
+.wallet-advanced .ui-form .ui-field { width: 100%; }
+.wallet-advanced .api-error, .api-error { display: grid; gap: 12px; justify-items: start; }
+.wallet-advanced .validate-setup-note { margin: 8px 0 0; font-size: 0.82rem; }
+.proxy-add-grid { display: grid; grid-template-columns: minmax(0, 1fr) 180px 120px auto; gap: 12px; align-items: end; }
+#proxy-add-error { margin-top: 8px; }
+.calc-address { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.calc-address code { min-width: 0; font-family: monospace; font-size: 0.82rem; color: var(--text-primary); overflow-wrap: anywhere; }
+#multisig-result .ui-panel { margin-top: 4px; }
+#multisig-result .ui-panel-body p { margin: 8px 0 0; }
+.ms-pending-table { margin: 0; }
+.ms-pending-table .ms-cell-hash code { font-size: 0.78rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.ms-pending-table .ms-cell-by .address-cell { font-size: 0.82rem; }
+.ms-pending-table .ms-cell-block { font-size: 0.82rem; color: var(--text-secondary); }
+.ms-pending-foot { margin: 8px 0 0; }
+@media (max-width: 900px) {
+    .proxy-add-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 640px) {
+    .proxy-add-grid { grid-template-columns: minmax(0, 1fr); }
+    .ms-pending-table thead { display: none; }
+    .ms-pending-table, .ms-pending-table tbody { display: block; width: 100%; }
+    .ms-pending-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+    .ms-pending-table tbody td { display: block; min-width: 0; padding: 0; border-bottom: 0; text-align: left; }
+    .ms-pending-table tbody td::before { content: attr(data-label); display: block; font-size: 0.82rem; color: var(--text-secondary); }
+}
+
+/* The wallet page body (spec 2026-11-25, sweep rows 5 to 15): classes, not colours written in markup. */
+.wallet-header-figure { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
+.wallet-header-note { font-size: 0.82rem; color: var(--text-secondary); }
+.wallet-chart-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: 0 20px; text-align: center; font-size: 0.85rem; color: var(--text-secondary); }
+#wallet-apr-card .list-header h2 .bx { color: var(--accent-violet-text); vertical-align: middle; }
+.wallet-apr-figure { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.wallet-apr-period { font-size: 0.82rem; color: var(--text-secondary); }
+.wallet-apr-value { font-size: 2.8rem; font-weight: 700; line-height: 1; color: var(--text-primary); }
+.wallet-apr-unit { font-size: 1.4rem; color: var(--text-secondary); }
+.wallet-apr-detail { margin-top: 6px; text-align: center; font-size: 0.85rem; color: var(--text-secondary); }
+.wallet-apr-bonded { font-size: 0.82rem; }
+.wallet-date-cell { white-space: nowrap; }
+.payout-validator { font-size: 0.78rem; }
+.staking-summary-card .value.is-positive { color: var(--accent-green); }
+.wallet-load-failed { padding: 24px; }
+.js-recipient-copy { margin-left: 8px; }
 @media (forced-colors: active) {
     .ui-chip, .ui-tile, .ui-step, .ui-panel { border: 1px solid CanvasText; background: Canvas; color: CanvasText; box-shadow: none; }
     .ui-step.is-current, .ui-tile.is-brand { background: Highlight; color: HighlightText; border-color: Highlight; }
@@ -5107,7 +5301,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .wallet-picker .wallet-create-line { margin-top: 8px; }
 .ms-compact-wrap { position: relative; }
 .ms-checking { color: var(--text-secondary); font-size: 0.8rem; font-weight: 400; }
-.ms-compact > summary .wp-help-btn { min-width: 28px; min-height: 28px; padding: 0; background: none; border: 0; color: var(--text-muted); font-size: 1rem; cursor: pointer; border-radius: 999px; }
+.ms-compact > summary .wp-help-btn { min-width: 28px; min-height: 28px; padding: 0; background: none; border: 0; color: var(--text-secondary); font-size: 1rem; cursor: pointer; border-radius: 999px; }
 .ms-compact > summary .wp-help-btn:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
 .wp-popover { margin: 4px 0 8px 18px; padding: 10px 12px; max-width: 420px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-secondary); font-size: 0.82rem; line-height: 1.5; }
 .wp-popover[hidden] { display: none; }
@@ -5318,6 +5512,7 @@ a.validate-secondary { text-decoration: none; }
 .validate-advanced summary { padding: 12px 16px; cursor: pointer; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); }
 .validate-advanced summary:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
 .validate-advanced-body { display: flex; flex-direction: column; gap: 12px; padding: 0 16px 16px; }
+.validate-advanced-body code { overflow-wrap: anywhere; }
 .validate-node-result { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .validate-node-verdict { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
 .validate-node-table td, .validate-node-table th { overflow-wrap: anywhere; }
@@ -5348,7 +5543,8 @@ a.validate-secondary { text-decoration: none; }
 .validate-setup-step input[type="text"], .validate-setup-step textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
 .validate-setup-step input[aria-invalid="true"], .validate-setup-step textarea[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.validate-setup-note { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
+.validate-setup-note { margin: 0; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere; }
+.validate-setup-step > p { overflow-wrap: anywhere; }
 .validate-setup-cmd { margin: 0; padding: 12px 16px; overflow-x: auto; white-space: pre; font-size: 0.82rem; line-height: 1.6; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); }
 .validate-setup-cmd:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
 .validate-setup-payee { margin: 0; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 8px; }
@@ -5548,7 +5744,9 @@ a.validate-secondary { text-decoration: none; }
    tokens only; no colour of its own. */
 .validate-manage { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--border-color); }
 .validate-manage-title { display: flex; align-items: center; gap: 12px; margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-primary); }
-/* The manage actions (spec 2026-11-21 section 5.3): a grid of 44 px secondaries, each led by a violet icon. */
+/* The manage actions (spec 2026-11-21 section 5.3): a grid of 44 px secondaries, each led by a violet icon.
+   C-1 (CEO approval 2026-11-25): the routine actions are a 2 by 2 grid (one column on a phone); Stop validating
+   leaves the grid and comes last, alone, under a divider, as a text button with a neutral icon. */
 .validate-manage-actions { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .validate-manage-actions .validate-secondary { width: 100%; min-height: 44px; box-sizing: border-box; justify-content: flex-start; text-align: left; }
 .validate-manage-actions .validate-secondary .bx { flex-shrink: 0; font-size: 18px; color: var(--accent-violet-text); }
@@ -5556,12 +5754,15 @@ a.validate-secondary { text-decoration: none; }
 .validate-manage-ops .validate-secondary { width: auto; }
 .validate-manage-ops .ui-chip { vertical-align: middle; }
 .validate-manage-pending .validate-headline { display: flex; align-items: center; gap: 8px; }
-@media (min-width: 1024px) {
-    .validate-manage-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
 @media (max-width: 480px) {
     .validate-manage-actions { grid-template-columns: 1fr; }
 }
+.validate-manage-stop { margin: 0; border-top: 1px solid var(--border-color); padding-top: 12px; }
+.validate-manage-stop .validate-text-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.validate-manage-stop .validate-text-btn .bx { flex-shrink: 0; font-size: 18px; color: var(--text-secondary); }
+/* The Stop validating confirm step signs from a 44 px secondary with the same neutral icon: no pink gradient button. */
+.validate-manage-panel .validate-secondary[data-manage-action="sign"] { min-height: 44px; box-sizing: border-box; }
+.validate-manage-panel .validate-secondary[data-manage-action="sign"] .bx { flex-shrink: 0; font-size: 18px; color: var(--text-secondary); }
 .validate-manage-links { margin: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.9rem; }
 .validate-manage-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .validate-manage-panel input[type="text"], .validate-manage-panel textarea { width: 100%; box-sizing: border-box; padding: 12px; background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.9rem; }
@@ -5569,7 +5770,7 @@ a.validate-secondary { text-decoration: none; }
 .validate-manage-panel input[aria-invalid="true"], .validate-manage-panel textarea[aria-invalid="true"] { border-color: var(--accent-red-line); }
 .validate-manage-rule { font-weight: 700; color: var(--text-primary); }
 .validate-manage-facts { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.6; }
-.validate-manage .validate-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
+.validate-manage .validate-secondary:disabled, .validate-manage .validate-text-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 /* Sprint 7: the stashes the connected account is a proxy for, a card of its own (spec 2026-11-21 section 4):
    chips for the proxy type and the state, a text link per row. No row fill. */
 .validate-proxied h3 { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
@@ -5684,7 +5885,7 @@ a.validate-secondary { text-decoration: none; }
 .stake-simple .ui-panel.is-line { padding: 0; }
 .stake-call-details { align-self: stretch; }
 .stake-plan-lines { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
-.stake-plan-lines li { display: flex; align-items: center; gap: 8px; }
+.stake-plan-lines li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .stake-plan-lines .bx { font-size: 16px; color: var(--text-secondary); }
 .stake-calls { margin: 0; padding-left: 20px; font-family: monospace; font-size: 0.82rem; line-height: 1.6; overflow-wrap: anywhere; word-break: break-all; color: var(--text-secondary); }
 .stake-calls code, .stake-call-wrapper code { color: var(--accent-violet-text); }

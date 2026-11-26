@@ -19,6 +19,10 @@
 // locks: the Balance breakdown redesign (locks-<scene>-<width>.html), no primary in any scene.
 // sections: My Account that updates itself (sections-<scene>-<width>.html, fidelity review 2026-11-24 P1): the REAL frame,
 // patches and indicators of lib/wallet-sections.js, the REAL stake and payout parts, told what the core tells them.
+// advanced: the Multisig wallets card and the Advanced card (advanced-<scene>-<width>.html and multisig-<scene>-<width>.html,
+// spec 2026-11-25-multisig-and-advanced-cards.md T8): the REAL lib/multisig-view.js and lib/wallet-advanced-view.js in the
+// sections frame. The page guard of both sets: one visible primary (Send); no primary, gradient or colour written in
+// markup inside the two cards or the head; no .staking-download-btn on the page.
 // stake: the Stake PDEX card's simple view (stake-simple-<scene>-<width>.html, design 10.3 WP2): the real modal markup
 // over the wallet page, the REAL lib/stake-card-view.js over a validator snapshot run through the real loadPickerData.
 // Its advanced view (stake-advanced-<scene>-<width>.html, design 10.3 WP3) adds the REAL picker (lib/stake-picker-view.js)
@@ -40,6 +44,7 @@
 // Addresses are synthetic (32 repeated bytes): they belong to no one.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 import { mountChooser, fakeWallet, acct, addr, tick } from '../test/helpers/chooser-world.js';
@@ -68,8 +73,15 @@ import { mockProvider } from '../test/helpers/mock-provider.js';
 import { FEE_MARGIN } from '../lib/fee-preflight.js';
 import { createStakeRefresh, stakeButtonHtml, stakedTileHtml, myValidatorsHtml, stakeIntentNoteHtml } from '../lib/stake-refresh.js';
 import { classifyThrownError } from '../lib/tx-status.js';
-import { createWalletSections, actionBarHtml } from '../lib/wallet-sections.js';
+import { createWalletSections, actionBarHtml, headHtml } from '../lib/wallet-sections.js';
 import { REFRESH_UI } from '../lib/refresh-ui.js';
+import { advancedShellHtml, proxyAddFormHtml, calculatorHtml, bindCalculator, pendingHtml } from '../lib/wallet-advanced-view.js';
+import { createMultisigUI } from '../lib/multisig-view.js';
+import { createSpendMotionUI } from '../lib/treasury-spend-view.js';
+import { normalizeMultisig } from '../lib/multisig.js';
+import { isValidPolkadexAddress } from '../lib/wallet-safety.js';
+import { createKeyMulti, sortAddresses, encodeAddress as encodeAddr, decodeAddress as decodeAddr } from '@polkadot/util-crypto';
+import { u8aToHex } from '@polkadot/util';
 
 const root = new URL('../', import.meta.url);
 const rd = (p, enc = 'utf8') => readFileSync(new URL(p, root), enc);
@@ -295,7 +307,7 @@ const WP3_SCENES = [
     { id: 'steps-S10', primary: 1, need: '.validate-stepwise-done', build: wp3('steps-S10') },
     { id: 'manage-idle', primary: 0, need: '#validate-manage-slot .validate-manage-actions', build: wp3('man-idle', { slot: manageSlot }) },
     { id: 'manage-rotate-keys', primary: 1, need: '#validate-manage-keys', build: wp3('man-keys', { slot: manageSlot }) },
-    { id: 'manage-stop', primary: 1, need: '.validate-manage-facts', build: wp3('man-chill', { slot: manageSlot }) },
+    { id: 'manage-stop', primary: 0, need: '.validate-manage-facts', build: wp3('man-chill', { slot: manageSlot }) },   // C-1: signs from a secondary
     { id: 'manage-pending-multisig', primary: 0, need: '.validate-manage-pending', build: wp3('man-ms-pending', { slot: manageSlot }) },
     { id: 'guide-top', primary: 1, need: '.validate-guide .validate-path.is-compact', build: wp3('guide-pending') },
     { id: 'guide-step-commands', primary: 1, need: '[aria-labelledby="node-step-client"] .validate-cmd', scroll: '#node-step-client', build: wp3('guide-published') },
@@ -354,9 +366,7 @@ function r1world({ known = [], ageMs = 0, server = R1_ENTRIES } = {}) {
     const pr = createPayoutRefresh({ doc, known: store, post: core, data: () => wallet, fmt: r1fmt, now: clock });
     const tile = (label, value, cls = '') => `<div class="staking-summary-card"><div class="label">${label}</div><div class="value${cls}">${value}</div></div>`;
     const btn = (id, icon, title, sub, primary = '') => `<button class="wallet-action-btn${primary}" id="${id}"><i class='bx ${icon}'></i><div><strong>${title}</strong><span>${sub}</span></div></button>`;
-    doc.querySelector('#wallet-dashboard').innerHTML = `<div class="list-container glass">
-        <div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2><div style="display:flex; gap:14px; align-items:center;"><button class="staking-download-btn">Switch wallet</button><button class="staking-download-btn">Disconnect</button></div></div>
-        <div style="padding: 12px 24px 0;"><a href="#" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${ME}</a></div>
+    doc.querySelector('#wallet-dashboard').innerHTML = `${headHtml({ address: ME }, { isOwn: true, canSwitch: true }, { esc: escapeHtml })}
         <div class="staking-summary-grid">${tile('Total Balance', '1,204.5521 PDEX', ' accent')}${tile('Total Staked', '1,150.0000 PDEX')}${tile('Claimed Rewards', '41.2000 PDEX')}${pr.tileHtml(wallet)}</div>
         <div id="wallet-actions-slot"><div class="wallet-action-bar" id="wallet-action-bar">${btn('wallet-act-send', 'bx-paper-plane', 'Send PDEX', 'Transfer to any Polkadex address', ' primary')}${btn('wallet-act-stake', 'bx-plus-circle', 'Stake more', 'Add bond &amp; choose validators')}${pr.buttonHtml(wallet)}${btn('wallet-act-unstake', 'bx-minus-circle', 'Unstake', 'Begin the unbonding period')}${btn('wallet-act-identity', 'bx-id-card', 'Set identity', 'Display name, email, twitter')}</div></div>
     </div>`;
@@ -652,9 +662,7 @@ function stake4dashboard(data, { readOnly = false } = {}) {
         ? `<div class="wallet-readonly-callout"><div class="wallet-readonly-head"><i class='bx bx-show'></i><div><strong>Read-only mode</strong><p>You're viewing this account in <strong>read-only</strong> mode. To send PDEX, stake, claim rewards, or unbond, connect a Substrate browser extension (Polkadot.js, Talisman, SubWallet) or open this page in a mobile wallet's in-app browser.</p></div></div>${stakeIntentNoteHtml('SC-121', escapeHtml)}</div>`
         : `<div class="wallet-action-bar" id="wallet-action-bar">${btn('wallet-act-send', 'bx-paper-plane', 'Send PDEX', 'Transfer to any Polkadex address', ' primary')}${stakeButtonHtml(data.staking, escapeHtml)}`
             + `${btn('wallet-act-payout', 'bx-gift', 'Pay out rewards', '0 unclaimed entries')}${btn('wallet-act-unstake', 'bx-minus-circle', 'Unstake', 'Begin the unbonding period')}${btn('wallet-act-identity', 'bx-id-card', 'Set identity', 'Display name, email, twitter')}</div>`;
-    return `<div class="list-container glass">
-        <div class="list-header"><h2><i class='bx bx-wallet'></i> My Account</h2><div style="display:flex; gap:14px; align-items:center;"><button class="staking-download-btn">Switch wallet</button><button class="staking-download-btn">Disconnect</button></div></div>
-        <div style="padding: 12px 24px 0;"><a href="#" class="item-link" style="color:var(--text-secondary);font-size:0.78rem;">${ME}</a></div>
+    return `${headHtml({ address: ME }, { isOwn: true, canSwitch: true }, { esc: escapeHtml })}
         <div class="staking-summary-grid"><div class="staking-summary-card"><div class="label">Total Balance</div><div class="value accent" id="wallet-total-value">${s4fmt.pdex(data.balance.total)} PDEX</div><div class="value-usd" data-pdex-amount="${data.balance.total}"></div></div>
         ${stakedTileHtml(data, s4fmt)}<div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value">0.0000 PDEX</div></div><div class="staking-summary-card" id="wallet-unpaid-tile"><div class="label" id="wallet-unpaid-label">Unpaid Rewards</div><div class="value" id="wallet-unpaid-value" style="color:var(--brand-primary);">0.0000 PDEX</div></div></div>
     </div>
@@ -737,11 +745,18 @@ async function sectionsWorld({ steps = null } = {}) {
         fetchWallet: async () => ({ ok: true, status: 200, json: async () => next }), setTimer, clearTimer, now: () => 10_000_000,
         parts: { bar: (d) => actionBarHtml(d, { esc: escapeHtml, stakeable: 1, payoutButton: pr.buttonHtml(d) }) } });
     doc.querySelector('#wallet-dashboard').innerHTML = sections.frameHtml(data, { bar: actionBarHtml(data, { esc: escapeHtml, stakeable: 1, payoutButton: pr.buttonHtml(data) }),
-        price: { history: [], configured: true }, isOwn: true, canSwitch: true, help: helpIcon('my-account', 'About My Account') })
-        + `<div class="list-container glass"><div class="list-header"><h2>Proxies</h2></div><div id="wallet-proxy-list" style="padding: 8px 24px 20px;"></div></div>`;
+        price: { history: [], configured: true }, isOwn: true, canSwitch: true, help: helpIcon('my-account', 'About My Account') });
+    // The REAL Advanced card (lib/wallet-advanced-view.js), as script.js renderWalletAdvancedSection draws it for the own wallet.
+    doc.getElementById('wallet-advanced-section').innerHTML = advancedShellHtml({ isOwn: true });
+    doc.getElementById('wallet-proxy-add').innerHTML = proxyAddFormHtml(['Any', 'Governance', 'Staking'], escapeHtml);
+    const calc = doc.getElementById('wallet-multisig-calc');
+    calc.innerHTML = calculatorHtml();
+    bindCalculator(calc, { isValid: isValidPolkadexAddress, keyOf: (a) => u8aToHex(decodeAddr(a)), derive: (lines, n) => encodeAddr(createKeyMulti(sortAddresses(lines, 88), n), 88),
+        write: async () => {}, esc: escapeHtml, short: shortAddr, setTimer });
+    doc.getElementById('wallet-multisig-pending').innerHTML = pendingHtml([], { esc: escapeHtml, short: shortAddr, number: (n) => Number(n).toLocaleString('en-US') });
     pr.paint({ reason: 'render' });
     doc.getElementById('wallet-recent-rewards-table').innerHTML = secTable(['Era', 'Amount', 'Date'], data.rewards.recentClaimed.map(r => [String(r.era), `<span class="staking-amount">${r1fmt.pdex(r.amount)} PDEX</span>`, '2026-11-23']));
-    doc.getElementById('wallet-recent-tx-table').innerHTML = secTable(['Hash', 'Direction', 'Amount', 'Date'], data.recentTransactions.map(r => [`<a href="#" class="item-link" style="color:var(--brand-secondary);">${shortAddr(r.hash)}</a>`, `<span class="reward-badge claimed">${r.direction}</span>`, escapeHtml(r.amount), '2026-11-23']));
+    doc.getElementById('wallet-recent-tx-table').innerHTML = secTable(['Hash', 'Direction', 'Amount', 'Date'], data.recentTransactions.map(r => [`<a href="#" class="item-link">${shortAddr(r.hash)}</a>`, `<span class="reward-badge claimed">${r.direction}</span>`, escapeHtml(r.amount), '2026-11-23']));
     doc.getElementById('wallet-apr-periods').innerHTML = ['7D', '30D', '90D', 'All'].map((l, i) => `<button type="button" class="reward-filter-btn${i === 1 ? ' active' : ''}">${l}</button>`).join('');
     doc.getElementById('wallet-apr-body').innerHTML = `<div class="wallet-stat"><span>Average APR (30 days)</span><strong>17.42%</strong></div>`;
     const proxyEl = doc.getElementById('wallet-proxy-list');
@@ -780,21 +795,153 @@ const SECTIONS_SCENES = [
         await w.say('tx.recent', 'could-not-refresh'); await w.say('rewards.claimed', 'could-not-refresh');
     } }) }
 ].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+// The wallet page's rules (spec 2026-11-25 T8): one visible primary (Send), none in the two cards; no gradient and no
+// colour, background or border written in markup in the cards or the head; no .staking-download-btn anywhere on the page.
+const INLINE_COLOUR = /(^|;)\s*(color|background|border)/i;
+function checkWalletPageRules(w, err) {
+    for (const slot of ['#wallet-multisig-slot', '#wallet-advanced-section']) {
+        const el = w.q(slot);
+        if (!el) { err.push(`no ${slot}`); continue; }
+        if (el.querySelector('.validate-primary, .wallet-action-btn.primary')) err.push(`a primary inside ${slot}`);
+        for (const x of Array.from(el.querySelectorAll('[style]'))) if (/gradient/.test(x.getAttribute('style')) || INLINE_COLOUR.test(x.getAttribute('style'))) err.push(`a colour written in markup inside ${slot}: ${x.outerHTML.slice(0, 80)}`);
+    }
+    const head = w.q('#wsec-head');
+    if (head) for (const x of Array.from(head.querySelectorAll('[style]'))) if (INLINE_COLOUR.test(x.getAttribute('style'))) err.push(`a colour written in markup in the head: ${x.outerHTML.slice(0, 80)}`);
+    const legacy = w.qa('.staking-download-btn').length;
+    if (legacy) err.push(`${legacy} .staking-download-btn on the page`);
+}
 function checkSectionsScene(w, s, err) {
     if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
     for (const id of ['wsec-head', 'wsec-summary', 'wsec-recent-tx', 'wsec-rewards', 'wallet-apr-card']) if (!w.doc.getElementById(id)) err.push(`no #${id}: not the real frame`);
     const n = w.qa('.wallet-action-btn.primary').filter(w.visible).length;
     if (n !== s.primary) err.push(`${n} primary actions visible, the spec table wants ${s.primary}`);
-    if (s.need && w.qa(s.need).filter(w.visible).length < 1) err.push(`no visible ${s.need}`);
+    for (const n of [].concat(s.need || [])) if (w.qa(n).filter(w.visible).length < 1) err.push(`no visible ${n}`);
+    checkWalletPageRules(w, err);
     // U14: one accent per card
     for (const c of ['#wsec-recent-tx', '#wsec-rewards', '#wallet-apr-card']) if (w.q(`${c} .list-header .ui-chip`) && w.q(`${c} > .ui-panel`)) err.push(`${c}: a chip and a line at once`);
+}
+
+// ── the Multisig wallets card and the Advanced card (spec 2026-11-25-multisig-and-advanced-cards.md, T8) ──
+// The real multisig card is mounted on the frame's slot with a stand-in search (what lib/multisig-discovery.js answers).
+const MS_TEAM = () => normalizeMultisig({ signers: [ME, P1, P2], threshold: 2, name: 'Team wallet' });
+const MS_TREASURY = () => normalizeMultisig({ signers: [ME, P1, P3], threshold: 2, name: 'Treasury' });
+async function advancedWorld({ discover = async () => ({ wallets: [], scannedEvents: 412 }), steps = null } = {}) {
+    return sectionsWorld({ steps: async (w) => {
+        const api = {};   // one node handle for the card's life (the card ignores a search answered for another one)
+        const ui = createMultisigUI({ store: { list: () => [], find: () => null, save: (v) => v }, storage: {}, api: () => api, accounts: async () => [], selected: () => ME, select() {},
+            submit: async () => {}, refresh() {}, fetchJson: async () => ({}), discover });
+        ui.mountAccounts(w.q('#wallet-multisig-slot'), { address: ME });
+        await tick(5);
+        if (steps) await steps(w);
+        await tick(5);
+    } });
+}
+const ADVANCED_SCENES = [
+    { id: 'advanced-default', need: ['#multisig-calc-go.ui-action'], scroll: '#wallet-advanced-section', build: () => advancedWorld() },
+    { id: 'advanced-derived', need: ['#multisig-result .ui-panel.is-ok [data-address]'], scroll: '#wallet-advanced-section', build: () => advancedWorld({ steps: async (w) => {
+        w.q('#multisig-signers').value = [ME, P1, P2].join('\n'); w.q('#multisig-threshold').value = '2'; w.q('#multisig-calc-go').click();
+    } }) },
+    { id: 'advanced-invalid', need: ['#multisig-signers[aria-invalid="true"]', '#multisig-signers-error .bx-error-circle'], scroll: '#wallet-advanced-section', build: () => advancedWorld({ steps: async (w) => {
+        w.q('#multisig-signers').value = ME; w.q('#multisig-calc-go').click();
+    } }) },
+    { id: 'multisig-discovering', need: ['.multisig-discover[disabled]', '.multisig-discovery-status .bx-spin'], scroll: '#wallet-multisig-slot', build: () => advancedWorld({ discover: () => new Promise(() => {}) }) },
+    { id: 'multisig-found', need: ['.multisig-saved-list [data-multisig]', '.multisig-discovery-status.is-ok'], scroll: '#wallet-multisig-slot', build: () => advancedWorld({ discover: async () => ({ wallets: [MS_TEAM(), MS_TREASURY()], scannedEvents: 412 }) }) },
+    { id: 'multisig-none', need: ['.multisig-discovery-status.is-info'], scroll: '#wallet-multisig-slot', build: () => advancedWorld() },
+    { id: 'multisig-failed', need: ['.multisig-discovery-status.ui-panel.is-warn:not(.is-line)', '.multisig-discover:not([disabled])'], scroll: '#wallet-multisig-slot',
+        build: () => advancedWorld({ discover: async () => { throw Object.assign(new Error('timed out'), { code: 'timeout' }); } }) }
+].map(s => ({ ...s, primary: 1, connected: ME, widths: [1280, 375] }));
+function checkAdvancedScene(w, s, err) {
+    checkSectionsScene(w, s, err);
+    if (!w.q('#wallet-advanced-section .wallet-advanced')) err.push('not the real Advanced card');
+    if (!w.q('#wallet-multisig-slot .multisig-panel')) err.push('not the real Multisig wallets card');
+    if (s.id === 'multisig-found' && w.qa('.multisig-saved-list [data-multisig]').length !== 2) err.push('the found scene does not list two wallets');
+}
+
+// ── heads: the page head and tabs of Treasury, Council, Democracy, Active Validators and the Account details
+// (plan 2026-11-25-page-header-alignment.md section 5.3). The page is the REAL script.js and index.html (test/helpers/full-page.js,
+// one child process per scene, the rendered shell read back), with the REAL stylesheet. Only the chain read behind "Propose a spend"
+// is told: the REAL lib/treasury-spend-view.js is mounted on the page's own slot with the seats the scene names.
+const HEADS_RUNNER = fileURLToPath(new URL('../test/helpers/full-page.js', import.meta.url));
+const HEADS_SETTLE = { setScroll: 0, wait: 150 };
+const headsApi = {
+    treasury: { '/api/treasury': { proposals: [], approvals: [], allProposals: Array.from({ length: 83 }, (_, i) => ({ index: i, status: 'awarded', value: '0', proposer: ME, beneficiary: P1 })), spendableFunds: 1250, proposalCount: 87, status: 'Synced' } },
+    democracy: (status) => ({ '/api/democracy': { referenda: [], publicProposals: [], referendumCount: 1, status, currentBlock: 100, launchPeriod: 50 } }),
+    council: { '/api/council': { members: [], runnersUp: [], candidates: [], motions: [], desiredMembers: 3, termDuration: 100, blocksRemaining: 50, pallet: 'elections', collectivePallet: 'council' },
+        '/api/technical-committee': { members: [], motions: [], proposalCount: 0, collectivePallet: 'technicalCommittee' } },
+    account: { '/api/account/': { account: ME, display: 'Unknown', balanceTotal: 1250.5, balanceFree: 1000, balanceReserved: 0, balanceFrozen: 250.5, roles: 'none', rank: '0', transactions: [], events: [], status: 'Synced' } }
+};
+async function headsWorld({ path, api, seed = {}, steps = [], seats = undefined, after = null }) {
+    const out = execFileSync(process.execPath, [HEADS_RUNNER, JSON.stringify({ path, api, seed, steps: [HEADS_SETTLE, ...steps], dumpHtml: true })], { encoding: 'utf8', maxBuffer: 1 << 26 });
+    const line = out.split('\n').find(l => l.startsWith('RESULT '));
+    if (!line) throw new Error(`the page ${path} did not report`);
+    const r = JSON.parse(line.slice(7));
+    if (r.errors && r.errors.length) throw new Error(`the page ${path} threw: ${r.errors[0]}`);
+    const window = new Window({ url: 'https://explorer.test/' + path });
+    const doc = window.document;
+    doc.body.innerHTML = r.appHtml;
+    for (const img of doc.querySelectorAll('img[src="logo.png"]')) img.setAttribute('src', logoUri);
+    const qa = (sel) => Array.from(doc.querySelectorAll(sel));
+    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), visible: (el) => !!el && !el.closest('[hidden]') };
+    if (seats) {
+        // The page's own action slot, told what the chain says: the real part draws every state.
+        const slot = w.q('#treasury-spend-action');
+        const api = seats.noApi ? null : { registry: { chainDecimals: [12] } };
+        const ui = createSpendMotionUI({ api: () => api, selected: () => seats.selected, isMultisig: () => false, submit: async () => {}, connectPrompt: () => '', document: doc,
+            motion: { readSeats: seats.pending ? () => new Promise(() => {}) : async () => ({ pallet: 'council', members: seats.members }), readHead: async () => 1000, build: () => ({}), decode: () => ({}) } });
+        ui.mount(slot);
+        await tick(5); await tick(5);
+    }
+    if (after) after(w);
+    return w;
+}
+const HEADS_SCENES = [
+    { id: 'treasury-header', connected: ME, widths: [1280, 1000, 375], build: () => headsWorld({ path: 'treasury', api: headsApi.treasury, seats: { selected: ME, members: [P1, P2, P3] } }) },
+    { id: 'treasury-header-no-wallet', build: () => headsWorld({ path: 'treasury', api: headsApi.treasury, seats: { selected: null, members: [] } }) },
+    { id: 'treasury-header-member', connected: ME, build: () => headsWorld({ path: 'treasury', api: headsApi.treasury, seats: { selected: ME, members: [ME, P1, P2] } }) },
+    { id: 'treasury-header-spends-tab', connected: ME, build: () => headsWorld({ path: 'treasury', api: headsApi.treasury, steps: [{ click: '[data-treastab="spends"]' }], seats: { selected: ME, members: [P1, P2, P3] } }) },
+    { id: 'treasury-tabs-hover', connected: ME, build: () => headsWorld({ path: 'treasury', api: headsApi.treasury, seats: { selected: ME, members: [P1, P2, P3] },
+        after: (w) => { w.q('[data-treastab="spends"]').classList.add('pv-hover'); w.q('[data-treastab="history"]').classList.add('pv-focus'); } }) },
+    { id: 'council-header', connected: ME, build: () => headsWorld({ path: 'council', api: headsApi.council }) },
+    { id: 'council-header-motions', connected: ME, build: () => headsWorld({ path: 'council', api: headsApi.council, steps: [{ click: '[data-tab="council-motions"]' }] }) },
+    { id: 'democracy-header', build: () => headsWorld({ path: 'democracy', api: headsApi.democracy('Synced') }) },
+    { id: 'democracy-header-referenda', build: () => headsWorld({ path: 'democracy', api: headsApi.democracy('Syncing'), steps: [{ click: '[data-demtab="referenda"]' }] }) },
+    { id: 'validators-header', build: () => headsWorld({ path: 'validators', api: {}, seed: { pdex_validate_enabled: '1' } }) },
+    { id: 'account-tabs', build: () => headsWorld({ path: 'account/' + ME, api: headsApi.account }) }
+].map(s => ({ primary: 0, widths: [1280, 375], ...s }));
+function checkHeadsScene(w, s, err) {
+    const shown = w.qa('.page-section').filter(p => p.style.display && p.style.display !== 'none');
+    if (shown.length !== 1) err.push(`${shown.length} pages on screen, the scene wants 1`);
+    const page = shown[0] || w.doc;
+    const heads = Array.from(page.querySelectorAll('.list-header')).filter(h => h.classList.contains('ui-page-head'));
+    // The Account details head (title and close control) is one row and is not part of this change; its tab row is.
+    if (heads.length < 1 && s.id !== 'account-tabs') err.push('the page head is not .list-header.ui-page-head');
+    for (const h of heads) if (h.querySelector('[style]')) err.push('a style attribute inside the head: ' + h.querySelector('[style]').outerHTML.slice(0, 80));
+    for (const row of Array.from(page.querySelectorAll('.account-tabs'))) {
+        if (/margin|padding/.test(row.getAttribute('style') || '')) err.push('inline spacing on a tab row');
+        const n = row.querySelectorAll('.account-tab.active').length;
+        if (row.querySelector('.account-tab') && n !== 1) err.push(`${n} selected tabs in a tab row`);
+    }
+    if (w.qa('.validate-primary').length) err.push('a .validate-primary in a head scene');
+    if (w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length !== s.primary) err.push('the scene wants ' + s.primary + ' primary actions');
+    if (s.id === 'treasury-tabs-hover' && !(w.q('[data-treastab="spends"].pv-hover') && w.q('[data-treastab="history"].pv-focus'))) err.push('the pointer is not on Spends or the focus not on History');
+    if (s.id.startsWith('treasury-header') && !w.q('#treasury-spend-action .ui-action')) err.push('no .ui-action in the Treasury actions row');
+    // The CEO report: a hovered inactive tab must keep the colour of the others (the cascade, as the file draws it).
+    if (s.id === 'treasury-tabs-hover') {
+        const doc = new Window().document;
+        doc.head.innerHTML = `<style>${STYLES_PV}</style>`;
+        doc.body.innerHTML = w.q('#treasury-content .account-tabs').outerHTML;
+        const win = doc.defaultView;
+        const colours = Array.from(doc.querySelectorAll('.account-tab:not(.active)')).map(t => win.getComputedStyle(t).color);
+        if (new Set(colours).size !== 1) err.push('an inactive tab differs from the other inactive tabs: ' + colours.join(' '));
+    }
 }
 
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
     stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' },
     stake4: { scenes: STAKE4_SCENES, check: checkStakeScene, prefix: '' }, account4: { scenes: ACCOUNT4_SCENES, check: checkAccount4Scene, prefix: '' },
-    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' }, sections: { scenes: SECTIONS_SCENES, check: checkSectionsScene, prefix: 'sections' } };
+    nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' }, sections: { scenes: SECTIONS_SCENES, check: checkSectionsScene, prefix: 'sections' },
+    advanced: { scenes: ADVANCED_SCENES, check: checkAdvancedScene, prefix: '' }, heads: { scenes: HEADS_SCENES, check: checkHeadsScene, prefix: 'heads' } };
 
 // A scene is markup: a radio or checkbox changed after render keeps its old `checked` attribute, so the file would show
 // the first choice selected beside the second's field (fidelity review S12). The property becomes the attribute.

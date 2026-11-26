@@ -1012,7 +1012,7 @@ describe('wiring', () => {
         assert.match(script, /createSpendPayoutUI\(\{[^}]*submit: submitSignedTx/);
         assert.match(script, /createSpendPayoutUI\(\{[^}]*makeTable/);
         const fn = bodyOf(script, 'renderTreasury');
-        assert.match(fn, /tabBtn\('spends'/);
+        assert.match(fn, /key: 'spends', label: 'Spends'/);   // amended (page head plan 2026-11-25): tabsHtml, not tabBtn
         assert.match(fn, /spendPayoutUI\.mount\(/);
         assert.match(bodyOf(script, 'onWalletChanged'), /spendPayoutUI\.accountChanged\(\)/);
     });
