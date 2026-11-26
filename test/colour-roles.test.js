@@ -109,7 +109,8 @@ const ACCENT_FILL = /var\(--accent-(green|amber|blue|red)[\w-]*\)|var\(--(succes
 // picked in the referendum vote is drawn in its side's colour, with a check; that is a state, not an action's fill.
 export const CHOICE_STATES = new Map([
     ['.referendum-side-btn[data-side="aye"][aria-pressed="true"]', 'choice state: the pressed Aye of the referendum vote (I34)'],
-    ['.referendum-side-btn[data-side="nay"][aria-pressed="true"]', 'choice state: the pressed Nay of the referendum vote (I34)']
+    ['.referendum-side-btn[data-side="nay"][aria-pressed="true"]', 'choice state: the pressed Nay of the referendum vote (I34)'],
+    ['.motion-btn.nay', 'vote side: Nay wears its own red tint, matching Aye\'s green tint (designer follow-up, sprint 11)']
 ]);
 function actionAccentOffenders(css) {
     const out = [];

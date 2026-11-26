@@ -334,7 +334,7 @@ describe('the stylesheet rulings', () => {
         assert.deepEqual(hits, []);
         assert.equal(decl('.mobile-wallet-cta.secondary', 'background'), 'var(--accent-violet-tint)');
         assert.equal(decl('.mobile-wallet-cta.secondary', 'border'), '1px solid var(--accent-violet-line)');
-        assert.equal(decl('.mobile-wallet-cta', 'background'), 'var(--brand-primary)');
+        assert.equal(decl('.mobile-wallet-cta', 'background'), 'var(--brand-gradient)');
     });
     test('19: the guard sees an off-kit amber (a broken copy is caught)', () => {
         assert.ok(/#f5a623|rgba\(\s*245\s*,\s*166\s*,\s*35\b/i.test('.x { color: #F5A623; background: rgba(245, 166, 35, 0.1); }'));

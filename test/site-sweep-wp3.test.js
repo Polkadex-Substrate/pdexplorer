@@ -212,7 +212,7 @@ describe('5.1 (Q3): every view\'s one primary is the gradient .validate-primary 
 const rulesFor = (sel) => RULES.filter(r => r.selectors.includes(sel));
 describe('T6 (WP3b): the stylesheet has one primary look and no pink button that is not a primary', () => {
     test('no rule gives a button or link selector background: var(--brand-primary)', () => {
-        const BUTTONISH = /(btn|button|-copy\b|-run\b|^a(?=$|[.:[])|\.pill\b|-action\b|-link\b)/;
+        const BUTTONISH = /(btn|button|-copy\b|-run\b|^a(?=$|[.:[])|\.pill\b|-action\b|-link\b|-cta\b)/;
         const bad = RULES.filter(r => /var\(--brand-primary\)/.test(r.decls.background || r.decls['background-color'] || '') && r.selectors.some(s => BUTTONISH.test(s.split(/[\s>+~]+/).pop())))
             .map(r => `styles.css:${r.line} ${r.selectors.join(', ')}`);
         assert.deepEqual(bad, []);
@@ -282,7 +282,7 @@ describe('CEO decision (2026-11-26): Nay uses the red role, Aye stays green', ()
     });
     test('the motion buttons: Nay is red text on a red line (no pink, no off-kit #ff5fae); Aye keeps its green', () => {
         const n = declsIn('.motion-btn.nay', '');
-        assert.deepEqual([n.color, n['border-color']], ['var(--accent-red)', 'var(--accent-red-line)']);
+        assert.deepEqual([n.color, n['border-color'], n.background], ['var(--accent-red)', 'var(--accent-red-line)', 'var(--accent-red-tint)']);
         const all = RULES.filter(r => r.selectors.some(s => /\.motion-btn\.nay/.test(s))).map(r => JSON.stringify(r.decls)).join(' ');
         assert.ok(!/230, 0, 122|brand-primary|ff5fae/i.test(all), all);
         assert.match(declsIn('.motion-btn.aye', '').color, /var\(--(brand-secondary|accent-green|success)\)/);

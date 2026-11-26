@@ -804,7 +804,9 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
     // Amended in sprint 11 WP3b (Q3, approved 2026-11-26, spec 5.1 rows 1 and 17): the top bar's Connect Wallet and the confirm
     // dialog's action are the primary of their view and take the gradient.
     const PRIMARIES = ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', '.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', '.wallet-onboarding-reload', '.wc-open',
-        '.connect-wallet-btn', '.confirm-dialog-actions .confirm-dialog-danger'];
+        '.connect-wallet-btn', '.confirm-dialog-actions .confirm-dialog-danger',
+        // Amended in sprint 11 (designer follow-up, CEO colour roles): the mobile wallet panel's call to action is the primary of that panel.
+        '.mobile-wallet-cta'];
     // amended (colour roles 2.4): the gradient is also the page-header tile, the hairline and .validate-primary (the shared Primary); none is a wallet row or pill
     const NON_ACTION_GRADIENT = ['.ui-tile.is-brand', '.ui-hairline::before', '.validate-primary'];
     function checkOnePrimary(css) {
