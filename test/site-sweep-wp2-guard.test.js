@@ -13,7 +13,8 @@ const rd = repoReader(ROOT);
 const run = (opts) => checkSite(rd, opts);
 const BIG = 1e9;
 // What WP3 still owns in index.html: its pages (spec 8). WP2 takes only the two buttons rows I20 and I44 name there.
-const INDEX_OWNED = 111;
+// Amended in sprint 11 WP3 (spec 2.6: "WP3 takes index.html to 0"): WP3 has landed, so nothing is left to own.
+const INDEX_OWNED = 0;
 
 describe('G2 (inline colour): the ceilings WP2 leaves', () => {
     test('script.js and lib/ are at 0: the only lines left are the named exemptions of 2.5, each with its reason', () => {
@@ -22,7 +23,7 @@ describe('G2 (inline colour): the ceilings WP2 leaves', () => {
         assert.equal(G2_CEILING.other, 0);
         assert.ok(EXEMPT.every(e => e.why && e.why.trim()));
     });
-    test('index.html is at what WP3 owns (113 at the parent, 111 after rows I20 and I44), and the ceiling equals the measured lines', () => {
+    test('index.html is at what WP3 owns (113 before WP2, 111 after rows I20 and I44, 0 after WP3), and the ceiling equals the measured lines', () => {
         const r = run({ g2: { ...G2_CEILING }, g3: { 'script.js': BIG, 'index.html': BIG, 'lib/': BIG, other: BIG, 'styles.css': BIG }, g4: BIG });
         assert.equal(G2_CEILING['index.html'], INDEX_OWNED);
         assert.equal(r.counts.g2['index.html'], INDEX_OWNED);

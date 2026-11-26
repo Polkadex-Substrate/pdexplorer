@@ -72,14 +72,17 @@ describe('T1: the kit classes of 2.1, exact declarations', () => {
 });
 
 describe('T2: the tiers (section 1.0)', () => {
-    test('no rule names .staking-download-btn; .staking-search-bar button keeps its three rules', () => {
+    // Amended in sprint 11 WP3b (Q3, spec 5.1 row 14): Search is .validate-primary and the three .staking-search-bar button rules are deleted.
+    test('no rule names .staking-download-btn; the three .staking-search-bar button rules are gone (Q3)', () => {
         const hits = RULES.filter(r => r.selectors.some(s => s.includes('staking-download-btn'))).map(r => `line ${r.line}: ${r.selectors.join(', ')}`);
         assert.deepEqual(hits, []);
-        for (const s of ['.staking-search-bar button', '.staking-search-bar button:hover', '.staking-search-bar button:active']) assert.ok(anyRule(s), `${s} went`);
+        for (const s of ['.staking-search-bar button', '.staking-search-bar button:hover', '.staking-search-bar button:active']) assert.ok(!anyRule(s), `${s} is still there`);
     });
-    test('.validate-primary.is-solid { background: var(--brand-primary) } is the only rule that gives a .validate-primary a non-gradient background', () => {
-        assert.deepEqual(base('.validate-primary.is-solid'), { background: 'var(--brand-primary)' });
-        const others = RULES.filter(r => r.selectors.some(s => /\.validate-primary(?![\w-])/.test(s) && s !== '.validate-primary.is-solid' && s !== '.validate-primary')
+    // Amended in sprint 11 WP3b (Q3, spec 5.1): the holding rule .validate-primary.is-solid is deleted; no rule gives a .validate-primary
+    // a non-gradient background.
+    test('no rule gives a .validate-primary a non-gradient background; .validate-primary.is-solid is gone (Q3)', () => {
+        assert.equal(anyRule('.validate-primary.is-solid'), false, '.validate-primary.is-solid is still there');
+        const others = RULES.filter(r => r.selectors.some(s => /\.validate-primary(?![\w-])/.test(s) && s !== '.validate-primary')
             && (r.decls.background || r.decls['background-color']) && !/gradient|none|transparent/.test(r.decls.background || r.decls['background-color']));
         assert.deepEqual(others.map(r => `line ${r.line}: ${r.selectors.join(', ')}`), []);
     });

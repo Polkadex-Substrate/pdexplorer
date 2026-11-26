@@ -427,3 +427,72 @@ describe('WP1 review fixes: Send wrong-network refusal', () => {
         assert.equal(hint.querySelectorAll('.ui-hint-icon').length, 1, 'a second pass doubled the icon');
     });
 });
+
+// ── Sprint 11 WP3b (Q3, the gradient primary): every sign button changes class only ──
+// The ten sign buttons of the signing views become the view's one .validate-primary (spec 5.1 rows 2 to 11). What each
+// view shows and builds is the snapshot above; Stake, Unstake and Identity are added here with the facts taken on the
+// parent of the change (57cb1a9), so their call, label, action, button and texts are pinned the same way.
+const NETWORK = { minStake: 100, eraDurationMs: 86_400_000, unbondingMs: 28 * 86_400_000 };
+const SIGN_BUTTONS = [
+    ['submit-stake-tx-btn', 'stake-modal', 'Sign and stake'], ['submit-payout-tx-btn', 'payout-modal', 'Sign and pay out'], ['submit-send-tx-btn', 'send-modal', 'Sign and send'],
+    ['submit-unstake-tx-btn', 'unstake-modal', 'Sign and unstake'], ['submit-identity-tx-btn', 'identity-modal', 'Save identity'], ['submit-vote-tx-btn', 'council-vote-modal', 'Sign and submit vote'],
+    ['submit-referendum-vote-btn', 'referendum-vote-modal', 'Sign and submit vote'], ['submit-candidacy-tx-btn', 'council-candidacy-modal', 'Sign and submit candidacy'],
+    ['council-withdraw-sign', 'council-withdraw-modal', 'Sign and withdraw candidacy'], ['treasury-spend-sign', 'treasury-spend-modal', 'Sign and table motion']];
+
+describe('WP3b: the ten sign buttons are the gradient primary (class only)', () => {
+    for (const [id, modal, label] of SIGN_BUTTONS) {
+        test(`#${id}: .validate-primary, no .modal-submit-btn and no .is-solid; same label; the only primary of #${modal}`, () => {
+            const w = page();
+            const b = w.get(id);
+            assert.ok(b, `no #${id}`);
+            assert.ok(b.classList.contains('validate-primary'), `#${id} is "${b.className}", not the gradient primary`);
+            assert.ok(!b.classList.contains('modal-submit-btn') && !b.classList.contains('is-solid'), `#${id} keeps a solid look: "${b.className}"`);
+            assert.equal(norm(b.textContent), label);
+            assert.equal(w.get(modal).querySelectorAll('.validate-primary, .modal-submit-btn').length, 1, `#${modal}: not one primary`);
+        });
+    }
+});
+
+describe('Stake (SIGNING VIEW, WP3b row 2): the call is unchanged (spy)', () => {
+    test('staking.bond plus nominate for the typed amount and the picked validators; the label, the action, the button', async () => {
+        const stakePlan = await import('../lib/stake-plan.js');
+        const { FEE_MARGIN } = await import('../lib/fee-preflight.js');
+        const data = { address: ME, balance: { free: 501, transferable: 500 }, staking: { totalStaked: 0, activeStaked: 0, nominating: [], ledgerRead: 'ok', controller: null }, network: NETWORK };
+        const w = page({ path: '/wallet', fns: ['submitStakeTx', 'clearStakeError', 'showStakeError', 'formatDuration'], ctx: {
+            ...stakePlan, FEE_MARGIN, stakeCard: null, currentWalletData: data, stakeMaxNominations: () => 16, isSameAddress: (a, b) => a === b,
+            stakeSelected: new Map([[V1, { address: V1, name: 'Alpha' }], [V2, { address: V2, name: 'Beta' }]]), loadValidatorsForPicker: async () => ({}) } });
+        w.get('stake-amount-input').value = '150';
+        await w.fn('submitStakeTx')();
+        assert.equal(w.calls.length, 1, norm(w.get('stake-modal-error').textContent));
+        same('stake.call', await callOf(w.calls[0]));
+    });
+});
+
+describe('Unstake (SIGNING VIEW, WP3b row 5): the call is unchanged (spy)', () => {
+    const world = () => page({ path: '/wallet', fns: ['submitUnstakeTx', 'decodeUnstakeError', 'planckToPdexString', 'formatDuration'],
+        prelude: 'var unstakeFullUnbondIntent = true; var unstakeMaxPlanck = "5000000000000";\n', ctx: {
+            signerRoles: null, planProblemMessage: null, planFullUnbond: null, buildStakeTx: null, isSameAddress: (a, b) => a === b,
+            currentWalletData: { address: ME, staking: { activeStaked: 5, totalStaked: 5, controller: ME, ledgerRead: 'ok' }, network: NETWORK } } });
+    test('Max: utility.batchAll of staking.chill and staking.unbond for the whole bond; the label, the action, the button', async () => {
+        const stakePlan = await import('../lib/stake-plan.js');
+        const w = world();
+        Object.assign(w.context, { signerRoles: stakePlan.signerRoles, planProblemMessage: stakePlan.planProblemMessage, planFullUnbond: stakePlan.planFullUnbond, buildStakeTx: stakePlan.buildStakeTx });
+        w.get('unstake-amount-input').value = '5';
+        await w.fn('submitUnstakeTx')();
+        assert.equal(w.calls.length, 1, norm(w.get('unstake-modal-error').textContent));
+        same('unstake.call', await callOf(w.calls[0]));
+    });
+});
+
+describe('Identity (SIGNING VIEW, WP3b row 6): the call is unchanged (spy)', () => {
+    test('identity.setIdentity with the typed fields; the label, the action, the button', async () => {
+        const w = page({ path: '/wallet', fns: ['submitSetIdentity', 'hideIdentityError', 'showIdentityError', 'toIdData'],
+            prelude: "const IDENTITY_FIELD_KEYS = ['display', 'legal', 'email', 'twitter', 'web', 'riot']; const IDENTITY_FIELD_MAX_BYTES = 32;\n",
+            ctx: { TextEncoder, TextDecoder, isSameAddress: (a, b) => a === b, currentWalletData: { address: ME, identity: 'Unknown' } } });
+        w.get('identity-display').value = 'Alice';
+        w.get('identity-email').value = 'alice@example.com';
+        await w.fn('submitSetIdentity')();
+        assert.equal(w.calls.length, 1, norm(w.get('identity-modal-error').textContent));
+        same('identity.call', await callOf(w.calls[0]));
+    });
+});

@@ -1326,5 +1326,129 @@
     "idleText": "Sign and table motion",
     "signingAccount": null,
     "expectedWallet": "esmUCXF8KGFcb2aYMBLLYhhYcCMXdoKzGvxKJRPDou4XgXPvV"
+  },
+  "stake.call": {
+    "section": "utility",
+    "method": "batchAll",
+    "args": [
+      [
+        {
+          "callIndex": "0x0900",
+          "args": {
+            "value": 150000000000000,
+            "payee": {
+              "staked": null
+            }
+          }
+        },
+        {
+          "callIndex": "0x0905",
+          "args": {
+            "targets": [
+              {
+                "id": "esmhMyzKnLYCRJrbYUBK8sf3eJNdeU7ttEScUxMN6WESDCiXh"
+              },
+              {
+                "id": "esmigL4eL3ZrbwHQGCTozh3zkJyYSwCV9MzSborBKmME4fydA"
+              }
+            ]
+          }
+        }
+      ]
+    ],
+    "hex": "0x01020809000b0060b7986c8800090508002929292929292929292929292929292929292929292929292929292929292929002a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "label": "Stake & nominate",
+    "action": {
+      "key": "staking.bondNominate",
+      "params": {
+        "amount": "150",
+        "n": 2,
+        "destination": null,
+        "first": true,
+        "eraText": "24 hours"
+      }
+    },
+    "button": "submit-stake-tx-btn",
+    "busyText": "Signing…",
+    "idleText": "Sign and stake",
+    "signingAccount": null,
+    "expectedWallet": null
+  },
+  "unstake.call": {
+    "section": "utility",
+    "method": "batchAll",
+    "args": [
+      [
+        {
+          "callIndex": "0x0906",
+          "args": {}
+        },
+        {
+          "callIndex": "0x0902",
+          "args": {
+            "value": 5000000000000
+          }
+        }
+      ]
+    ],
+    "hex": "0x010208090609020b005039278c04",
+    "label": "Unstake",
+    "action": {
+      "key": "staking.unbond",
+      "params": {
+        "amount": "5",
+        "full": true,
+        "unbondingText": "28 days"
+      }
+    },
+    "button": "submit-unstake-tx-btn",
+    "busyText": "Signing…",
+    "idleText": "Sign and unstake",
+    "signingAccount": null,
+    "expectedWallet": null
+  },
+  "identity.call": {
+    "section": "identity",
+    "method": "setIdentity",
+    "args": [
+      {
+        "additional": [],
+        "display": {
+          "raw": "0x416c696365"
+        },
+        "legal": {
+          "none": null
+        },
+        "web": {
+          "none": null
+        },
+        "riot": {
+          "none": null
+        },
+        "email": {
+          "raw": "0x616c696365406578616d706c652e636f6d"
+        },
+        "pgpFingerprint": null,
+        "image": {
+          "none": null
+        },
+        "twitter": {
+          "none": null
+        }
+      }
+    ],
+    "hex": "0x16010006416c69636500000012616c696365406578616d706c652e636f6d000000",
+    "label": "Set identity",
+    "action": {
+      "key": "identity.set",
+      "params": {
+        "display": "Alice"
+      }
+    },
+    "button": "submit-identity-tx-btn",
+    "busyText": "Signing…",
+    "idleText": "Save identity",
+    "signingAccount": null,
+    "expectedWallet": null
   }
 }

@@ -42,10 +42,12 @@ const ROWS = [
     [1, 'static', '#council-withdraw-copy-address', 'validate-secondary', 'bx-copy', 'Copy address'],
     [2, 'static', '#council-withdraw-retry', 'validate-secondary', 'bx-refresh', 'Refresh review'],
     [3, 'static', '#cancel-council-withdraw', 'validate-text-btn', null, 'Cancel'],
-    [4, 'static', '#council-withdraw-sign', 'validate-primary', null, 'Sign and withdraw candidacy', ['is-solid'], (el) => assert.equal(el.hasAttribute('disabled'), true, 'row 4 keeps disabled')],
+    // Amended in sprint 11 WP3b (Q3 approved 2026-11-26, spec 5.1 row 10): .is-solid is deleted; the sign button is the gradient primary.
+    [4, 'static', '#council-withdraw-sign', 'validate-primary', null, 'Sign and withdraw candidacy', [], (el) => { assert.equal(el.hasAttribute('disabled'), true, 'row 4 keeps disabled'); assert.ok(!el.classList.contains('is-solid'), 'row 4: .is-solid is gone (Q3)'); }],
     [5, 'static', '#treasury-spend-edit', 'validate-secondary', 'bx-edit-alt', 'Edit'],
     [6, 'static', '#treasury-spend-check', 'ui-action', 'bx-search-alt', 'Review motion', [], (el) => assert.equal(el.hasAttribute('disabled'), true, 'row 6 keeps disabled')],
-    [7, 'static', '#treasury-spend-sign', 'validate-primary', null, 'Sign and table motion', ['is-solid'], (el) => assert.equal(el.hasAttribute('disabled'), true, 'row 7 keeps disabled')],
+    // Amended in sprint 11 WP3b (Q3, spec 5.1 row 11): as row 4.
+    [7, 'static', '#treasury-spend-sign', 'validate-primary', null, 'Sign and table motion', [], (el) => { assert.equal(el.hasAttribute('disabled'), true, 'row 7 keeps disabled'); assert.ok(!el.classList.contains('is-solid'), 'row 7: .is-solid is gone (Q3)'); }],
     [8, 'static', '#onboarding-tour-back', 'validate-secondary', false, 'Back', [], (el) => assert.equal(el.hasAttribute('style'), false, 'row 8: the inline padding and size go')],
     [9, 'static', '#cookies-reset-btn', 'ui-action', 'bx-refresh', 'Reset all preferences', [], (el) => { assert.equal(el.hasAttribute('style'), false, 'row 9: the inline style goes'); assert.ok(el.closest('.legal-page'), 'row 9 sits in .legal-page (its margin comes from .legal-page .ui-action)'); }],
     [10, 'static', '#storage-notice-banner a[href="/privacy"]', 'validate-text-btn', null, 'Learn more', [], (el) => assert.equal(el.tagName, 'A')],
@@ -209,7 +211,8 @@ describe('P13, P14, I5, I6, I34, I45: the modals of WP1 on the kit (index.html)'
             assert.equal(primaries.length, m.primary, primaries.map(e => e.id).join(', '));
             if (m.sign && m.label) {
                 const b = root.querySelector(m.sign);
-                assert.ok(b.classList.contains('modal-submit-btn'), `${m.sign} is not .modal-submit-btn (I45)`);
+                // Amended in sprint 11 WP3b (Q3, spec 5.1 rows 7 to 9): I45's .modal-submit-btn is deleted; the sign button is the gradient primary.
+                assert.ok(b.classList.contains('validate-primary') && !b.classList.contains('modal-submit-btn'), `${m.sign} is not .validate-primary (Q3)`);
                 assert.equal(text(b), m.label);
                 assert.ok(!b.classList.contains('glass'));
             }

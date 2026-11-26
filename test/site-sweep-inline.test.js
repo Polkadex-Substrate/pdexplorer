@@ -137,13 +137,14 @@ function emailWorld(answer = { status: 'pending' }) {
 const coloured = (root) => Array.from(root.querySelectorAll('[style]')).filter(e => COLOUR.test(';' + e.getAttribute('style'))).map(e => `<${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''} style="${e.getAttribute('style')}">`);
 
 describe('I16: the email alerts modal on the kit (words unchanged)', () => {
-    test('the form: one primary (Subscribe, .validate-primary.is-solid), Cancel as text, the field and groups on the kit, no colour in markup', () => {
+    // Amended in sprint 11 WP3b (Q3, spec 5.1 row 12): Subscribe drops .is-solid and is the gradient primary.
+    test('the form: one primary (Subscribe, .validate-primary, the gradient), Cancel as text, the field and groups on the kit, no colour in markup', () => {
         const w = emailWorld();
         w.ctx.openEmailSubscribeModal('democracy');
         const c = w.content;
         assert.deepEqual(coloured(c), []);
         const submit = c.querySelector('#email-subscribe-submit');
-        assert.ok(submit.classList.contains('validate-primary') && submit.classList.contains('is-solid'), submit.className);
+        assert.ok(submit.classList.contains('validate-primary') && !submit.classList.contains('is-solid'), submit.className);
         assert.equal(text(submit), 'Subscribe');
         assert.equal(submit.getAttribute('type'), 'submit');
         const cancel = c.querySelector('#email-subscribe-cancel');
