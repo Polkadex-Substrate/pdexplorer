@@ -177,9 +177,11 @@ describe('WP1 rules for the signing modals and the off-kit hues of section 9', (
         assert.equal(base('.ui-modal-card.is-picker')['max-width'], '820px');
         assert.equal(base('.ui-modal.is-tour')['z-index'], '1100');
     });
+    // Amended in the second red commit: the CTA is an action, and colour-roles guard 3 allows no accent fill on an
+    // action, so it takes the neutral fill with the blue line and text; the badge (not an action) keeps the blue tint.
     test('section 9: .email-alerts-cta and .badge.stake-badge-info use the blue tokens (no cyan, no #8ab8ff)', () => {
         const cta = base('.email-alerts-cta');
-        assert.deepEqual([cta.background, cta.border, cta.color], ['var(--accent-blue-tint)', '1px solid var(--accent-blue-line)', 'var(--accent-blue-text)']);
+        assert.deepEqual([cta.background, cta.border, cta.color], ['rgba(255, 255, 255, 0.05)', '1px solid var(--accent-blue-line)', 'var(--accent-blue-text)']);
         const hover = base('.email-alerts-cta:hover');
         assert.deepEqual([hover['border-color'], hover.color], ['var(--accent-blue)', 'var(--text-primary)']);
         assert.doesNotMatch(JSON.stringify(hover), /0, 196, 255/);

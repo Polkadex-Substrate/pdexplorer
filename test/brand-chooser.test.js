@@ -96,7 +96,8 @@ describe('lint: greens are for positive states, never for an action', () => {
         ['.stake-val-add:hover:not(:disabled)', 'outside this branch (audit section 5)'],
         ['.governance-toast-msg:hover', 'outside this branch (audit section 5)'],
         ['.gov-item-link', 'outside this branch (audit section 5)'],
-        ['.close-control:focus-visible', 'outside this branch (audit section 5)']
+        ['.close-control:focus-visible', 'outside this branch (audit section 5)'],
+        ['.referendum-side-btn[data-side="aye"][aria-pressed="true"]', 'choice state: the pressed Aye of the referendum vote (spec 2026-11-26 I34, T5)']
     ]);
 
     test('no green token on a button, link, row, hover or focus selector anywhere in styles.css', () => {
@@ -745,6 +746,8 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
     function checkRemoved(css) {
         const rules = parseRules(css), err = [];
         for (const r of rules) for (const s of r.selectors) {
+            // The key-value tables of the detail pages keep their row stripe as a class (spec 2026-11-26 2.1, P16); not the chooser.
+            if (s === 'table.ui-kv tr:nth-child(even)') continue;
             if (/nth-child/.test(s) && ['background', 'background-color', 'border-color'].some(p => p in r.decls)) err.push(`styles.css:${r.line} "${s}" is an :nth-child rule with a background or border-color`);
             if (/:where\(/.test(s) && /wallet-(option|account)/.test(s)) err.push(`styles.css:${r.line} "${s}" is a :where( stripe rule`);
         }

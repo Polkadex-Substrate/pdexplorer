@@ -407,7 +407,8 @@ describe('the heads preview scenes', () => {
                 assert.ok(!/margin|padding/.test(row.getAttribute('style') || ''), `${f}: inline spacing on a tab row`);
                 if (row.querySelector('.account-tab')) assert.equal(row.querySelectorAll('.account-tab.active').length, 1, `${f}: ${row.querySelectorAll('.account-tab.active').length} selected tabs in a row`);
             }
-            assert.equal(d.querySelectorAll('.validate-primary').length, 0, `${f}: a .validate-primary on a head scene`);
+            const hiddenAt = (el) => { for (let e = el; e && e.nodeType === 1; e = e.parentElement) if (e.hasAttribute('hidden') || /display:\s*none/.test(e.getAttribute('style') || '')) return true; return false; };
+            assert.equal(Array.from(d.querySelectorAll('.validate-primary')).filter(e => !hiddenAt(e)).length, 0, `${f}: a .validate-primary drawn on a head scene`);   // amended (sprint 11 WP1): the closed dialogs carry one
         }
     });
     test('the hover scene has the pointer on Spends and focus on History', () => {

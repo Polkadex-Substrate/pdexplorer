@@ -139,11 +139,14 @@ describe('T7: the 34 legacy buttons, each on its tier (section 1.1)', () => {
         });
     }
     test('rows 21 to 23: Try again reads the page again (one load, one click, two reads)', () => {
-        for (const [k, api] of [['disc', '/api/discussions'], ['dem', '/api/democracy'], ['tre', '/api/treasury']]) {
+        // Amended in the second red commit: the h3 check read the whole app (other pages keep inline h3 until WP2 and
+        // WP3); it now reads the page that failed to load.
+        for (const [k, api, root] of [['disc', '/api/discussions', '#discussions-content'], ['dem', '/api/democracy', '#democracy-content'], ['tre', '/api/treasury', '#treasury-content']]) {
             const n = PAGES[k].r.fetched.filter(u => u.includes(api)).length;
             assert.ok(n >= 2, `${k}: ${api} read ${n} times`);
-            assert.ok(PAGES[k].doc.querySelector('.ui-panel.is-warn'), `${k}: the failure is not an amber panel`);
-            assert.equal(PAGES[k].doc.querySelector('h3[style]') === null, true, `${k}: the red h3 is still there`);
+            const box = PAGES[k].doc.querySelector(root);
+            assert.ok(box && box.querySelector('.ui-panel.is-warn'), `${k}: the failure is not an amber panel`);
+            assert.equal(box.querySelector('h3[style], [style*="color"]') === null, true, `${k}: the red h3 or another inline colour is still there`);
         }
     });
     test('rows 1 and 5 keep their display state (style="display:none" is state, toggled by script)', () => {

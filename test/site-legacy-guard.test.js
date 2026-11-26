@@ -70,6 +70,10 @@ describe('G2: colour written in markup (ceilings per bucket, may only go down)',
         const errs = errorsOf(fixture(() => {}), { g2: big, g3: big, g4: 1e9, exempt: stale });
         assert.ok(errs.some(e => /script\.js renderBrandPage: the exemption matches nothing \(a stale exemption\)/.test(e)), errs.slice(-3).join('\n'));
     });
+    test('on this repository every exemption matches a line (no stale exemption)', () => {
+        const errs = errorsOf(fixture(() => {}), { g2: big, g3: big, g4: 1e9 });
+        assert.deepEqual(errs.filter(e => /stale exemption/.test(e)), []);
+    });
     test('every exemption carries its reason, and one without a reason fails', () => {
         for (const e of need('EXEMPT')) assert.ok(e.why && e.why.length > 10, `${e.file} ${e.fn || ''}: no reason`);
         const bare = need('EXEMPT').map((e, i) => (i === 0 ? { ...e, why: '' } : e));
@@ -88,6 +92,17 @@ describe('G3: hues outside the kit', () => {
         const c = baseline();
         const errs = errorsOf(fixture(f => f.set('styles.css', f.get('styles.css').replace('.ui-section-title {', '.pv-guard-probe { color: orange; }\n.ui-section-title {'))), at(c));
         assert.ok(errs.some(e => /G3 hue: \d+ lines in styles\.css hold a colour that is not a kit colour.*styles\.css:\d+ \(orange\)/.test(e)), errs.join('\n').slice(0, 1500));
+    });
+    // Added in the second red commit: the colour-name detector read "violet" and "green" inside token names.
+    test('(d) control: token names are not hues (var(--accent-violet-text), var(--accent-green-tint), var(--brand-secondary)) in styles.css or a string', () => {
+        const c = baseline();
+        const errs = errorsOf(fixture(f => {
+            prepend(f, 'script.js', "const a = `<span style=\"display:none\" data-tone=\"color: var(--accent-violet-text)\">x</span>`;");
+            f.set('styles.css', f.get('styles.css') + '\n.pv-guard-probe { color: var(--accent-violet-text); background: var(--accent-green-tint); border-color: var(--accent-red-line); }\n');
+        }), at(c));
+        assert.ok(!errs.some(e => /^G3 /.test(e)), errs.filter(e => /^G3 /.test(e)).join('\n').slice(0, 600));
+        assert.deepEqual(need('sourceHues')('el.className = `x`; const v = "color: var(--accent-green)";'), []);
+        assert.deepEqual(need('cssHues')('.a { color: var(--accent-violet-text); }', need('kitColours')(repo().get('styles.css'))), []);
     });
     test('(c) control: var(--accent-amber) passes', () => {
         const c = baseline();

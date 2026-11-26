@@ -205,7 +205,9 @@ describe('3: the headline takes focus without scrolling after the read', () => {
 const RUNNER = fileURLToPath(new URL('./helpers/full-page.js', import.meta.url));
 function page(scenario) {
     return new Promise((resolve, reject) => {
-        execFile(process.execPath, [RUNNER, JSON.stringify({ probe: ['#connect-wallet-btn.is-outline', '.validate-primary'], ...scenario })], { timeout: 60000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
+        // Amended (sprint 11 WP1): '#validate-root .validate-primary', not '.validate-primary': rows 4 and 7 of the site sweep put a
+        // .validate-primary.is-solid in the closed Withdraw candidacy and Propose a spend dialogs, which every page carries.
+        execFile(process.execPath, [RUNNER, JSON.stringify({ probe: ['#connect-wallet-btn.is-outline', '#validate-root .validate-primary'], ...scenario })], { timeout: 60000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
             const line = String(stdout).split('\n').find(l => l.startsWith('RESULT '));
             if (!line) return reject(new Error('the page did not report: ' + (err ? err.message : '') + '\n' + String(stderr).slice(-2000)));
             resolve(JSON.parse(line.slice(7)));
@@ -229,7 +231,7 @@ describe('4: the header button and the page primary', () => {
     test('/validate with no wallet: the connect bar is the primary, the header is an outline', async () => {
         const r = await page({ path: 'validate', seed: ON });
         assert.equal(r.page, 'validate');
-        assert.equal(r.probe['.validate-primary'].count, 1);
+        assert.equal(r.probe['#validate-root .validate-primary'].count, 1);
         assert.equal(r.probe['#connect-wallet-btn.is-outline'].count, 1);
         assert.deepEqual(r.errors, []);
     });
@@ -243,7 +245,7 @@ describe('4: the header button and the page primary', () => {
     });
     test('/validate/<address> with no wallet: no page primary, the header stays solid', async () => {
         const r = await page({ path: 'validate/' + OTHER, seed: ON, api: { '/api/validator/': { ...validatorStatusModel(snap({ address: OTHER }), params()), address: OTHER } } });
-        assert.equal(r.probe['.validate-primary'].count, 0);
+        assert.equal(r.probe['#validate-root .validate-primary'].count, 0);
         assert.equal(r.probe['#connect-wallet-btn.is-outline'].count, 0);
     });
     test('connected on /validate: the connected look; after Disconnect the page draws Connect wallet and the header turns outline', async () => {
