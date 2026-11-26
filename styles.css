@@ -4825,7 +4825,7 @@ tr.gov-row-clickable:hover td { background: rgba(255, 255, 255, 0.03); }
 .ui-page-head-actions .ui-panel.is-line { flex: 1 1 280px; min-width: 0; margin: 0; }
 .ui-page-body { padding: 24px var(--page-gutter); }
 #account-details-container { --page-gutter: 20px; }
-#account-details-container .address-cell { overflow-wrap: anywhere; }   /* the full address in the first table has no break point at 375 (found by the phone-width scene check) */
+#account-details-container .address-cell, .council-page .address-cell { overflow-wrap: anywhere; }   /* the full address in the first table has no break point at 375 (found by the phone-width scene check) */
 
 /* An action this account can never use here: outlined and readable, not dimmed (the 0.55 dim stays for "held while another runs") */
 .ui-action.is-unavailable[aria-disabled="true"] { opacity: 1; background: transparent; border-color: rgba(255, 255, 255, 0.36); color: var(--text-secondary); cursor: not-allowed; }
@@ -6043,3 +6043,65 @@ a.validate-secondary { text-decoration: none; }
     .stake-modal-body.is-advanced .stake-primary-reason { order: 14; }
     .stake-calls, .stake-payee-msg { overflow-wrap: anywhere; word-break: break-all; }
 }
+
+/* Sprint 11 WP2: what script.js used to write inline, as classes and data-state (patterns P1 to P11, rows I11 to I44). */
+.status-indicator[data-state="ok"] { background: var(--success); }
+.status-indicator[data-state="wait"] { background: var(--accent-amber); }
+.status-indicator[data-state="down"] { background: var(--error); }
+.chain-stale { border-radius: 0; border-width: 0 0 1px; padding: 12px 22px; }
+.tx-status { font-size: 18px; vertical-align: middle; }
+.tx-status.is-success { color: var(--accent-green); }
+.tx-status.is-failed { color: var(--accent-red); }
+.tx-status.is-unknown { color: var(--text-secondary); }
+.staking-summary-card .value.is-wait { color: var(--accent-amber); }
+kbd { padding: 1px 5px; border: 1px solid var(--border-color); border-radius: 3px; font-family: inherit; }
+.brand-logo-card.is-dark { background: var(--bg-dark); }
+.ui-caption[data-state="ok"], .ui-caption[data-state="error"] { color: var(--text-primary); }
+.ui-caption[data-state="note"] { color: var(--text-secondary); }
+.label-block { margin-top: 14px; }
+.label-block.ui-ruled-top { padding-top: 14px; }
+.label-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid rgba(255, 255, 255, 0.04); }
+.label-votes { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 32px; }
+.label-vote-btn { background: none; border: none; cursor: pointer; color: var(--text-secondary); padding: 0; font-size: 1.1rem; line-height: 1; }
+.label-vote-btn:disabled { cursor: not-allowed; }
+.label-vote-btn[aria-pressed="true"] { color: var(--text-primary); background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
+.label-score { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); min-width: 24px; text-align: center; }
+.label-main { flex: 1; min-width: 0; }
+.label-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.label-badge { font-size: 0.7rem; padding: 1px 8px; }
+.label-meta { margin-top: 2px; }
+.label-actions { display: flex; align-items: center; gap: 6px; }
+.label-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.label-form-row .ui-input { flex: 1; min-width: 220px; }
+.label-status { margin-top: 8px; }
+.analytics-toolbar { margin-top: 20px; }
+.analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px; margin-top: 18px; }
+.analytics-card { padding: 16px; border-radius: var(--radius-sm); }
+.analytics-card-head { margin-bottom: 10px; }
+.watchlist-empty { padding: 48px 24px; text-align: center; }
+.watchlist-empty h2 { margin: 16px 0 8px; }
+.watchlist-empty .ui-lede { max-width: 520px; margin: 0 auto; }
+.watchlist-group { padding: 14px 20px; }
+.watchlist-rows { display: flex; flex-direction: column; gap: 6px; }
+.watchlist-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; background: rgba(255, 255, 255, 0.02); border-radius: 6px; }
+.watchlist-main { min-width: 0; flex: 1; }
+.watchlist-main .item-link { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.watchlist-star { background: none; border: none; padding: 2px 4px; cursor: pointer; color: var(--text-secondary); vertical-align: middle; line-height: 1; font-size: 1rem; }
+.watchlist-star[aria-pressed="true"] { color: var(--brand-primary); }
+.tour-icon-wrap { text-align: center; margin-bottom: 16px; }
+.tour-icon { font-size: 42px; color: var(--brand-primary); }
+.tour-title { margin: 0 0 12px; font-size: 1.4rem; text-align: center; }
+.tour-body { color: var(--text-secondary); font-size: 0.92rem; line-height: 1.6; }
+.tour-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); transition: background var(--transition-fast); }
+.tour-dot.is-on { background: var(--brand-primary); }
+.gov-detail-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 10px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.discussion-link-feedback.is-ok { color: var(--text-primary); }
+.discussion-edit-btn, .discussion-link-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 0.75rem; padding: 0 4px; }
+.discussion-earlier-head { cursor: pointer; padding: 10px 24px; color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; }
+.discussion-earlier-posts { opacity: 0.92; }
+.discussion-earlier-foot { padding: 4px 24px 12px; }
+.discussion-lifecycle { display: flex; flex-wrap: wrap; gap: 18px; padding: 10px 0 14px; }
+.discussion-lifecycle ul { margin: 0; padding-left: 18px; }
+.discussion-lifecycle .ui-strong { margin-bottom: 4px; }
+.js-older-bar { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: center; padding: 20px; }
+.js-older-status { flex-basis: 100%; text-align: center; }

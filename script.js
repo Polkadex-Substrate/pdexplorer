@@ -103,7 +103,7 @@ import { createScrollMemory } from './lib/scroll-reset.js';
 import { startInputActionsObserver, enhanceInputActions } from './lib/input-actions.js';
 import { validateEnabled } from './lib/validate-gate.js';
 import { mountValidatePage, mountKeysPage, KEYS_PAGE_TITLE } from './lib/validator-status-view.js';
-import { headerLook, PAGE_PRIMARY_SELECTOR, icon, panelHtml, linePanelHtml, chipHtml, pageHeadHtml, tabsHtml, revealActiveTab, loadFailedHtml } from './lib/ui-parts.js';
+import { headerLook, PAGE_PRIMARY_SELECTOR, icon, panelHtml, linePanelHtml, chipHtml, pageHeadHtml, tabsHtml, revealActiveTab, loadFailedHtml, stateHtml, setHint } from './lib/ui-parts.js';
 import { mountNodeGuide } from './lib/validator-node-guide.js';
 import { mountValidatorSetup } from './lib/validator-setup-view.js';
 import { buildCheckedUnbondTx, readMaxUnbondWarning } from './lib/validator-manage-chain.js';
@@ -156,7 +156,7 @@ function commissionCell(row) {
 
     let html = `<span style="font-weight:600;">${stakingEscapeHtml(pct.toFixed(2))}%</span>`;
     if (pct > 50) {
-        html += ` <span class="badge" style="background: var(--error);">HIGH RISK</span>`;
+        html += ` ${chipHtml('is-error', 'bx-error-circle', 'High risk', stakingEscapeHtml)}`;
     }
     if (h && h.pendingRaise) {
         // The live commission has already moved past the newest era we hold
@@ -183,16 +183,13 @@ function commissionCell(row) {
              + `RAISED RECENTLY</span>`;
     }
     if (h && h.note) {
-        const tone = h.volatility === 'stable' ? 'var(--text-muted)'
-                   : h.volatility === 'volatile' ? 'var(--warning, #f5a623)'
-                   : 'var(--text-secondary)';
         // No white-space:nowrap — the note runs to ~55 characters and forcing
         // it onto one line widened the entire validators table.
-        html += `<div style="font-size:0.68rem;color:${tone};margin-top:2px;max-width:22ch;line-height:1.3;">`
+        html += (h.volatility === 'volatile' ? '<div class="ui-caption is-warn" style="max-width:22ch;">' : '<div class="ui-caption" style="max-width:22ch;">')
              + `${stakingEscapeHtml(h.note)}</div>`;
     } else if (h && h.volatility === 'unknown') {
         // Say so rather than implying stability we have not observed.
-        html += `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;">history not yet indexed</div>`;
+        html += `<div class="ui-caption">history not yet indexed</div>`;
     }
     return html;
 }
@@ -204,24 +201,24 @@ function commissionCell(row) {
 // the same two-copies-drift shape as F-045. One function, used by both tables.
 // `soft` renders the translucent-background variant the account-extrinsics
 // table already used, so adopting the shared helper there did not restyle it.
-function statusBadge(status, extraStyle = '', { soft = false, icon = false } = {}) {
+function statusBadge(status, extraClass = '', { soft = false, icon = false } = {}) {
     const st = String(status || 'unknown');
-    const SOFT = {
-        success: 'background: rgba(46, 204, 113, 0.2); color: #2ecc71;',
-        failed:  'background: rgba(231, 76, 60, 0.2); color: #e74c3c;',
-        unknown: 'background: rgba(255, 255, 255, 0.08); color: var(--text-muted);'
-    };
     const key = (st === 'success' || st === 'failed') ? st : 'unknown';
-    const solid = key === 'failed' ? 'var(--error)' : key === 'success' ? 'var(--success)' : 'var(--text-muted)';
     const label = st === 'success' ? 'Success' : st === 'failed' ? 'Failed' : st;
-    // `icon`: the same three-way decision as a check, cross or dash, for compact Result columns.
-    if (icon) return `<i class="bx ${{ success: 'bxs-check-circle', failed: 'bxs-x-circle', unknown: 'bx-minus' }[key]}" title="${stakingEscapeHtml(label)}" style="font-size: 18px; color: ${solid};${extraStyle}"></i>`;
-    const style = soft ? SOFT[key] : `background: ${solid};`;
-    const title = key === 'unknown'
-        ? ' title="Seen live; the dispatch result has not been read yet."'
-        : '';
-    return `<span class="badge"${title} style="${style}${extraStyle}">${stakingEscapeHtml(label)}</span>`;
+    const more = extraClass ? ' ' + extraClass : '';
+    // `icon`: the same three-way decision as a check, cross or dash, for compact Result columns. The role is a class
+    // (.tx-status .is-success, .is-failed, .is-unknown): the stylesheet colours it, never an inline style.
+    if (icon) return `<i class="bx ${{ success: 'bxs-check-circle tx-status is-success', failed: 'bxs-x-circle tx-status is-failed', unknown: 'bx-minus tx-status is-unknown' }[key]}${more}" title="${stakingEscapeHtml(label)}"></i>`;
+    // The badge form is the chip of the colour roles: an icon and the word, so the state is never colour alone.
+    const chip = key === 'success' ? chipHtml('is-positive', 'bx-check', label, stakingEscapeHtml)
+        : key === 'failed' ? chipHtml('is-error', 'bx-x', label, stakingEscapeHtml)
+        : chipHtml('is-neutral', 'bx-minus', label, stakingEscapeHtml);
+    const title = key === 'unknown' ? ' title="Seen live; the dispatch result has not been read yet."' : '';
+    return title || more ? chip.replace('<span class="ui-chip ', `<span${title} class="ui-chip${more} `) : chip;
 }
+
+// A centred state line of the kit (lib/ui-parts.js stateHtml), the words as the page had them.
+function stateLine(kind, text, roomy = false) { return stateHtml(kind, text, { roomy, esc: stakingEscapeHtml }); }
 
 function liveBadge() {
     return '<span class="live-badge" title="Seen live over the node connection. Not yet confirmed by the indexer; the author and event count fill in once it is.">live</span>';
@@ -855,7 +852,7 @@ function runLiveRuntimeCheck(api, version) {
             networkStatusText.innerText = 'Node out of date';
             networkStatusText.title = status.message + ' Browsing still works; sending and staking are refused until the page reconnects to an up-to-date node.';
             statusIndicator.classList.remove('live');
-            statusIndicator.style.background = 'var(--error)';
+            statusIndicator.dataset.state = 'down';
         }
         return false;
     } catch (e) { console.warn('[runtime] browser live runtime check could not run:', e && e.message ? e.message : e); return true; }
@@ -865,7 +862,7 @@ function setNodeConnectedStatus() {
     networkStatusText.innerText = "Polkadex Connected";
     networkStatusText.title = '';
     statusIndicator.classList.add('live');
-    statusIndicator.style.background = 'var(--success)';
+    statusIndicator.dataset.state = 'ok';
 }
 
 // Keep the pill true to the node actually connected. The runtime version
@@ -921,7 +918,7 @@ function markNodeLinkOffline() {
     networkStatusText.innerText = "Node link offline";
     networkStatusText.title = 'Could not open a direct WebSocket to the Polkadex node. '
         + 'Explorer data is still live via the indexer; sending and staking need this link.';
-    statusIndicator.style.background = 'var(--error)';
+    statusIndicator.dataset.state = 'down';
     statusIndicator.classList.remove('live');
 }
 
@@ -978,7 +975,7 @@ async function init() {
     try {
         networkStatusText.innerText = "Connecting...";
         statusIndicator.classList.remove('live');
-        statusIndicator.style.background = 'orange';
+        statusIndicator.dataset.state = 'wait';
 
         // Cloudflare LB endpoint — auto-fails over between origin nodes
         // (so.polkadex.ee, polkadex-rpc.faradaynodes.com, ...) so this single
@@ -1033,7 +1030,7 @@ async function init() {
             console.warn('[chain] node link still connecting after '
                 + WS_HANDSHAKE_BUDGET_MS + 'ms — continuing with REST data');
             networkStatusText.innerText = 'Connecting to node…';
-            statusIndicator.style.background = 'orange';
+            statusIndicator.dataset.state = 'wait';
         } else {
             console.error("Failed to connect to Polkadex node", error);
             markNodeLinkOffline();
@@ -1423,15 +1420,9 @@ function renderChainStaleBanner(chainHead) {
         ? `${headLabel} hasn't advanced in ${minutesStale} minute${minutesStale === 1 ? '' : 's'}`
         : `${headLabel} hasn't advanced in a while`;
 
-    const html = `
-        <div style="display:flex; align-items:center; gap:14px; padding:12px 22px; background: rgba(245, 166, 35, 0.12); border-bottom: 1px solid rgba(245, 166, 35, 0.45); color: #fbeac4; font-size: 0.88rem; line-height: 1.45;">
-            <i class='bx bx-error-circle' style="font-size: 20px; color: #f5a623; flex-shrink: 0;"></i>
-            <div style="flex: 1;">
-                <strong style="color: #fff;">Chain may be stalled:</strong>
-                ${stakingEscapeHtml(detail)}. The data on this page may be out of date until the upstream chain RPC recovers.
-                Indicator clears automatically when blocks resume.
-            </div>
-        </div>`;
+    const html = panelHtml('is-warn chain-stale', 'bx-error-circle',
+        `${stakingEscapeHtml(detail)}. The data on this page may be out of date until the upstream chain RPC recovers.
+        Indicator clears automatically when blocks resume.`, { title: 'Chain may be stalled:', esc: stakingEscapeHtml });
 
     if (el) {
         el.innerHTML = html;
@@ -2084,7 +2075,7 @@ function renderTransactions() {
     transactionsListEl.innerHTML = '';
     const financialTransactions = financialTransactionRows(transactions);
     if (financialTransactions.length === 0) {
-        transactionsListEl.innerHTML = '<div style="padding: 20px; color: var(--text-muted); font-size: 0.9rem;">Waiting for financial transactions...</div>';
+        transactionsListEl.innerHTML = stateLine('empty', 'Waiting for financial transactions...');
         return;
     }
     financialTransactions.forEach((tx, index) => {
@@ -2137,7 +2128,7 @@ async function fetchValidators() {
     if (validatorsFetched) return;
     try {
         if (!validatorsTableApi) {
-            validatorsListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching from backend indexer…</div>';
+            validatorsListEl.innerHTML = stateLine('loading', 'Fetching from backend indexer…', true);
         }
 
         const response = await fetch('/api/validators');
@@ -2145,7 +2136,7 @@ async function fetchValidators() {
 
         if (data.status === 'Initializing' || data.status === 'Syncing' && data.validators.length === 0) {
             if (!validatorsTableApi) {
-                validatorsListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: orange;">Indexer is syncing data from Polkadex node, please wait…</div>';
+                validatorsListEl.innerHTML = stateLine('wait', 'Indexer is syncing data from Polkadex node, please wait…', true);
             }
             setTimeout(() => { validatorsFetched = false; fetchValidators(); }, 3000);
             return;
@@ -2162,7 +2153,7 @@ async function fetchValidators() {
     } catch (err) {
         console.error("Error fetching validators:", err);
         if (!validatorsTableApi) {
-            validatorsListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--error);">Error reaching backend indexer. Is node server.js running?</div>';
+            validatorsListEl.innerHTML = stateLine('failed', 'This list could not be loaded. Reload to try again.', true);
         }
     }
 }
@@ -2199,7 +2190,7 @@ function renderValidators() {
                     key: 'totalStake', label: 'Total Stake',
                     sort: (a, b) => (a.totalStake || 0) - (b.totalStake || 0),
                     format: row => row.totalStake == null
-                        ? '<span style="color: var(--text-muted)" title="Stake data is temporarily unavailable">unavailable</span>'
+                        ? '<span class="ui-quiet" title="Stake data is temporarily unavailable">unavailable</span>'
                         : `${Number(row.totalStake).toLocaleString('en-US', { maximumFractionDigits: 2 })} <span class="unit">PDEX</span>`
                 },
                 {
@@ -2260,8 +2251,8 @@ function renderValidators() {
                     format: row => {
                         const v = formatNominatorApy(row[NOMINATOR_APY_FIELD]);
                         return v != null
-                            ? `<span style="color: var(--success); font-weight: 500;">${v}</span>`
-                            : '<span style="color: var(--text-secondary);">—</span>';
+                            ? `<span class="ui-positive">${v}</span>`
+                            : '<span class="ui-quiet">—</span>';
                     }
                 },
             ]
@@ -2281,7 +2272,7 @@ async function fetchHolders() {
     try {
         if (!holdersListEl) return;
         if (!holdersTableApi) {
-            holdersListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching from backend indexer…</div>';
+            holdersListEl.innerHTML = stateLine('loading', 'Fetching from backend indexer…', true);
         }
 
         const response = await fetch('/api/holders');
@@ -2289,7 +2280,7 @@ async function fetchHolders() {
 
         if (data.status === 'Initializing' || data.status === 'Syncing' && data.holders.length === 0) {
             if (!holdersTableApi) {
-                holdersListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: orange;">Indexer is syncing data from Polkadex node, please wait…</div>';
+                holdersListEl.innerHTML = stateLine('wait', 'Indexer is syncing data from Polkadex node, please wait…', true);
             }
             setTimeout(() => { holdersFetched = false; fetchHolders(); }, 3000);
             return;
@@ -2303,7 +2294,7 @@ async function fetchHolders() {
     } catch (err) {
         console.error("Error fetching holders:", err);
         if (!holdersTableApi) {
-            holdersListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--error);">Error reaching backend indexer. Is node server.js running?</div>';
+            holdersListEl.innerHTML = stateLine('failed', 'This list could not be loaded. Reload to try again.', true);
         }
     }
 }
@@ -2352,7 +2343,7 @@ function renderHolders() {
                 {
                     key: 'share', label: 'Percentage',
                     sort: (a, b) => (a.share || 0) - (b.share || 0),
-                    format: row => `<span style="color: var(--brand-primary); font-weight: 500;">${Number(row.share).toFixed(4)}%</span>`
+                    format: row => `<span class="ui-strong">${Number(row.share).toFixed(4)}%</span>`
                 }
             ]
         });
@@ -2381,14 +2372,14 @@ async function fetchTransactions(force = false) {
     try {
         if (!fullTransactionsListEl) return;
         if ((!force || transactions.length === 0) && !transactionsTableApi) {
-            fullTransactionsListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching from backend indexer…</div>';
+            fullTransactionsListEl.innerHTML = stateLine('loading', 'Fetching from backend indexer…', true);
         }
 
         const response = await fetch('/api/transactions');
         const data = await response.json();
 
         if (data.status === 'Initializing' || (data.status === 'Syncing' && data.transactions.length === 0)) {
-            fullTransactionsListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: orange;">Indexer is crawling historical blocks, please wait…</div>';
+            fullTransactionsListEl.innerHTML = stateLine('wait', 'Indexer is crawling historical blocks, please wait…', true);
             setTimeout(() => { txFetched = false; fetchTransactions(); }, 5000);
             return;
         }
@@ -2418,7 +2409,7 @@ async function fetchTransactions(force = false) {
     } catch (err) {
         console.error("Error fetching transactions:", err);
         if (!transactionsTableApi) {
-            fullTransactionsListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--error);">Error reaching backend indexer. Is node server.js running?</div>';
+            fullTransactionsListEl.innerHTML = stateLine('failed', 'This list could not be loaded. Reload to try again.', true);
         }
     }
 }
@@ -2479,7 +2470,7 @@ function renderFullTransactions() {
                     sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
                     format: row => {
                         const d = formatLocalDateTime(row.timestamp);
-                        return `<span style="color: var(--text-secondary);">${stakingEscapeHtml(timeAgo(row.timestamp))}<br><small>${stakingEscapeHtml(d)}</small></span>`;
+                        return `<span class="ui-quiet">${stakingEscapeHtml(timeAgo(row.timestamp))}<br><small>${stakingEscapeHtml(d)}</small></span>`;
                     }
                 },
                 {
@@ -2494,7 +2485,7 @@ function renderFullTransactions() {
                 },
                 {
                     key: 'value', label: 'Value',
-                    format: row => `<span style="color: var(--text-secondary);">${stakingEscapeHtml(String(row.value || ''))}</span>`
+                    format: row => `<span class="ui-quiet">${stakingEscapeHtml(String(row.value || ''))}</span>`
                 },
                 {
                     key: 'status', label: 'Status',
@@ -2542,12 +2533,12 @@ function updateOlderFinancialTxButton(show) {
     if (olderTxReachedGenesis) {
         loadOlderBtn.style.display = 'inline-block';
         loadOlderBtn.disabled = true;
-        loadOlderBtn.innerText = 'Reached the start of the chain';
+        loadOlderBtn.innerHTML = icon('bx-down-arrow-alt') + 'Reached the start of the chain';
         return;
     }
     loadOlderBtn.style.display = show ? 'inline-block' : 'none';
     loadOlderBtn.disabled = isLoadingOlderTx;
-    loadOlderBtn.innerText = isLoadingOlderTx ? 'Loading older financial tx...' : 'Load Older 100 Financial Tx';
+    loadOlderBtn.innerHTML = icon('bx-down-arrow-alt') + (isLoadingOlderTx ? 'Loading older financial tx...' : 'Load Older 100 Financial Tx');
 }
 
 function normalizeTransactionRow(tx) {
@@ -2624,7 +2615,7 @@ async function loadOlderFinancialTransactions() {
             if (!note) {
                 const n = document.createElement('div');
                 n.id = 'older-tx-note';
-                n.style.cssText = 'text-align:center; padding: 12px; color: var(--text-muted); font-size: 0.85rem;';
+                n.className = 'ui-state';
                 n.textContent = `No financial transactions found in the last ${data.scannedBlocks || 0} older blocks.`;
                 if (fullTransactionsListEl && fullTransactionsListEl.parentNode) {
                     fullTransactionsListEl.parentNode.insertBefore(n, fullTransactionsListEl);
@@ -2636,8 +2627,9 @@ async function loadOlderFinancialTransactions() {
         console.error("Error loading older financial transactions:", err);
         // Show the error as a toast-style note rather than wiping the table.
         const errEl = document.createElement('div');
-        errEl.style.cssText = 'text-align:center; padding: 12px; color: var(--error); font-size: 0.85rem;';
-        errEl.textContent = 'Error loading older financial transactions: ' + (err.message || String(err));
+        errEl.className = 'ui-state is-failed';
+        errEl.setAttribute('role', 'alert');
+        errEl.innerHTML = icon('bx-error') + stakingEscapeHtml('Error loading older financial transactions: ' + (err.message || String(err)));
         if (fullTransactionsListEl && fullTransactionsListEl.parentNode) {
             fullTransactionsListEl.parentNode.insertBefore(errEl, fullTransactionsListEl);
             setTimeout(() => { try { errEl.remove(); } catch (e) {} }, 6000);
@@ -2653,7 +2645,7 @@ async function fetchBlocks(force = false) {
     try {
         if (!fullBlocksListEl) return;
         if ((!force || fullBlocks.length === 0) && !blocksTableApi) {
-            fullBlocksListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching from backend indexer…</div>';
+            fullBlocksListEl.innerHTML = stateLine('loading', 'Fetching from backend indexer…', true);
         }
 
         const response = await fetch('/api/blocks');
@@ -2666,7 +2658,7 @@ async function fetchBlocks(force = false) {
         // not hide data — the backend now reports the real chain_index state,
         // and an index that has rows is renderable regardless of its phase.
         if (data.blocks.length === 0 && (data.status === 'Initializing' || data.status === 'Syncing')) {
-            fullBlocksListEl.innerHTML = '<div style="text-align:center; padding: 40px; color: orange;">Indexer is crawling historical blocks, please wait…</div>';
+            fullBlocksListEl.innerHTML = stateLine('wait', 'Indexer is crawling historical blocks, please wait…', true);
             setTimeout(() => { blocksFetched = false; fetchBlocks(); }, 5000);
             return;
         }
@@ -2685,7 +2677,7 @@ async function fetchBlocks(force = false) {
     } catch (err) {
         console.error("Error fetching blocks:", err);
         if (!blocksTableApi) {
-            fullBlocksListEl.innerHTML = `<div style="text-align:center; padding: 40px; color: var(--error);">Backend Syncing. Please refresh.</div>`;
+            fullBlocksListEl.innerHTML = stateLine('failed', 'This list could not be loaded. Reload to try again.', true);
         }
     }
 }
@@ -2714,7 +2706,7 @@ function renderFullBlocks() {
                 {
                     key: 'timestamp', label: 'Age',
                     sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-                    format: row => `<span style="color: var(--text-secondary);">${stakingEscapeHtml(timeAgo(row.timestamp))}</span>`
+                    format: row => `<span class="ui-quiet">${stakingEscapeHtml(timeAgo(row.timestamp))}</span>`
                 },
                 {
                     key: 'authorName', label: 'Author', searchable: true,
@@ -2732,7 +2724,7 @@ function renderFullBlocks() {
                         // is NOT a link: linking to /account/ with an empty
                         // address produced a dead 404.
                         if (!addr) {
-                            return `<span style="color: var(--text-muted);">${row.unconfirmed ? 'pending…' : '—'}</span>`;
+                            return `<span class="ui-quiet">${row.unconfirmed ? 'pending…' : '—'}</span>`;
                         }
                         const short = addr.substring(0, 8) + '…';
                         if (name && name !== 'Unknown' && name !== 'System' && !String(name).startsWith('Validator')) {
@@ -2745,7 +2737,7 @@ function renderFullBlocks() {
                     key: 'extrinsicsCount', label: 'Extrinsics',
                     sort: (a, b) => (a.extrinsicsCount || 0) - (b.extrinsicsCount || 0),
                     format: row => row.extrinsicsCount == null
-                        ? '<span style="color: var(--text-muted);">—</span>'
+                        ? '<span class="ui-quiet">—</span>'
                         : `<strong>${stakingEscapeHtml(row.extrinsicsCount)}</strong>`
                 },
                 {
@@ -2753,7 +2745,7 @@ function renderFullBlocks() {
                     sort: (a, b) => (a.eventsCount || 0) - (b.eventsCount || 0),
                     // F-064: null means the events query failed, not zero.
                     format: row => row.eventsCount == null
-                        ? '<span style="color: var(--text-muted);">—</span>'
+                        ? '<span class="ui-quiet">—</span>'
                         : `<strong>${stakingEscapeHtml(row.eventsCount)}</strong>`
                 },
                 {
@@ -2767,7 +2759,7 @@ function renderFullBlocks() {
                     key: 'timestampDate', label: 'Date',
                     sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
                     format: row => row.timestamp
-                        ? `<span style="color: var(--text-secondary);">${stakingEscapeHtml(formatLocalDateTime(row.timestamp))}</span>`
+                        ? `<span class="ui-quiet">${stakingEscapeHtml(formatLocalDateTime(row.timestamp))}</span>`
                         : ''
                 }
             ]
@@ -2857,7 +2849,7 @@ async function fetchEvents(force = false) {
 
         // Audit F-020: spin only while there are no rows (see fetchBlocks).
         if (data.events.length === 0 && (data.status === 'Initializing' || data.status === 'Syncing')) {
-            fullEventsListEl.innerHTML = '<div style="text-align:center; padding: 20px; color: orange;">Indexer is crawling historical events, please wait...</div>';
+            fullEventsListEl.innerHTML = stateLine('wait', 'Indexer is crawling historical events, please wait...');
             setTimeout(() => { eventsFetched = false; fetchEvents(); }, 5000);
             return;
         }
@@ -2868,7 +2860,7 @@ async function fetchEvents(force = false) {
 
     } catch (err) {
         console.error("Error fetching events:", err);
-        fullEventsListEl.innerHTML = '<div style="text-align:center; padding: 20px; color: var(--error);">Error reaching backend indexer. Is node server.js running?</div>';
+        fullEventsListEl.innerHTML = stateLine('failed', 'This list could not be loaded. Reload to try again.');
     }
 }
 
@@ -2903,8 +2895,8 @@ function renderFullEvents() {
                         // shape. Reward events without an enclosing extrinsic
                         // fall through to the event-id span.
                         const link = (row.txHash && looksLikeTxHash(row.txHash))
-                            ? `<a href="/tx/${row.block}/${row.txHash}" class="item-link" style="font-size:12px; color: var(--brand-secondary); opacity:0.8;">tx: ${stakingEscapeHtml(shortHash)}</a>`
-                            : `<span style="font-size:12px; color: var(--text-secondary); opacity:0.8;">event: ${stakingEscapeHtml(shortHash)}</span>`;
+                            ? `<a href="/tx/${row.block}/${row.txHash}" class="item-link">tx: ${stakingEscapeHtml(shortHash)}</a>`
+                            : `<span class="ui-caption">event: ${stakingEscapeHtml(shortHash)}</span>`;
                         return `<a href="/block/${row.block}" class="item-link">${row.block}</a><br>${link}`;
                     }
                 },
@@ -2926,7 +2918,7 @@ function renderFullEvents() {
                     filter: { type: 'text', placeholder: 'Signer name/address…' },
                     format: row => {
                         const identityStr = (row.signerName && row.signerName !== 'Unknown') ? row.signerName : row.signerAddress;
-                        return `<a href="/account/${row.signerAddress}" class="item-link" style="font-size:13px;">${stakingEscapeHtml(identityStr || '')}</a>`;
+                        return `<a href="/account/${row.signerAddress}" class="item-link">${stakingEscapeHtml(identityStr || '')}</a>`;
                     }
                 },
                 {
@@ -2934,14 +2926,14 @@ function renderFullEvents() {
                     sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
                     format: row => {
                         const d = formatLocalDateTime(row.timestamp);
-                        return `<span style="color: var(--text-secondary);">${stakingEscapeHtml(timeAgo(row.timestamp))}<br><small>${stakingEscapeHtml(d)}</small></span>`;
+                        return `<span class="ui-quiet">${stakingEscapeHtml(timeAgo(row.timestamp))}<br><small>${stakingEscapeHtml(d)}</small></span>`;
                     }
                 },
                 {
                     key: 'status', label: 'Status',
                     sort: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
                     filter: { type: 'select', options: ['success', 'failed', 'unknown'] },
-                    format: row => statusBadge(row.status, ' font-size:11px;')
+                    format: row => statusBadge(row.status)
                 },
                 {
                     key: 'signerAddress', label: 'Signer Address', searchable: true,
@@ -3022,9 +3014,9 @@ function setDeepSearchButtonMode(mode) {
     if (!deepSearchBtn) return;
     if (mode === 'back') {
         deepSearchBtn.dataset.mode = 'back';
-        deepSearchBtn.innerHTML = "<i class='bx bx-arrow-back' style=\"vertical-align:middle;\"></i> Back to search";
-        deepSearchBtn.style.borderColor = 'var(--border-color)';
-        deepSearchBtn.style.background  = 'rgba(255,255,255,0.05)';
+        deepSearchBtn.innerHTML = icon('bx-arrow-back') + 'Back to search';
+        deepSearchBtn.classList.remove('ui-action');
+        deepSearchBtn.classList.add('validate-secondary');
         deepSearchBtn.style.display = '';
     } else if (mode === 'hidden') {
         // No query yet — the inline prompt below has its own Search button,
@@ -3033,9 +3025,9 @@ function setDeepSearchButtonMode(mode) {
         deepSearchBtn.style.display = 'none';
     } else {
         deepSearchBtn.dataset.mode = 'deep';
-        deepSearchBtn.textContent = 'Deep Search Network';
-        deepSearchBtn.style.borderColor = 'var(--brand-primary)';
-        deepSearchBtn.style.background  = 'rgba(229,0,122,0.1)';
+        deepSearchBtn.innerHTML = icon('bx-globe') + 'Deep Search Network';
+        deepSearchBtn.classList.remove('validate-secondary');
+        deepSearchBtn.classList.add('ui-action');
         deepSearchBtn.style.display = '';
     }
 }
@@ -3066,11 +3058,11 @@ function renderSearchPrompt(note, prefillQuery) {
     searchResultsContainer.innerHTML = `
         <div style="text-align: center; padding: 32px 16px;">
             <h3 style="margin: 0 0 10px; font-size: 1.25rem;">Search the Polkadex Mainnet</h3>
-            <p style="color: var(--text-secondary); margin: 0 auto 22px; font-size: 0.88rem; max-width: 540px; line-height: 1.55;">
+            <p class="ui-lede" style="margin: 0 auto 22px; max-width: 540px;">
                 Look up a block number, block hash, transaction hash, or account address. The local index is checked first;
                 you can also drill into the chain RPC directly with <strong>Deep Search</strong>.
             </p>
-            ${note ? `<div style="color: var(--brand-secondary); font-size: 0.85rem; margin-bottom: 14px;">${stakingEscapeHtml(note)}</div>` : ''}
+            ${note ? `<div class="ui-caption" style="margin-bottom: 14px;">${stakingEscapeHtml(note)}</div>` : ''}
             <div class="staking-search-bar" style="max-width: 640px; margin: 0 auto;">
                 <div style="flex: 1 1 320px; position: relative; display: flex; align-items: center;">
                     <input id="inline-search-input" data-input-kind="search" type="text" inputmode="search"
@@ -3080,8 +3072,8 @@ function renderSearchPrompt(note, prefillQuery) {
                 </div>
                 <button id="inline-search-submit-btn" type="button"><i class='bx bx-search'></i> Search</button>
             </div>
-            <p style="color: var(--text-muted); font-size: 0.78rem; margin-top: 14px;">
-                Tip: pressing <kbd style="padding: 1px 5px; border: 1px solid var(--border-color); border-radius: 3px; font-family: inherit;">Enter</kbd> submits.
+            <p class="ui-caption" style="margin-top: 14px;">
+                Tip: pressing <kbd>Enter</kbd> submits.
             </p>
         </div>`;
 
@@ -3280,7 +3272,7 @@ async function performSearch(query) {
     }
 
     if (!found) {
-        html = '<div style="text-align:center; padding: 20px; color: orange;">No results found in recent local history. Try deep search.</div>';
+        html = stateLine('empty', 'No results found in recent local history. Try deep search.');
     }
 
     if (searchResultsContainer) {
@@ -3448,9 +3440,9 @@ async function deepSearchNetwork(query) {
             // "Unexpected token '<'".
             try {
                 const err = await parseJsonResponse(response);
-                searchResultsContainer.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--error);">Deep Search Failed: ${stakingEscapeHtml(err.error || 'unknown error')}</div>`;
+                searchResultsContainer.innerHTML = stateLine('failed', 'Deep Search Failed: ' + (err.error || 'unknown error'));
             } catch (e) {
-                searchResultsContainer.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--error);">Deep Search Failed: ${stakingEscapeHtml(e.message)}<br><span style="color:var(--text-secondary);font-size:0.85rem;">If this keeps happening, the chain RPC is likely timing out; try again in a minute.</span></div>`;
+                searchResultsContainer.innerHTML = `<div class="ui-state is-failed" role="alert">${icon('bx-error')}Deep Search Failed: ${stakingEscapeHtml(e.message)}<br><span class="ui-caption">If this keeps happening, the chain RPC is likely timing out; try again in a minute.</span></div>`;
             }
             return;
         }
@@ -3475,10 +3467,10 @@ async function deepSearchNetwork(query) {
         // that made `name` raw in the first place.
         const E = stakingEscapeHtml;
         if (data.type === 'block') {
-            html += `<h3 style="margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Block Detail (Deep Search)</h3>`;
+            html += `<h3 class="ui-section-title ui-ruled" style="margin-top: 20px;">Block Detail (Deep Search)</h3>`;
             html += `<div style="padding: 10px 0;">Block <strong>${E(data.data.number)}</strong> (${E(data.data.hash)})<br>Author: ${E(data.data.authorAddress)}<br>${E(data.data.extrinsicsCount)} extrinsics, ${E(data.data.eventsCount)} events</div>`;
         } else if (data.type === 'account') {
-            html += `<h3 style="margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Account Detail (Deep Search)</h3>`;
+            html += `<h3 class="ui-section-title ui-ruled" style="margin-top: 20px;">Account Detail (Deep Search)</h3>`;
             html += `<div style="padding: 10px 0;">Address: <strong>${E(data.data.address)}</strong><br>Identity: ${E(data.data.name)}<br>Total Balance: ${E(Number(data.data.balance).toFixed(4))} PDEX<br>Free: ${E(Number(data.data.free).toFixed(4))} PDEX, Reserved: ${E(Number(data.data.reserved).toFixed(4))} PDEX</div>`;
         }
 
@@ -3490,11 +3482,11 @@ async function deepSearchNetwork(query) {
         } else {
             // The chain didn't recognise the query as a block or account.
             // Leave the button in "deep" mode so the user can refine and retry.
-            if (searchResultsContainer) searchResultsContainer.innerHTML = '<div style="text-align:center; padding: 20px; color: var(--text-secondary);">No matching block or account found on-chain for that query.</div>';
+            if (searchResultsContainer) searchResultsContainer.innerHTML = stateLine('empty', 'No matching block or account found on-chain for that query.');
         }
 
     } catch (err) {
-        searchResultsContainer.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--error);">Deep search error: ${stakingEscapeHtml(err.message)}</div>`;
+        searchResultsContainer.innerHTML = stateLine('failed', 'Deep search error: ' + err.message);
     }
 }
 
@@ -3817,7 +3809,7 @@ function renderHelpLanding(searchQuery = '') {
         sidebarHtml += '</ul></div>';
     }
     if (!sidebarHtml) {
-        sidebarHtml = `<p style="padding: 10px; font-size: 0.85rem; color: var(--text-secondary);">No matches for "${stakingEscapeHtml(q)}".</p>`;
+        sidebarHtml = `<p class="ui-lede" style="padding: 10px;">No matches for "${stakingEscapeHtml(q)}".</p>`;
     }
     nav.innerHTML = sidebarHtml;
 
@@ -4083,11 +4075,11 @@ function renderBrandPage() {
                 </div>
                 <div class="brand-type-sample">
                     <span class="brand-type-label">Caption · Inter 400, muted</span>
-                    <span style="font-family: 'Inter', sans-serif; font-weight: 400; font-size: 0.82rem; color: var(--text-secondary);">Subtitles, table headers, secondary metadata.</span>
+                    <span class="ui-caption" style="font-family: 'Inter', sans-serif; font-weight: 400;">Subtitles, table headers, secondary metadata.</span>
                 </div>
                 <div class="brand-type-sample">
                     <span class="brand-type-label">Mono · Courier New</span>
-                    <span style="font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--brand-secondary);">e8ab9d4fJp…  block #12338677  /api/extrinsic</span>
+                    <span class="mono ui-quiet">e8ab9d4fJp…  block #12338677  /api/extrinsic</span>
                 </div>
             </div>
             <p class="brand-note">Primary face is <strong>Inter</strong> (self-hosted, weights 300/400/500/600/700).
@@ -4097,7 +4089,7 @@ function renderBrandPage() {
         <section class="brand-section">
             <h2>Logo</h2>
             <div class="brand-logo-grid">
-                <div class="brand-logo-card" style="background: var(--bg-dark);">
+                <div class="brand-logo-card is-dark">
                     <img src="/logo.png" alt="Polkadex logo on dark" class="js-brand-img" data-fallback="plain">
                     <span>On dark</span>
                 </div>
@@ -5239,7 +5231,7 @@ function renderPricePageChart(history) {
 
 function buildPriceStatsHtml(history, days) {
     if (!history.length) {
-        return `<div class="list-container glass" style="padding:24px;text-align:center;color:var(--text-muted);">No price data in the selected range.</div>`;
+        return `<div class="list-container glass">${stateLine('empty', 'No price data in the selected range.')}</div>`;
     }
     const prices  = history.map(p => Number(p.price)).filter(Number.isFinite);
     const volumes = history.map(p => Number(p.volume24h)).filter(Number.isFinite);
@@ -6235,54 +6227,54 @@ async function fetchAccountDetails(address) {
         const tabCount = list => (data.index?.totals?.[list] ?? (data[list] || []).length).toLocaleString();   // indexed total, else rows loaded
 
         let html = `
-            <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div class="list-header is-ruled" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2 style="font-size: 18px;">Account Details</h2>
                 <a href="#" data-close-detail="holders" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
-            <div style="background: rgba(255,255,255,0.02); margin-bottom: 20px; border-radius: 4px; border: 1px solid var(--border-color);">
-                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
-                    <tr style="background: rgba(255,255,255,0.05);">
-                        <td style="padding: 12px 20px; font-weight: 600; width: 250px;">account</td>
-                        <td style="padding: 12px 20px;" class="address-cell address-with-label" data-address="${stakingEscapeHtml(data.account)}">${stakingEscapeHtml(data.account)} <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span> ${watchlistStarButton('address', data.account, (data.display && data.display !== 'Unknown') ? data.display : data.account)}
+            <div class="ui-kv-wrap">
+                <table class="ui-kv" style="text-align: left; font-size: 14px;">
+                    <tr>
+                        <td>account</td>
+                        <td class="address-cell address-with-label" data-address="${stakingEscapeHtml(data.account)}">${stakingEscapeHtml(data.account)} <button type="button" class="validate-text-btn js-copy-address">Copy</button> ${watchlistStarButton('address', data.account, (data.display && data.display !== 'Unknown') ? data.display : data.account)}
                             <div id="account-label-editor"></div>
                         </td>
                     </tr>
                     <tr>
-                        <td style="padding: 12px 20px; font-weight: 600;">display</td>
+                        <td>display</td>
                         <!-- Audit F-013: data.display is pallet_identity text — anyone
                              can set it on-chain, so it MUST be escaped or an identity
                              string becomes stored XSS on /account/<addr>. -->
-                        <td style="padding: 12px 20px; color: var(--brand-secondary);">${stakingEscapeHtml(data.display)}</td>
-                    </tr>
-                    <tr style="background: rgba(255,255,255,0.02);">
-                        <td style="padding: 12px 20px; font-weight: 600;">balance total</td>
-                        <td style="padding: 12px 20px;">${data.balanceTotal.toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
+                        <td><span class="ui-strong">${stakingEscapeHtml(data.display)}</span></td>
                     </tr>
                     <tr>
-                        <td style="padding: 12px 20px; font-weight: 600;">balance reserved</td>
+                        <td>balance total</td>
+                        <td>${data.balanceTotal.toFixed(4)} <span class="ui-caption">(PDEX)</span></td>
+                    </tr>
+                    <tr>
+                        <td>balance reserved</td>
                         <!-- F-136: the '?? data.balanceFrozen' fallback that used to be
                              here is GONE, and removing it was required, not tidying.
                              balanceFrozen used to be an alias of reserved; it now
                              carries the real frozen amount, which is a different
                              quantity, so the fallback would print locks under a
                              "reserved" label — the exact confusion F-136 is about. -->
-                        <td style="padding: 12px 20px;">${Number(data.balanceReserved ?? 0).toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
+                        <td>${Number(data.balanceReserved ?? 0).toFixed(4)} <span class="ui-caption">(PDEX)</span></td>
                     </tr>
                     <tr>
-                        <td style="padding: 12px 20px; font-weight: 600;">balance frozen</td>
-                        <td style="padding: 12px 20px;">${Number(data.balanceFrozen ?? 0).toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span> <span style="font-size: 11px; color: var(--text-secondary);">locks (vesting/staking) — overlaps free, not additional to it</span></td>
-                    </tr>
-                    <tr style="background: rgba(255,255,255,0.02);">
-                        <td style="padding: 12px 20px; font-weight: 600;">balance free</td>
-                        <td style="padding: 12px 20px;">${data.balanceFree.toFixed(4)} <span style="font-size: 11px; color: var(--text-secondary);">(PDEX)</span></td>
+                        <td>balance frozen</td>
+                        <td>${Number(data.balanceFrozen ?? 0).toFixed(4)} <span class="ui-caption">(PDEX)</span> <span class="ui-caption">locks (vesting/staking) — overlaps free, not additional to it</span></td>
                     </tr>
                     <tr>
-                        <td style="padding: 12px 20px; font-weight: 600;">roles</td>
-                        <td style="padding: 12px 20px;">${stakingEscapeHtml(data.roles)}</td>
+                        <td>balance free</td>
+                        <td>${data.balanceFree.toFixed(4)} <span class="ui-caption">(PDEX)</span></td>
                     </tr>
-                    <tr style="background: rgba(255,255,255,0.02);">
-                        <td style="padding: 12px 20px; font-weight: 600;">Rating(top)</td>
-                        <td style="padding: 12px 20px;">${(data.rank == null || data.rank === "0") ? "outside the top 500" : '#' + stakingEscapeHtml(String(data.rank))}</td>
+                    <tr>
+                        <td>roles</td>
+                        <td>${stakingEscapeHtml(data.roles)}</td>
+                    </tr>
+                    <tr>
+                        <td>Rating(top)</td>
+                        <td>${(data.rank == null || data.rank === "0") ? "outside the top 500" : '#' + stakingEscapeHtml(String(data.rank))}</td>
                     </tr>
                 </table>
             </div>
@@ -6360,7 +6352,7 @@ async function fetchAccountDetails(address) {
             columns: [
                 {
                     key: 'hash', label: 'Event Hash', searchable: true,
-                    format: row => `<span class="address-cell" style="color: var(--brand-secondary);">${stakingEscapeHtml((row.hash || '').substring(0, 25))}…</span>`
+                    format: row => `<span class="mono">${stakingEscapeHtml((row.hash || '').substring(0, 25))}…</span>`
                 },
                 {
                     key: 'section', label: 'Section',
@@ -6372,7 +6364,7 @@ async function fetchAccountDetails(address) {
                     key: 'method', label: 'Method', searchable: true,
                     sort: (a, b) => String(a.method || '').localeCompare(String(b.method || '')),
                     filter: { type: 'select', options: eventMethods },
-                    format: row => `<span style="color: var(--text-secondary); font-size: 11px;">${stakingEscapeHtml(row.method || '')}</span>`
+                    format: row => `<span class="ui-caption">${stakingEscapeHtml(row.method || '')}</span>`
                 },
                 {
                     key: 'timestamp', label: 'Age',
@@ -6414,13 +6406,13 @@ async function fetchBlockDetails(id) {
         });
 
         let html = `
-            <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div class="list-header is-ruled" style="display: flex; justify-content: space-between; align-items: center;">
                 <h2>Block ${data.block.header.number}</h2>
                 <a href="#" data-close-detail="blocks" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
             <div style="padding: 20px;">
                 <div style="margin-bottom: 10px;"><strong>hash</strong> <span class="address-cell">${data.hash}</span></div>
-                <div style="margin-bottom: 20px;"><strong>date</strong> <span style="color: var(--text-secondary);">${stakingEscapeHtml(formatLocalDateTime(data.date))}</span></div>
+                <div style="margin-bottom: 20px;"><strong>date</strong> <span class="ui-quiet">${stakingEscapeHtml(formatLocalDateTime(data.date))}</span></div>
                 <div class="json-container">
                     ${renderJSONTree({ block: data.block })}
                 </div>
@@ -6472,10 +6464,7 @@ async function fetchTxDetails(block, hash) {
         let correctionBanner = '';
         if (data.correctedFrom != null && Number.isFinite(data.block) && data.block !== data.correctedFrom) {
             try { history.replaceState(history.state, '', '/tx/' + data.block + '/' + data.hash); } catch (_) {}
-            correctionBanner = `<div style="margin: 0 20px 12px; padding: 10px 14px; background: rgba(245, 166, 35, 0.1); border: 1px solid rgba(245, 166, 35, 0.3); border-radius: 4px; font-size: 0.82rem; color: var(--text-secondary);">
-                <i class='bx bx-info-circle' style="vertical-align: middle; color: #f5a623;"></i>
-                The link pointed at block #${data.correctedFrom}, but the transaction is actually in block #${data.block}. The URL has been corrected — likely a chain reorg between when the link was generated and when it was opened.
-            </div>`;
+            correctionBanner = `<div class="ui-page-body">${linePanelHtml('is-info', 'bx-info-circle', stakingEscapeHtml(`The link pointed at block #${data.correctedFrom}, but the transaction is actually in block #${data.block}. The URL has been corrected \u2014 likely a chain reorg between when the link was generated and when it was opened.`))}</div>`;
         }
 
         updateSeoMeta('tx-details', {
@@ -6485,21 +6474,21 @@ async function fetchTxDetails(block, hash) {
         });
 
         let html = `
-            <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div class="list-header is-ruled" style="display: flex; justify-content: space-between; align-items: center;">
                 <h2>Tx: ${data.hash}</h2>
                 <a href="#" data-close-detail="transactions" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
             ${correctionBanner}
             <div style="padding: 20px;">
-                <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; text-align: left;">
-                    <tr><td style="padding: 10px; font-weight: bold; width: 150px;">Time</td><td style="padding: 10px;">${stakingEscapeHtml(formatLocalDateTime(data.time))}</td></tr>
+                <table class="ui-kv" style="margin-bottom: 30px; text-align: left;">
+                    <tr><td>Time</td><td>${stakingEscapeHtml(formatLocalDateTime(data.time))}</td></tr>
                     <!-- Audit F-122: every chain-derived field escaped; from/to
                          also URL-encoded in the href attribute context. -->
-                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">event</td><td style="padding: 10px;">${stakingEscapeHtml(data.event)}</td></tr>
-                    <tr><td style="padding: 10px; font-weight: bold;">from</td><td style="padding: 10px;"><a href="/account/${encodeURIComponent(data.from)}" class="item-link address-cell">${stakingEscapeHtml(data.from)}</a></td></tr>
-                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">to</td><td style="padding: 10px;"><a href="/account/${encodeURIComponent(data.to)}" class="item-link address-cell">${stakingEscapeHtml(data.to)}</a></td></tr>
-                    <tr><td style="padding: 10px; font-weight: bold;">status</td><td style="padding: 10px;"><span class="badge" style="background: ${data.status === 'success' ? 'var(--success)' : 'var(--error)'}; font-size: 11px;">${stakingEscapeHtml(data.status)}</span></td></tr>
-                    <tr style="background: rgba(255,255,255,0.02);"><td style="padding: 10px; font-weight: bold;">block</td><td style="padding: 10px;"><a href="/block/${encodeURIComponent(data.block)}" class="item-link">${stakingEscapeHtml(String(data.block))}</a></td></tr>
+                    <tr><td>event</td><td>${stakingEscapeHtml(data.event)}</td></tr>
+                    <tr><td>from</td><td><a href="/account/${encodeURIComponent(data.from)}" class="item-link address-cell">${stakingEscapeHtml(data.from)}</a></td></tr>
+                    <tr><td>to</td><td><a href="/account/${encodeURIComponent(data.to)}" class="item-link address-cell">${stakingEscapeHtml(data.to)}</a></td></tr>
+                    <tr><td>status</td><td>${statusBadge(data.status)}</td></tr>
+                    <tr><td>block</td><td><a href="/block/${encodeURIComponent(data.block)}" class="item-link">${stakingEscapeHtml(String(data.block))}</a></td></tr>
                 </table>
                 ${data.call ? `<h3 class="tx-h3">Decoded call</h3>${renderCallHtml(data.call, {})}` : ''}
                 ${(data.eventTrees || []).length ? `<h3 class="tx-h3">Events</h3>${data.eventTrees.map(ev => renderCallHtml(ev, {}, { raw: false })).join('')}` : ''}
@@ -6554,20 +6543,20 @@ function renderTxNotFoundCard(block, hash, opts) {
     let headline, body, primaryButtonHtml, primaryAction;
     if (reason === 'invalid-format' && hashIsEventId) {
         headline = `Looking for an event, not a transaction`;
-        body = `This link points to an event identifier (<code style="color: var(--brand-secondary); font-size: 0.82rem;">${hashSafe}…</code>),
+        body = `This link points to an event identifier (<code class="ui-code">${hashSafe}…</code>),
             not a transaction hash. Events live inside blocks — view block #${blockSafe} to see the full list of events that ran in it.`;
         primaryButtonHtml = `<i class='bx bx-cube'></i> View block #${blockSafe}`;
         primaryAction = () => navigateTo('block/' + block);
     } else if (reason === 'invalid-format') {
         headline = `That doesn't look like a transaction hash`;
-        body = `A transaction hash is 64 hexadecimal characters (with an optional <code style="color: var(--brand-secondary); font-size: 0.82rem;">0x</code> prefix).
-            What we got — <code style="color: var(--brand-secondary); font-size: 0.82rem;">${hashSafe}…</code> — is the wrong shape, so it can't match any extrinsic on chain.
+        body = `A transaction hash is 64 hexadecimal characters (with an optional <code class="ui-code">0x</code> prefix).
+            What we got — <code class="ui-code">${hashSafe}…</code> — is the wrong shape, so it can't match any extrinsic on chain.
             The link is probably hand-edited or copied wrong.`;
         primaryButtonHtml = `<i class='bx bx-globe'></i> Try a deep search`;
         primaryAction = () => navigateTo('search?q=' + encodeURIComponent(hash || ''));
     } else {
         headline = `Transaction not in block #${blockSafe}`;
-        body = `The link pointed at <code style="color: var(--brand-secondary); font-size: 0.82rem;">${hashSafe}…</code>
+        body = `The link pointed at <code class="ui-code">${hashSafe}…</code>
             in block #${blockSafe}, but no extrinsic with that hash is in that block (or in the two blocks on either side).
             This is usually a stale link from before a chain reorg moved the transaction elsewhere.`;
         primaryButtonHtml = `<i class='bx bx-search'></i> Search recent blocks for this hash`;
@@ -6577,9 +6566,9 @@ function renderTxNotFoundCard(block, hash, opts) {
     txDetailsContainer.innerHTML = `
         <div class="list-container glass" style="padding: 40px 28px;">
             <div style="text-align: center; max-width: 580px; margin: 0 auto;">
-                <i class='bx bx-search-alt' style="font-size: 42px; color: var(--brand-primary); opacity: 0.7;"></i>
+                <span class="ui-tile is-lg is-neutral"><i class='bx bx-search-alt' aria-hidden="true"></i></span>
                 <h2 style="margin: 14px 0 8px;">${headline}</h2>
-                <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6;">${body}</p>
+                <p class="ui-lede">${body}</p>
                 <div style="display: flex; gap: 10px; justify-content: center; margin-top: 22px; flex-wrap: wrap;">
                     <button type="button" id="tx-recover-btn" class="ui-action">
                         ${primaryButtonHtml}
@@ -6588,7 +6577,7 @@ function renderTxNotFoundCard(block, hash, opts) {
                         <i class='bx bx-globe'></i> Deep network search
                     </a>
                 </div>
-                <div id="tx-recover-status" style="margin-top: 16px; font-size: 0.85rem; color: var(--text-muted);"></div>
+                <div id="tx-recover-status" class="ui-lede" style="margin-top: 16px;"></div>
             </div>
         </div>`;
 
@@ -6659,11 +6648,9 @@ window.addEventListener('hashchange', () => {
 window.copyToClipboard = function (element, text) {
     navigator.clipboard.writeText(text).then(() => {
         const originalText = element.innerText;
-        element.innerText = 'copied!';
-        element.style.color = 'var(--success)';
+        element.innerText = 'Copied';
         setTimeout(() => {
             element.innerText = originalText;
-            element.style.color = 'var(--brand-secondary)';
         }, 1500);
     }).catch(err => {
         console.error('Failed to copy: ', err);
@@ -6708,41 +6695,40 @@ function renderValidatorScorecard(scorecard) {
     // the page they use to decide where to stake. Renamed and re-worded; the
     // colour is now a neutral warning rather than an error.
     const spikes = scorecard.commissionSpikeCount ?? scorecard.slashCount ?? 0;
-    const spikeColor = spikes > 0 ? 'var(--warning, #f5a623)' : 'var(--success)';
     const spikeLabel = spikes === 0
         ? 'None'
         : `${spikes} spike${spikes === 1 ? '' : 's'}`;
     return `
         <div style="margin-bottom: 25px;">
             <h3 style="font-size: 14px; margin-bottom: 12px; display:flex; align-items:center; gap:8px;">
-                <i class='bx bx-stats' style="color:var(--brand-primary);"></i> Scorecard
-                <span style="color:var(--text-muted);font-weight:400;font-size:0.78rem;">(last ${pad(scorecard.totalEras)} eras, except where noted)</span>
+                <i class='bx bx-stats' aria-hidden="true"></i> Scorecard
+                <span class="ui-caption">(last ${pad(scorecard.totalEras)} eras, except where noted)</span>
             </h3>
             <div class="staking-summary-grid">
                 <div class="staking-summary-card">
                     <div class="label">Est. APY</div>
                     <div class="value accent">${apy}</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">${nominatorApyCaption(scorecard)}</div>
+                    <div class="ui-caption">${nominatorApyCaption(scorecard)}</div>
                 </div>
                 <div class="staking-summary-card">
                     <div class="label">Commission</div>
                     <div class="value">${commBand}</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">avg ${avgComm}%</div>
+                    <div class="ui-caption">avg ${avgComm}%</div>
                 </div>
                 <div class="staking-summary-card">
                     <div class="label">Active eras</div>
-                    <div class="value">${pad(scorecard.activeEras)} <span style="color:var(--text-muted);font-size:0.7rem;font-weight:400;">/ ${pad(scorecard.totalEras)}</span></div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">${activeRate}% in active set</div>
+                    <div class="value">${pad(scorecard.activeEras)} <span class="ui-quiet">/ ${pad(scorecard.totalEras)}</span></div>
+                    <div class="ui-caption">${activeRate}% in active set</div>
                 </div>
                 <div class="staking-summary-card">
                     <div class="label">Commission spikes</div>
-                    <div class="value" style="color:${spikeColor};">${spikeLabel}</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">all-time · eras raising commission above 50%</div>
+                    <div class="value ${spikes > 0 ? 'is-wait' : 'is-positive'}">${spikeLabel}</div>
+                    <div class="ui-caption">all-time · eras raising commission above 50%</div>
                 </div>
                 <div class="staking-summary-card">
                     <div class="label">Current stake</div>
                     <div class="value">${stakingFormatPDEX(scorecard.currentStake)} <span class="unit">PDEX</span></div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">latest indexed era</div>
+                    <div class="ui-caption">latest indexed era</div>
                 </div>
             </div>
         </div>
@@ -6807,28 +6793,26 @@ async function fetchValidatorDetails(address) {
                 let triggersHtml = '';
                 let triggerActionHtml = '';
                 if (data.triggers && data.triggers.length > 0) {
-                    triggerActionHtml = `
-                        <br><button type="button" id="toggle-trigger-events" style="border: 0; background: transparent; color: #ff6b6b; font-weight: bold; text-decoration: underline; margin-top: 5px; display: inline-block; padding: 0; cursor: pointer;">go to trigger events</button>
-                    `;
+                    triggerActionHtml = `<p><button type="button" id="toggle-trigger-events" class="validate-text-btn is-danger">go to trigger events</button></p>`;
                     triggersHtml = `
-                        <div id="trigger-events-log" style="display: none; margin-top: 15px; border-top: 1px solid rgba(255, 50, 50, 0.2); padding-top: 15px;">
-                            <strong style="display: block; margin-bottom: 10px;">Trigger Events Log:</strong>
-                            <table style="width: 100%; border-collapse: collapse; font-size: 12px; color: #ffcccc;">
+                        <div id="trigger-events-log" class="ui-ruled-top" style="display: none; margin-top: 15px;">
+                            <strong class="ui-strong">Trigger Events Log:</strong>
+                            <table class="data-table">
                                 <thead>
-                                    <tr style="border-bottom: 1px solid rgba(255, 50, 50, 0.2);">
-                                        <th style="padding: 5px; text-align: left;">Era</th>
-                                        <th style="padding: 5px; text-align: left;">Previous Comm.</th>
-                                        <th style="padding: 5px; text-align: left;">New Comm.</th>
-                                        <th style="padding: 5px; text-align: left;">Time Detected</th>
+                                    <tr>
+                                        <th>Era</th>
+                                        <th>Previous Comm.</th>
+                                        <th>New Comm.</th>
+                                        <th>Time Detected</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${data.triggers.map(t => `
                                         <tr>
-                                            <td style="padding: 5px;">${t.era}</td>
-                                            <td style="padding: 5px;">${t.prevCommission.toFixed(2)}%</td>
-                                            <td style="padding: 5px; color: #ff6b6b; font-weight: bold;">${t.newCommission.toFixed(2)}%</td>
-                                            <td style="padding: 5px;">${stakingEscapeHtml(formatLocalDateTime(t.timestamp))}</td>
+                                            <td>${t.era}</td>
+                                            <td>${t.prevCommission.toFixed(2)}%</td>
+                                            <td class="ui-strong">${t.newCommission.toFixed(2)}%</td>
+                                            <td>${stakingEscapeHtml(formatLocalDateTime(t.timestamp))}</td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
@@ -6837,15 +6821,8 @@ async function fetchValidatorDetails(address) {
                     `;
                 }
 
-                commissionWarning = `
-                    <div style="background: rgba(255, 50, 50, 0.1); border: 1px solid rgba(255, 50, 50, 0.3); padding: 15px; border-radius: 4px; margin-bottom: 20px;">
-                        <div style="color: #ff6b6b; font-size: 13px; line-height: 1.5;">
-                            Commission increase above threshold detected in validator network; max commission in 30 eras: ${maxComm.toFixed(2)}%; threshold: 50.00%
-                            ${triggerActionHtml}
-                        </div>
-                        ${triggersHtml}
-                    </div>
-                `;
+                commissionWarning = `<div style="margin-bottom: 20px;">${panelHtml('is-error', 'bx-error-circle',
+                    `<p>Commission increase above threshold detected in validator network; max commission in 30 eras: ${maxComm.toFixed(2)}%; threshold: 50.00%</p>${triggerActionHtml}${triggersHtml}`)}</div>`;
             }
         }
 
@@ -6854,21 +6831,21 @@ async function fetchValidatorDetails(address) {
             // Using a mock date for display purposes if not indexed properly, or calculate backwards from today
             // We'll just display Era number.
             historyTableRows += `
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                    <td style="padding: 12px 10px;">${h.era}</td>
-                    <td style="padding: 12px 10px;">${h.commission.toFixed(2)}%</td>
-                    <td style="padding: 12px 10px;">${(h.stake / 1000).toFixed(4)} kPDEX</td>
-                    <td style="padding: 12px 10px;">${formatNominatorApy(h.nominatorApy) ?? '\u2014'}</td>
+                <tr>
+                    <td>${h.era}</td>
+                    <td>${h.commission.toFixed(2)}%</td>
+                    <td>${(h.stake / 1000).toFixed(4)} kPDEX</td>
+                    <td>${formatNominatorApy(h.nominatorApy) ?? '\u2014'}</td>
                 </tr>
             `;
         });
 
         if (data.history.length === 0) {
-            historyTableRows = '<tr><td colspan="4" style="padding: 20px; text-align: center; color: var(--text-secondary);">Syncing historical eras. Check back later!</td></tr>';
+            historyTableRows = `<tr><td colspan="4">${stateLine('empty', 'Syncing historical eras. Check back later!')}</td></tr>`;
         }
 
         container.innerHTML = `
-            <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div class="list-header is-ruled" style="display: flex; justify-content: space-between; align-items: center;">
                 <h2 style="font-size: 18px;">Validator history - ${identityStr} ${watchlistStarButton('validator', data.address, (data.identity && data.identity !== 'Unknown') ? data.identity : data.address)}</h2>
                 <a href="#" data-close-detail="validators" class="close-control" title="Close" aria-label="Close"><i class='bx bx-x' aria-hidden="true"></i></a>
             </div>
@@ -6882,11 +6859,11 @@ async function fetchValidatorDetails(address) {
                 
                 <div style="margin-bottom: 15px;" data-address="${stakingEscapeHtml(data.address)}">
                     <strong style="display: block; margin-bottom: 5px;">Address:</strong>
-                    <span class="address-cell">${stakingEscapeHtml(data.address)}</span> <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span>
+                    <span class="address-cell">${stakingEscapeHtml(data.address)}</span> <button type="button" class="validate-text-btn js-copy-address">Copy</button>
                 </div>
                 <div style="margin-bottom: 25px;" data-address="${stakingEscapeHtml(data.controller)}">
                     <strong style="display: block; margin-bottom: 5px;">Controller account:</strong>
-                    <span class="address-cell">${stakingEscapeHtml(data.controller)}</span> <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); font-size: 13px; margin-left: 10px;">copy</span>
+                    <span class="address-cell">${stakingEscapeHtml(data.controller)}</span> <button type="button" class="validate-text-btn js-copy-address">Copy</button>
                 </div>
                 <div id="validator-manage-link-slot" class="validator-manage-link"></div>
 
@@ -6894,20 +6871,20 @@ async function fetchValidatorDetails(address) {
 
                 <div style="margin-bottom: 25px;">
                     <h3 style="font-size: 14px; margin-bottom: 10px;">Commission trend (30 eras)</h3>
-                    <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 4px; padding: 15px; height: 250px;">
+                    <div class="ui-chart-box">
                         <canvas id="validatorChartCanvas"></canvas>
                     </div>
                 </div>
 
                 <div>
                     <h3 style="font-size: 14px; margin-bottom: 10px;">Historical data</h3>
-                    <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
+                    <table class="ui-kv" style="text-align: left; font-size: 13px;">
                         <thead>
-                            <tr style="background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.05);">
-                                <th style="padding: 12px 10px; font-weight: 600;">Era</th>
-                                <th style="padding: 12px 10px; font-weight: 600;">Commission</th>
-                                <th style="padding: 12px 10px; font-weight: 600;">Stake PDEX</th>
-                                <th style="padding: 12px 10px; font-weight: 600;">APY</th>
+                            <tr>
+                                <th style="padding: 12px 20px; font-weight: 600;">Era</th>
+                                <th style="padding: 12px 20px; font-weight: 600;">Commission</th>
+                                <th style="padding: 12px 20px; font-weight: 600;">Stake PDEX</th>
+                                <th style="padding: 12px 20px; font-weight: 600;">APY</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -7027,19 +7004,19 @@ async function renderEmailPreferencesPage() {
 
     if (!token) {
         box.innerHTML = emailPrefsCard(
-            `<p style="color:var(--text-secondary);line-height:1.6;margin:0;">This page needs the personal link from one of your alert emails. Open the most recent one and click <strong>Manage preferences</strong>.</p>`
+            `<p class="ui-lede" style="margin:0;">This page needs the personal link from one of your alert emails. Open the most recent one and click <strong>Manage preferences</strong>.</p>`
         );
         return;
     }
 
-    box.innerHTML = emailPrefsCard(`<p style="color:var(--text-secondary);margin:0;">Loading your preferences…</p>`);
+    box.innerHTML = emailPrefsCard(`<p class="ui-lede" style="margin:0;">Loading your preferences…</p>`);
 
     let data;
     try {
         const res = await fetch(`/api/email/preferences?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
         if (res.status === 404) {
             box.innerHTML = emailPrefsCard(
-                `<p style="color:var(--text-secondary);line-height:1.6;margin:0;">This preferences link is not recognised. It may have been superseded, or the URL was cut short in transit — email clients sometimes wrap long links. Try opening it from a newer alert email.</p>`
+                `<p class="ui-lede" style="margin:0;">This preferences link is not recognised. It may have been superseded, or the URL was cut short in transit — email clients sometimes wrap long links. Try opening it from a newer alert email.</p>`
             );
             return;
         }
@@ -7064,8 +7041,8 @@ async function renderEmailPreferencesPage() {
     };
 
     const fields = EMAIL_PREF_GROUPS.map(group => `
-        <fieldset style="border:0;padding:0;margin:0 0 18px;">
-            <legend style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary);padding:0;margin-bottom:8px;">${stakingEscapeHtml(group.legend)}</legend>
+        <fieldset class="ui-fieldset">
+            <legend class="ui-section-title">${stakingEscapeHtml(group.legend)}</legend>
             ${group.items.map(item => `
                 <label class="email-pref">
                     <input type="checkbox" data-pref-path="${stakingEscapeHtml(item.path)}"${isOn(item.path) ? ' checked' : ''}>
@@ -7076,10 +7053,10 @@ async function renderEmailPreferencesPage() {
     const unsubscribed = !!data.unsubscribed;
 
     box.innerHTML = emailPrefsCard(`
-        <p style="color:var(--text-secondary);line-height:1.6;margin:0 0 4px;">Alerts for <strong style="color:var(--text-primary);">${stakingEscapeHtml(data.email || '')}</strong></p>
+        <p class="ui-lede" style="margin:0 0 4px;">Alerts for <strong class="ui-strong">${stakingEscapeHtml(data.email || '')}</strong></p>
         ${unsubscribed
             ? `<p class="cs-warn" style="margin:0 0 16px;">You are currently unsubscribed, so none of these will be sent. Saving your choices here does not resubscribe you.</p>`
-            : `<p style="color:var(--text-secondary);font-size:0.85rem;margin:0 0 18px;">Untick anything you would rather not receive. Changes save immediately.</p>`}
+            : `<p class="ui-lede" style="margin:0 0 18px;">Untick anything you would rather not receive. Changes save immediately.</p>`}
         <form id="email-prefs-form">
             ${fields}
             <div class="cs-actions" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -7088,8 +7065,8 @@ async function renderEmailPreferencesPage() {
             </div>
             <div id="email-prefs-error" class="staking-error" style="display:none;"></div>
         </form>
-        <hr style="border:none;border-top:1px solid var(--border-color);margin:22px 0 16px;">
-        <p style="color:var(--text-secondary);font-size:0.82rem;line-height:1.6;margin:0;">
+        <hr class="ui-hr">
+        <p class="ui-lede" style="margin:0;">
             Want to stop everything instead? Use the <strong>Unsubscribe</strong> link at the bottom of any alert email.
         </p>
     `);
@@ -7209,7 +7186,7 @@ function stakingFormatNumber(value) {
 // because most of its callers pass genuine numbers where 0 is the right answer
 // for a missing value; only the counts that can be *unknown* use this.
 function formatCountOrUnknown(value) {
-    if (value == null) return '<span style="color:var(--text-muted);">—</span>';
+    if (value == null) return '<span class="ui-quiet">—</span>';
     return stakingFormatNumber(value);
 }
 // isValidPolkadexAddress is imported from ./lib/wallet-safety.js (audit
@@ -7392,7 +7369,7 @@ async function fetchStakingRewards(address, isPoll) {
         // The area is replaced: a chart left alive would sit on a detached canvas.
         if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
         resultsEl.style.display = 'block';
-        resultsEl.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-secondary);">Loading staking rewards…</div>';
+        resultsEl.innerHTML = stateLine('loading', 'Loading staking rewards…', true);
     }
 
     try {
@@ -7411,7 +7388,7 @@ async function fetchStakingRewards(address, isPoll) {
         if (!req.isCurrent()) return;
         if (!isPoll) {
             stakingRewardsData = null; if (stakingRewardsChart) { stakingRewardsChart.destroy(); stakingRewardsChart = null; }
-            resultsEl.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
+            resultsEl.innerHTML = stateLine('failed', 'Could not load this. ' + e.message, true);
         }
     }
 }
@@ -7572,8 +7549,8 @@ function renderStakingAprCard(apr) {
     if (!apr || apr.bondedAmount == null) {
         return `<div class="staking-summary-card">
             <div class="label">APR (30-day)</div>
-            <div class="value" style="color:var(--text-muted);">—</div>
-            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">bonded stake unavailable</div>
+            <div class="value ui-quiet">—</div>
+            <div class="ui-caption">bonded stake unavailable</div>
         </div>`;
     }
     // User has no bonded stake — the denominator is zero, so APR is
@@ -7581,8 +7558,8 @@ function renderStakingAprCard(apr) {
     if (!apr.bondedAmount || Number(apr.bondedAmount) <= 0) {
         return `<div class="staking-summary-card">
             <div class="label">APR (30-day)</div>
-            <div class="value" style="color:var(--text-muted);">—</div>
-            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">no bonded stake to measure</div>
+            <div class="value ui-quiet">—</div>
+            <div class="ui-caption">no bonded stake to measure</div>
         </div>`;
     }
     const fmtPct = v => (v == null || !Number.isFinite(v)) ? '—' : v.toFixed(2) + '%';
@@ -7605,7 +7582,7 @@ function renderStakingAprCard(apr) {
     return `<div class="staking-summary-card">
         <div class="label">APR${headlineNote || ' (30-day)'}</div>
         <div class="value accent">${displayedHeadline}</div>
-        <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">${stakingEscapeHtml(subParts.join(' · '))}</div>
+        <div class="ui-caption">${stakingEscapeHtml(subParts.join(' · '))}</div>
     </div>`;
 }
 
@@ -7623,7 +7600,7 @@ function renderStakingRewards(data) {
         const note = data.unclaimedComputing
             ? 'Unpaid rewards are still being computed — this can take a moment.'
             : (index.backfillComplete
-                ? `No staking rewards were found for <span style="color: var(--brand-secondary);">${stakingEscapeHtml(stakingShortAddress(data.address))}</span>.`
+                ? `No staking rewards were found for <span class="mono">${stakingEscapeHtml(stakingShortAddress(data.address))}</span>.`
                 : 'The indexer is still backfilling older history — check back shortly.');
                 
         const title = data.unclaimedComputing 
@@ -7635,7 +7612,7 @@ function renderStakingRewards(data) {
             : '';
 
         resultsEl.innerHTML = `
-            <div style="padding: 40px; text-align: center; color: var(--text-secondary);">
+            <div class="ui-state is-roomy">
                 ${iconHtml}
                 <h3>${title}</h3>
                 <p>${note}</p>
@@ -7649,7 +7626,7 @@ function renderStakingRewards(data) {
     const rewards = getFilteredRewards(data, stakingRewardFilter);
     const fbtn = (key, label) => `<button class="reward-filter-btn${stakingRewardFilter === key ? ' active' : ''}" data-filter="${key}">${label}</button>`;
     const computingNote = data.unclaimedComputing
-        ? '<div style="padding: 0 24px 14px; color: var(--text-muted); font-size: 0.78rem;">Unpaid rewards are being computed in the background and will appear shortly.</div>'
+        ? '<div class="ui-caption" style="padding: 0 24px 14px;">Unpaid rewards are being computed in the background and will appear shortly.</div>'
         : '';
 
     // The pill row above already coarse-filters to all/claimed/unpaid; the
@@ -7662,7 +7639,7 @@ function renderStakingRewards(data) {
         <div class="list-header">
             <h2>Reward history${identity ? ' — ' + stakingEscapeHtml(identity) : ''}</h2>
             <div style="display:flex;align-items:center;gap:14px;">
-                <a href="/account/${encodeURIComponent(data.address)}" class="item-link" style="color: var(--text-secondary); font-size: 0.78rem;">${stakingEscapeHtml(data.address)}</a>
+                <a href="/account/${encodeURIComponent(data.address)}" class="item-link"><span class="mono">${stakingEscapeHtml(data.address)}</span></a>
                 <!-- Close button — returns the user to wherever they
                      navigated in from. Same X-icon pattern as the block /
                      tx / validator detail pages so the affordance is
@@ -7675,7 +7652,7 @@ function renderStakingRewards(data) {
         </div>
         <div class="staking-summary-grid">
             <div class="staking-summary-card"><div class="label">Claimed Rewards</div><div class="value accent">${stakingFormatPDEX(summary.claimedTotal)} PDEX</div></div>
-            <div class="staking-summary-card"><div class="label">Unpaid Rewards</div><div class="value" style="color: var(--brand-primary);">${stakingFormatPDEX(summary.unclaimedTotal)} PDEX</div></div>
+            <div class="staking-summary-card"><div class="label">Unpaid Rewards</div><div class="value">${stakingFormatPDEX(summary.unclaimedTotal)} PDEX</div></div>
             <div class="staking-summary-card"><div class="label">Total Rewards</div><div class="value">${stakingFormatPDEX(summary.totalAmount)} PDEX</div></div>
             <div class="staking-summary-card"><div class="label">Claimed Payouts</div><div class="value">${stakingFormatNumber(summary.claimedCount)}</div></div>
             <div class="staking-summary-card"><div class="label">Eras</div><div class="value">${stakingFormatNumber(summary.eraCount)}</div></div>
@@ -7711,12 +7688,12 @@ function renderStakingRewards(data) {
             {
                 key: 'era', label: 'Era', searchable: true,
                 sort: (a, b) => (a.era == null ? -1 : a.era) - (b.era == null ? -1 : b.era),
-                format: row => row.era != null ? String(row.era) : '<span style="color:var(--text-muted);">—</span>'
+                format: row => row.era != null ? String(row.era) : '<span class="ui-quiet">—</span>'
             },
             {
                 key: 'timestamp', label: 'Date',
                 sort: (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
-                format: row => row.timestamp ? `<span style="white-space:nowrap;">${stakingEscapeHtml(formatLocalDateTime(row.timestamp))}</span>` : '<span style="color:var(--text-muted);">—</span>'
+                format: row => row.timestamp ? `<span style="white-space:nowrap;">${stakingEscapeHtml(formatLocalDateTime(row.timestamp))}</span>` : '<span class="ui-quiet">—</span>'
             },
             {
                 key: 'amount', label: 'Amount',
@@ -7735,15 +7712,15 @@ function renderStakingRewards(data) {
                 sort: (a, b) => String(a.validator || '').localeCompare(String(b.validator || '')),
                 filter: { type: 'text', placeholder: 'Validator address…' },
                 format: row => row.validator
-                    ? `<a href="/validator/${encodeURIComponent(row.validator)}" class="item-link" style="color: var(--brand-secondary);">${stakingShortAddress(row.validator)}</a>`
-                    : '<span style="color: var(--text-muted);">—</span>'
+                    ? `<a href="/validator/${encodeURIComponent(row.validator)}" class="item-link">${stakingShortAddress(row.validator)}</a>`
+                    : '<span class="ui-quiet">—</span>'
             },
             {
                 key: 'block', label: 'Block', searchable: true,
                 sort: (a, b) => (a.block || 0) - (b.block || 0),
                 format: row => row.block != null
-                    ? `<a href="/block/${row.block}" class="item-link" style="color: var(--brand-secondary);">${stakingFormatNumber(row.block)}</a>`
-                    : '<span style="color: var(--text-muted);">—</span>'
+                    ? `<a href="/block/${row.block}" class="item-link">${stakingFormatNumber(row.block)}</a>`
+                    : '<span class="ui-quiet">—</span>'
             }
         ]
     });
@@ -8246,7 +8223,7 @@ function buildWalletConnectPrompt() {
     // Capture the current path INCLUDING query string so a deep-linked
     // modal-opening URL (e.g. /democracy?ref=42) round-trips intact.
     const here = (window.location.pathname || '/') + (window.location.search || '');
-    return `Please connect your wallet first. <a href="/wallet?returnTo=${encodeURIComponent(here)}" style="color:var(--brand-secondary);font-weight:600;text-decoration:underline;">Connect a wallet</a> and you'll be returned to this page.`;
+    return `Please connect your wallet first. <a href="/wallet?returnTo=${encodeURIComponent(here)}" class="item-link is-inline">Connect a wallet</a> and you'll be returned to this page.`;
 }
 
 // Pull ?returnTo from the current URL and validate it's a same-origin
@@ -8368,7 +8345,7 @@ function initWalletPage(address) {
         // Personal dashboard: noindex and no route JSON-LD (PII / dynamic).
         updateSeoMeta('wallet', walletDashboardSeo(address, getStoredWallet(), { isSame: isSameAddress, shortAddr: stakingShortAddress }));
         if (isValidPolkadexAddress(address)) fetchWalletDashboard(address);
-        else root.innerHTML = '<div class="list-container glass" style="padding:32px;color:var(--error);">Invalid Polkadex address.</div>';
+        else root.innerHTML = `<div class="list-container glass">${linePanelHtml('is-error', 'bx-error-circle', 'Invalid Polkadex address.')}</div>`;
         return;
     }
     // No address in the URL — user clicked "My Account" from the sidebar.
@@ -10569,7 +10546,7 @@ function initDiscussionsPage(threadId) {
 async function fetchDiscussionThreads() {
     const root = document.getElementById('discussions-content');
     if (!root) return;
-    root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading discussions…</div>';
+    root.innerHTML = `<div class="list-container glass">${stateLine('loading', 'Loading discussions…', true)}</div>`;
     try {
         const res = await fetch('/api/discussions');
         // parseJsonResponse converts an upstream HTML error page (502 / 504)
@@ -10590,14 +10567,14 @@ function renderThreadList(threads) {
     root.innerHTML = `
         <div class="list-container glass" style="margin-bottom:20px;">
             <div class="list-header"><h2>Discussions</h2></div>
-            <div style="padding:18px 24px;color:var(--text-secondary);font-size:0.88rem;line-height:1.6;">
+            <div class="ui-lede" style="padding:18px 24px;margin:0;">
                 A discussion thread opens automatically for every public proposal and council motion. Each thread locks for new posts once its proposal moves to a referendum (voting) or its motion concludes. Connect your Substrate wallet to take part.
             </div>
         </div>
         <div class="list-container glass">
             <div class="list-header">
                 <h2>Threads</h2>
-                <span style="color:var(--text-secondary);font-size:0.8rem;">${threads.length} total</span>
+                <span class="ui-caption">${threads.length} total</span>
             </div>
             <div id="discussions-threads-table"></div>
         </div>`;
@@ -10620,13 +10597,13 @@ function renderThreadList(threads) {
                 key: 'title', label: 'Title', searchable: true,
                 sort: (a, b) => String(a.title || a.id || '').localeCompare(String(b.title || b.id || '')),
                 filter: { type: 'text', placeholder: 'Title…' },
-                format: row => `<a href="/discussions/${encodeURIComponent(row.id)}" class="item-link" style="color:var(--brand-secondary);font-weight:500;">${stakingEscapeHtml(row.title || row.id)}</a>`
+                format: row => `<a href="/discussions/${encodeURIComponent(row.id)}" class="item-link">${stakingEscapeHtml(row.title || row.id)}</a>`
             },
             {
                 key: 'kind', label: 'Kind', searchable: true,
                 sort: (a, b) => String(a.kind || '').localeCompare(String(b.kind || '')),
                 filter: { type: 'select', options: kindFilterOptions() },
-                format: row => `<span style="color:var(--text-secondary);">${stakingEscapeHtml(kindLabel(row.kind))}</span>`
+                format: row => `<span class="ui-quiet">${stakingEscapeHtml(kindLabel(row.kind))}</span>`
             },
             {
                 key: 'status', label: 'Status',
@@ -10640,14 +10617,14 @@ function renderThreadList(threads) {
                 key: 'postCount', label: 'Posts',
                 sort: (a, b) => (a.postCount || 0) - (b.postCount || 0),
                 format: row => stakingFormatNumber(row.postCount || 0) + (row.earlierPostCount > 0
-                    ? ` <span style="color:var(--text-muted);font-size:0.78rem;">+ ${stakingFormatNumber(row.earlierPostCount)} earlier</span>` : '')
+                    ? ` <span class="ui-caption">+ ${stakingFormatNumber(row.earlierPostCount)} earlier</span>` : '')
             },
             {
                 key: 'closedReason', label: 'Closed reason', searchable: true,
                 sort: (a, b) => String(a.closedReason || '').localeCompare(String(b.closedReason || '')),
                 format: row => row.closedReason
-                    ? `<span style="color:var(--text-muted);font-size:0.85rem;">${stakingEscapeHtml(row.closedReason)}</span>`
-                    : '<span style="color:var(--text-muted);">—</span>'
+                    ? `<span class="ui-quiet">${stakingEscapeHtml(row.closedReason)}</span>`
+                    : '<span class="ui-quiet">—</span>'
             }
         ]
     });
@@ -10656,7 +10633,7 @@ function renderThreadList(threads) {
 // root/opts: the governance item pages embed the same view (opts.embedded).
 async function fetchDiscussionThread(id, focusLink = false, root = document.getElementById('discussions-content'), opts = {}) {
     if (!root) return;
-    if (!opts.quiet) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading discussion…</div>';
+    if (!opts.quiet) root.innerHTML = `<div class="list-container glass"><div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Loading discussion…</div></div>`;
     try {
         // no-store: a cached copy from before a post was made showed "No posts yet" (2026-10-22).
         const res = await fetch('/api/discussions/' + encodeURIComponent(id), { cache: 'no-store' });
@@ -10668,7 +10645,7 @@ async function fetchDiscussionThread(id, focusLink = false, root = document.getE
         return data;
     } catch (e) {
         if (opts.quiet) return null;   // a background refresh that failed leaves the board as it is
-        root.innerHTML = `<div class="list-container glass" style="padding:40px;text-align:center;color:var(--error);">Error: ${stakingEscapeHtml(e.message)}</div>`;
+        root.innerHTML = `<div class="list-container glass"><div class="ui-state is-failed is-roomy" role="alert"><i class="bx bx-error" aria-hidden="true"></i>${stakingEscapeHtml('Could not load this. ' + e.message)}</div></div>`;
         return null;
     }
 }
@@ -10698,7 +10675,7 @@ function renderThread(thread, posts, root = document.getElementById('discussions
         <div class="list-container glass">
             <div class="list-header">
                 <h2 style="display:flex;align-items:center;gap:10px;">${opts.embedded ? 'Discussion' : stakingEscapeHtml(thread.title || thread.id)} ${badge} ${helpIcon('discussions', 'Posting, editing and linking to comments')}</h2>
-                <a href="/discussions${opts.embedded ? '/' + encodeURIComponent(thread.id) : ''}" class="item-link" style="color:var(--text-secondary);font-size:0.8rem;">${opts.embedded ? 'Open as a thread page' : 'All discussions'}</a>
+                <a href="/discussions${opts.embedded ? '/' + encodeURIComponent(thread.id) : ''}" class="item-link">${opts.embedded ? 'Open as a thread page' : 'All discussions'}</a>
                 ${opts.embedded ? '' : closeControlHtml({ parent: 'discussions' })}
             </div>
             ${opts.embedded ? '' : renderLifecycleLinks(thread.links, stakingEscapeHtml)}
@@ -10852,7 +10829,7 @@ async function fetchDemocracyData(opts = {}) {
     if (!root) return;
     const quiet = !!(opts.quiet && democracyData);
     const generation = routeGeneration;   // a response that lands after the user left paints nothing
-    if (!quiet) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading democracy data...</div>';
+    if (!quiet) root.innerHTML = `<div class="list-container glass"><div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Loading democracy data...</div></div>`;
     try {
         const res = await democracyView.fetchRest(opts.fresh);
         // Use parseJsonResponse so an upstream HTML error page (Cloudflare
@@ -10958,7 +10935,7 @@ function democracyStatusBadge(s) {
 
 function renderDemocracyReferenda(d) {
     const refs = d.referenda || [];
-    if (!refs.length) return '<div style="padding:24px;text-align:center;color:var(--text-muted);">No referenda indexed yet.</div>';
+    if (!refs.length) return stateLine('empty', 'No referenda indexed yet.');
     // The indexer writes one of exactly three status values (server.js:
     // democracy sync): 'Ongoing', 'Passed', 'NotPassed'. Pill keys MUST match
     // those casing-and-spelling exactly — earlier versions used lowercase
@@ -11047,7 +11024,7 @@ function mountDemocracyReferendaTable(refs) {
 
 function renderDemocracyProposals(d) {
     const props = d.publicProposals || [];
-    if (!props.length) return '<div style="padding:24px;text-align:center;color:var(--text-muted);">No active public proposals. Proposals appear here while they await tabling to a referendum.</div>';
+    if (!props.length) return stateLine('empty', 'No active public proposals. Proposals appear here while they await tabling to a referendum.');
     // Sort pills — Public Proposals don't have multiple statuses (they're all
     // pending tabling), so the prominent filter is "sort by X" instead of
     // "show only status Y". Pills sort by the most useful axes at a glance:
@@ -11089,7 +11066,7 @@ function mountDemocracyProposalsTable(props) {
                 filter: { type: 'text', placeholder: 'Proposer…' },
                 format: row => {
                     const who = row.proposerName && row.proposerName !== 'Unknown' ? row.proposerName : stakingShortAddress(row.proposer);
-                    return `<a href="/account/${encodeURIComponent(row.proposer)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(who)}</a>`;
+                    return `<a href="/account/${encodeURIComponent(row.proposer)}" class="item-link">${stakingEscapeHtml(who)}</a>`;
                 }
             },
             {
@@ -11105,7 +11082,7 @@ function mountDemocracyProposalsTable(props) {
             { key: '__second', label: 'Second', format: row => democracyView.cell('prop', row, 'action') },
             {
                 key: 'discussion', label: 'Discussion',
-                format: row => `<a href="${govItemPath('proposal', row.index)}#discussion" class="item-link" style="color:var(--brand-secondary);">Discuss</a>`
+                format: row => `<a href="${govItemPath('proposal', row.index)}#discussion" class="item-link">Discuss</a>`
             }
         ]
     });
@@ -11114,17 +11091,17 @@ function mountDemocracyProposalsTable(props) {
 function renderDemocracyStatisticsBody(d) {
     const known = (d.referenda || []).filter(r => r.tallyKnown).length;
     const note = known === 0
-        ? '<div style="padding:0 0 16px;color:var(--text-muted);font-size:0.83rem;line-height:1.6;">Vote tallies are still being collected. Tallies for ongoing referenda are captured live; historical tallies are recovered when the node serves archive state.</div>'
+        ? '<div class="ui-caption" style="padding:0 0 16px;">Vote tallies are still being collected. Tallies for ongoing referenda are captured live; historical tallies are recovered when the node serves archive state.</div>'
         : '';
     return note + `
         <div class="staking-chart-wrap" style="height:300px;padding:10px 0 0;"><canvas id="dem-vote-chart"></canvas></div>
         <div class="wallet-grid" style="margin-top:18px;">
             <div>
-                <div style="color:var(--text-secondary);font-size:0.8rem;font-weight:600;margin-bottom:4px;">Turnout per Referendum (PDEX)</div>
+                <div class="ui-caption" style="font-weight:600;margin-bottom:4px;">Turnout per Referendum (PDEX)</div>
                 <div class="staking-chart-wrap" style="height:230px;padding:6px 0 0;"><canvas id="dem-turnout-chart"></canvas></div>
             </div>
             <div>
-                <div style="color:var(--text-secondary);font-size:0.8rem;font-weight:600;margin-bottom:4px;">Turnout % of Total Issuance</div>
+                <div class="ui-caption" style="font-weight:600;margin-bottom:4px;">Turnout % of Total Issuance</div>
                 <div class="staking-chart-wrap" style="height:230px;padding:6px 0 0;"><canvas id="dem-turnoutpct-chart"></canvas></div>
             </div>
         </div>`;
@@ -11251,8 +11228,8 @@ async function fetchCouncilData(opts) {
         const blocksRemaining = Number(data.blocksRemaining) || 0;
 
         document.getElementById('council-seats-count').innerText = `${members.length}/${data.desiredMembers || 0}`;
-        document.getElementById('council-runnersup-count').innerText = runnersUp.length;
-        document.getElementById('council-candidates-count').innerText = candidates.length;
+        document.getElementById('council-runnersup-count').innerText = String(runnersUp.length);
+        document.getElementById('council-candidates-count').innerText = String(candidates.length);
 
         // Term progress (guarded against a zero/missing term duration).
         const pct = termDuration > 0
@@ -11277,10 +11254,10 @@ async function fetchCouncilData(opts) {
             el.innerHTML = list.map(item => {
                 const addr = stakingEscapeHtml(item.address);
                 return `
-                <tr style="background: rgba(255,255,255,0.02);">
+                <tr>
                     <td>
-                        <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">${stakingEscapeHtml(item.name || 'Unknown')}</div>
-                        <div class="address-cell" data-address="${addr}" style="font-size: 13px;">${addr} <span class="js-copy-address" style="cursor: pointer; color: var(--brand-secondary); margin-left: 8px;">copy</span></div>
+                        <div class="ui-strong" style="margin-bottom: 4px;">${stakingEscapeHtml(item.name || 'Unknown')}</div>
+                        <div class="address-cell" data-address="${addr}" style="font-size: 13px;">${addr} <button type="button" class="validate-text-btn js-copy-address">Copy</button></div>
                     </td>
                     <td style="text-align: right; font-weight: 600;">
                         ${Number(item.stake || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })} PDEX
@@ -11304,13 +11281,13 @@ async function fetchCouncilData(opts) {
         return data.freshness;
     } catch (err) {
         console.error('Failed to fetch council data', err);
-        const failMsg = '<tr><td colspan="2" style="text-align:center; padding:20px; color: var(--error);">Failed to load council data.</td></tr>';
+        const failMsg = `<tr><td colspan="2">${stateLine('failed', 'Failed to load council data.')}</td></tr>`;
         ['council-members-list', 'council-runnersup-list', 'council-candidates-list'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.innerHTML = failMsg;
         });
         const motionsEl = document.getElementById('council-motions-content');
-        if (motionsEl) { motionsEl.__motionRender = null; motionsEl.innerHTML = '<div style="padding:40px;text-align:center;color:var(--error);">Failed to load council motions.</div>'; }
+        if (motionsEl) { motionsEl.__motionRender = null; motionsEl.innerHTML = stateLine('failed', 'Failed to load council motions.', true); }
     }
 }
 
@@ -11334,9 +11311,9 @@ async function fetchTechnicalCommitteeData(opts) {
             list.innerHTML = members.length ? members.map(m => {
                 const addr = stakingEscapeHtml(m.address);
                 const prime = m.isPrime ? ' <span class="reward-badge claimed" title="The prime member\'s vote is the default for members who do not vote">Prime</span>' : '';
-                return `<tr style="background: rgba(255,255,255,0.02);"><td>
-                    <div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">${stakingEscapeHtml(m.name || 'Unknown')}${prime}</div>
-                    <div class="address-cell" data-address="${addr}" style="font-size:13px;"><a href="/account/${encodeURIComponent(m.address)}" class="item-link" style="color:var(--brand-secondary);">${addr}</a></div>
+                return `<tr><td>
+                    <div class="ui-strong" style="margin-bottom:4px;">${stakingEscapeHtml(m.name || 'Unknown')}${prime}</div>
+                    <div class="address-cell" data-address="${addr}" style="font-size:13px;"><a href="/account/${encodeURIComponent(m.address)}" class="item-link">${addr}</a></div>
                 </td></tr>`;
             }).join('') : '<tr><td style="text-align:center;padding:20px;">No members</td></tr>';
         }
@@ -11344,9 +11321,9 @@ async function fetchTechnicalCommitteeData(opts) {
         return data.freshness;
     } catch (err) {
         console.error('Failed to fetch technical committee data', err);
-        if (list) list.innerHTML = '<tr><td style="text-align:center;padding:20px;color:var(--error);">Failed to load the technical committee.</td></tr>';
+        if (list) list.innerHTML = `<tr><td>${stateLine('failed', 'Failed to load the technical committee.')}</td></tr>`;
         const root = document.getElementById('tc-motions-content');
-        if (root) { root.__motionRender = null; root.innerHTML = '<div style="padding:40px;text-align:center;color:var(--error);">Failed to load technical committee motions.</div>'; }
+        if (root) { root.__motionRender = null; root.innerHTML = stateLine('failed', 'Failed to load technical committee motions.', true); }
     }
 }
 
@@ -11375,7 +11352,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
 
     if (!data.collectivePallet) {
         root.__motionRender = null;
-        root.innerHTML = `<div style="padding:40px;text-align:center;color:var(--text-muted);">${stakingEscapeHtml(view.label)} motions are not available on this runtime.</div>`;
+        root.innerHTML = stateLine('empty', `${view.label} motions are not available on this runtime.`, true);
         return;
     }
 
@@ -11385,7 +11362,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
     // found. Say what is actually known.
     const historyCount = Array.isArray(data.motionHistory) ? data.motionHistory.length : 0;
     const recoveringNote = (view.key !== 'council' && Number.isFinite(Number(data.proposalCount)) && historyCount < Number(data.proposalCount))
-        ? `<div style="margin-bottom:14px;padding:10px 12px;border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-secondary);font-size:0.82rem;">Recovering history: ${stakingFormatNumber(historyCount)} of ${stakingFormatNumber(Number(data.proposalCount))} motions indexed so far. Older motions appear as the indexer locates them.</div>`
+        ? `<div style="margin-bottom:14px;">${linePanelHtml('is-warn', 'bx-time-five', stakingEscapeHtml(`Recovering history: ${stakingFormatNumber(historyCount)} of ${stakingFormatNumber(Number(data.proposalCount))} motions indexed so far. Older motions appear as the indexer locates them.`))}</div>`
         : '';
     const summary = recoveringNote + `
         <div class="staking-summary-grid" style="margin-bottom:20px;">
@@ -11415,7 +11392,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
         root.__motionRender = null;
         root.innerHTML = summary
             + governanceIndexNote(data.history, 'motions')
-            + `<div style="padding:28px;text-align:center;color:var(--text-muted);">No motions are currently open before ${stakingEscapeHtml(view.bodyNoun)}.</div>`;
+            + stateLine('empty', `No motions are currently open before ${view.bodyNoun}.`);
         wireMotionControls(root, view);
         return;
     }
@@ -11457,14 +11434,14 @@ function renderCollectiveMotions(view, data = view.getData()) {
         <div class="staking-toolbar" style="margin-bottom:14px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
             <div class="reward-filter">${statusPills}</div>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <label for="${view.key}-motion-call-filter" style="font-size:0.8rem;color:var(--text-muted);">Call type</label>
+                <label class="ui-field-label" for="${view.key}-motion-call-filter">Call type</label>
                 <select id="${view.key}-motion-call-filter" class="motion-call-select ui-input">${callOptions}</select>
             </div>
         </div>`;
 
     const roleNote = isCouncilMember
-        ? `<div style="margin-bottom:16px;color:var(--text-secondary);font-size:0.82rem;">You are a ${stakingEscapeHtml(view.memberRole.toLowerCase())} — you can vote on, and close motions.</div>`
-        : `<div style="margin-bottom:16px;color:var(--text-muted);font-size:0.82rem;">Anyone can view and explore motions. Voting and closing require a seat on ${stakingEscapeHtml(view.bodyNoun)} — ${stored ? 'your connected wallet does not hold one.' : 'connect a member wallet to act.'}</div>`;
+        ? `<div class="ui-caption" style="margin-bottom:16px;">You are a ${stakingEscapeHtml(view.memberRole.toLowerCase())} — you can vote on, and close motions.</div>`
+        : `<div class="ui-caption" style="margin-bottom:16px;">Anyone can view and explore motions. Voting and closing require a seat on ${stakingEscapeHtml(view.bodyNoun)} — ${stored ? 'your connected wallet does not hold one.' : 'connect a member wallet to act.'}</div>`;
 
     // A motion is visible when it passes BOTH the status and call-type filters.
     const matches = (m) => (view.filter === 'all' || m.__statusKey === view.filter)
@@ -11493,7 +11470,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
         const busy = !!pend && !pend.error;
         const h = history.find(x => x.hash === m.hash && Number(x.motionIndex) === Number(m.index));
         const proposer = h && h.proposer
-            ? `<div class="motion-meta">Proposed by <a href="/account/${encodeURIComponent(h.proposer)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(treasuryPartyName(h.proposerName, h.proposer))}</a>${youTag(h.proposer)}</div>`
+            ? `<div class="motion-meta">Proposed by <a href="/account/${encodeURIComponent(h.proposer)}" class="item-link">${stakingEscapeHtml(treasuryPartyName(h.proposerName, h.proposer))}</a>${youTag(h.proposer)}</div>`
             : '';
 
         const argsHtml = (m.args && m.args.length)
@@ -11506,7 +11483,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
             if (!addrs || !addrs.length) return '';
             const dkey = `${m.hash}:${label}`;
             return `<details class="motion-details" data-dkey="${stakingEscapeHtml(dkey)}"${openDetails.has(dkey) ? ' open' : ''}><summary>${label} (${addrs.length})</summary>
-                <div class="motion-voters">${addrs.map(a => `<span><a href="/account/${encodeURIComponent(a)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(nameOf(a))}</a>${youTag(a)}</span>`).join('')}</div>
+                <div class="motion-voters">${addrs.map(a => `<span><a href="/account/${encodeURIComponent(a)}" class="item-link">${stakingEscapeHtml(nameOf(a))}</a>${youTag(a)}</span>`).join('')}</div>
             </details>`;
         };
 
@@ -11579,7 +11556,7 @@ function renderCollectiveMotions(view, data = view.getData()) {
     const openSection = visibleMotions.length ? `<div class="motion-list">${cards}</div>` : '';
     const resolvedSection = renderResolvedMotions(visibleResolved, view);
     const nothingVisible = (visibleMotions.length + visibleResolved.length) === 0
-        ? `<div style="padding:28px;text-align:center;color:var(--text-muted);">No motions match the current filters.</div>`
+        ? stateLine('empty', 'No motions match the current filters.')
         : '';
 
     root.innerHTML = summary + toolbar + governanceIndexNote(data.history, 'motions') + roleNote
@@ -11634,8 +11611,8 @@ function renderResolvedMotions(resolved, view = COLLECTIVE_VIEWS.council) {
             : idxLabel;
         const call = (m.section && m.method) ? `${m.section}.${m.method}` : view.motionLabel;
         const proposer = m.proposer
-            ? `<a href="/account/${encodeURIComponent(m.proposer)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(treasuryPartyName(m.proposerName, m.proposer))}</a>`
-            : '<span style="color:var(--text-muted);">—</span>';
+            ? `<a href="/account/${encodeURIComponent(m.proposer)}" class="item-link">${stakingEscapeHtml(treasuryPartyName(m.proposerName, m.proposer))}</a>`
+            : '<span class="ui-quiet">—</span>';
         const tally = (m.ayes == null && m.nays == null) ? '—' : `${m.ayes || 0} / ${m.nays || 0}`;
         return `<tr class="${GOV_ROW_CLASS}">
             <td>${idx}</td>
@@ -11648,7 +11625,7 @@ function renderResolvedMotions(resolved, view = COLLECTIVE_VIEWS.council) {
         </tr>`;
     }).join('');
     return `<div style="margin-top:26px;">
-        <h3 style="font-size:0.95rem;color:var(--text-primary);margin-bottom:12px;">Resolved Motions <span style="color:var(--text-muted);font-weight:400;font-size:0.8rem;">(${resolved.length})</span></h3>
+        <h3 class="ui-strong" style="margin-bottom:12px;">Resolved Motions <span class="ui-quiet">(${resolved.length})</span></h3>
         <div class="table-responsive"><table class="data-table">
             <thead><tr><th>Motion</th><th>Call</th><th>Proposer</th><th style="text-align:right;">Threshold</th><th style="text-align:right;">Ayes / Nays</th><th style="text-align:right;">Resolved Block</th><th style="text-align:right;">Outcome</th></tr></thead>
             <tbody>${rows}</tbody>
@@ -12296,7 +12273,7 @@ async function fetchTreasuryData(o = {}) {
     if (!o.fresh) treasuryTab = 'overview';
     const root = document.getElementById('treasury-content');
     if (!root) return;
-    if (!o.fresh) root.innerHTML = '<div class="list-container glass" style="padding:40px;text-align:center;color:var(--text-secondary);">Loading treasury data…</div>';
+    if (!o.fresh) root.innerHTML = `<div class="list-container glass"><div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Loading treasury data…</div></div>`;
     try {
         const res = await (o.fresh ? fetch('/api/treasury?fresh=1', { cache: 'no-store' }) : fetch('/api/treasury'));
         const data = await parseJsonResponse(res);
@@ -12415,8 +12392,8 @@ function treasuryStatusBadge(status) {
 }
 
 function treasuryPartyCell(name, address) {
-    if (!address) return '<span style="color:var(--text-muted);">—</span>';
-    return `<a href="/account/${encodeURIComponent(address)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(treasuryPartyName(name, address))}</a>`;
+    if (!address) return '<span class="ui-quiet">—</span>';
+    return `<a href="/account/${encodeURIComponent(address)}" class="item-link">${stakingEscapeHtml(treasuryPartyName(name, address))}</a>`;
 }
 
 // Shared makeTable column factory for treasury proposals. `showStatus` adds
@@ -12466,15 +12443,15 @@ function buildTreasuryColumns(showStatus, opts = {}) {
 // placeholder div, and the caller calls mount...Table after setting innerHTML
 // so the makeTable instance can find its container in the DOM.
 function renderTreasuryProposals(list) {
-    if (!list.length) return '<div style="padding:24px;text-align:center;color:var(--text-muted);">No open proposals are currently awaiting council approval.</div>';
+    if (!list.length) return stateLine('empty', 'No open proposals are currently awaiting council approval.');
     return '<div id="treasury-proposals-table"></div>';
 }
 function renderTreasuryApproved(list) {
-    if (!list.length) return '<div style="padding:24px;text-align:center;color:var(--text-muted);">No approved proposals are awaiting payout.</div>';
+    if (!list.length) return stateLine('empty', 'No approved proposals are awaiting payout.');
     return '<div id="treasury-approved-table"></div>';
 }
 function renderTreasuryHistory(list) {
-    if (!list.length) return '<div style="padding:24px;text-align:center;color:var(--text-muted);">No resolved proposals indexed yet. Past proposals are crawled from chain history in the background.</div>';
+    if (!list.length) return stateLine('empty', 'No resolved proposals indexed yet. Past proposals are crawled from chain history in the background.');
     return '<div id="treasury-history-table"></div>';
 }
 function mountTreasuryProposalsTable(list) {
@@ -12525,25 +12502,25 @@ function mountTreasuryHistoryTable(list) {
 let governanceDetailReturnState = null;
 
 function formatGovTime(ts) {
-    if (!ts) return '<span style="color:var(--text-muted);">—</span>';
+    if (!ts) return '<span class="ui-quiet">—</span>';
     const formatted = formatLocalDateTime(ts);
-    return formatted ? stakingEscapeHtml(formatted) : '<span style="color:var(--text-muted);">—</span>';
+    return formatted ? stakingEscapeHtml(formatted) : '<span class="ui-quiet">—</span>';
 }
 function formatGovBlockLink(blockNumber) {
-    if (blockNumber == null) return '<span style="color:var(--text-muted);">—</span>';
-    return `<a href="/block/${blockNumber}" class="item-link" style="color:var(--brand-secondary);">${stakingFormatNumber(blockNumber)}</a>`;
+    if (blockNumber == null) return '<span class="ui-quiet">—</span>';
+    return `<a href="/block/${blockNumber}" class="item-link">${stakingFormatNumber(blockNumber)}</a>`;
 }
 function formatGovAccountLink(address, displayName) {
-    if (!address) return '<span style="color:var(--text-muted);">—</span>';
+    if (!address) return '<span class="ui-quiet">—</span>';
     const label = (displayName && displayName !== 'Unknown') ? displayName : stakingShortAddress(address);
-    return `<a href="/account/${encodeURIComponent(address)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(label)}</a>`;
+    return `<a href="/account/${encodeURIComponent(address)}" class="item-link">${stakingEscapeHtml(label)}</a>`;
 }
 
 // Generic 2-column row used inside the detail body so every kind has the same
 // look without re-implementing the styling at each site.
 function govDetailRow(label, value) {
-    return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
-        <span style="color:var(--text-secondary);font-size:0.85rem;min-width:140px;">${stakingEscapeHtml(label)}</span>
+    return `<div class="gov-detail-row">
+        <span class="ui-quiet" style="min-width:140px;">${stakingEscapeHtml(label)}</span>
         <span style="text-align:right;font-size:0.9rem;flex:1;word-break:break-all;">${value}</span>
     </div>`;
 }
@@ -12555,14 +12532,14 @@ function renderTreasuryDetail(row) {
     const heading = `Treasury Proposal #${stakingEscapeHtml(String(row.id))}`;
 
     return `<h2 style="margin:0 0 8px 0;font-size:1.4rem;">${heading}</h2>
-        <div style="margin-bottom:18px;color:var(--text-muted);font-size:0.85rem;">
+        <div class="ui-lede" style="margin-bottom:18px;">
             On-chain treasury spend request. Click the block links below to view the extrinsic that proposed or resolved it.
         </div>
         ${govDetailRow('Status', treasuryStatusBadge(row.status))}
         ${govDetailRow('Proposer', formatGovAccountLink(row.proposer, row.proposerName))}
         ${govDetailRow('Beneficiary', formatGovAccountLink(row.beneficiary, row.beneficiaryName))}
-        ${govDetailRow('Requested', row.value == null ? '<span style="color:var(--text-muted);">—</span>' : `<strong>${stakingFormatPDEX(row.value)} PDEX</strong>`)}
-        ${govDetailRow('Bond', row.bond == null ? '<span style="color:var(--text-muted);">—</span>' : stakingFormatPDEX(row.bond) + ' PDEX')}
+        ${govDetailRow('Requested', row.value == null ? '<span class="ui-quiet">—</span>' : `<strong>${stakingFormatPDEX(row.value)} PDEX</strong>`)}
+        ${govDetailRow('Bond', row.bond == null ? '<span class="ui-quiet">—</span>' : stakingFormatPDEX(row.bond) + ' PDEX')}
         ${govDetailRow('Proposed at block', formatGovBlockLink(row.proposedBlock))}
         ${govDetailRow('Proposed at', formatGovTime(row.proposedAt))}
         ${govDetailRow('Resolved at block', formatGovBlockLink(row.resolvedBlock))}
@@ -12581,7 +12558,7 @@ function openGovernanceDetailModal({ kind, row, returnPage, returnTab }) {
     const renderBody = () => {
         let body = '';
         if (kind === 'treasury')              body = renderTreasuryDetail(row);
-        else body = '<div style="color:var(--text-muted);">Unknown proposal kind.</div>';
+        else body = '<div class="ui-quiet">Unknown proposal kind.</div>';
         content.innerHTML = body;
 
     };
@@ -13092,7 +13069,7 @@ async function renderAccountLabelEditor(address, opts = {}) {
     try { data = await fetchLabelsJson(address); }
     catch (e) {
         if (opts.hold && opts.hold()) return;
-        slot.innerHTML = `<div style="margin-top:10px;color:var(--text-muted);font-size:0.78rem;">Couldn't load labels: ${stakingEscapeHtml(e.message)}</div>`;
+        slot.innerHTML = `<div class="ui-caption label-block">Couldn't load labels: ${stakingEscapeHtml(e.message)}</div>`;
         return;
     }
     if (opts.hold && opts.hold()) return;   // another tab's re-read: a label typed while it was in flight stays (lib/server-refresh.js)
@@ -13106,7 +13083,7 @@ async function renderAccountLabelEditor(address, opts = {}) {
         const myVote = Number(l.viewerVote) || 0;
         const hiddenByReports = l.reportCount >= 3;
         const isMine = session && session.address === l.signer;
-        return `<div class="label-row ${l.vetoed || hiddenByReports ? 'hidden-label' : ''}" data-signer="${stakingEscapeHtml(l.signer)}" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid rgba(255,255,255,0.04);">
+        return `<div class="label-row ${l.vetoed || hiddenByReports ? 'hidden-label' : ''}" data-signer="${stakingEscapeHtml(l.signer)}">
             ${ l.isSelf
                 ? '' // self-labels don't get vote arrows (the score doesn't drive their ranking)
                 : (() => {
@@ -13117,27 +13094,27 @@ async function renderAccountLabelEditor(address, opts = {}) {
                     // tooltip pointing to the connect flow.
                     const canVote = !!(session || getStoredWallet());
                     const tip = session ? 'Vote' : (getStoredWallet() ? 'Sign in to vote (one-time signature)' : 'Connect a wallet to vote');
-                    return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;min-width:32px;">
-                    <button type="button" class="label-vote-btn" data-vote="1"  title="${stakingEscapeHtml(tip)}" ${canVote ? '' : 'disabled'} style="background:none;border:none;cursor:${canVote?'pointer':'not-allowed'};color:${myVote===1?'var(--success)':'var(--text-muted)'};padding:0;font-size:1.1rem;line-height:1;"><i class='bx bx-chevron-up'></i></button>
-                    <span style="font-size:0.82rem;font-weight:600;color:var(--text-primary);min-width:24px;text-align:center;">${l.score > 0 ? '+' : ''}${l.score}</span>
-                    <button type="button" class="label-vote-btn" data-vote="-1" title="${stakingEscapeHtml(tip)}" ${canVote ? '' : 'disabled'} style="background:none;border:none;cursor:${canVote?'pointer':'not-allowed'};color:${myVote===-1?'var(--error)':'var(--text-muted)'};padding:0;font-size:1.1rem;line-height:1;"><i class='bx bx-chevron-down'></i></button>
+                    return `<div class="label-votes">
+                    <button type="button" class="label-vote-btn" data-vote="1" aria-pressed="${myVote === 1}" title="${stakingEscapeHtml(tip)}" ${canVote ? '' : 'disabled'}><i class='bx bx-chevron-up'></i></button>
+                    <span class="label-score">${l.score > 0 ? '+' : ''}${l.score}</span>
+                    <button type="button" class="label-vote-btn" data-vote="-1" aria-pressed="${myVote === -1}" title="${stakingEscapeHtml(tip)}" ${canVote ? '' : 'disabled'}><i class='bx bx-chevron-down'></i></button>
                 </div>`;
                 })()
             }
-            <div style="flex:1;min-width:0;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <strong style="color:var(--text-primary);">${stakingEscapeHtml(l.label)}</strong>
-                    ${l.isSelf ? `<span class="reward-badge claimed" style="font-size:0.7rem;padding:1px 8px;">verified owner</span>` : ''}
-                    ${l.vetoed ? `<span class="reward-badge unclaimed" style="font-size:0.7rem;padding:1px 8px;">vetoed</span>` : ''}
-                    ${hiddenByReports ? `<span class="reward-badge unclaimed" style="font-size:0.7rem;padding:1px 8px;">hidden (reports)</span>` : ''}
+            <div class="label-main">
+                <div class="label-title">
+                    <strong class="ui-strong">${stakingEscapeHtml(l.label)}</strong>
+                    ${l.isSelf ? `<span class="reward-badge claimed label-badge">verified owner</span>` : ''}
+                    ${l.vetoed ? `<span class="reward-badge unclaimed label-badge">vetoed</span>` : ''}
+                    ${hiddenByReports ? `<span class="reward-badge unclaimed label-badge">hidden (reports)</span>` : ''}
                 </div>
-                <div style="color:var(--text-muted);font-size:0.72rem;margin-top:2px;">
-                    by <a href="/account/${encodeURIComponent(l.signer)}" class="item-link" style="color:var(--brand-secondary);">${stakingEscapeHtml(stakingShortAddress(l.signer))}</a>
+                <div class="ui-caption label-meta">
+                    by <a href="/account/${encodeURIComponent(l.signer)}" class="item-link">${stakingEscapeHtml(stakingShortAddress(l.signer))}</a>
                     · ${stakingEscapeHtml(formatLocalDateTime(l.createdAt || 0))}
-                    ${l.reportCount > 0 ? ` · <span style="color:var(--error);">${l.reportCount} report${l.reportCount === 1 ? '' : 's'}</span>` : ''}
+                    ${l.reportCount > 0 ? ` · <span class="ui-chip is-error"><i class="bx bx-flag" aria-hidden="true"></i>${l.reportCount} report${l.reportCount === 1 ? '' : 's'}</span>` : ''}
                 </div>
             </div>
-            <div style="display:flex;align-items:center;gap:6px;">
+            <div class="label-actions">
                 ${isMine ? `<button type="button" class="label-delete-btn validate-text-btn is-danger">Remove mine</button>` : ''}
                 ${!isMine && !l.isSelf && session ? `<button type="button" class="label-report-btn validate-text-btn">Report</button>` : ''}
                 ${isOwner && !l.isSelf ? `<button type="button" class="label-veto-btn validate-text-btn${l.vetoed ? '' : ' is-danger'}">${l.vetoed ? 'Un-veto' : 'Veto'}</button>` : ''}
@@ -13158,25 +13135,25 @@ async function renderAccountLabelEditor(address, opts = {}) {
     const mineLabel = session ? (community.find(c => c.signer === session.address) || (selfRow && selfRow.signer === session.address ? selfRow : null)) : null;
     let suggestForm;
     if (session) {
-        suggestForm = `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-color);">
-                <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">${isOwner ? 'Set your label' : 'Suggest a label'}</h4>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <input type="text" id="account-label-input" data-input-kind="text" maxlength="64" placeholder="${isOwner ? 'Foundation Wallet, Cold Storage #1, …' : 'Binance hot wallet, Polkadex Sudo, …'}" value="${stakingEscapeHtml(mineLabel ? mineLabel.label : '')}" class="ui-input" style="flex:1;min-width:220px;">
+        suggestForm = `<div class="ui-ruled-top label-block">
+                <h4 class="ui-section-title">${isOwner ? 'Set your label' : 'Suggest a label'}</h4>
+                <div class="label-form-row">
+                    <input type="text" id="account-label-input" data-input-kind="text" maxlength="64" placeholder="${isOwner ? 'Foundation Wallet, Cold Storage #1, …' : 'Binance hot wallet, Polkadex Sudo, …'}" value="${stakingEscapeHtml(mineLabel ? mineLabel.label : '')}" class="ui-input">
                     <button type="button" id="account-label-save" class="ui-action"><i class='bx bx-check' aria-hidden="true"></i>${mineLabel ? 'Update' : (isOwner ? 'Set label' : 'Suggest')}</button>
                 </div>
-                <div id="account-label-status" style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">${isOwner
+                <div id="account-label-status" class="ui-caption label-status" data-state="note">${isOwner
                     ? 'Owner labels (verified by signature) always outrank community suggestions.'
                     : 'Your suggestion will appear in this list. The community votes on it; the address owner can veto.'}
-                    Signed in as <code style="font-size:0.72rem;">${stakingEscapeHtml(stakingShortAddress(session.address))}</code>.</div>
+                    Signed in as <code class="ui-code">${stakingEscapeHtml(stakingShortAddress(session.address))}</code>.</div>
             </div>`;
     } else if (connectedAddress) {
-        suggestForm = `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-color);">
-                <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 8px 0;">Sign in to suggest &amp; vote</h4>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        suggestForm = `<div class="ui-ruled-top label-block">
+                <h4 class="ui-section-title">Sign in to suggest &amp; vote</h4>
+                <div class="label-form-row">
                     <button type="button" id="account-label-signin" class="ui-action"><i class='bx bx-log-in' aria-hidden="true"></i>Sign in with wallet</button>
-                    <span style="color:var(--text-muted);font-size:0.78rem;">connected as <code style="font-size:0.72rem;">${stakingEscapeHtml(stakingShortAddress(connectedAddress))}</code></span>
+                    <span class="ui-caption">connected as <code class="ui-code">${stakingEscapeHtml(stakingShortAddress(connectedAddress))}</code></span>
                 </div>
-                <div style="margin-top:8px;color:var(--text-muted);font-size:0.78rem;">One-time signature proves you own this address — no transaction, no gas. The same session also lets you post on the discussion board.</div>
+                <div class="ui-caption label-status">One-time signature proves you own this address — no transaction, no gas. The same session also lets you post on the discussion board.</div>
             </div>`;
     } else {
         // returnTo brings the user back to the current /account/<addr> page
@@ -13185,19 +13162,19 @@ async function renderAccountLabelEditor(address, opts = {}) {
         // labels editor invisible — confusing for someone who just wanted
         // to vote.
         const returnTo = `/account/${encodeURIComponent(address)}`;
-        suggestForm = `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-color);color:var(--text-muted);font-size:0.82rem;">
-                <a href="/wallet?returnTo=${encodeURIComponent(returnTo)}" class="item-link" style="color:var(--brand-secondary);">Connect a wallet</a> to suggest or vote on labels.
+        suggestForm = `<div class="ui-ruled-top ui-caption label-block">
+                <a href="/wallet?returnTo=${encodeURIComponent(returnTo)}" class="item-link">Connect a wallet</a> to suggest or vote on labels.
            </div>`;
     }
 
     // ─ Layout ─────────────────────────────────────────────────────────────
     slot.innerHTML = `
-        <div style="margin-top:14px;">
-            <h4 style="font-size:0.82rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin:0 0 4px 0;">Labels ${helpIcon('community-labels', 'About community labels')} <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-muted);">(${labels.length})</span></h4>
+        <div class="label-block">
+            <h4 class="ui-section-title">Labels ${helpIcon('community-labels', 'About community labels')} <span class="ui-quiet">(${labels.length})</span></h4>
             ${selfRow ? renderLabelRow(selfRow) : ''}
             ${community.length
                 ? community.map(renderLabelRow).join('')
-                : (selfRow ? '' : `<div style="color:var(--text-muted);font-size:0.82rem;padding:10px 0;">No labels yet. ${session ? 'Be the first to suggest one!' : ''}</div>`)}
+                : (selfRow ? '' : `<div class="ui-state is-empty">No labels yet. ${session ? 'Be the first to suggest one!' : ''}</div>`)}
             ${suggestForm}
         </div>`;
 
@@ -13235,10 +13212,19 @@ async function renderAccountLabelEditor(address, opts = {}) {
     // ─ Wire suggest form ──────────────────────────────────────────────────
     const saveBtn = document.getElementById('account-label-save');
     const statusEl = document.getElementById('account-label-status');
+    // The state is data-state (the stylesheet colours it), with a check or an alert icon so colour is never the only signal.
+    const hint = (state, text) => {
+        if (!statusEl) return;
+        statusEl.setAttribute('data-state', state);
+        statusEl.textContent = '';
+        const glyph = { ok: 'bx-check', error: 'bx-error-circle' }[state];
+        if (glyph) statusEl.insertAdjacentHTML('beforeend', `<i class="bx ${glyph} ui-hint-icon" aria-hidden="true"></i>`);
+        statusEl.appendChild(document.createTextNode(text));
+    };
     if (saveBtn) saveBtn.addEventListener('click', async () => {
         const input = document.getElementById('account-label-input');
         const label = (input && input.value || '').trim();
-        if (!label) { if (statusEl) { statusEl.textContent = 'Enter a label first.'; statusEl.style.color = 'var(--error)'; } return; }
+        if (!label) { hint('error', 'Enter a label first.'); return; }
         saveBtn.disabled = true;
         try {
             const live = liveLabelSession(openedFor);
@@ -13251,10 +13237,10 @@ async function renderAccountLabelEditor(address, opts = {}) {
             if (res.status === 401) { discussAuthStore().forgetToken(live.token); throw new Error('Session expired - please sign in again.'); }
             if (res.status === 429) throw new Error(data.error || 'Slow down — try again in a minute.');
             if (!res.ok || data.error) throw new Error(data.error || 'Failed to save label.');
-            if (statusEl) { statusEl.textContent = 'Saved.'; statusEl.style.color = 'var(--success)'; }
+            hint('ok', 'Saved.');
             serverRefresh.labels(address);   // the editor and every pill of this address, here and in the other tabs
         } catch (e) {
-            if (statusEl) { statusEl.textContent = e.message; statusEl.style.color = 'var(--error)'; }
+            hint('error', e.message);
         } finally {
             saveBtn.disabled = false;
         }
@@ -13413,8 +13399,7 @@ async function fetchAnalyticsData() {
     releaseCharts(Object.values(analyticsSlots));   // the skeleton replaces every canvas
     el.innerHTML =
         '<div class="list-container glass analytics-skeleton" aria-busy="true">' +
-            '<div class="list-header"><h2>Network Analytics</h2>' +
-                '<span style="color:var(--text-muted);font-size:0.78rem;">Loading…</span></div>' +
+            pageHeadHtml({ title: 'Network Analytics', esc: stakingEscapeHtml, meta: ['Loading…'], ruled: true }) +
             '<div class="skel-kpis">' + skelKpis + '</div>' +
             '<div style="padding:14px 24px;"><div class="skel" style="height:32px;width:280px;max-width:70%;"></div></div>' +
             '<div class="skel-charts">' + skelCharts + '</div>' +
@@ -13486,7 +13471,7 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
         `<div class="staking-summary-card">
             <div class="label">${stakingEscapeHtml(label)}</div>
             <div class="value">${value}</div>
-            ${sub ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:4px;">${sub}</div>` : ''}
+            ${sub ? `<div class="ui-caption">${sub}</div>` : ''}
         </div>`;
 
     // Pill row for changing the date range. Re-uses the existing reward-filter
@@ -13496,11 +13481,8 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
 
     el.innerHTML = `
         <div class="list-container glass">
-            <div class="list-header">
-                <h2>Network Analytics</h2>
-                <span style="color:var(--text-muted);font-size:0.78rem;">Last sync ${stakingEscapeHtml(formatLocalDateTime(snapshot.lastSync) || '—')}</span>
-            </div>
-            <div style="padding:20px;">
+            ${pageHeadHtml({ title: 'Network Analytics', esc: stakingEscapeHtml, meta: [`Last sync ${stakingEscapeHtml(formatLocalDateTime(snapshot.lastSync) || '—')}`], ruled: true })}
+            <div class="ui-page-body">
                 <div class="staking-summary-grid">
                     ${kpiCard('Indexed blocks',       formatCountOrUnknown(snapshot.indexedBlocks),
                         snapshot.countsReady === false ? 'counting…' : 'blocks in the local index')}
@@ -13508,19 +13490,19 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
                         snapshot.countsReady === false ? 'counting…' : 'transfers in the local index')}
                     ${kpiCard(
                         'Validators',
-                        `${stakingFormatNumber(snapshot.validatorCount)} <span style="color:var(--text-muted);font-size:0.7rem;font-weight:400;">/ ${stakingFormatNumber(snapshot.totalValidators || snapshot.validatorCount)}</span>`,
+                        `${stakingFormatNumber(snapshot.validatorCount)} <span class="ui-quiet">/ ${stakingFormatNumber(snapshot.totalValidators || snapshot.validatorCount)}</span>`,
                         `active / registered · era #${snapshot.activeEra}`
                     )}
                     ${kpiCard(
                         'Nominators',
-                        `${stakingFormatNumber(snapshot.nominatorCount)} <span style="color:var(--text-muted);font-size:0.7rem;font-weight:400;">/ ${stakingFormatNumber(snapshot.totalNominators || snapshot.nominatorCount)}</span>`,
+                        `${stakingFormatNumber(snapshot.nominatorCount)} <span class="ui-quiet">/ ${stakingFormatNumber(snapshot.totalNominators || snapshot.nominatorCount)}</span>`,
                         'active / registered'
                     )}
                     ${kpiCard('Total staked',         `${stakingFormatPDEX(totalStaked)} <span class="unit">PDEX</span>`, `${stakingPct.toFixed(2)}% of issuance`)}
                     ${kpiCard('Total issuance',       `${stakingFormatPDEX(totalIssuance)} <span class="unit">PDEX</span>`, 'circulating + locked')}
                 </div>
 
-                <div class="staking-toolbar" style="margin-top:20px;">
+                <div class="staking-toolbar analytics-toolbar">
                     <div class="reward-filter">
                         ${rangePill(7,  'Last 7 days')}
                         ${rangePill(30, 'Last 30 days')}
@@ -13529,7 +13511,7 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
                     </div>
                 </div>
 
-                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));gap:18px;margin-top:18px;">
+                <div class="analytics-grid">
                     ${analyticsChartCard('Daily transactions',  'analytics-chart-tx-count',   `${series.txCount?.length || 0} day(s) of data`)}
                     ${analyticsChartCard('Daily PDEX volume',   'analytics-chart-tx-volume', 'sum of transfer amounts per day')}
                     ${analyticsChartCard('Daily active addresses', 'analytics-chart-addrs', 'distinct addresses involved per day')}
@@ -13553,18 +13535,18 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
         </div>
     `;
 
-    drawAnalyticsBarChart('analytics-chart-tx-count',   series.txCount,         'Transactions',   '#e6007a');
-    drawAnalyticsLineChart('analytics-chart-tx-volume',  series.txVolume,        'PDEX volume',    '#00d4ff');
-    drawAnalyticsLineChart('analytics-chart-addrs',      series.activeAddresses, 'Active addresses','#2ecc71');
-    drawAnalyticsBarChart('analytics-chart-blocks',     series.blocks,          'Blocks',         '#9b59b6');
+    drawAnalyticsBarChart('analytics-chart-tx-count',   series.txCount,         'Transactions',   chartToken('--brand-primary'));
+    drawAnalyticsLineChart('analytics-chart-tx-volume',  series.txVolume,        'PDEX volume',    chartToken('--accent-blue'));
+    drawAnalyticsLineChart('analytics-chart-addrs',      series.activeAddresses, 'Active addresses',chartToken('--accent-green'));
+    drawAnalyticsBarChart('analytics-chart-blocks',     series.blocks,          'Blocks',         chartToken('--accent-violet'));
     // Price line — drawn once the configured provider (CoinGecko by default)
     // has returned data. The helper no-ops if the canvas is missing or the
     // series is empty.
-    drawAnalyticsLineChart('analytics-chart-price',     priceSeries,            'USD',            '#f5a623');
+    drawAnalyticsLineChart('analytics-chart-price',     priceSeries,            'USD',            chartToken('--accent-amber'));
     // Treasury cumulative line — climbs with every awarded proposal.
     // Shown even when the day list is empty so the empty-state subtitle
     // explains the situation.
-    drawAnalyticsLineChart('analytics-chart-treasury',  treasuryCumulative,     'PDEX awarded',   '#9b59b6');
+    drawAnalyticsLineChart('analytics-chart-treasury',  treasuryCumulative,     'PDEX awarded',   chartToken('--accent-violet'));
 
     // Range pill click handlers — re-fetch with the new day count.
     el.querySelectorAll('[data-analytics-range]').forEach(btn => {
@@ -13578,13 +13560,18 @@ function renderAnalyticsPage(snapshot, ts, priceData) {
     });
 }
 
+// A chart series colour is a stylesheet token read when the chart is drawn, never a hex written here.
+function chartToken(name) {
+    try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || 'currentColor'; } catch (_) { return 'currentColor'; }
+}
+
 function analyticsChartCard(title, canvasId, subtitle) {
-    return `<div class="glass" style="padding:16px;border-radius:var(--radius-sm);">
-        <div style="margin-bottom:10px;">
-            <div style="font-size:0.95rem;font-weight:600;color:var(--text-primary);">${stakingEscapeHtml(title)}</div>
-            ${subtitle ? `<div style="font-size:0.72rem;color:var(--text-muted);">${stakingEscapeHtml(subtitle)}</div>` : ''}
+    return `<div class="glass analytics-card">
+        <div class="analytics-card-head">
+            <div class="ui-section-title">${stakingEscapeHtml(title)}</div>
+            ${subtitle ? `<div class="ui-caption">${stakingEscapeHtml(subtitle)}</div>` : ''}
         </div>
-        <div style="height:220px;position:relative;"><canvas id="${stakingEscapeHtml(canvasId)}"></canvas></div>
+        <div class="ui-chart-box"><canvas id="${stakingEscapeHtml(canvasId)}"></canvas></div>
     </div>`;
 }
 
@@ -13675,9 +13662,8 @@ function toggleWatchlist(kind, id, label) {
 function watchlistStarButton(kind, id, label) {
     const filled = isWatched(kind, id);
     const icon = filled ? 'bxs-star' : 'bx-star';
-    const color = filled ? 'var(--brand-primary)' : 'var(--text-muted)';
     const title = filled ? 'Remove from watchlist' : 'Add to watchlist';
-    return `<button type="button" class="watchlist-star" data-watch-kind="${stakingEscapeHtml(kind)}" data-watch-id="${stakingEscapeHtml(String(id))}" data-watch-label="${stakingEscapeHtml(String(label || id))}" title="${title}" aria-label="${title}" style="background:none;border:none;padding:2px 4px;cursor:pointer;color:${color};vertical-align:middle;line-height:1;font-size:1rem;"><i class='bx ${icon}'></i></button>`;
+    return `<button type="button" class="watchlist-star" data-watch-kind="${stakingEscapeHtml(kind)}" data-watch-id="${stakingEscapeHtml(String(id))}" data-watch-label="${stakingEscapeHtml(String(label || id))}" title="${title}" aria-label="${title}" aria-pressed="${filled}"><i class='bx ${icon}'></i></button>`;
 }
 
 // Render the dedicated /watchlist page — grouped sections by kind, each with
@@ -13690,11 +13676,11 @@ function renderWatchlistPage() {
 
     if (!items.length) {
         container.innerHTML = `
-            <div class="glass" style="padding:48px 24px;text-align:center;">
-                <i class='bx bx-star' style="font-size:48px;color:var(--text-muted);"></i>
-                <h2 style="margin:16px 0 8px 0;">Your watchlist is empty</h2>
-                <p style="color:var(--text-secondary);max-width:520px;margin:0 auto;">
-                    Click the <i class='bx bx-star' style="color:var(--text-muted);"></i> star next to any address, validator, referendum, motion, or treasury proposal to keep it here. The list lives in your browser only — clearing site data resets it.
+            <div class="glass watchlist-empty">
+                <span class="ui-tile is-lg is-neutral">${icon('bx-star')}</span>
+                <h2>Your watchlist is empty</h2>
+                <p class="ui-lede">
+                    Click the <i class='bx bx-star ui-glyph is-muted' aria-hidden="true"></i> star next to any address, validator, referendum, motion, or treasury proposal to keep it here. The list lives in your browser only — clearing site data resets it.
                 </p>
             </div>`;
         return;
@@ -13714,19 +13700,18 @@ function renderWatchlistPage() {
         block:            { label: 'Blocks',               pathFor: id => `/block/${encodeURIComponent(id)}` }
     };
     let html = `<div class="list-container glass">
-        <div class="list-header"><h2>Watchlist ${helpIcon('watchlist', 'About the watchlist')} <span style="color:var(--text-muted);font-weight:400;font-size:0.85rem;">(${items.length} item${items.length === 1 ? '' : 's'})</span></h2>
-            <button type="button" id="watchlist-clear-all" class="validate-text-btn is-danger"><i class='bx bx-trash' aria-hidden="true"></i>Clear all</button>
-        </div>`;
+        ${pageHeadHtml({ title: 'Watchlist', esc: stakingEscapeHtml, help: helpIcon('watchlist', 'About the watchlist'), meta: [`${items.length} item${items.length === 1 ? '' : 's'}`], ruled: true,
+            actions: `<button type="button" id="watchlist-clear-all" class="validate-text-btn is-danger"><i class='bx bx-trash' aria-hidden="true"></i>Clear all</button>` })}`;
     for (const [kind, meta] of Object.entries(groups)) {
         const ofKind = items.filter(i => i.kind === kind);
         if (!ofKind.length) continue;
-        html += `<div style="padding:14px 20px;border-top:1px solid var(--border-color);">
-            <h3 style="font-size:0.85rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin:0 0 10px 0;">${stakingEscapeHtml(meta.label)} <span style="color:var(--text-muted);font-weight:400;">(${ofKind.length})</span></h3>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-                ${ofKind.map(it => `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border-radius:6px;">
-                    <div style="min-width:0;flex:1;">
-                        <a href="${meta.pathFor(it.id)}" class="item-link" style="color:var(--brand-secondary);font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${stakingEscapeHtml(it.label || it.id)}</a>
-                        <div style="color:var(--text-muted);font-size:0.72rem;margin-top:2px;">added ${stakingEscapeHtml(formatLocalDateTime(it.addedAt))}</div>
+        html += `<div class="watchlist-group ui-ruled-top">
+            <h3 class="ui-section-title">${stakingEscapeHtml(meta.label)} <span class="ui-quiet">(${ofKind.length})</span></h3>
+            <div class="watchlist-rows">
+                ${ofKind.map(it => `<div class="watchlist-row">
+                    <div class="watchlist-main">
+                        <a href="${meta.pathFor(it.id)}" class="item-link">${stakingEscapeHtml(it.label || it.id)}</a>
+                        <div class="ui-caption">added ${stakingEscapeHtml(formatLocalDateTime(it.addedAt))}</div>
                     </div>
                     ${watchlistStarButton(it.kind, it.id, it.label)}
                 </div>`).join('')}
@@ -13766,7 +13751,7 @@ function renderWatchlistPage() {
             i.classList.toggle('bxs-star', filled);
             i.classList.toggle('bx-star', !filled);
         }
-        btn.style.color = filled ? 'var(--brand-primary)' : 'var(--text-muted)';
+        btn.setAttribute('aria-pressed', String(filled));
         btn.title = filled ? 'Remove from watchlist' : 'Add to watchlist';
         btn.setAttribute('aria-label', btn.title);
     });
@@ -13867,18 +13852,16 @@ function renderTourSlide() {
     const content = document.getElementById('onboarding-tour-content');
     if (content) {
         content.innerHTML = `
-            <div style="text-align:center;margin-bottom:16px;">
-                <i class='bx ${slide.icon}' style="font-size:42px;color:var(--brand-primary);"></i>
-            </div>
-            <h2 style="margin:0 0 12px 0;font-size:1.4rem;text-align:center;">${stakingEscapeHtml(slide.title)}</h2>
-            <div style="color:var(--text-secondary);font-size:0.92rem;line-height:1.6;">${slide.body}</div>
+            <div class="tour-icon-wrap"><i class='bx ${slide.icon} tour-icon'></i></div>
+            <h2 class="tour-title">${stakingEscapeHtml(slide.title)}</h2>
+            <div class="tour-body">${slide.body}</div>
         `;
     }
     // Dot indicator row.
     const dots = document.getElementById('onboarding-tour-dots');
     if (dots) {
         dots.innerHTML = TOUR_SLIDES.map((_, i) =>
-            `<span style="width:8px;height:8px;border-radius:50%;background:${i === tourCurrentSlide ? 'var(--brand-primary)' : 'rgba(255,255,255,0.15)'};transition:background var(--transition-fast);"></span>`
+            `<span class="tour-dot${i === tourCurrentSlide ? ' is-on' : ''}"></span>`
         ).join('');
     }
     const backBtn = document.getElementById('onboarding-tour-back');

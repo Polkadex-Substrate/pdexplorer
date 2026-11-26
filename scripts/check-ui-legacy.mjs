@@ -29,8 +29,8 @@ const isComment = (line) => { const t = line.trim(); return t.startsWith('//') |
 // exempt lines only, WP3 takes index.html and styles.css to the plain rule.
 // At f33320f: G2 script.js 317, index.html 163, lib/ 35 (not counting the exemptions and the layout-only interpolations);
 // G3 script.js 82, index.html 40, lib/ 24, styles.css 73; G4 sources 104. WP1 also took the email alerts modal (row I16).
-export const G2_CEILING = Object.freeze({ 'script.js': 252, 'index.html': 113, 'lib/': 32, other: 0 });
-export const G3_CEILING = Object.freeze({ 'script.js': 50, 'index.html': 14, 'lib/': 21, other: 0, 'styles.css': 67 });
+export const G2_CEILING = Object.freeze({ 'script.js': 0, 'index.html': 111, 'lib/': 0, other: 0 });
+export const G3_CEILING = Object.freeze({ 'script.js': 0, 'index.html': 14, 'lib/': 17, other: 0, 'styles.css': 67 });
 export const G4_SOURCE_CEILING = 95;
 
 // The exemptions of 2.5, by file and function name (never by line number), each with its reason. An entry that
