@@ -17,9 +17,11 @@
 //            { setScroll: y } (the reader scrolled to y), { back: true } (history.back()) ]
 //   scrollLog: true                  window.scrollTo is recorded (happy-dom has no layout, so scrollY is a stub
 //                                    that scrollTo sets); result.scroll = { restoration, atLoad }, steps[i].scrollCalls
-//   api: { 'url substring': json }   answers for fetch, first match wins (else {})
+//   api: { 'url substring': json }   answers for fetch, first match wins (else {}); a canned object with __status answers that HTTP status, with __hang never answers, with __throw fails like a dropped network
+//   tagStatic: true                  marks index.html's elements (data-static, data-static-style) before script.js runs
+//   clipboard: true                  navigator.clipboard.writeText answers
 //   probe: [selector]                per selector: how many, how many not hidden, the first one's text
-//   steps may also hold { dump: selector }: the first match's outerHTML is appended to result.dumps (null if none)
+//   steps may also hold { type: selector, value } (an input's value is set), { dump: selector }: the first match's outerHTML is appended to result.dumps (null if none)
 // }
 // The result also carries every URL fetched, every WebSocket URL and the data-page on screen.
 // Prints one line: RESULT {"first": header, "steps": [header...], "final": {...}}.
@@ -87,9 +89,13 @@ g.fetch = win.fetch = async (url) => {
     const m = /\/api\/wallet\/([^/?]+)/.exec(String(url));
     const canned = Object.entries(scenario.api || {}).find(([k]) => String(url).includes(k));
     const data = canned ? canned[1] : m ? walletPayload(decodeURIComponent(m[1])) : {};
-    return { ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data), headers: new Map(canned ? [['content-type', 'application/json']] : []) };
+    if (data && data.__throw) throw new TypeError('Failed to fetch');   // __throw: the request fails as a dropped network does
+    if (data && data.__hang) await new Promise(() => {});   // a canned answer may carry __hang: the request never answers (a loading state stays drawn)
+    const status = (data && data.__status) || 200;   // a canned answer may carry __status to fail the request
+    return { ok: status < 400, status, json: async () => data, text: async () => JSON.stringify(data), headers: new Map(canned ? [['content-type', 'application/json']] : []) };
 };
 
+if (scenario.clipboard) Object.defineProperty(win.navigator, 'clipboard', { value: { writeText: async () => {} }, configurable: true });
 const enables = {};
 const injected = {};
 for (const [key, list] of Object.entries(scenario.wallets || {})) {
@@ -126,6 +132,9 @@ const dashboard = () => {
 
 // Cut the node handshake race (WS_HANDSHAKE_BUDGET_MS, 6 s) to zero while
 // script.js loads; that timer is created synchronously in init().
+// tagStatic: every element index.html draws is marked, with the style it was drawn with, before script.js runs, so a test can
+// tell what script.js wrote (an element with no mark, or a mark whose style has changed) from what the static markup holds.
+if (scenario.tagStatic) for (const e of win.document.querySelectorAll('*')) { e.setAttribute('data-static', ''); if (e.hasAttribute('style')) e.setAttribute('data-static-style', e.getAttribute('style')); }
 const realSetTimeout = g.setTimeout;
 g.setTimeout = (fn, ms, ...a) => realSetTimeout(fn, ms === 6000 ? 0 : ms, ...a);
 await import(SCRIPT_URL.href);
@@ -141,6 +150,9 @@ for (const step of scenario.steps || []) {
         scroll.y = step.setScroll;
     } else if (step.back) {
         win.history.back();
+    } else if (step.type) {
+        const el = document.querySelector(step.type);
+        if (!el) errors.push('no element for ' + step.type); else el.value = step.value;
     } else if (step.click) {
         const el = document.querySelectorAll(step.click)[step.nth || 0];
         if (!el) errors.push('no element for ' + step.click);

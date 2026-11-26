@@ -503,8 +503,10 @@ describe('F-064 — live rows carry what the chain said, or null', () => {
         // EITHER the solid or the soft variant.
         assert.match(badge, /const key = \(st === 'success' \|\| st === 'failed'\) \? st : 'unknown'/,
             'the status is no longer funnelled through an explicit three-way key');
-        assert.match(badge, /unknown:\s*'background: rgba\(255, 255, 255/, 'the soft variant needs an unknown style');
-        assert.match(badge, /var\(--text-muted\)/, 'the solid variant needs a neutral colour for unknown');
+        // Amended (sprint 11 site sweep WP2, spec 2.3 row I14): the colour of each state is a class now, so the test pins the
+        // neutral class for unknown in both forms (the icon's .is-unknown and the chip's .is-neutral), not an inline style.
+        assert.match(badge, /bx-minus tx-status is-unknown/, 'the icon form needs a neutral class for unknown');
+        assert.match(badge, /chipHtml\('is-neutral'/, 'the badge form needs the neutral chip for unknown');
         // And the label must not claim an outcome it does not have.
         assert.match(badge, /st === 'success' \? 'Success' : st === 'failed' \? 'Failed' : st/,
             "an unknown status must render as 'unknown', not as Success or Failed");
