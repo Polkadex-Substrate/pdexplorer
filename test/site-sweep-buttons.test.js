@@ -94,6 +94,7 @@ const SCENARIOS = {
     tre: { path: 'treasury', api: { '/api/treasury': { error: 'Indexer offline' } }, steps: [{ click: '#treasury-retry-btn' }] },
     owner: { path: 'account/' + ME, api: { ...accountApi(), '/api/labels/': LABELS }, wallets: { 'polkadot-js': [ME] }, seed: { ...WALLET, pdex_discuss_session: JSON.stringify({ v: 3, token: 'tok', address: ME, expiresAt: far }) }, steps: [{ wait: 400 }] },
     signin: { path: 'account/' + ME, api: { ...accountApi(), '/api/labels/': LABELS }, wallets: { 'polkadot-js': [ME] }, seed: WALLET, steps: [{ wait: 400 }] },
+    val: { path: 'validate' },
     watch: { path: 'watchlist', seed: { pdex_watchlist_v1: JSON.stringify({ ['address:' + ME]: { kind: 'address', id: ME, label: 'Alice', addedAt: 1700000000000 } }) } }
 };
 const PAGES = {};

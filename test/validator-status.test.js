@@ -1002,8 +1002,8 @@ describe('wiring: server, docs, shell, script, brand', () => {
         const amber = rules.filter(r => /--accent-amber|--warning/.test(r.body));
         for (const r of amber) assert.match(r.sel, /is-wait|is-warn|\.ui-/, r.sel);
         const accent = rules.filter(r => /--error|--accent-(red|green|amber|blue)|#ff4d4d/i.test(r.body));
-        // is-danger (amended, sprint 11 WP1): the red hover of a destructive text link (Remove, Clear all), roles table, spec 2026-11-26 1.0.
-        for (const r of accent) for (const s of r.sel.split(',')) if (!/\.ui-|is-(error|positive|wait|info|ok|done|danger)|validate-msg|aria-invalid|validate-alert|validate-tile-chip/.test(s)) assert.doesNotMatch(s, /btn|button|primary|secondary|link|:hover|:focus/, s);
+        // The one amendment (sprint 11 WP1, narrowed by its review): the red hover of a destructive text link, roles table, spec 2026-11-26 1.0.
+        for (const r of accent) for (const s of r.sel.split(',').map(x => x.trim())) if (s !== '.validate-text-btn.is-danger:hover' && !/\.ui-|is-(error|positive|wait|info|ok|done)|validate-msg|aria-invalid|validate-alert|validate-tile-chip/.test(s)) assert.doesNotMatch(s, /btn|button|primary|secondary|link|:hover|:focus/, s);
         for (const r of rules) assert.doesNotMatch(r.body, /#[0-9a-f]{3,8}\b(?![^;]*var\()/i, `new colour literal in ${r.sel}`);
         const view = stripComments(readRepo('lib/validator-status-view.js', import.meta.url));
         assert.doesNotMatch(view, /style="[^"]*(--success|--brand-secondary|--error|--accent-)/);

@@ -189,3 +189,13 @@ describe('WP1 rules for the signing modals and the off-kit hues of section 9', (
         assert.deepEqual([info.background, info.color, info.border], ['var(--accent-blue-tint)', 'var(--accent-blue-text)', '1px solid var(--accent-blue-line)']);
     });
 });
+
+describe('WP1 review fixes: two stale rules', () => {
+    test('.council-withdraw-actions button:disabled is gone (it outranked .validate-primary:disabled at 0.45)', () => {
+        assert.equal(RULES.some(r => r.selectors.some(s => /\.council-withdraw-actions\s+button:disabled/.test(s))), false);
+        assert.equal(base('.validate-primary:disabled').opacity, '0.45');
+    });
+    test('.ui-modal-card > .modal-submit-btn:first-child is gone (a close button is always first, so it never matched)', () => {
+        assert.equal(RULES.some(r => r.selectors.some(s => /modal-submit-btn:first-child/.test(s))), false);
+    });
+});

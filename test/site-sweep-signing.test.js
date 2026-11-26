@@ -360,3 +360,70 @@ describe('Propose a spend (SIGNING VIEW, lib/treasury-spend-view.js on index.htm
         same('spend.call', await callOf(submitted[0], chain));
     });
 });
+
+// ── WP1 review fixes (designer): the shared #unstake-modal-error and the wrong-network refusal ──
+describe('WP1 review fixes: Withdraw unbonded and Unstake share #unstake-modal-error', () => {
+    const world = (controller) => page({ path: '/wallet', fns: ['submitWithdrawUnbonded', 'submitUnstakeTx', 'isSameAddress'], prelude: `var withdrawControllerAddress = ${JSON.stringify(controller)};\n`, ctx: {
+        currentWalletData: { address: ME }, decodeAddress: (a) => a, toPolkadexAddress: (a) => a,
+        globalApi: { query: { staking: { slashingSpans: async () => ({ isSome: true, unwrap: () => ({ prior: [1, 2] }) }) } } } } });
+    test('Withdraw fails, then Unstake fails: the element shows the error state with its icon, no colour from script', async () => {
+        const w = world(OTHER);
+        await w.fn('submitWithdrawUnbonded')();
+        const err = w.get('unstake-modal-error');
+        assert.equal(err.getAttribute('data-state'), 'error');
+        assert.equal(err.querySelectorAll('.ui-hint-icon').length, 1);
+        w.context.currentWalletData = null;
+        await w.fn('submitUnstakeTx')();
+        assert.equal(norm(err.textContent), 'Wallet data is not loaded.');
+        assert.equal(err.getAttribute('data-state'), 'error', 'an Unstake failure must draw as the error state');
+        assert.equal(err.querySelectorAll('.ui-hint-icon').length, 1, 'an Unstake failure must carry the error icon');
+        assert.ok(err.querySelector('.bx-error-circle'));
+        assert.equal(err.style.color, '');
+        assert.equal(w.calls.length, 0);
+    });
+    test('a cleared element has no data-state: Withdraw after a failed Withdraw', async () => {
+        const w = world(OTHER);
+        await w.fn('submitWithdrawUnbonded')();
+        const err = w.get('unstake-modal-error');
+        assert.equal(err.getAttribute('data-state'), 'error');
+        w.context.withdrawControllerAddress = ME;
+        await w.fn('submitWithdrawUnbonded')();
+        assert.equal(w.calls.length, 1, 'the retry reaches signing');
+        assert.equal(err.hasAttribute('data-state'), false, 'Withdraw left the old state on a cleared element');
+        assert.equal(err.textContent, '');
+    });
+    test('Pay out: reopening after an error clears data-state', async () => {
+        const list = Array.from({ length: 2 }, (_, i) => ({ era: 500 + i, validator: V1, amount: 1.5, key: `${500 + i}:${V1}` }));
+        const w = page({ path: '/wallet', fns: ['openPayoutModal', 'submitPayoutTx', 'batchTx', 'buildPayoutCall'], prelude: 'const PAYOUT_BATCH_MAX = 30;\n', ctx: {
+            currentWalletData: { address: ME },
+            payoutRefresh: { model: () => ({ button: 'enabled', payable: list, payableTotal: list.length * 1.5 }), signable: () => list, modalLine: () => {}, paint: () => {},
+                rowsHtml: (es) => es.map(e => `<div class="payout-entry" data-key="${e.key}">${e.era}</div>`).join('') } } });
+        w.fn('openPayoutModal')();
+        await w.fn('submitPayoutTx')();
+        w.calls[0].onError('Rejected in wallet');
+        const err = w.get('payout-modal-error');
+        assert.equal(err.getAttribute('data-state'), 'error');
+        list.length = 0;
+        w.fn('openPayoutModal')();
+        assert.equal(err.hasAttribute('data-state'), false, 'the reopened modal kept the error state');
+    });
+});
+
+describe('WP1 review fixes: Send wrong-network refusal', () => {
+    test('the refusal hint holds exactly one .ui-hint-icon, first, in the error state; the Copy button is kept', () => {
+        const w = page({ path: '/wallet', fns: ['openSendModal', 'validateSendRecipient', 'clearSendError', 'updateSendSignGate', 'getExistentialDepositPDEX', 'isSameAddress'], prelude: 'var sendValidRecipient = false; var sendLastFeePDEX = null; var sendFeeEstimateFailed = false; const SEND_FEE_BUFFER = 0.05;\n', ctx: {
+            currentWalletData: { address: ME, balance: { free: 100, transferable: 100, total: 100 } }, globalApi: api, multisigStore: { find: () => null } } });
+        w.fn('openSendModal')();
+        w.get('send-to-input').value = encodeAddress(new Uint8Array(32).fill(7), 0);
+        w.fn('validateSendRecipient')();
+        const hint = w.get('send-to-hint');
+        assert.equal(hint.getAttribute('data-state'), 'error');
+        assert.ok(hint.querySelector('.js-recipient-copy'), 'the refusal was not drawn');
+        assert.equal(hint.querySelectorAll('.ui-hint-icon').length, 1);
+        assert.equal(hint.firstElementChild.className.includes('ui-hint-icon'), true, 'the icon is not first');
+        assert.equal(hint.firstElementChild.getAttribute('aria-hidden'), 'true');
+        assert.equal(hint.querySelectorAll('.js-recipient-copy').length, 1);
+        w.fn('validateSendRecipient')();
+        assert.equal(hint.querySelectorAll('.ui-hint-icon').length, 1, 'a second pass doubled the icon');
+    });
+});
