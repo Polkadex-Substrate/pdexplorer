@@ -78,6 +78,8 @@ import { REFRESH_UI } from '../lib/refresh-ui.js';
 import { advancedShellHtml, proxyAddFormHtml, calculatorHtml, bindCalculator, pendingHtml } from '../lib/wallet-advanced-view.js';
 import { createMultisigUI } from '../lib/multisig-view.js';
 import { createSpendMotionUI } from '../lib/treasury-spend-view.js';
+import { createCouncilCandidacyUI } from '../lib/council-candidacy-view.js';
+import { buildSpendMotion, decodeSpendMotion } from '../lib/treasury-spend.js';
 import { normalizeMultisig } from '../lib/multisig.js';
 import { isValidPolkadexAddress } from '../lib/wallet-safety.js';
 import { createKeyMulti, sortAddresses, encodeAddress as encodeAddr, decodeAddress as decodeAddr } from '@polkadot/util-crypto';
@@ -169,7 +171,7 @@ const WALLET_SCENES = [
     { id: 'wallet-ext-shared-accounts', primary: 0, build: () => setup({ wallets: [POLKADOT(), TALISMAN()], phone: true }, async (w) => { w.row('talisman').click(); await w.settle(); w.q('#wallet-picker-back').click(); await w.settle(); withMs(w); }) },
     { id: 'wallet-waiting', primary: 0, build: () => setup({ wallets: [Object.assign(TALISMAN(), { hold: true }), POLKADOT()] }, async (w) => { w.row('talisman').click(); await tick(20); withMs(w); }) },
     { id: 'wallet-problem', primary: 0, build: () => setup({ wallets: [Object.assign(POLKADOT(), { reject: true }), TALISMAN()] }, async (w) => { w.row('polkadot-js').click(); await w.settle(); withMs(w); }) },
-    { id: 'wallet-switch-current', primary: 0, connected: addr(10, 42), need: '.wallet-account-row.is-current', build: () => setup({ wallets: [TALISMAN(), POLKADOT()], current: addr(10, 42), currentSource: 'talisman', lastSource: 'talisman' }, withMs) },
+    { id: 'wallet-switch-current', widths: [1280, 375, 320], primary: 0, connected: addr(10, 42), need: '.wallet-account-row.is-current', build: () => setup({ wallets: [TALISMAN(), POLKADOT()], current: addr(10, 42), currentSource: 'talisman', lastSource: 'talisman' }, withMs) },
     { id: 'wallet-accounts-five', primary: 0, build: () => setup({ wallets: [fakeWallet('talisman', [acct(10, 'Main account'), acct(12, 'Staking'), acct(13, 'Savings'), acct(15, 'Trading'), acct(16, 'Cold storage')])] }, async (w) => { w.row('talisman').click(); await w.settle(); }) },
     { id: 'wallet-get', primary: 0, build: () => setup({}, async (w) => { w.action('get').click(); await w.settle(); }) },
     { id: 'wallet-get-retried', primary: 1, extra: '.wallet-onboarding-reload', build: () => setup({}, async (w) => { w.action('get').click(); await w.settle(); w.q('.wallet-get-check').click(); await w.settle(); }) },
@@ -260,8 +262,8 @@ const VALIDATE_SCENES = [
     { id: 'hub-proxy-with-three-stashes', primary: 0, need: '.validate-proxied', build: hub({ proxied: THREE }) },
     { id: 'hub-proxy-limited', primary: 0, need: '.validate-proxied', build: hub({ proxied: { ...NO_PROXIES, limited: true, reason: 'SIGNER_INDEX_MISSING' } }) },
     { id: 'keys-empty', primary: 1, need: '#validate-keys-form', build: keysPage({ account: { status: 'none', address: '' } }) },
-    { id: 'keys-ok', primary: 1, need: '.validate-keys-table', build: keysPage({ keysAnswer: { ok: true, conflict: false, bytes: 193, summary: '6 keys, 193 bytes, none registered to another account.', rows: keysRows(false) } }, submitKeys(VBLOB)) },
-    { id: 'keys-conflict', primary: 1, need: '.validate-alert', build: keysPage({ keysAnswer: { ok: true, conflict: true, bytes: 193, summary: `Key 2 (babe) is already registered to ${THEM}. The chain will reject these keys.`, rows: keysRows(true) } }, submitKeys(VBLOB)) },
+    { id: 'keys-ok', widths: [1280, 375, 320], primary: 1, need: '.validate-keys-table', build: keysPage({ keysAnswer: { ok: true, conflict: false, bytes: 193, summary: '6 keys, 193 bytes, none registered to another account.', rows: keysRows(false) } }, submitKeys(VBLOB)) },
+    { id: 'keys-conflict', widths: [1280, 375, 320], primary: 1, need: '.validate-alert', build: keysPage({ keysAnswer: { ok: true, conflict: true, bytes: 193, summary: `Key 2 (babe) is already registered to ${THEM}. The chain will reject these keys.`, rows: keysRows(true) } }, submitKeys(VBLOB)) },
     { id: 'keys-invalid', primary: 1, need: '#validate-keys-input[aria-invalid="true"]', build: keysPage({}, submitKeys('0x1234')) },
     { id: 'keys-mismatch', primary: 0, need: '.validate-mismatch', build: keysPage({ params: { ...VPARAMS, specVersion: 394, layout: { ok: false } } }) }
 ];
@@ -294,7 +296,7 @@ const WP3_SCENES = [
     { id: 'wizard-step3', primary: 1, need: '.validate-stash-notes', build: wp3('wiz-step3') },
     { id: 'wizard-step4', primary: 1, need: '#validate-setup-commission', build: wp3('wiz-step4-warn') },
     { id: 'wizard-step5-review', primary: 1, need: '.validate-warnings.ui-panel.is-warn', build: wp3('wiz-review-ack') },
-    { id: 'wizard-review-multisig', primary: 1, need: '.validate-warnings', build: wp3('wiz-review-multisig') },
+    { id: 'wizard-review-multisig', widths: [1280, 375, 320], primary: 1, need: '.validate-warnings', build: wp3('wiz-review-multisig') },
     { id: 'wizard-signing', primary: 1, need: '[data-setup-action="sign"][disabled]', build: wp3('wiz-signing') },
     { id: 'wizard-done', primary: 1, need: '.ui-panel.is-ok', build: wp3('wiz-result-applied') },
     { id: 'steps-S0', primary: 1, need: '.validate-stepwise-panel', build: wp3('steps-S0') },
@@ -635,7 +637,7 @@ const STAKE_ADV_SCENES = [
     { id: 'stake-advanced-list-failed', primary: 1, need: '#stake-validator-list [data-stake-action="retry"]', build: () => stakeWorld({ data: sstaker([1, 2, 3]), view: 'advanced', failed: true }) },
     { id: 'stake-advanced-confirm-automatic', primary: 1, need: '[data-sc="SC-40"]', build: () => stakeWorld({ data: sstaker([10, 11, 12]), view: 'advanced',
         steps: (w) => { w.q('[data-stake-action="auto"]').click(); } }) }
-].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+].map(s => ({ ...s, connected: ME, widths: [1280, 375, 320] }));   // 320: a check-on-device item of sprint 11 (spec 4.2)
 function checkStakeScene(w, s, err) {
     if (!w.doc.querySelector('aside.sidebar .nav-item.active#nav-my-account')) err.push('no active #nav-my-account in the sidebar');
     const modal = w.doc.querySelector('#stake-modal');
@@ -726,7 +728,8 @@ const secPayload = (over = {}) => ({ address: ME, identity: 'Unknown',
     freshness: { v: 1, chainHead: SEC_BLOCK - 10, indexed: { chain: SEC_BLOCK - 10, rewards: SEC_BLOCK - 10, tx: SEC_BLOCK - 10 }, pending: [] }, ...over });
 const secFmt = { ...r1fmt, duration: sdur };
 const SEC_PROXIES = [{ delegate: P1, proxyType: 'Staking', delay: 0 }, { delegate: P2, proxyType: 'Governance', delay: 0 }];
-const secTable = (head, rows) => `<div class="table-responsive"><table class="data-table"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+// The markup makeTable draws with stacked: true (sprint 11 spec 4.1): .is-stacked, a data-label per body cell, the cell class.
+const secTable = (head, rows, cells = []) => `<div class="table-responsive"><table class="data-table is-stacked"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td${cells[i] ? ` class="${cells[i]}"` : ''} data-label="${head[i]}">${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 async function sectionsWorld({ steps = null } = {}) {
     const window = new Window({ url: 'https://explorer.test/wallet' });
     const doc = window.document;
@@ -755,8 +758,8 @@ async function sectionsWorld({ steps = null } = {}) {
         write: async () => {}, esc: escapeHtml, short: shortAddr, setTimer });
     doc.getElementById('wallet-multisig-pending').innerHTML = pendingHtml([], { esc: escapeHtml, short: shortAddr, number: (n) => Number(n).toLocaleString('en-US') });
     pr.paint({ reason: 'render' });
-    doc.getElementById('wallet-recent-rewards-table').innerHTML = secTable(['Era', 'Amount', 'Date'], data.rewards.recentClaimed.map(r => [String(r.era), `<span class="staking-amount">${r1fmt.pdex(r.amount)} PDEX</span>`, '2026-11-23']));
-    doc.getElementById('wallet-recent-tx-table').innerHTML = secTable(['Hash', 'Direction', 'Amount', 'Date'], data.recentTransactions.map(r => [`<a href="#" class="item-link">${shortAddr(r.hash)}</a>`, `<span class="reward-badge claimed">${r.direction}</span>`, escapeHtml(r.amount), '2026-11-23']));
+    doc.getElementById('wallet-recent-rewards-table').innerHTML = secTable(['Era', 'Amount', 'Date'], data.rewards.recentClaimed.map(r => [String(r.era), `<span class="staking-amount">${r1fmt.pdex(r.amount)} PDEX</span>`, '2026-11-23']), ['is-lead', '', 'is-end']);
+    doc.getElementById('wallet-recent-tx-table').innerHTML = secTable(['Hash', 'Direction', 'Amount', 'Date'], data.recentTransactions.map(r => [`<a href="#" class="item-link">${shortAddr(r.hash)}</a>`, `<span class="reward-badge claimed">${r.direction}</span>`, escapeHtml(r.amount), '2026-11-23']), ['is-lead', 'is-tag', '', 'is-end']);
     doc.getElementById('wallet-apr-periods').innerHTML = ['7D', '30D', '90D', 'All'].map((l, i) => `<button type="button" class="reward-filter-btn${i === 1 ? ' active' : ''}">${l}</button>`).join('');
     doc.getElementById('wallet-apr-body').innerHTML = `<div class="wallet-stat"><span>Average APR (30 days)</span><strong>17.42%</strong></div>`;
     const proxyEl = doc.getElementById('wallet-proxy-list');
@@ -770,6 +773,8 @@ async function sectionsWorld({ steps = null } = {}) {
     return w;
 }
 const SECTIONS_SCENES = [
+    // The page as it opens (sprint 11 spec 4.1, 6.3): Recent Transactions stacked on a phone; also drawn at 320.
+    { id: 'default', primary: 1, need: '#wallet-recent-tx-table table.data-table.is-stacked', widths: [1280, 375, 320], build: () => sectionsWorld({}) },
     // A send of 120 PDEX in block #4,210,377: the chain read has it (Total Balance, washed), the transactions index not yet.
     { id: 'send-included', primary: 1, need: '#wsec-recent-tx .list-header .ui-chip.is-wait', build: () => sectionsWorld({ steps: async (w) => {
         const was = w.data();
@@ -794,7 +799,7 @@ const SECTIONS_SCENES = [
         await w.say('tx.recent', 'updating'); await w.say('rewards.claimed', 'updating'); await w.t1();
         await w.say('tx.recent', 'could-not-refresh'); await w.say('rewards.claimed', 'could-not-refresh');
     } }) }
-].map(s => ({ ...s, connected: ME, widths: [1280, 375] }));
+].map(s => ({ widths: [1280, 375], ...s, connected: ME }));
 // The wallet page's rules (spec 2026-11-25 T8): one visible primary (Send), none in the two cards; no gradient and no
 // colour, background or border written in markup in the cards or the head; no .staking-download-btn anywhere on the page.
 const INLINE_COLOUR = /(^|;)\s*(color|background|border)/i;
@@ -881,7 +886,10 @@ async function headsWorld({ path, api, seed = {}, steps = [], seats = undefined,
     doc.body.innerHTML = r.appHtml;
     for (const img of doc.querySelectorAll('img[src="logo.png"]')) img.setAttribute('src', logoUri);
     const qa = (sel) => Array.from(doc.querySelectorAll(sel));
-    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), visible: (el) => !!el && !el.closest('[hidden]') };
+    // Drawn: not [hidden] and not inside a closed dialog (display: none), so the closed signing dialogs every page carries
+    // (sprint 11 WP1 rows 4 and 7: .validate-primary.is-solid) are not counted as the page's primary.
+    const visible = (el) => { if (!el || el.closest('[hidden]')) return false; for (let e = el; e && e.nodeType === 1; e = e.parentElement) if (/display:\s*none/.test(e.getAttribute('style') || '')) return false; return true; };
+    const w = { window, doc, qa, q: (sel) => doc.querySelector(sel), visible };
     if (seats) {
         // The page's own action slot, told what the chain says: the real part draws every state.
         const slot = w.q('#treasury-spend-action');
@@ -901,8 +909,9 @@ const HEADS_SCENES = [
     { id: 'treasury-header-spends-tab', connected: ME, build: () => headsWorld({ path: 'treasury', api: headsApi.treasury, steps: [{ click: '[data-treastab="spends"]' }], seats: { selected: ME, members: [P1, P2, P3] } }) },
     { id: 'treasury-tabs-hover', connected: ME, build: () => headsWorld({ path: 'treasury', api: headsApi.treasury, seats: { selected: ME, members: [P1, P2, P3] },
         after: (w) => { w.q('[data-treastab="spends"]').classList.add('pv-hover'); w.q('[data-treastab="history"]').classList.add('pv-focus'); } }) },
-    { id: 'council-header', connected: ME, build: () => headsWorld({ path: 'council', api: headsApi.council }) },
-    { id: 'council-header-motions', connected: ME, build: () => headsWorld({ path: 'council', api: headsApi.council, steps: [{ click: '[data-tab="council-motions"]' }] }) },
+    // Q3 (sprint 11 5.1 row 16): the Council page's Vote is its one primary, the gradient.
+    { id: 'council-header', connected: ME, primary: 1, build: () => headsWorld({ path: 'council', api: headsApi.council }) },
+    { id: 'council-header-motions', connected: ME, primary: 1, build: () => headsWorld({ path: 'council', api: headsApi.council, steps: [{ click: '[data-tab="council-motions"]' }] }) },
     { id: 'democracy-header', build: () => headsWorld({ path: 'democracy', api: headsApi.democracy('Synced') }) },
     { id: 'democracy-header-referenda', build: () => headsWorld({ path: 'democracy', api: headsApi.democracy('Syncing'), steps: [{ click: '[data-demtab="referenda"]' }] }) },
     { id: 'validators-header', build: () => headsWorld({ path: 'validators', api: {}, seed: { pdex_validate_enabled: '1' } }) },
@@ -921,7 +930,7 @@ function checkHeadsScene(w, s, err) {
         const n = row.querySelectorAll('.account-tab.active').length;
         if (row.querySelector('.account-tab') && n !== 1) err.push(`${n} selected tabs in a tab row`);
     }
-    if (w.qa('.validate-primary').length) err.push('a .validate-primary in a head scene');
+    if (w.qa('.validate-primary').filter(w.visible).length > s.primary) err.push('a .validate-primary in a head scene');
     if (w.qa(PAGE_PRIMARY_SELECTOR).filter(w.visible).length !== s.primary) err.push('the scene wants ' + s.primary + ' primary actions');
     if (s.id === 'treasury-tabs-hover' && !(w.q('[data-treastab="spends"].pv-hover') && w.q('[data-treastab="history"].pv-focus'))) err.push('the pointer is not on Spends or the focus not on History');
     if (s.id.startsWith('treasury-header') && !w.q('#treasury-spend-action .ui-action')) err.push('no .ui-action in the Treasury actions row');
@@ -936,12 +945,116 @@ function checkHeadsScene(w, s, err) {
     }
 }
 
+// ── site: the pages and modals of the sprint 11 site sweep, WP1 (cto-team/plans/2026-11-26-sprint11-site-sweep.md,
+// section 6.3): the REAL page (index.html and script.js through test/helpers/full-page.js), opened by clicks where the page
+// opens a view itself, and the REAL lib views mounted where a view needs a chain. Files site-<scene>-<width>.html.
+const SITE_ME = vaddr(31);
+const SITE_WALLET = { pdex_wallet_address: SITE_ME, pdex_wallet_source: 'polkadot-js', pdex_tour_seen_v1: '1' };
+const SITE_LABELS = { labels: [{ signer: P1, label: 'Exchange wallet', score: 2, viewerVote: 0, reportCount: 0, vetoed: false, createdAt: 1700000000000 }] };
+const SITE_COUNCIL = { ...headsApi.council, '/api/council': { ...headsApi.council['/api/council'], members: [{ address: P1, name: 'Alpha', stake: 1200 }], runnersUp: [{ address: P2, name: 'Unknown', stake: 640 }], candidates: [{ address: P3, name: 'Gamma', stake: 0 }] } };
+const SITE_REF = { '/api/democracy': { referenda: [{ refIndex: 7, index: 7, status: 'Ongoing', ayes: 1200, nays: 300, turnout: 1500, tallyKnown: 1, end: 400, title: 'Raise the treasury burn' }], publicProposals: [], referendumCount: 8, status: 'Synced', currentBlock: 100, launchPeriod: 50 } };
+const SITE_REWARDS = { '/api/staking-rewards/': { address: SITE_ME, identity: 'Alice', summary: { claimedTotal: 12.5, unclaimedTotal: 0, totalRewards: 12.5 }, index: { backfillComplete: true },
+    claimed: [{ era: 100, validator: P1, amount: 1.25, blockNumber: 10, timestamp: 1700000000000, claimed: true }, { era: 101, validator: P2, amount: 1.5, blockNumber: 20, timestamp: 1700086400000, claimed: true }], unclaimed: [] } };
+const SITE_SEEN = { pdex_tour_seen_v1: '1' };
+const SITE_H = '0x' + 'ab'.repeat(32), SITE_NOW = 1790000000000;
+const SITE_BLOCKS = { '/api/blocks': { status: 'Synced', blocks: [{ number: 100, hash: SITE_H, timestamp: SITE_NOW, authorAddress: P1, authorName: 'Alpha', extrinsicsCount: 2, eventsCount: 5 }, { number: 99, hash: '0x' + 'cd'.repeat(32), timestamp: SITE_NOW, authorAddress: P2, authorName: '', extrinsicsCount: 1, eventsCount: 3 }] } };
+const SITE_VALIDATOR = { '/api/validator/': { address: P1, controller: P2, identity: 'Alpha', history: [{ era: 1, commission: 60, stake: 1000000, timestamp: SITE_NOW }, { era: 2, commission: 5, stake: 1000000, timestamp: SITE_NOW }],
+    triggers: [{ era: 1, prevCommission: 5, newCommission: 60, timestamp: SITE_NOW }], nominators: [],
+    scorecard: { totalEras: 30, activeEras: 10, activeEraRate: 0.3, avgCommission: 5, minCommission: 1, maxCommission: 60, commissionSpikeCount: 2, estimatedNominatorApy: 10 } } };
+const SITE_ANALYTICS = { '/api/analytics/snapshot': { lastSync: SITE_NOW, indexedBlocks: 10, indexedTransactions: 5, validatorCount: 3, totalValidators: 4, nominatorCount: 5, totalNominators: 6, activeEra: 9, totalStaked: 100, totalIssuance: 1000, stakingRatio: 0.1, countsReady: true },
+    '/api/analytics/timeseries': { series: { txCount: [], txVolume: [], activeAddresses: [], blocks: [], avgExtrinsics: [], treasuryAwarded: [] } } };
+const siteShow = (w, sel, display = 'flex') => { const el = w.q(sel); if (el) el.style.display = display; };
+const siteWorld = (o) => headsWorld({ seed: SITE_WALLET, ...o });
+const SITE_SCENES = [
+    { id: 'modal-withdraw-candidacy', connected: SITE_ME, build: async () => {
+        const w = await siteWorld({ path: 'council', api: SITE_COUNCIL });
+        const chain = { tx: {}, query: { elections: { members() {}, runnersUp() {}, candidates() {} } }, rpc: { chain: { getBlockHash: async () => '0x' + '22'.repeat(32) } },
+            at: async () => ({ query: { elections: { members: async () => [], runnersUp: async () => [], candidates: async () => [[P1, 10], [SITE_ME, 10]] } } }) };
+        const ui = createCouncilCandidacyUI({ api: () => chain, selected: () => SITE_ME, isMultisig: () => false, document: w.doc, submit: async () => {}, refresh: () => {}, connectPrompt: () => '' });
+        await ui.open(); await tick(10);
+        return w;
+    } },
+    { id: 'modal-propose-spend-review', connected: SITE_ME, build: async () => {
+        const w = await siteWorld({ path: 'treasury', api: headsApi.treasury });
+        const api = await stakeApi();
+        const ui = createSpendMotionUI({ api: () => api, selected: () => SITE_ME, isMultisig: () => false, submit: async () => {}, connectPrompt: () => '', document: w.doc,
+            motion: { readSeats: async () => ({ pallet: 'council', members: [SITE_ME, P1, P2, P3, THEM] }), readHead: async () => 1000, build: buildSpendMotion, decode: decodeSpendMotion } });
+        await ui.open(); await tick(10);
+        w.q('#treasury-spend-beneficiary').value = THEM;
+        w.q('#treasury-spend-amount').value = '1500';
+        w.q('#treasury-spend-check').click(); await tick(20); await tick(20);
+        return w;
+    } },
+    { id: 'modal-referendum-vote-aye', connected: SITE_ME, build: () => siteWorld({ path: 'democracy', api: SITE_REF, steps: [{ click: '[data-demtab="referenda"]' }, { click: '.referendum-vote-trigger[data-side="aye"]' }] }) },
+    { id: 'modal-council-vote', connected: SITE_ME, build: () => siteWorld({ path: 'council', api: SITE_COUNCIL, steps: [{ click: '#council-vote-btn', wait: 200 }] }) },
+    { id: 'modal-candidacy', connected: SITE_ME, build: () => siteWorld({ path: 'council', api: SITE_COUNCIL, steps: [{ click: '#council-submit-candidacy-btn' }] }) },
+    { id: 'email-alerts-modal', build: () => headsWorld({ path: 'democracy', api: headsApi.democracy('Synced'), seed: { pdex_tour_seen_v1: '1' }, steps: [{ click: '[data-email-subscribe="democracy"]' }] }) },
+    { id: 'storage-notice', build: () => headsWorld({ path: '', api: {}, seed: { pdex_tour_seen_v1: '1' }, after: (w) => {
+        const html = rd('index.html');
+        const a = html.indexOf('<div id="storage-notice-banner"');
+        const b = html.indexOf('<div id="tx-status-zone"', a);
+        w.q('.app-container').insertAdjacentHTML('beforeend', html.slice(a, b));
+        siteShow(w, '#storage-notice-banner', 'block');
+    } }) },
+    { id: 'rewards-result', build: () => headsWorld({ path: 'staking-rewards/' + SITE_ME, api: SITE_REWARDS, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'chain-state-result', build: () => headsWorld({ path: 'chain-state', api: {}, seed: { pdex_tour_seen_v1: '1' }, after: (w) => { const x = w.q('#cs-export'); if (x) x.hidden = false; } }) },
+    { id: 'discussions-failed', build: () => headsWorld({ path: 'discussions', api: { '/api/discussions': { error: 'Request failed (503)' } }, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'democracy-failed', build: () => headsWorld({ path: 'democracy', api: { '/api/democracy': { error: 'Request failed (503)' } }, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'treasury-failed', build: () => headsWorld({ path: 'treasury', api: { '/api/treasury': { error: 'Request failed (503)' } }, seed: { pdex_tour_seen_v1: '1' } }) },
+    { id: 'account-labels-signed-out', connected: SITE_ME, build: () => siteWorld({ path: 'account/' + SITE_ME, api: { ...headsApi.account, '/api/labels/': SITE_LABELS }, steps: [{ wait: 300 }] }) },
+    { id: 'watchlist-items', build: () => headsWorld({ path: 'watchlist', api: {}, seed: { pdex_tour_seen_v1: '1', pdex_watchlist_v1: JSON.stringify({ ['address:' + SITE_ME]: { kind: 'address', id: SITE_ME, label: 'Alice', addedAt: 1700000000000 }, ['validator:' + P1]: { kind: 'validator', id: P1, label: 'Validator A', addedAt: 1700000500000 } }) } }) },
+    { id: 'tx-not-found', build: () => headsWorld({ path: 'tx/123/not-a-hash', api: {}, seed: { pdex_tour_seen_v1: '1' } }) },
+    // WP3 (spec 6.3): the rest of the site set, the REAL page each time.
+    { id: 'validators-syncing', build: () => headsWorld({ path: 'validators', api: { '/api/validators': { status: 'Syncing', validators: [] } }, seed: SITE_SEEN }) },
+    { id: 'transactions-failed', build: () => headsWorld({ path: 'transactions', api: { '/api/transactions': { __throw: true } }, seed: SITE_SEEN }) },
+    { id: 'blocks-loaded', build: () => headsWorld({ path: 'blocks', api: SITE_BLOCKS, seed: SITE_SEEN }) },
+    { id: 'search-nothing-found', build: () => headsWorld({ path: 'search', api: {}, seed: SITE_SEEN, steps: [{ type: '#inline-search-input', value: 'zzzz' }, { click: '#inline-search-submit-btn' }] }) },
+    { id: 'search-deep-failed', build: () => headsWorld({ path: 'search', api: { '/api/search/': { __status: 500, error: 'upstream down' } }, seed: SITE_SEEN,
+        steps: [{ type: '#inline-search-input', value: 'zzzz' }, { click: '#inline-search-submit-btn' }, { click: '#deep-search-btn' }, { wait: 50 }] }) },
+    { id: 'account-summary', connected: SITE_ME, build: () => siteWorld({ path: 'account/' + SITE_ME, api: { ...headsApi.account, '/api/labels/': SITE_LABELS }, steps: [{ wait: 300 }] }) },
+    { id: 'tx-found', build: () => headsWorld({ path: 'tx/100/' + SITE_H, api: { '/api/extrinsic/': { hash: SITE_H, block: 100, correctedFrom: 98, event: 'balances.transfer', from: P1, to: SITE_ME, status: 'success', time: SITE_NOW, extrinsic: {}, events: [], call: null } }, seed: SITE_SEEN }) },
+    { id: 'validator-commission-alert', build: () => headsWorld({ path: 'validator/' + P1, api: SITE_VALIDATOR, seed: SITE_SEEN }) },
+    { id: 'rewards-empty', build: () => headsWorld({ path: 'staking-rewards/' + SITE_ME, api: { '/api/staking-rewards/': { ...SITE_REWARDS['/api/staking-rewards/'], summary: { claimedTotal: 0, unclaimedTotal: 0, totalRewards: 0 }, claimed: [] } }, seed: SITE_SEEN }) },
+    { id: 'thread-composer', connected: SITE_ME, build: () => siteWorld({ path: 'discussions/7', api: { '/api/discussions/7': { thread: { id: 7, kind: 'referendum', title: 'Raise the treasury burn', status: 'open' }, posts: [] } } }) },
+    { id: 'analytics', build: () => headsWorld({ path: 'analytics', api: SITE_ANALYTICS, seed: SITE_SEEN }) },
+    { id: 'watchlist-empty', build: () => headsWorld({ path: 'watchlist', api: {}, seed: SITE_SEEN }) },
+    { id: 'cookies', build: () => headsWorld({ path: 'cookies', api: {}, seed: SITE_SEEN }) },
+    { id: 'tour-first-slide', build: () => headsWorld({ path: '?tour=1', api: {}, seed: {}, steps: [{ wait: 1000 }] }) },
+    // WP3b (spec 6.3, Q3): the top bar with no wallet, the Send dialog, the Council page head.
+    { id: 'topbar-no-wallet', build: () => headsWorld({ path: '', api: {}, seed: SITE_SEEN }) },
+    { id: 'modal-send', connected: SITE_ME, build: () => siteWorld({ path: '', api: {}, after: (w) => siteShow(w, '#send-modal') }) },
+    { id: 'council-head', connected: SITE_ME, build: () => siteWorld({ path: 'council', api: SITE_COUNCIL }) }
+].map(s => ({ widths: [1280, 375], ...s }));
+// The part each scene shows (spec 6.3): no legacy class anywhere; at most one primary drawn; the focus drawn, with no
+// colour, background or border written in markup inside it (the rest of a page is WP2 and WP3).
+const SITE_FOCUS = { 'modal-withdraw-candidacy': '#council-withdraw-modal', 'modal-propose-spend-review': '#treasury-spend-modal', 'modal-referendum-vote-aye': '#referendum-vote-modal',
+    'modal-council-vote': '#council-vote-modal', 'modal-candidacy': '#council-candidacy-modal', 'email-alerts-modal': '#email-subscribe-modal', 'storage-notice': '#storage-notice-dismiss',
+    'rewards-result': '.staking-toolbar-actions', 'chain-state-result': '#cs-export', 'discussions-failed': '#discussions-content', 'democracy-failed': '#democracy-content',
+    'treasury-failed': '#treasury-content', 'account-labels-signed-out': '#account-label-signin', 'watchlist-items': '#watchlist-clear-all', 'tx-not-found': '#tx-recover-btn',
+    'validators-syncing': '#validators-table', 'transactions-failed': '#full-transactions-table', 'blocks-loaded': '#full-blocks-table', 'search-nothing-found': '#search-results-container',
+    'search-deep-failed': '#search-results-container', 'account-summary': '#account-details-container', 'tx-found': '#tx-details-container', 'validator-commission-alert': '#validator-details-container',
+    'rewards-empty': '#staking-rewards-results', 'thread-composer': '#discussions-content', 'analytics': '.page-section[data-page="analytics"]', 'watchlist-empty': '.page-section[data-page="watchlist"]',
+    'cookies': '.page-section[data-page="cookies"]', 'tour-first-slide': '#onboarding-tour-modal', 'topbar-no-wallet': 'header.topbar', 'modal-send': '#send-modal', 'council-head': '.council-page-header' };
+const siteDrawn = (el) => { for (let e = el; e && e.nodeType === 1; e = e.parentElement) { if (e.hasAttribute('hidden') || /display:\s*none/.test(e.getAttribute('style') || '')) return false; } return true; };
+const SITE_COLOUR = /(^|;)\s*(color|background(-color|-image)?|border(?!-radius)(-[a-z]+)*)\s*:/i;
+function checkSiteScene(w, s, err) {
+    if (w.qa('.staking-download-btn').length) err.push(`${w.qa('.staking-download-btn').length} .staking-download-btn on the page`);
+    // A dialog is its own view (spec 1.0): with one open, its primaries are counted, not the page's behind it.
+    const view = w.qa('.modal').filter(siteDrawn).pop() || w.doc;
+    const prim = Array.from(view.querySelectorAll('.validate-primary, .wallet-option-row.is-primary, .modal-submit-btn')).filter(siteDrawn);
+    if (prim.length > 1) err.push(`${prim.length} primaries drawn: ${prim.map(e => e.id || e.className).join(', ')}`);
+    const focus = w.q(SITE_FOCUS[s.id]);
+    if (!focus || !siteDrawn(focus)) { err.push(`${SITE_FOCUS[s.id]} is not drawn`); return; }
+    for (const e of [focus, ...focus.querySelectorAll('[style]')]) if (e.hasAttribute('style') && SITE_COLOUR.test(';' + e.getAttribute('style'))) err.push(`a colour written in markup: <${e.tagName.toLowerCase()} style="${e.getAttribute('style').slice(0, 60)}">`);
+}
+
 // ── work packages: later rounds add theirs here ──
 const WORK_PACKAGES = { 1: { scenes: WALLET_SCENES, palette: true }, 2: { scenes: VALIDATE_SCENES, check: checkValidateScene }, 3: { scenes: WP3_SCENES, check: checkWp3Scene }, r1: { scenes: R1_SCENES, check: checkR1Scene, prefix: 'r1' }, locks: { scenes: LOCKS_SCENES, check: checkLocksScene, prefix: 'locks' },
     stake: { scenes: STAKE_SCENES.concat(STAKE_ADV_SCENES), check: checkStakeScene, prefix: '' },
     stake4: { scenes: STAKE4_SCENES, check: checkStakeScene, prefix: '' }, account4: { scenes: ACCOUNT4_SCENES, check: checkAccount4Scene, prefix: '' },
     nowallet4: { scenes: NOWALLET4_SCENES, prefix: '' }, sections: { scenes: SECTIONS_SCENES, check: checkSectionsScene, prefix: 'sections' },
-    advanced: { scenes: ADVANCED_SCENES, check: checkAdvancedScene, prefix: '' }, heads: { scenes: HEADS_SCENES, check: checkHeadsScene, prefix: 'heads' } };
+    advanced: { scenes: ADVANCED_SCENES, check: checkAdvancedScene, prefix: '' }, heads: { scenes: HEADS_SCENES, check: checkHeadsScene, prefix: 'heads' },
+    site: { scenes: SITE_SCENES, check: checkSiteScene, prefix: 'site' } };
 
 // A scene is markup: a radio or checkbox changed after render keeps its old `checked` attribute, so the file would show
 // the first choice selected beside the second's field (fidelity review S12). The property becomes the attribute.
@@ -1081,22 +1194,26 @@ async function main() {
     if (!out) { console.error('usage: node --experimental-sqlite tools/preview-scenes.mjs --out <dir> [--wp 1] [--scene <id>] [--selftest]'); return 2; }
     const wps = arg('--wp') ? [arg('--wp')] : Object.keys(WORK_PACKAGES);
     const only = arg('--scene');
+    // Each file is checked, then written at once: holding every file (each inlines styles.css and the fonts) until the end ran
+    // the whole set out of heap once sprint 11 added its scenes. A refused scene still writes nothing more after it.
     const files = [];
+    const out0 = out;
+    mkdirSync(out0, { recursive: true });
+    const pending = { push: ([name, html]) => { writeFileSync(`${out0}/${name}`, html); files.push(name); } };
     for (const n of wps) {
         const wp = WORK_PACKAGES[n];
         if (!wp) { console.error('no work package ' + n); return 2; }
         for (const s of wp.scenes) {
             if (only && s.id !== only) continue;
             const inner = await renderScene(s, wp.check);
-            for (const width of s.widths || WIDTHS) { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); files.push([`${wp.prefix === '' ? '' : (wp.prefix || 'wp' + n) + '-'}${s.id}-${width}.html`, html]); }
+            const ready = (s.widths || WIDTHS).map(width => { const html = sceneFile(s.id, inner, width, s.scroll || ''); checkFile(html); return [`${wp.prefix === '' ? '' : (wp.prefix || 'wp' + n) + '-'}${s.id}-${width}.html`, html]; });
+            for (const f of ready) pending.push(f);
         }
-        if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); files.push([`wp${n}-palette.html`, html]); }
+        if (wp.palette && !only) { const html = paletteHtml(); checkFile(html, { palette: true }); pending.push([`wp${n}-palette.html`, html]); }
     }
-    mkdirSync(out, { recursive: true });
-    for (const [name, html] of files) writeFileSync(`${out}/${name}`, html);
     console.log(`wrote ${files.length} files to ${out}`);
     return 0;
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-    try { process.exit(await main()); } catch (e) { console.error('REFUSED, no file written:\n' + e.message); process.exit(1); }
+    try { process.exit(await main()); } catch (e) { console.error('REFUSED (the set is incomplete; the scenes before the refused one were written):\n' + e.message); process.exit(1); }
 }

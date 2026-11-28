@@ -96,7 +96,8 @@ describe('lint: greens are for positive states, never for an action', () => {
         ['.stake-val-add:hover:not(:disabled)', 'outside this branch (audit section 5)'],
         ['.governance-toast-msg:hover', 'outside this branch (audit section 5)'],
         ['.gov-item-link', 'outside this branch (audit section 5)'],
-        ['.close-control:focus-visible', 'outside this branch (audit section 5)']
+        ['.close-control:focus-visible', 'outside this branch (audit section 5)'],
+        ['.referendum-side-btn[data-side="aye"][aria-pressed="true"]', 'choice state: the pressed Aye of the referendum vote (spec 2026-11-26 I34, T5)']
     ]);
 
     test('no green token on a button, link, row, hover or focus selector anywhere in styles.css', () => {
@@ -322,7 +323,7 @@ describe('the chooser CSS, token by token (C1 to C20)', () => {
         assert.equal(r.decls.display, 'inline-block');
         assert.equal(r.decls['min-height'], '44px');
         assert.equal(r.decls['line-height'], '44px');
-        assert.ok(RULES.some(x => x.selectors.includes('#wallet-switch-btn[hidden]') && x.decls.display === 'none'), 'a hidden Switch wallet still shows (.staking-download-btn sets display)');
+        assert.ok(RULES.some(x => x.selectors.includes('#wallet-switch-btn[hidden]') && x.decls.display === 'none'), 'a hidden Switch wallet still shows (its button class sets display)');   // message reworded only (sprint 11: the class it named is deleted)
     });
 });
 
@@ -687,12 +688,15 @@ describe('privacy and cookie pages (audit section 4)', () => {
         assert.ok(COOKIES.includes('the Phone wallet option'));
     });
 
+    // Amended in sprint 11 WP3 (spec 2.2 P12): the legal pages carry no inline colour; every code in the body takes
+    // .legal-body code (the violet text token of .ui-code), so none of these keys is green. The rows and the keys are pinned
+    // in the markup, the colour in the stylesheet.
     test('C10: the WalletConnect rows of the cookie table name their keys in plain text, not green', () => {
         for (const key of ['pdex_wc_enabled', 'pdex_wc_debug', 'pdex_wc_session', 'wc@2:*']) {
-            const m = COOKIES.match(new RegExp('<code style="([^"]*)">' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</code>'));
-            assert.ok(m, key + ' row not found');
-            assert.equal(m[1], 'color: var(--text-primary);', key);
+            const m = COOKIES.match(new RegExp('<code>' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</code>'));
+            assert.ok(m, key + ' row not found (a code with no style)');
         }
+        assert.equal(decl('.legal-body code', 'color'), 'var(--accent-violet-text)');
     });
 
     test('no em or en dash in the new texts', () => {
@@ -745,6 +749,8 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
     function checkRemoved(css) {
         const rules = parseRules(css), err = [];
         for (const r of rules) for (const s of r.selectors) {
+            // The key-value tables of the detail pages keep their row stripe as a class (spec 2026-11-26 2.1, P16); not the chooser.
+            if (s === 'table.ui-kv tr:nth-child(even)') continue;
             if (/nth-child/.test(s) && ['background', 'background-color', 'border-color'].some(p => p in r.decls)) err.push(`styles.css:${r.line} "${s}" is an :nth-child rule with a background or border-color`);
             if (/:where\(/.test(s) && /wallet-(option|account)/.test(s)) err.push(`styles.css:${r.line} "${s}" is a :where( stripe rule`);
         }
@@ -795,7 +801,12 @@ describe('chooser contrast pass: neutral rows, brand colour as accent (revision 
         return err;
     }
     // Check 6: the gradient as a foreground fill (any layer not clipped to the border-box) only on the one primary action of a view.
-    const PRIMARIES = ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', '.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', '.wallet-onboarding-reload', '.wc-open'];
+    // Amended in sprint 11 WP3b (Q3, approved 2026-11-26, spec 5.1 rows 1 and 17): the top bar's Connect Wallet and the confirm
+    // dialog's action are the primary of their view and take the gradient.
+    const PRIMARIES = ['.wallet-option-row.is-primary .wallet-option-action:not(.is-count)', '.wallet-option-row.is-primary[data-action="get"] .wallet-ext-tile', '.wallet-onboarding-reload', '.wc-open',
+        '.connect-wallet-btn', '.confirm-dialog-actions .confirm-dialog-danger',
+        // Amended in sprint 11 (designer follow-up, CEO colour roles): the mobile wallet panel's call to action is the primary of that panel.
+        '.mobile-wallet-cta'];
     // amended (colour roles 2.4): the gradient is also the page-header tile, the hairline and .validate-primary (the shared Primary); none is a wallet row or pill
     const NON_ACTION_GRADIENT = ['.ui-tile.is-brand', '.ui-hairline::before', '.validate-primary'];
     function checkOnePrimary(css) {

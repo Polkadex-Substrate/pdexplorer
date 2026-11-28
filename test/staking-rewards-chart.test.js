@@ -34,7 +34,7 @@ function page({ reduced = false } = {}) {
     const ctx = {
         console, Promise, Object, JSON, Array, Map, Set, String, Number, Math, Date, encodeURIComponent,
         window: win, document: doc, Chart: FakeChart, ...chartUpdate, REFRESH_UI,
-        stakingFormatPDEX: (v) => Number(v || 0).toFixed(4), stakingFormatNumber: (n) => String(n), stakingShortAddress: (x) => String(x).slice(0, 6), stakingEscapeHtml: escapeHtml,
+        stakingFormatPDEX: (v) => Number(v || 0).toFixed(4), stakingFormatNumber: (n) => String(n), stakingShortAddress: (x) => String(x).slice(0, 6), stakingEscapeHtml: escapeHtml, stateLine: globalThis.stateLine,
         createLatest, isValidPolkadexAddress: () => true, setTimeout: () => 0, fetch: (...a) => ctx.__fetch(...a), AbortController: win.AbortController || globalThis.AbortController,
         stakingRewardsPlan: () => ({ mode: 'connect' }), renderStakingRewardsNote() {}, loadStakingIndexStatus() {}, stakingRewardsViewed: () => '',
         walletSession: { onActiveAccountChange: () => () => {}, getActiveAccount: () => null }, onStakingRewardsWalletChange() {}, isSameAddress: () => false,
@@ -183,7 +183,7 @@ describe('the staking-rewards bars (CEO report 22 Nov)', () => {
         p.s.render(mk(ME, eras(6)));
         failFetch(p);
         await p.s.fetchRewards(ME, false);
-        assert.ok(p.q('#staking-rewards-results').textContent.includes('Error'), 'error not shown');
+        assert.ok(p.q('#staking-rewards-results').textContent.includes('Could not load this. boom'), 'error not shown');
         assert.equal(p.log.destroys, 1); assert.equal(p.s.chart(), null, 'stored instance kept');
         p.s.render(mk(ME, eras(6)));
         assert.equal(p.log.made.length, 2, 'fresh chart on the next render');

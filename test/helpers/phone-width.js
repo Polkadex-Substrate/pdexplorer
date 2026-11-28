@@ -103,7 +103,9 @@ export function scenesAt375() {
     const dir = mkdtempSync(join(tmpdir(), 'phone-width-'));
     try {
         const tool = fileURLToPath(new URL('../../tools/preview-scenes.mjs', import.meta.url));
-        execFileSync(process.execPath, ['--experimental-sqlite', tool, '--out', dir], { stdio: 'pipe', timeout: 240000, maxBuffer: 1 << 26 });
+        // 480 s, not 240: the tool takes about 65 s alone and over 240 s on a loaded machine (the "T1 to T4" and "T10 to
+        // T13" groups flaked once under load, cut by this timeout); sprint 11 also adds the site scenes.
+        execFileSync(process.execPath, ['--experimental-sqlite', tool, '--out', dir], { stdio: 'pipe', timeout: 480000, maxBuffer: 1 << 26 });
         const out = [];
         for (const f of readdirSync(dir).filter(n => /-375\.html$/.test(n)).sort()) {
             const html = readFileSync(join(dir, f), 'utf8');

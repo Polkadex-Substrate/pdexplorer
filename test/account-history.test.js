@@ -224,7 +224,7 @@ describe('Load older under the account tables', () => {
     test('an error shows the escaped message and re-enables the button', async () => {
         const ui = mount({ pages: [new Error('<b>busy</b>'), { rows: [{ hash: 'b' }], next: null }] });
         await ui.click();
-        assert.equal(ui.error.innerHTML, '&lt;b&gt;busy&lt;/b&gt;');
+        assert.equal(ui.error.innerHTML.replace(/^<i [^>]*><\/i>/, ''), '&lt;b&gt;busy&lt;/b&gt;');
         assert.equal(ui.button.disabled, false);
         assert.equal(ui.table.rows, undefined, 'a failed page must not touch the table');
         await ui.click();

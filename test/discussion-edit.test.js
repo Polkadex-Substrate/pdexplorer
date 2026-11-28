@@ -134,7 +134,7 @@ describe('UI logic', () => {
         assert.ok(!html.includes('<script>'));
         assert.ok(!html.includes('<b>x</b>'));
         assert.match(html, /&lt;script&gt;.*<br>line2/);
-        assert.match(html, /discussion-edited-tag" title="Edited D9"/);
+        assert.match(html, /discussion-edited-tag ui-caption" title="Edited D9"/);
         assert.match(html, /data-edit-post="7"/);
         const plain = renderPostHtml({ ...evil, editedAt: null }, o());
         assert.ok(!plain.includes('edited'));

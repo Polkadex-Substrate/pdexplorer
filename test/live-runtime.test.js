@@ -272,7 +272,7 @@ describe('browser pill follows the node (script.js code, mock api)', () => {
 
     function harness(api) {
         const pill = { innerText: 'Polkadex Connected', title: '' };
-        const dot = { classList: { add() {}, remove() {} }, style: {} };
+        const dot = { classList: { add() {}, remove() {} }, style: {}, dataset: {} };
         const logs = [];
         const con = { log: (l) => logs.push(['log', l]), error: (l) => logs.push(['error', l]), warn: (l) => logs.push(['warn', l]) };
         const win = { addEventListener() {} };

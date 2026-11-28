@@ -105,11 +105,18 @@ function hueOffenders(css) {
 const lastCompound = (s) => s.split(/[\s>+~]+/).pop();
 const ACTION_LAST = /(btn|button|-action\b|-link\b|-retry|-check\b|-cancel|-reload|-open\b|-install|-cta|-back\b|^a(?=$|[:.[])|-row\b|:hover|:focus)/;
 const ACCENT_FILL = /var\(--accent-(green|amber|blue|red)[\w-]*\)|var\(--(success|error|warning|brand-secondary)\)|#14f195|#00e676|#ffa500|#148fe8|#ff4d4d/i;
+// Choice states, named with their reason (spec 2026-11-26-sprint11-site-sweep.md, I34 and T5): the side a person
+// picked in the referendum vote is drawn in its side's colour, with a check; that is a state, not an action's fill.
+export const CHOICE_STATES = new Map([
+    ['.referendum-side-btn[data-side="aye"][aria-pressed="true"]', 'choice state: the pressed Aye of the referendum vote (I34)'],
+    ['.referendum-side-btn[data-side="nay"][aria-pressed="true"]', 'choice state: the pressed Nay of the referendum vote (I34)'],
+    ['.motion-btn.nay', 'vote side: Nay wears its own red tint, matching Aye\'s green tint (designer follow-up, sprint 11)']
+]);
 function actionAccentOffenders(css) {
     const out = [];
     for (const r of parseRules(css)) for (const s of r.selectors) {
         const last = lastCompound(s);
-        if (!ACTION_LAST.test(last) || /\.ui-|\.wallet-account-badge/.test(last)) continue;
+        if (!ACTION_LAST.test(last) || /\.ui-|\.wallet-account-badge/.test(last) || CHOICE_STATES.has(s)) continue;
         for (const p of ['background', 'background-color', 'background-image']) {
             if (r.decls[p] && ACCENT_FILL.test(r.decls[p])) out.push(`styles.css:${r.line} "${s}" { ${p}: ${r.decls[p]} } is an accent fill on an action`);
         }
@@ -159,6 +166,8 @@ describe('2.2 the tokens', () => {
     });
     test('3: no accent fill on an action; raw violet and raw blue are never text', () => {
         assert.deepEqual(actionAccentOffenders(CSS), [], msg(actionAccentOffenders(CSS)));
+        // No stale exemption: each named choice state is a rule of the sheet.
+        for (const sel of CHOICE_STATES.keys()) assert.ok(parseRules(CSS).some(r => r.selectors.includes(sel)), `the choice state ${sel} is not in styles.css`);
         assert.deepEqual(rawTextOffenders(CSS), [], msg(rawTextOffenders(CSS)));
     });
     test('4: no tint or wash on a row, a card or a path card', () => {

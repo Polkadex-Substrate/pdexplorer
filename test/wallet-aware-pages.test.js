@@ -339,7 +339,7 @@ function stakingWorld(t, { path = '/staking-rewards', connected = '', source = '
         document, window: { location: window.location, injectedWeb3: undefined }, history: window.history,
         encodeAddress, decodeAddress, POLKADEX_SS58: 88, isValidPolkadexAddress,
         createWalletSession, ...aware,
-        storage, stakingEscapeHtml: escapeHtml, stakingShortAddress: short, safeRouteToken: () => '',
+        storage, stakingEscapeHtml: escapeHtml, stateLine: globalThis.stateLine, stakingShortAddress: short, safeRouteToken: () => '',
         loadStakingIndexStatus() {},
         renderStakingRewards(data) { const el = document.getElementById('staking-rewards-results'); el.innerHTML = 'REWARDS:' + data.address; log.renders.push(data.address); },
         navigateTo(target) { log.navigations.push(target); window.history.pushState(null, '', '/' + target); ctx.routeTo(target); },

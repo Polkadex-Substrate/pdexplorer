@@ -15,7 +15,8 @@ export function runPage(scenario) {
         execFile(process.execPath, [RUNNER, JSON.stringify(scenario)], { timeout: 90000, maxBuffer: 16 << 20 }, (err, stdout, stderr) => {
             const line = String(stdout).split('\n').find(l => l.startsWith('RESULT '));
             if (!line) return reject(new Error('the page did not report: ' + (err ? err.message : '') + '\n' + String(stderr).slice(-1500)));
-            resolve(JSON.parse(line.slice(7)));
+            // A cut line must fail the test, not leave it waiting (a throw here would be lost in the callback).
+            try { resolve(JSON.parse(line.slice(7))); } catch (e) { reject(new Error('the page reported a line that is not JSON (cut short?): ' + e.message)); }
         });
     });
 }

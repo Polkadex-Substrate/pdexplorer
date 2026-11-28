@@ -165,7 +165,7 @@ describe('button states', () => {
         assert.equal(ui.button.disabled, false);
         assert.equal(ui.button.textContent, 'Load older');
         assert.equal(ui.button.attrs['aria-busy'], 'false');
-        assert.match(ui.inserted[1], /class="js-older-status"[^>]*role="status"/);
+        assert.match(ui.inserted[1], /class="js-older-status[^"]*"[^>]*role="status"/);
         assert.match(ui.inserted[1], /aria-live="polite"/);
     });
 
@@ -188,7 +188,7 @@ describe('button states', () => {
     test('error: the message shows inline (escaped), the button becomes Retry, and a retry clears it', async () => {
         const ui = mount({ pages: [new Error('<b>busy</b>'), page(200, '8:1')] });
         await ui.click();
-        assert.equal(ui.error.innerHTML, '&lt;b&gt;busy&lt;/b&gt;');
+        assert.equal(ui.error.innerHTML.replace(/^<i [^>]*><\/i>/, ''), '&lt;b&gt;busy&lt;/b&gt;');
         assert.equal(ui.button.textContent, 'Retry');
         assert.equal(ui.button.disabled, false);
         assert.equal(ui.button.attrs['aria-busy'], 'false');
@@ -357,7 +357,7 @@ describe('filtered empty state and Search all', () => {
     test('a failed page during Search all shows the error and offers Retry', async () => {
         const ui = mount({ filters: true, total: 1000, pages: [new Error('timeout')] });
         await ui.searchClick();
-        assert.equal(ui.error.innerHTML, 'timeout');
+        assert.equal(ui.error.innerHTML.replace(/^<i [^>]*><\/i>/, ''), 'timeout');
         assert.equal(ui.button.textContent, 'Retry');
         assert.equal(ui.search.textContent, 'Search all');
     });
@@ -419,7 +419,7 @@ describe('Search all stops when a page does not advance', () => {
         const ui = mount({ filters: true, total: 1462, pages: [page(200, 'a'), page(200, 'a'), page(200, 'b', true)] });
         await ui.searchClick();
         assert.equal(ui.urls.length, 2);
-        assert.equal(ui.error.innerHTML, 'The server returned the same page twice; stopped at 400 of 1,462');
+        assert.equal(ui.error.innerHTML.replace(/^<i [^>]*><\/i>/, ''), 'The server returned the same page twice; stopped at 400 of 1,462');
         assert.equal(ui.button.textContent, 'Retry');
         assert.equal(ui.button.disabled, false);
         assert.equal(ui.search.textContent, 'Search all');
@@ -439,7 +439,7 @@ describe('plain Load older stops when a page does not advance', () => {
         await ui.click();
         assert.equal(ui.urls.length, 2);
         assert.match(ui.urls[1], /before=8%3A1$/);
-        assert.equal(ui.error.innerHTML, 'The server returned the same page twice; stopped at 400 of 1,462');
+        assert.equal(ui.error.innerHTML.replace(/^<i [^>]*><\/i>/, ''), 'The server returned the same page twice; stopped at 400 of 1,462');
         assert.equal(ui.button.textContent, 'Retry');
         assert.equal(ui.button.disabled, false);
         assert.equal(ui.el('.js-older-count').textContent, 'Showing 400 of 1,462 events', 'repeated page appended');

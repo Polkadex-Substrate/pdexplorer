@@ -1,6 +1,6 @@
 // T9 of the Multisig wallets and Advanced cards spec (cto-team/plans/2026-11-25-multisig-and-advanced-cards.md, 6.1):
 // scripts/check-wallet-legacy.mjs fails the build on a .staking-download-btn or a colour, background or border written
-// in markup anywhere on the wallet page and its sub-views, and caps the 34 legacy uses elsewhere. Each rule is broken
+// in markup anywhere on the wallet page and its sub-views, and (sprint 11) allows no use of the class anywhere else. Each rule is broken
 // once on a fixture first and its MESSAGE is read (file, line, offending text), not only its exit code.
 
 import { test, describe } from 'node:test';
@@ -75,14 +75,17 @@ describe('T9: the guard, broken once per rule on a fixture', () => {
         delete f['lib/wallet-advanced-view.js'];
         assert.match(report(run(f)), /lib\/wallet-advanced-view\.js: the file is missing/);
     });
-    test('the ceiling: 34 uses elsewhere pass, 35 are refused with every place named', () => {
+    // Amended (sprint 11 site sweep, spec 2026-11-26 section 1.2): the 34 uses are gone, the ceiling is 0 and the message
+    // says the class no longer exists. Not a weakening: one use anywhere now fails where 34 passed.
+    test('the ceiling is 0: one use elsewhere is refused, named, with "no longer exists; pick a tier"', () => {
+        assert.equal(CEILING, 0);
         const f = clean();
-        f['lib/discussion-auth.js'] = Array.from({ length: 34 }, () => '<button class="staking-download-btn">x</button>').join('\n');
         assert.equal(run(f).ok, true);
         f['index.html'] = '<a class="staking-download-btn">y</a>';
         const r = run(f);
         assert.equal(r.ok, false);
-        assert.match(report(r), /used 35 times outside the wallet page; the ceiling is 34 and may only go down/);
+        assert.match(report(r), /\.staking-download-btn no longer exists; pick a tier/);
+        assert.match(report(r), /used 1 times outside the wallet page; the ceiling is 0/);
         assert.match(report(r), /index\.html:1/);
     });
     test('the ceiling scan is an exclusion list: a new file is read without being added anywhere', () => {

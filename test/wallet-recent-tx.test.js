@@ -359,16 +359,17 @@ describe('brand audit: tinted pager, plain links (cto-team/plans/2026-11-16-bran
         assert.ok(!/brand-secondary/.test(loader));
     });
 
-    test('the buttons are the primary-tinted secondary in styles.css (brand identity pass, section 4)', () => {
+    // Amended in sprint 11 WP3b (Q3, approved 2026-11-26, spec 5.2 C): pink is the one primary only; the Load older bars take the
+    // .ui-action declarations (violet tint, violet line, white text, violet halo on hover).
+    test('the buttons are the .ui-action look in styles.css (sprint 11 5.2 C)', () => {
         const base = rule('.js-older-btn, .js-older-search');
-        assert.match(base, /background: rgba\(230, 0, 122, 0\.08\)/);
-        assert.match(base, /border: 1px solid var\(--border-hover\)/);
+        assert.match(base, /background: var\(--accent-violet-tint\)/);
+        assert.match(base, /border: 1px solid var\(--accent-violet-text\)/);
         assert.match(base, /color: var\(--text-primary\)/);
-        assert.ok(!/229|brand-secondary|var\(--brand-primary\)/.test(base), 'tint is alpha on the 230 token only, text stays white');
+        assert.ok(!/229|230, 0, 122|brand-secondary|var\(--brand-primary\)/.test(base), 'no pink and no green on a bar that is not the primary');
         const hover = rule('.js-older-btn:hover, .js-older-search:hover');
-        assert.match(hover, /background: rgba\(230, 0, 122, 0\.14\)/);
-        assert.match(hover, /border-color: var\(--brand-primary\)/);
-        assert.match(hover, /box-shadow: 0 0 0 3px var\(--brand-primary-glow\)/);
+        assert.match(hover, /box-shadow: 0 0 0 3px var\(--accent-violet-tint\)/);
+        assert.ok(!/230, 0, 122|brand-primary/.test(hover), 'the hover is still pink');
         assert.match(base, /transition: border-color var\(--transition-fast\), background var\(--transition-fast\), box-shadow var\(--transition-fast\)/);
     });
 

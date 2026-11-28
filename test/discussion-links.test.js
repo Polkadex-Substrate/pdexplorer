@@ -18,7 +18,7 @@ function el(tag, attrs = {}) {
         getAttribute: (k) => (k in e.attrs ? e.attrs[k] : null),
         setAttribute: (k, v) => { e.attrs[k] = String(v); },
         addEventListener: (t, fn) => { (e.listeners[t] = e.listeners[t] || []).push(fn); },
-        classList: { add: (c) => e.classes.add(c), contains: (c) => e.classes.has(c) },
+        classList: { add: (c) => e.classes.add(c), remove: (c) => e.classes.delete(c), contains: (c) => e.classes.has(c) },
         scrollIntoView: (o) => { e.scrolled = o; },
         focus: (o) => { e.focused = o; },
         select: () => {},

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { decodeAddress, encodeAddress } from '@polkadot/util-crypto';
 import * as db from '../db.js';
 import { escapeHtml } from '../lib/html-escape.js';
+import { chipHtml } from '../lib/ui-parts.js';
 import { readRepo, stripComments, bodyOf } from './helpers/source.js';
 import { formatUtcDateTime, transferValueCell, transferIndexCell, transferDirection, transferParty, transferColumns } from '../lib/account-transfers.js';
 
@@ -42,8 +43,10 @@ describe('transfers carry the extrinsic of their event', () => {
 // given stay in script.js, so those are lifted out of it and passed in, as script.js does.
 const src = stripComments(readRepo('script.js', import.meta.url));
 const NAMES = ['isSameAddress', 'stakingShortAddress', 'shortAddressLink', 'statusBadge'];
-const H = new Function('decodeAddress', 'stakingEscapeHtml',
-    `${NAMES.map(n => bodyOf(src, n)).join('\n')} return { ${NAMES.join(', ')} };`)(decodeAddress, escapeHtml);
+// Amended (sprint 11 site sweep WP2, spec 2.3 row I14): statusBadge draws a chip through chipHtml now, so it is given the
+// same chipHtml script.js imports.
+const H = new Function('decodeAddress', 'stakingEscapeHtml', 'chipHtml',
+    `${NAMES.map(n => bodyOf(src, n)).join('\n')} return { ${NAMES.join(', ')} };`)(decodeAddress, escapeHtml, chipHtml);
 const DEPS = { same: H.isSameAddress, short: H.stakingShortAddress, link: H.shortAddressLink, timeAgo: ts => `ago:${ts}`, statusBadge: H.statusBadge };
 
 const KEY = new Uint8Array(32).fill(7);
@@ -71,7 +74,7 @@ describe('the account transfers cells', () => {
 
     test('Value splits the integer, the fraction and the unit, and escapes each', () => {
         assert.equal(transferValueCell('1,341.7476 PDEX'),
-            '1,341<span style="color: var(--text-secondary);">.7476</span> <span style="color: var(--brand-primary);">PDEX</span>');
+            '1,341<span class="ui-quiet">.7476</span> <span class="ui-quiet">PDEX</span>');
         assert.match(transferValueCell('5 <b>PDEX</b>'), /^5<span[^>]*><\/span> <span[^>]*>&lt;b&gt;PDEX&lt;\/b&gt;<\/span>$/);
         assert.equal(transferValueCell('<i>x</i>'), '&lt;i&gt;x&lt;/i&gt;');
     });
@@ -82,10 +85,13 @@ describe('the account transfers cells', () => {
         assert.equal(formatUtcDateTime('not a time'), '-');
     });
 
+    // Amended (sprint 11 site sweep WP2, spec 2.3 row I14): the Result icon no longer carries an inline colour; its role is a
+    // class (.is-success, .is-failed, .is-unknown on .tx-status) and the stylesheet colours it. Same three states, same titles.
     test('Result is an icon: a check for success, a cross for failed, a dash otherwise', () => {
-        assert.match(H.statusBadge('success', '', { icon: true }), /bxs-check-circle" title="Success" style="[^"]*var\(--success\)/);
-        assert.match(H.statusBadge('failed', '', { icon: true }), /bxs-x-circle" title="Failed" style="[^"]*var\(--error\)/);
-        assert.match(H.statusBadge(null, '', { icon: true }), /bx-minus" title="unknown" style="[^"]*var\(--text-muted\)/);
+        assert.match(H.statusBadge('success', '', { icon: true }), /bxs-check-circle tx-status is-success" title="Success"/);
+        assert.match(H.statusBadge('failed', '', { icon: true }), /bxs-x-circle tx-status is-failed" title="Failed"/);
+        assert.match(H.statusBadge(null, '', { icon: true }), /bx-minus tx-status is-unknown" title="unknown"/);
+        for (const s of ['success', 'failed', null]) assert.doesNotMatch(H.statusBadge(s, '', { icon: true }), /style=/);
     });
 
     test('the Transfers columns, in order, render each cell for the viewed account', () => {

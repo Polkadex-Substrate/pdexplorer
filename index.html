@@ -186,7 +186,7 @@
         <!-- Sidebar Navigation -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <a href="https://polkadex.ee" target="_blank" class="logo" style="text-decoration: none; display: flex; align-items: center; gap: 12px; color: var(--text-primary);">
+                <a href="https://polkadex.ee" target="_blank" class="logo">
                     <img src="logo.png" alt="Polkadex Logo" class="logo-img" style="width: 32px; height: 32px; border-radius: 50%;">
                     <span class="logo-text" style="font-size: 1.1rem;">Polkadex Mainnet Explorer</span>
                 </a>
@@ -256,7 +256,7 @@
                     <button class="mobile-toggle js-sidebar-open" type="button" aria-label="Open menu">
                         <i class='bx bx-menu'></i>
                     </button>
-                    <a href="https://polkadex.ee" target="_blank" class="logo" style="text-decoration: none; display: flex; align-items: center; gap: 8px; font-weight: bold; color: white;">
+                    <a href="https://polkadex.ee" target="_blank" class="logo">
                         <img src="logo.png" alt="Polkadex Logo" style="width: 24px; height: 24px; border-radius: 50%;">
                         <span>Polkadex Mainnet Explorer</span>
                     </a>
@@ -446,7 +446,7 @@
                         </div>
                     </div>
                     <div id="validators-table">
-                        <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching validators from indexer…</div>
+                        <div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Fetching validators from indexer…</div>
                     </div>
                     <div style="text-align: center; padding: 20px;">
                     </div>
@@ -456,7 +456,7 @@
             <!-- Staking Rewards Page -->
             <div class="staking-rewards-page page-section" data-page="staking-rewards" style="display: none;">
                 <div class="list-container glass">
-                    <div class="list-header" style="border-bottom: none; padding-bottom: 0;">
+                    <div class="list-header is-open">
                         <h2>Staking Rewards</h2>
                     </div>
                     <div id="staking-index-status" style="padding: 0 24px;"></div>
@@ -466,7 +466,7 @@
                             <div style="flex: 1 1 320px; position: relative; display: flex; align-items: center;">
                                 <input type="text" id="staking-address-input" data-input-kind="address" placeholder="Polkadex address (e.g. esxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)" autocomplete="off" spellcheck="false" style="width: 100%;">
                             </div>
-                            <button id="staking-search-btn"><i class='bx bx-search'></i> Search</button>
+                            <button id="staking-search-btn" class="validate-primary"><i class='bx bx-search'></i> Search</button>
                         </div>
                         <div id="staking-rewards-error" class="staking-error" style="display: none;"></div>
                         <div id="staking-rewards-wallet-note" aria-live="polite"></div>
@@ -487,7 +487,7 @@
                     <div class="ui-page-head-actions council-header-actions" role="group" aria-label="Council actions">
                         <button id="council-submit-candidacy-btn" class="ui-action council-action-button" type="button">Submit Candidacy</button>
                         <button id="council-withdraw-btn" class="ui-action council-action-button" type="button">Withdraw candidacy</button>
-                        <button id="council-vote-btn" class="glass council-action-button council-vote-button" type="button">Vote</button>
+                        <button id="council-vote-btn" class="validate-primary council-action-button council-vote-button" type="button">Vote</button>
                     </div>
                 </div>
                 <div class="list-container glass">
@@ -500,21 +500,12 @@
                     <!-- Council Members Tab -->
                     <div id="council-members" class="account-tab-content ui-page-body active">
                         <!-- Summary Stats -->
-                        <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 30px;">
-                            <div class="glass" style="flex: 1; padding: 20px; border-radius: var(--radius-md); text-align: center; border: 1px solid var(--border-color);">
-                                <div style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px;">Seats</div>
-                                <div id="council-seats-count" style="font-size: 28px; font-weight: 700; color: var(--text-primary);">--/--</div>
-                            </div>
-                            <div class="glass" style="flex: 1; padding: 20px; border-radius: var(--radius-md); text-align: center; border: 1px solid var(--border-color);">
-                                <div style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px;">Runners Up</div>
-                                <div id="council-runnersup-count" style="font-size: 28px; font-weight: 700; color: var(--text-primary);">--</div>
-                            </div>
-                            <div class="glass" style="flex: 1; padding: 20px; border-radius: var(--radius-md); text-align: center; border: 1px solid var(--border-color);">
-                                <div style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px; font-weight: 600; letter-spacing: 0.5px;">Candidates</div>
-                                <div id="council-candidates-count" style="font-size: 28px; font-weight: 700; color: var(--text-primary);">--</div>
-                            </div>
+                        <div class="staking-summary-grid council-summary-grid">
+                            <div class="staking-summary-card"><div class="label">Seats</div><div class="value" id="council-seats-count">--/--</div></div>
+                            <div class="staking-summary-card"><div class="label">Runners Up</div><div class="value" id="council-runnersup-count">--</div></div>
+                            <div class="staking-summary-card"><div class="label">Candidates</div><div class="value" id="council-candidates-count">--</div></div>
                             <!-- Term Progress Animation -->
-                            <div class="glass" style="flex: 1; padding: 20px; border-radius: var(--radius-md); text-align: center; border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; gap: 15px;">
+                            <div class="staking-summary-card council-term-card">
                                 <div class="progress-circle" id="council-term-progress">
                                     <svg viewBox="0 0 36 36">
                                         <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
@@ -522,15 +513,15 @@
                                     </svg>
                                     <div class="progress-text" id="council-progress-pct" style="font-size: 11px;">--%</div>
                                 </div>
-                                <div style="text-align: left;">
-                                    <div style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; font-weight: 600;">Term Progress</div>
-                                    <div id="council-term-remaining" style="font-size: 16px; font-weight: 600; color: var(--text-primary);">-- days -- hrs</div>
+                                <div class="council-term-text">
+                                    <div class="label">Term Progress</div>
+                                    <div class="value" id="council-term-remaining">-- days -- hrs</div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Members Table -->
-                        <h3 style="margin-bottom: 15px; font-size: 1.1rem; color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Members</h3>
+                        <h3 class="ui-section-title ui-ruled">Members</h3>
                         <div class="table-responsive" style="margin-bottom: 30px;">
                             <table class="data-table">
                                 <thead>
@@ -546,7 +537,7 @@
                         </div>
 
                         <!-- Runners Up Table -->
-                        <h3 style="margin-bottom: 15px; font-size: 1.1rem; color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Runners Up</h3>
+                        <h3 class="ui-section-title ui-ruled">Runners Up</h3>
                         <div class="table-responsive" style="margin-bottom: 30px;">
                             <table class="data-table">
                                 <thead>
@@ -562,7 +553,7 @@
                         </div>
 
                         <!-- Candidates Table -->
-                        <h3 style="margin-bottom: 15px; font-size: 1.1rem; color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Candidates</h3>
+                        <h3 class="ui-section-title ui-ruled">Candidates</h3>
                         <div class="table-responsive">
                             <table class="data-table">
                                 <thead>
@@ -581,7 +572,7 @@
                     <!-- Council Motions Tab -->
                     <div id="council-motions" class="account-tab-content ui-page-body">
                         <div id="council-motions-content">
-                            <div style="padding: 40px; text-align: center; color: var(--text-secondary);">Fetching council motions…</div>
+                            <div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Fetching council motions…</div>
                         </div>
                     </div>
 
@@ -593,7 +584,7 @@
                             <div class="staking-summary-card"><div class="label">Members</div><div class="value" id="tc-members-count">--</div></div>
                             <div class="staking-summary-card"><div class="label">Motions since genesis</div><div class="value" id="tc-motions-total">--</div></div>
                         </div>
-                        <h3 style="font-size: 0.95rem; color: var(--text-primary); margin-bottom: 12px;">Members</h3>
+                        <h3 class="ui-section-title">Members</h3>
                         <div class="table-responsive" style="margin-bottom: 26px;">
                             <table class="data-table">
                                 <tbody id="tc-members-list">
@@ -602,7 +593,7 @@
                             </table>
                         </div>
                         <div id="tc-motions-content">
-                            <div style="padding: 40px; text-align: center; color: var(--text-secondary);">Fetching technical committee motions…</div>
+                            <div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Fetching technical committee motions…</div>
                         </div>
                     </div>
                 </div>
@@ -623,34 +614,34 @@
                         <label id="council-withdraw-ack-label" class="council-withdraw-ack" style="display:none;"><input id="council-withdraw-ack" type="checkbox">I understand that this gives up my council seat immediately when executed.</label>
                     </div>
                     <div id="council-withdraw-error" class="staking-error" role="alert"></div>
-                    <button id="council-withdraw-copy-address" class="staking-download-btn" type="button" style="display:none;">Copy address</button>
+                    <button id="council-withdraw-copy-address" class="validate-secondary" type="button" style="display:none;"><i class='bx bx-copy' aria-hidden="true"></i><span class="btn-label">Copy address</span></button>
                     <div class="council-withdraw-actions">
-                        <button id="council-withdraw-retry" class="staking-download-btn" type="button">Refresh review</button>
-                        <button id="cancel-council-withdraw" class="staking-download-btn" type="button">Cancel</button>
-                        <button id="council-withdraw-sign" class="staking-download-btn" type="button" disabled>Sign and withdraw candidacy</button>
+                        <button id="council-withdraw-retry" class="validate-secondary" type="button"><i class='bx bx-refresh' aria-hidden="true"></i>Refresh review</button>
+                        <button id="cancel-council-withdraw" class="validate-text-btn" type="button">Cancel</button>
+                        <button id="council-withdraw-sign" class="validate-primary" type="button" disabled>Sign and withdraw candidacy</button>
                     </div>
                 </div>
             </div>
-            <div id="council-candidacy-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
-                <div class="glass" style="width: 100%; max-width: 500px; padding: 30px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-candidacy-modal" data-modal-close aria-label="Close" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 20px; font-size: 1.3rem;">Submit Candidacy</h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 20px; font-size: 0.9rem;">Submit your candidacy for the Polkadex Council. This action requires a connected wallet extension.</p>
-                    <div id="candidacy-modal-wallet-warning" style="color: var(--error); margin-bottom: 15px; font-size: 0.9rem; display: none;">Please connect your wallet first.</div>
-                    <div style="margin-bottom: 20px;">
-                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Active Wallet</label>
-                        <div id="candidacy-active-wallet" style="padding: 12px 16px; background: rgba(0,0,0,0.3); border-radius: var(--radius-sm); border: 1px solid rgba(255,255,255,0.05); font-family: monospace;">--</div>
+            <div id="council-candidacy-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card is-narrow">
+                    <button id="close-candidacy-modal" data-modal-close class="modal-close-btn" aria-label="Close"><i class='bx bx-x'></i></button>
+                    <h3>Submit Candidacy</h3>
+                    <p class="ui-section-caption">Submit your candidacy for the Polkadex Council. This action requires a connected wallet extension.</p>
+                    <p id="candidacy-modal-wallet-warning" class="ui-panel is-warn is-line" style="display: none;"><i class='bx bx-error' aria-hidden="true"></i><span class="ui-panel-body">Please connect your wallet first.</span></p>
+                    <div class="ui-field">
+                        <label class="ui-field-label">Active Wallet</label>
+                        <div id="candidacy-active-wallet" class="ui-readout">--</div>
                     </div>
-                    <button id="submit-candidacy-tx-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast);">Sign and submit candidacy</button>
+                    <button id="submit-candidacy-tx-btn" class="validate-primary">Sign and submit candidacy</button>
                 </div>
             </div>
 
-            <div id="council-vote-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 820px; max-height: 92vh; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column;">
-                    <button id="close-vote-modal" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;" aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 8px; font-size: 1.3rem;">Vote for Council</h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 14px; font-size: 0.88rem;">Pick up to 16 candidates from the list on the left. Click a row to add it to your votes on the right — click the × to remove. Voting locks the backing stake until you change or withdraw your vote.</p>
-                    <div id="vote-modal-wallet-warning" style="color: var(--error); margin-bottom: 12px; font-size: 0.9rem; display: none;">Please connect your wallet first.</div>
+            <div id="council-vote-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card is-picker">
+                    <button id="close-vote-modal" class="modal-close-btn" aria-label="Close"><i class='bx bx-x'></i></button>
+                    <h3>Vote for Council</h3>
+                    <p class="ui-section-caption">Pick up to 16 candidates from the list on the left. Click a row to add it to your votes on the right — click the × to remove. Voting locks the backing stake until you change or withdraw your vote.</p>
+                    <p id="vote-modal-wallet-warning" class="ui-panel is-warn is-line" style="display: none;"><i class='bx bx-error' aria-hidden="true"></i><span class="ui-panel-body">Please connect your wallet first.</span></p>
 
                     <!-- Side-by-side picker. Populated by openCouncilVoteModal()
                          in script.js, which fetches /api/council and renders
@@ -679,19 +670,19 @@
                         </div>
                     </div>
 
-                    <div style="margin: 18px 0 18px;">
-                        <label style="display: flex; align-items: baseline; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">
+                    <div class="ui-field council-vote-stake">
+                        <label class="ui-field-label council-vote-votable-row">
                             <span>Backing Stake (PDEX)</span>
                             <!-- Live votable balance — populated by
                                  openCouncilVoteModal() once the wallet's
                                  free balance has been queried from chain. -->
-                            <span id="council-vote-votable" style="color: var(--text-muted); font-size: 0.78rem;">Available: <strong style="color: var(--text-secondary);">—</strong> PDEX</span>
+                            <span id="council-vote-votable" class="ui-caption">Available: <strong class="ui-quiet">—</strong> PDEX</span>
                         </label>
-                        <input type="number" id="vote-stake-input" data-input-kind="amount" placeholder="100.0" step="0.1" min="0" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.9rem;">
-                        <div style="color: var(--text-muted); font-size: 0.78rem; margin-top: 6px;">The full stake is locked across all candidates you vote for, weighted equally. Locked until you submit a new vote or call <code>removeVoter</code>. Voting locks overlap with staking — the larger lock wins, so you don't double-pay.</div>
+                        <input type="number" id="vote-stake-input" class="ui-input" data-input-kind="amount" placeholder="100.0" step="0.1" min="0">
+                        <div class="ui-caption">The full stake is locked across all candidates you vote for, weighted equally. Locked until you submit a new vote or call <code>removeVoter</code>. Voting locks overlap with staking — the larger lock wins, so you don't double-pay.</div>
                     </div>
 
-                    <button id="submit-vote-tx-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast); font-size: 0.95rem;">Sign and submit vote</button>
+                    <button id="submit-vote-tx-btn" class="validate-primary">Sign and submit vote</button>
                 </div>
             </div>
 
@@ -703,13 +694,13 @@
             <!-- Propose a spend: a council motion wrapping treasury.spend,
                  reviewed as decoded call bytes before the wallet is asked
                  (lib/treasury-spend-view.js). -->
-            <div id="treasury-spend-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="treasury-spend-title" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
+            <div id="treasury-spend-modal" class="modal ui-modal" role="dialog" aria-modal="true" aria-labelledby="treasury-spend-title" style="display: none;">
+                <div class="glass ui-modal-card">
                     <button type="button" id="treasury-spend-close" class="modal-close-btn" data-modal-close aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 id="treasury-spend-title" style="margin-bottom: 6px; font-size: 1.3rem;">Propose a spend <a href="/help/treasury" class="help-inline-icon" title="Learn about treasury spends" aria-label="Help: treasury spends"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 12px; font-size: 0.88rem;">Creates a council motion. The spend is approved once enough members vote Aye.</p>
+                    <h3 id="treasury-spend-title">Propose a spend <a href="/help/treasury" class="help-inline-icon" title="Learn about treasury spends" aria-label="Help: treasury spends"><i class='bx bx-help-circle'></i></a></h3>
+                    <p class="ui-section-caption">Creates a council motion. The spend is approved once enough members vote Aye.</p>
                     <div class="stake-hint">Account: <span id="treasury-spend-account" style="font-family: monospace; overflow-wrap: anywhere;">--</span></div>
-                    <p id="treasury-spend-effect" role="status" style="margin: 12px 0; color: var(--text-secondary); font-size: 0.88rem;"></p>
+                    <p id="treasury-spend-effect" class="ui-lede" role="status"></p>
                     <div id="treasury-spend-connect"></div>
                     <div id="treasury-spend-form" style="display: none;">
                         <label class="stake-label" for="treasury-spend-beneficiary">Beneficiary</label>
@@ -726,9 +717,9 @@
                     <div id="treasury-spend-review" style="display: none; margin-top: 14px;"></div>
                     <div id="treasury-spend-error" class="staking-error" role="alert" style="display: none; margin-top: 14px;"></div>
                     <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px;">
-                        <button type="button" id="treasury-spend-edit" class="staking-download-btn" style="display: none;">Edit</button>
-                        <button type="button" id="treasury-spend-check" class="staking-download-btn" disabled>Review motion</button>
-                        <button type="button" id="treasury-spend-sign" class="staking-download-btn" disabled>Sign and table motion</button>
+                        <button type="button" id="treasury-spend-edit" class="validate-secondary" style="display: none;"><i class='bx bx-edit-alt' aria-hidden="true"></i>Edit</button>
+                        <button type="button" id="treasury-spend-check" class="ui-action" disabled><i class='bx bx-search-alt' aria-hidden="true"></i>Review motion</button>
+                        <button type="button" id="treasury-spend-sign" class="validate-primary" disabled>Sign and table motion</button>
                     </div>
                 </div>
             </div>
@@ -744,16 +735,16 @@
                  settings. Rendered by openEmailSubscribeModal() in script.js;
                  form submit POSTs to /api/email/subscribe, then transitions
                  to a "check your inbox" success state. -->
-            <div id="email-subscribe-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 520px; padding: 28px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1); max-height: 90vh; overflow-y: auto;">
-                    <button id="close-email-subscribe-modal" style="position: absolute; top: 18px; right: 18px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;" aria-label="Close"><i class='bx bx-x'></i></button>
+            <div id="email-subscribe-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card">
+                    <button id="close-email-subscribe-modal" class="modal-close-btn" aria-label="Close"><i class='bx bx-x'></i></button>
                     <div id="email-subscribe-content"></div>
                 </div>
             </div>
 
-            <div id="governance-detail-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 720px; padding: 30px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1); max-height: 90vh; overflow-y: auto;">
-                    <button id="close-governance-detail-modal" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;" aria-label="Close"><i class='bx bx-x'></i></button>
+            <div id="governance-detail-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card is-xl">
+                    <button id="close-governance-detail-modal" class="modal-close-btn" aria-label="Close"><i class='bx bx-x'></i></button>
                     <div id="governance-detail-content"></div>
                 </div>
             </div>
@@ -763,30 +754,30 @@
                  conviction multiplier (None=0.1× weight no lock → 6×=32 lock
                  periods). The actual extrinsic is `democracy.vote(refIndex,
                  { Standard: { vote: { aye, conviction }, balance } })`. -->
-            <div id="referendum-vote-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 520px; padding: 30px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-referendum-vote-modal" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 24px; cursor: pointer;" aria-label="Close"><i class='bx bx-x'></i></button>
-                    <h3 style="margin-bottom: 8px; font-size: 1.3rem;">Vote on Referendum <span id="referendum-vote-modal-idx"></span> <a href="/help/democracy-and-voting" class="help-inline-icon" title="Learn about referendum voting" aria-label="Help: referendum voting"><i class='bx bx-help-circle'></i></a></h3>
-                    <p style="color: var(--text-secondary); margin-bottom: 18px; font-size: 0.9rem;">Lock PDEX behind your vote. Higher conviction multiplies your vote weight and keeps your PDEX locked longer after the referendum ends, if your side wins.</p>
+            <div id="referendum-vote-modal" class="modal ui-modal" style="display: none;">
+                <div class="glass ui-modal-card">
+                    <button id="close-referendum-vote-modal" class="modal-close-btn" aria-label="Close"><i class='bx bx-x'></i></button>
+                    <h3>Vote on Referendum <span id="referendum-vote-modal-idx"></span> <a href="/help/democracy-and-voting" class="help-inline-icon" title="Learn about referendum voting" aria-label="Help: referendum voting"><i class='bx bx-help-circle'></i></a></h3>
+                    <p class="ui-section-caption">Lock PDEX behind your vote. Higher conviction multiplies your vote weight and keeps your PDEX locked longer after the referendum ends, if your side wins.</p>
 
-                    <div id="referendum-vote-modal-wallet-warning" style="color: var(--error); margin-bottom: 15px; font-size: 0.9rem; display: none;">Please connect your wallet first.</div>
+                    <p id="referendum-vote-modal-wallet-warning" class="ui-panel is-warn is-line" style="display: none;"><i class='bx bx-error' aria-hidden="true"></i><span class="ui-panel-body">Please connect your wallet first.</span></p>
 
-                    <div style="margin-bottom: 14px;">
-                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Vote</label>
-                        <div style="display: flex; gap: 8px;">
-                            <button type="button" id="referendum-vote-side-aye" class="referendum-side-btn" data-side="aye" style="flex: 1; padding: 12px; background: rgba(46, 204, 113, 0.1); color: var(--success); border: 2px solid var(--success); border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; font-family: inherit;">Aye</button>
-                            <button type="button" id="referendum-vote-side-nay" class="referendum-side-btn" data-side="nay" style="flex: 1; padding: 12px; background: rgba(231, 76, 60, 0.05); color: var(--text-secondary); border: 2px solid var(--border-color); border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; font-family: inherit;">Nay</button>
+                    <div class="ui-field">
+                        <label class="ui-field-label">Vote</label>
+                        <div class="referendum-sides">
+                            <button type="button" id="referendum-vote-side-aye" class="referendum-side-btn" data-side="aye" aria-pressed="true"><i class='bx bx-check' aria-hidden="true"></i>Aye</button>
+                            <button type="button" id="referendum-vote-side-nay" class="referendum-side-btn" data-side="nay" aria-pressed="false"><i class='bx bx-check' aria-hidden="true"></i>Nay</button>
                         </div>
                     </div>
 
-                    <div style="margin-bottom: 14px;">
-                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Amount to lock (PDEX)</label>
-                        <input type="number" id="referendum-vote-amount" data-input-kind="amount" placeholder="100.0" step="0.1" min="0" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit;">
+                    <div class="ui-field">
+                        <label class="ui-field-label">Amount to lock (PDEX)</label>
+                        <input type="number" id="referendum-vote-amount" class="ui-input" data-input-kind="amount" placeholder="100.0" step="0.1" min="0">
                     </div>
 
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Conviction (vote weight and lock)</label>
-                        <select id="referendum-vote-conviction" style="width: 100%; padding: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit;">
+                    <div class="ui-field">
+                        <label class="ui-field-label">Conviction (vote weight and lock)</label>
+                        <select id="referendum-vote-conviction" class="ui-input">
                             <option value="None">0.1× weight, no lock</option>
                             <option value="Locked1x" selected>1× weight, locked 1 lock period if your side wins</option>
                             <option value="Locked2x">2× weight, locked 2 lock periods if your side wins</option>
@@ -795,17 +786,17 @@
                             <option value="Locked5x">5× weight, locked 16 lock periods if your side wins</option>
                             <option value="Locked6x">6× weight, locked 32 lock periods if your side wins</option>
                         </select>
-                        <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px;">Every vote keeps its PDEX locked until the referendum ends. After that only the winning side stays locked, for the time shown, counted from the referendum's end; a lock period is the chain's <code>VoteLockingPeriod</code>. A vote on the losing side, or at 0.1×, can be unlocked as soon as the referendum ends.</div>
+                        <div class="ui-caption">Every vote keeps its PDEX locked until the referendum ends. After that only the winning side stays locked, for the time shown, counted from the referendum's end; a lock period is the chain's <code>VoteLockingPeriod</code>. A vote on the losing side, or at 0.1×, can be unlocked as soon as the referendum ends.</div>
                     </div>
 
-                    <div style="margin-bottom: 18px;">
-                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Active wallet</label>
-                        <div id="referendum-vote-active-wallet" style="padding: 12px 16px; background: rgba(0,0,0,0.3); border-radius: var(--radius-sm); border: 1px solid rgba(255,255,255,0.05); font-family: monospace; font-size: 0.82rem; word-break: break-all;">--</div>
+                    <div class="ui-field">
+                        <label class="ui-field-label">Active wallet</label>
+                        <div id="referendum-vote-active-wallet" class="ui-readout">--</div>
                     </div>
 
                     <div id="referendum-vote-error" class="staking-error" style="display: none; margin-bottom: 14px;"></div>
 
-                    <button id="submit-referendum-vote-btn" class="glass" style="width: 100%; padding: 12px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; transition: var(--transition-fast); font-family: inherit;">Sign and submit vote</button>
+                    <button id="submit-referendum-vote-btn" class="validate-primary">Sign and submit vote</button>
                 </div>
             </div>
 
@@ -877,7 +868,7 @@
                     <section id="stake-sign" class="stake-sign" data-stake-view="advanced" hidden></section>
 
                     <div id="stake-modal-error" class="staking-error" role="alert" style="display: none; margin-top: 16px;"></div>
-                    <button id="submit-stake-tx-btn" class="modal-submit-btn">Sign and stake</button>
+                    <button id="submit-stake-tx-btn" class="validate-primary">Sign and stake</button>
                     <p id="stake-primary-reason" class="stake-primary-reason" hidden></p>
                 </div>
             </div>
@@ -897,7 +888,7 @@
                     <div id="payout-entries" class="payout-entries"></div>
 
                     <div id="payout-modal-error" class="staking-error" style="display: none; margin-top: 12px;"></div>
-                    <button id="submit-payout-tx-btn" class="modal-submit-btn">Sign and pay out</button>
+                    <button id="submit-payout-tx-btn" class="validate-primary">Sign and pay out</button>
                 </div>
             </div>
 
@@ -941,7 +932,7 @@
                     </label>
 
                     <div id="send-modal-error" class="staking-error" style="display: none; margin-top: 16px;"></div>
-                    <button id="submit-send-tx-btn" class="modal-submit-btn">Sign and send</button>
+                    <button id="submit-send-tx-btn" class="validate-primary">Sign and send</button>
                 </div>
             </div>
 
@@ -976,7 +967,7 @@
 
                     <div id="unstake-modal-warning" class="validate-msg" role="status" hidden></div>
                     <div id="unstake-modal-error" class="staking-error" style="display: none; margin-top: 12px;"></div>
-                    <button id="submit-unstake-tx-btn" class="modal-submit-btn">Sign and unstake</button>
+                    <button id="submit-unstake-tx-btn" class="validate-primary">Sign and unstake</button>
                 </div>
             </div>
 
@@ -1026,7 +1017,7 @@
                          visible when one exists; otherwise the button row
                          shows just the save action. -->
                     <div class="identity-actions">
-                        <button id="submit-identity-tx-btn" class="modal-submit-btn">Save identity</button>
+                        <button id="submit-identity-tx-btn" class="validate-primary">Save identity</button>
                         <button type="button" id="clear-identity-tx-btn" class="validate-text-btn" style="display:none;">Reset (clear)</button>
                     </div>
                 </div>
@@ -1048,15 +1039,15 @@
                  (localStorage flag `pdex_tour_seen_v1`), or on-demand via the
                  "Take the tour" link in the footer / `?tour=1` query string.
                  5 slides walking through the explorer's distinctive features. -->
-            <div id="onboarding-tour-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); z-index: 1100; align-items: center; justify-content: center; backdrop-filter: blur(6px); padding: 20px;">
-                <div class="glass" style="width: 100%; max-width: 620px; padding: 36px 30px 26px; border-radius: var(--radius-lg); position: relative; border: 1px solid rgba(255,255,255,0.1);">
-                    <button id="close-onboarding-tour-modal" data-modal-close style="position: absolute; top: 14px; right: 14px; background: none; border: none; color: var(--text-secondary); font-size: 22px; cursor: pointer;" aria-label="Skip tour"><i class='bx bx-x'></i></button>
+            <div id="onboarding-tour-modal" class="modal ui-modal is-tour" style="display: none;">
+                <div class="glass ui-modal-card is-wide">
+                    <button id="close-onboarding-tour-modal" data-modal-close class="modal-close-btn" aria-label="Skip tour"><i class='bx bx-x'></i></button>
                     <div id="onboarding-tour-content" style="min-height: 280px;"></div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-color);">
+                    <div class="tour-foot ui-ruled-top">
                         <div id="onboarding-tour-dots" style="display: flex; gap: 6px;"></div>
                         <div style="display: flex; gap: 8px;">
-                            <button type="button" id="onboarding-tour-back" class="staking-download-btn" style="padding: 8px 18px; font-size: 0.82rem;">Back</button>
-                            <button type="button" id="onboarding-tour-next" class="glass" style="padding: 8px 22px; background: var(--brand-primary); color: white; border: none; border-radius: var(--radius-sm); font-weight: 600; cursor: pointer; font-family: inherit; font-size: 0.85rem;">Next →</button>
+                            <button type="button" id="onboarding-tour-back" class="validate-secondary">Back</button>
+                            <button type="button" id="onboarding-tour-next" class="validate-primary">Next →</button>
                         </div>
                     </div>
                 </div>
@@ -1066,9 +1057,9 @@
                  every `.glossary-term`. Positioned next to the trigger element
                  by JS. Stays light-weight (no library) and respects clicks
                  outside / Escape to dismiss. -->
-            <div id="glossary-popover" role="tooltip" style="display: none; position: absolute; z-index: 1200; max-width: 320px; padding: 12px 14px; background: var(--bg-dark); border: 1px solid var(--border-hover); border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,0.5); color: var(--text-primary); font-size: 0.82rem; line-height: 1.5;">
-                <div id="glossary-popover-term" style="font-weight: 700; color: var(--brand-primary); margin-bottom: 6px; text-transform: capitalize;"></div>
-                <div id="glossary-popover-body" style="color: var(--text-secondary);"></div>
+            <div id="glossary-popover" class="glossary-popover" role="tooltip" style="display: none;">
+                <div id="glossary-popover-term" class="glossary-popover-term"></div>
+                <div id="glossary-popover-body" class="ui-quiet"></div>
             </div>
 
             <!-- Analytics Page — daily time-series + snapshot KPIs derived
@@ -1104,7 +1095,7 @@
                         <span class="holder-count">Loading...</span>
                     </div>
                     <div id="holders-table">
-                        <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching holders from indexer…</div>
+                        <div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Fetching holders from indexer…</div>
                     </div>
                     <div style="text-align: center; padding: 20px;">
                     </div>
@@ -1119,10 +1110,10 @@
                         <span class="tx-count">Loading...</span>
                     </div>
                     <div id="full-transactions-table">
-                        <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching transactions…</div>
+                        <div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Fetching transactions…</div>
                     </div>
                     <div style="text-align: center; padding: 20px;">
-                        <button id="load-older-financial-tx-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--brand-primary); background: rgba(229,0,122,0.1); border-radius: var(--radius-sm); cursor: pointer; display: none; transition: var(--transition-fast); margin-right: 10px;">Load Older 100 Financial Tx</button>
+                        <button id="load-older-financial-tx-btn" class="ui-action" style="display: none; margin-right: 10px;"><i class='bx bx-down-arrow-alt' aria-hidden="true"></i>Load Older 100 Financial Tx</button>
                     </div>
                 </div>
             </div>
@@ -1135,7 +1126,7 @@
                         <span class="block-count">Loading...</span>
                     </div>
                     <div id="full-blocks-table">
-                        <div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching blocks…</div>
+                        <div class="ui-state is-loading is-roomy" role="status"><i class="bx bx-loader-alt bx-spin" aria-hidden="true"></i>Fetching blocks…</div>
                     </div>
                     <div style="text-align: center; padding: 20px;">
                     </div>
@@ -1145,7 +1136,7 @@
             <!-- Events Page -->
             <div class="events-page page-section" data-page="events" style="display: none;">
                 <div class="list-container glass" style="padding: 0;">
-                    <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px;">
+                    <div class="list-header is-ruled">
                         <h2>Polkadex Events (excl transactions)</h2>
                         <span class="event-count">Loading...</span>
                     </div>
@@ -1153,7 +1144,7 @@
                         <!-- Custom layout populated by JS -->
                         <div style="text-align:center; padding: 20px;">Fetching events...</div>
                     </div>
-                    <div style="text-align: center; padding: 20px; border-top: 1px solid var(--border-color);">
+                    <div class="list-footer">
                     </div>
                 </div>
             </div>
@@ -1208,7 +1199,7 @@
             <div class="not-found-page page-section" data-page="not-found" style="display: none;">
                 <div class="list-container glass" style="padding: 48px; text-align: center;">
                     <h1 style="font-size: 2.4rem; margin-bottom: 8px;">404</h1>
-                    <p style="color: var(--text-secondary); margin-bottom: 20px;">There's no page at this address. If you followed a link here, it may be pointing at a route that no longer exists.</p>
+                    <p class="ui-lede">There's no page at this address. If you followed a link here, it may be pointing at a route that no longer exists.</p>
                     <a href="/" class="item-link" style="font-weight: 600;">Back to the explorer</a>
                 </div>
             </div>
@@ -1264,10 +1255,9 @@
             <div class="help-page page-section" data-page="help" style="display: none;">
                 <div class="help-shell">
                     <aside class="help-sidebar glass">
-                        <div class="help-search-wrap">
-                            <i class='bx bx-search' style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 16px;"></i>
-                            <input type="search" id="help-search" data-input-kind="search" placeholder="Search help…" aria-label="Search help" autocomplete="off"
-                                   style="width: 100%; padding: 10px 12px 10px 36px; border: 1px solid var(--border-color); background: rgba(255,255,255,0.04); color: var(--text-primary); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.9rem;">
+                        <div class="help-search-wrap help-search">
+                            <i class='bx bx-search ui-glyph is-muted' aria-hidden="true"></i>
+                            <input type="search" id="help-search" class="ui-input" data-input-kind="search" placeholder="Search help…" aria-label="Search help" autocomplete="off">
                         </div>
                         <nav id="help-sidebar-nav" aria-label="Help topics"></nav>
                     </aside>
@@ -1284,56 +1274,56 @@
                  for both humans and crawlers. -->
             <div class="legal-page page-section" data-page="privacy" style="display: none;">
                 <div class="list-container glass" style="max-width: 860px; margin: 0 auto;">
-                    <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 24px;">
+                    <div class="list-header is-ruled">
                         <h1 style="margin: 0; font-size: 1.6rem;">Privacy Policy</h1>
-                        <span style="color: var(--text-secondary); font-size: 0.82rem;">Last updated: November 2026</span>
+                        <span class="ui-caption">Last updated: November 2026</span>
                     </div>
-                    <div style="padding: 30px 32px; line-height: 1.7; color: var(--text-secondary); font-size: 0.95rem;">
-                        <p style="color: var(--text-primary);"><strong>Short version.</strong> The Polkadex Explorer is a read-only window onto a public blockchain. We don't run analytics, we don't set tracking cookies, we don't sell or share data with third parties. We store a handful of small items in your browser's local storage to remember your preferences, and our server logs the kind of request data a normal web server logs. One exception to "nothing leaves this site": if you connect a phone wallet, your browser talks to the WalletConnect relay, run by Reown. It carries encrypted messages and sees your IP address. It is off unless you choose it. See section 4.</p>
+                    <div class="legal-body">
+                        <p class="legal-lead"><strong>Short version.</strong> The Polkadex Explorer is a read-only window onto a public blockchain. We don't run analytics, we don't set tracking cookies, we don't sell or share data with third parties. We store a handful of small items in your browser's local storage to remember your preferences, and our server logs the kind of request data a normal web server logs. One exception to "nothing leaves this site": if you connect a phone wallet, your browser talks to the WalletConnect relay, run by Reown. It carries encrypted messages and sees your IP address. It is off unless you choose it. See section 4.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">1. Who we are</h2>
+                        <h2>1. Who we are</h2>
                         <p>The Polkadex Explorer (explorer.polkadex.ee) is operated by the Polkadex Foundation. This policy covers the explorer specifically; the Foundation's wider organisational privacy policy is available at the <a href="https://github.com/Polkadex-Substrate/Docs/blob/master/Polkadex_Privacy_Policy.pdf" target="_blank" rel="noopener" class="item-link">Polkadex Privacy Policy</a>.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">2. What we store about you</h2>
+                        <h2>2. What we store about you</h2>
                         <p>The explorer stores three kinds of data:</p>
-                        <p><strong style="color: var(--text-primary);">a) On-chain data.</strong> All blocks, extrinsics, events, balances, validators, governance proposals, and votes you see on this site are <em>already public</em> on the Polkadex Mainnet. We index them so you can browse them efficiently. Anyone with a Polkadex node has access to the same data. We cannot delete on-chain data — that's a property of the blockchain itself, not of this explorer.</p>
-                        <p><strong style="color: var(--text-primary);">b) Local storage on your device.</strong> We keep a small set of keys in your browser's <code style="background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 3px; color: var(--brand-secondary);">localStorage</code> so the explorer remembers your choices between visits. See the <a href="/cookies" class="item-link">Cookie &amp; Storage Notice</a> for the full list. This data never leaves your device unless you explicitly sign a transaction or post a community label.</p>
-                        <p><strong style="color: var(--text-primary);">c) Server logs.</strong> Our backend logs the standard request data a web server records: source IP (often a Cloudflare IP, since we're behind Cloudflare), user-agent, requested URL, response code, and timestamp. We use these to debug errors and measure traffic shape. Logs are retained for 30 days and then rotated out.</p>
+                        <p><strong>a) On-chain data.</strong> All blocks, extrinsics, events, balances, validators, governance proposals, and votes you see on this site are <em>already public</em> on the Polkadex Mainnet. We index them so you can browse them efficiently. Anyone with a Polkadex node has access to the same data. We cannot delete on-chain data — that's a property of the blockchain itself, not of this explorer.</p>
+                        <p><strong>b) Local storage on your device.</strong> We keep a small set of keys in your browser's <code>localStorage</code> so the explorer remembers your choices between visits. See the <a href="/cookies" class="item-link">Cookie &amp; Storage Notice</a> for the full list. This data never leaves your device unless you explicitly sign a transaction or post a community label.</p>
+                        <p><strong>c) Server logs.</strong> Our backend logs the standard request data a web server records: source IP (often a Cloudflare IP, since we're behind Cloudflare), user-agent, requested URL, response code, and timestamp. We use these to debug errors and measure traffic shape. Logs are retained for 30 days and then rotated out.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">3. Wallet addresses and signatures</h2>
+                        <h2>3. Wallet addresses and signatures</h2>
                         <p>If you connect a wallet, the explorer reads your account's public address from it: from your browser extension, or from your phone wallet over WalletConnect. Public addresses are not personal data on their own under most privacy frameworks (they are pseudonymous identifiers anyone can derive from a public key), but they can become personal if linked to your identity, which is something <em>you</em> control. We never request your private key, mnemonic, or secret seed phrase. Any wallet extension that asks the explorer for these is malicious.</p>
                         <p>When you post a community label, a discussion message, or a vote, your wallet signs the action with your private key. The signed payload, including your address and the signature, is stored on our server (for labels and discussions) or broadcast to the chain (for votes). You can ask us to remove labels, votes, or discussion messages you authored; contact us via the channels listed below.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">4. Third-party services</h2>
+                        <h2>4. Third-party services</h2>
                         <p>The explorer integrates with:</p>
                         <ul style="margin: 0 0 16px; padding-left: 32px;">
-                        <li style="margin: 0 0 8px;"><strong style="color: var(--text-primary);">Cloudflare</strong> as a CDN and DDoS shield. Cloudflare sees your IP. Their privacy policy is at <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener" class="item-link">cloudflare.com/privacypolicy</a>.</li>
-                        <li style="margin: 0 0 8px;"><strong style="color: var(--text-primary);">Browser wallet extensions</strong> (Polkadot.js, Talisman, SubWallet, Nova Wallet) when you click Connect Wallet. The explorer doesn't share any data with them; they expose your account list to us with your explicit permission.</li>
-                        <li style="margin: 0 0 8px;"><strong style="color: var(--text-primary);">The WalletConnect relay</strong> (relay.walletconnect.org, run by Reown, Inc.), only if you connect a phone wallet from the Connect wallet page (the "Phone wallet" option; "Wallet app" on a phone). Your browser and your wallet app talk through this relay. The messages are end-to-end encrypted: the relay cannot read your accounts, your keys, or what you sign. It does see your IP address, that the connection comes from explorer.polkadex.ee, your browser and operating system, our project id, a random id your browser makes the first time and reuses on later connections, and the size and timing of the messages. When the explorer asks your wallet to sign, the relay also sees whether it is a transaction or a message and for which chain, and your wallet app may add the hash of the signed transaction, which matches it to that transaction once it is on chain. While your phone wallet stays connected, the explorer contacts the relay each time you open a page, so the connection keeps working. Choose "End connection" or "Disconnect" and it stops. If you never use the phone option, no WalletConnect code is loaded and your browser never contacts the relay. We have switched off the library's usage reporting to Reown, and our Content-Security-Policy blocks its other services.</li>
-                        <li style="margin: 0 0 8px;"><strong style="color: var(--text-primary);">A PDEX price feed</strong> (CoinGecko/Coinpaprika public API) that runs server-side. Your browser does not contact these endpoints directly.</li>
-                        <li style="margin: 0 0 8px;"><strong style="color: var(--text-primary);">A transactional email provider</strong> (Postmark by default; SendGrid as an alternative) that delivers your governance email alerts <em>if and only if you opt in</em> via the "Get email alerts" button. They see your email address and the alert content to send the message; they don't get your IP, your wallet, or anything else from us. We don't share your address with them for any purpose besides delivery.</li>
+                        <li><strong>Cloudflare</strong> as a CDN and DDoS shield. Cloudflare sees your IP. Their privacy policy is at <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener" class="item-link">cloudflare.com/privacypolicy</a>.</li>
+                        <li><strong>Browser wallet extensions</strong> (Polkadot.js, Talisman, SubWallet, Nova Wallet) when you click Connect Wallet. The explorer doesn't share any data with them; they expose your account list to us with your explicit permission.</li>
+                        <li><strong>The WalletConnect relay</strong> (relay.walletconnect.org, run by Reown, Inc.), only if you connect a phone wallet from the Connect wallet page (the "Phone wallet" option; "Wallet app" on a phone). Your browser and your wallet app talk through this relay. The messages are end-to-end encrypted: the relay cannot read your accounts, your keys, or what you sign. It does see your IP address, that the connection comes from explorer.polkadex.ee, your browser and operating system, our project id, a random id your browser makes the first time and reuses on later connections, and the size and timing of the messages. When the explorer asks your wallet to sign, the relay also sees whether it is a transaction or a message and for which chain, and your wallet app may add the hash of the signed transaction, which matches it to that transaction once it is on chain. While your phone wallet stays connected, the explorer contacts the relay each time you open a page, so the connection keeps working. Choose "End connection" or "Disconnect" and it stops. If you never use the phone option, no WalletConnect code is loaded and your browser never contacts the relay. We have switched off the library's usage reporting to Reown, and our Content-Security-Policy blocks its other services.</li>
+                        <li><strong>A PDEX price feed</strong> (CoinGecko/Coinpaprika public API) that runs server-side. Your browser does not contact these endpoints directly.</li>
+                        <li><strong>A transactional email provider</strong> (Postmark by default; SendGrid as an alternative) that delivers your governance email alerts <em>if and only if you opt in</em> via the "Get email alerts" button. They see your email address and the alert content to send the message; they don't get your IP, your wallet, or anything else from us. We don't share your address with them for any purpose besides delivery.</li>
                         </ul>
                         <p>We do not load Google Analytics, Mixpanel, Segment, advertising pixels, or any other analytics/tracking script. Every script, stylesheet, and font is self-hosted from explorer.polkadex.ee, including the icon font and the Inter typeface, which we serve ourselves rather than from Google Fonts, so viewing this site sends no request to Google or to any CDN other than Cloudflare in front of us. A Content-Security-Policy header enforces this: the browser itself refuses to load scripts from anywhere else. The same policy lets your browser open a connection to exactly two other hosts: rpc.polkadex.ee (our own node, for live blocks and for sending what you sign) and relay.walletconnect.org (only if you connect a phone wallet, as described above).</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">5. Email alerts (optional)</h2>
+                        <h2>5. Email alerts (optional)</h2>
                         <p>If you opt in to email alerts via the "Get email alerts" button, we store your email address, a randomly-generated confirmation token, an independent randomly-generated unsubscribe token, your selected event preferences, and timestamps. We use the email solely to deliver the alerts you subscribed to. There is no marketing.</p>
                         <p>Subscriptions use <strong>double opt-in</strong>: we email a confirmation link first, and only confirmed subscribers ever receive alerts. Every alert email contains a one-click unsubscribe link that works without login. Unsubscribing immediately stops all future alerts. We retain your subscription row marked as unsubscribed (rather than deleting) so accidental re-signups can be re-confirmed by you — request full deletion via the contact channels below and we'll wipe the row.</p>
-                        <p><strong style="color: var(--text-primary);">Validator alerts.</strong> If the explorer offers the "Get alerts for this validator" control on a validator status page and you use it, we store your email address, the validator stash address you chose, a confirmation token and an independent unsubscribe token for that validator, timestamps, and a log of which alerts were sent to you. We email you only about that validator, and only when it is not elected for a new era, has sent no heartbeat and authored no block by 85% of a session, is disabled, is slashed, changes its commission, or changes its session keys, one email for each occurrence. The same double opt-in applies: nothing is sent about a validator until you use the confirmation link, which works for 24 hours. Every alert has an unsubscribe link that works without login and ends only that validator; you can follow at most five validators with one address. Unsubscribing stops the email at once; we keep the row marked as unsubscribed, and you can ask us to delete it through the contact channels below. The address is not shared and is used for nothing else. The same email provider delivers these messages, and the control is off unless the operator has switched validator alerts on.</p>
+                        <p><strong>Validator alerts.</strong> If the explorer offers the "Get alerts for this validator" control on a validator status page and you use it, we store your email address, the validator stash address you chose, a confirmation token and an independent unsubscribe token for that validator, timestamps, and a log of which alerts were sent to you. We email you only about that validator, and only when it is not elected for a new era, has sent no heartbeat and authored no block by 85% of a session, is disabled, is slashed, changes its commission, or changes its session keys, one email for each occurrence. The same double opt-in applies: nothing is sent about a validator until you use the confirmation link, which works for 24 hours. Every alert has an unsubscribe link that works without login and ends only that validator; you can follow at most five validators with one address. Unsubscribing stops the email at once; we keep the row marked as unsubscribed, and you can ask us to delete it through the contact channels below. The address is not shared and is used for nothing else. The same email provider delivers these messages, and the control is off unless the operator has switched validator alerts on.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">6. Your rights (GDPR / UK GDPR / CCPA)</h2>
+                        <h2>6. Your rights (GDPR / UK GDPR / CCPA)</h2>
                         <p>You have the right to (a) know what personal data we hold about you, (b) request a copy, (c) request correction or deletion, and (d) object to processing. For the explorer specifically:</p>
-                        <p style="margin-left: 14px;">— <em>Local storage:</em> clear it any time via your browser settings, or click "Reset preferences" on the <a href="/cookies" class="item-link">Cookies page</a>.</p>
-                        <p style="margin-left: 14px;">— <em>Community labels, votes, discussion messages:</em> message us with the wallet that signed them (we'll verify via a fresh signature) and we'll delete them.</p>
-                        <p style="margin-left: 14px;">— <em>Server access logs:</em> we don't have a way to identify you within them unless you tell us your IP and time-window, but if you do, we'll delete matching entries on request.</p>
-                        <p style="margin-left: 14px;">— <em>On-chain data:</em> we cannot delete this. It's on the blockchain, not on our server.</p>
+                        <p class="legal-indent">— <em>Local storage:</em> clear it any time via your browser settings, or click "Reset preferences" on the <a href="/cookies" class="item-link">Cookies page</a>.</p>
+                        <p class="legal-indent">— <em>Community labels, votes, discussion messages:</em> message us with the wallet that signed them (we'll verify via a fresh signature) and we'll delete them.</p>
+                        <p class="legal-indent">— <em>Server access logs:</em> we don't have a way to identify you within them unless you tell us your IP and time-window, but if you do, we'll delete matching entries on request.</p>
+                        <p class="legal-indent">— <em>On-chain data:</em> we cannot delete this. It's on the blockchain, not on our server.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">7. Children</h2>
+                        <h2>7. Children</h2>
                         <p>The explorer isn't directed at children under 16. We don't knowingly process data from anyone under 16. If you believe a child has used the explorer in a way that needs attention, contact us.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">8. Changes to this policy</h2>
+                        <h2>8. Changes to this policy</h2>
                         <p>We'll update the "Last updated" date at the top of this page when this policy changes. Material changes will also be announced on our community channels.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">9. Contact</h2>
+                        <h2>9. Contact</h2>
                         <p>Open an issue at <a href="https://github.com/Polkadex-Substrate" target="_blank" rel="noopener" class="item-link">github.com/Polkadex-Substrate</a> or reach the team via the official channels listed at <a href="https://polkadex.ee" target="_blank" rel="noopener" class="item-link">polkadex.ee</a>.</p>
                     </div>
                 </div>
@@ -1346,72 +1336,72 @@
                  button clears every pdex_* key and reloads the page. -->
             <div class="legal-page page-section" data-page="cookies" style="display: none;">
                 <div class="list-container glass" style="max-width: 860px; margin: 0 auto;">
-                    <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 24px;">
+                    <div class="list-header is-ruled">
                         <h1 style="margin: 0; font-size: 1.6rem;">Cookie &amp; Storage Notice</h1>
-                        <span style="color: var(--text-secondary); font-size: 0.82rem;">Last updated: November 2026</span>
+                        <span class="ui-caption">Last updated: November 2026</span>
                     </div>
-                    <div style="padding: 30px 32px; line-height: 1.7; color: var(--text-secondary); font-size: 0.95rem;">
-                        <p style="color: var(--text-primary);"><strong>The Polkadex Explorer does not set tracking cookies.</strong> We use your browser's <code style="background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 3px; color: var(--brand-secondary);">localStorage</code> to remember your preferences between visits. Local storage stays on your device and is never sent over the network to us — unlike cookies, which are sent with every request.</p>
+                    <div class="legal-body">
+                        <p class="legal-lead"><strong>The Polkadex Explorer does not set tracking cookies.</strong> We use your browser's <code>localStorage</code> to remember your preferences between visits. Local storage stays on your device and is never sent over the network to us — unlike cookies, which are sent with every request.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">What we store</h2>
-                        <p>Every key the explorer writes is prefixed with <code style="background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 3px; color: var(--brand-secondary);">pdex_</code> for easy identification. Here's the full list:</p>
+                        <h2>What we store</h2>
+                        <p>Every key the explorer writes is prefixed with <code>pdex_</code> for easy identification. Here's the full list:</p>
 
                         <div style="margin-top: 18px; overflow-x: auto;">
-                            <table style="width: 100%; border-collapse: collapse; font-size: 0.88rem;">
+                            <table>
                                 <thead>
-                                    <tr style="border-bottom: 1px solid var(--border-color);">
-                                        <th style="text-align: left; padding: 10px 12px; color: var(--text-primary); font-weight: 600;">Key</th>
-                                        <th style="text-align: left; padding: 10px 12px; color: var(--text-primary); font-weight: 600;">What it stores</th>
-                                        <th style="text-align: left; padding: 10px 12px; color: var(--text-primary); font-weight: 600;">Why</th>
+                                    <tr>
+                                        <th>Key</th>
+                                        <th>What it stores</th>
+                                        <th>Why</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_address</code></td><td style="padding: 10px 12px;">Connected wallet address.</td><td style="padding: 10px 12px;">So the My Account page works without re-connecting on every reload.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_multisigs_v1</code></td><td style="padding: 10px 12px;">Saved multisig names, public signer addresses, and approval thresholds.</td><td style="padding: 10px 12px;">So imported multisigs remain available in My Accounts. Kept until you clear site storage; no private keys are stored.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_multisig_call:*</code></td><td style="padding: 10px 12px;">Reviewed call data and runtime version, keyed by network, multisig address, and call hash.</td><td style="padding: 10px 12px;">To review and complete pending multisig calls on this browser. Kept until you clear site storage.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_last_used_wallet_address</code></td><td style="padding: 10px 12px;">The most recently active address when your wallet has multiple accounts.</td><td style="padding: 10px 12px;">So we can default to the right account instead of always picking the first one.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_source</code></td><td style="padding: 10px 12px;">Which wallet extension (for example <code>polkadot-js</code>, <code>talisman</code> or <code>subwallet-js</code>) the connected account was chosen from.</td><td style="padding: 10px 12px;">So a signing request goes to the extension you picked when the same account exists in more than one.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_last_source</code></td><td style="padding: 10px 12px;">The wallet (for example <code>polkadot-js</code> or <code>talisman</code>) you last connected an account from. Removed when you click Disconnect.</td><td style="padding: 10px 12px;">So we only ever ask that wallet without a click, and never show another wallet's permission popup you did not ask for.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_disconnected</code></td><td style="padding: 10px 12px;">A flag set when you click Disconnect and cleared when you connect an account.</td><td style="padding: 10px 12px;">So we do not reconnect an account for you on the next visit; you see the account picker instead.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_session_rev</code></td><td style="padding: 10px 12px;">A number that goes up each time the connected account, its wallet extension or a Disconnect changes, in any tab.</td><td style="padding: 10px 12px;">So a signing request started before such a change is refused instead of being sent, even if you switch back to the same account.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--text-primary);">pdex_validate_enabled</code></td><td style="padding: 10px 12px;">A flag set when you open the explorer with <code>?validate=1</code> and removed with <code>?validate=0</code>. Only used while the Validate page is being tested.</td><td style="padding: 10px 12px;">So this browser shows the Validate page (validator status and the session keys checker) before it is switched on for everyone.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--text-primary);">pdex_wc_enabled</code></td><td style="padding: 10px 12px;">Set to 0 if you open the explorer with <code>?wc=0</code> (1 with <code>?wc=1</code>). Absent for most visitors.</td><td style="padding: 10px 12px;">So this browser remembers that you switched the Phone wallet option (WalletConnect) off.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--text-primary);">pdex_wc_debug</code></td><td style="padding: 10px 12px;">A flag set when you open the explorer with <code>?wcdebug=1</code> and removed with <code>?wcdebug=0</code>. Only used to diagnose WalletConnect signing problems.</td><td style="padding: 10px 12px;">So a failed phone-wallet signature shows support details (the transaction and signature, nothing secret) that you can copy and send to us.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--text-primary);">pdex_wc_session</code></td><td style="padding: 10px 12px;">A flag set when you connect a phone wallet with WalletConnect, removed when the connection ends.</td><td style="padding: 10px 12px;">So the explorer reconnects to your phone wallet when you come back. Without it no WalletConnect code is loaded.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--text-primary);">wc@2:*</code></td><td style="padding: 10px 12px;">Written by the WalletConnect library, in IndexedDB or local storage, only after you choose the Phone wallet option: the encrypted pairing and session with your phone wallet and its keys for the relay. No private key of your account; that stays in your wallet.</td><td style="padding: 10px 12px;">So the connection to your phone wallet survives a reload. The library may keep some entries after the connection ends; clearing this site's data in your browser removes them ("Reset preferences" clears only the <code>pdex_</code> keys).</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_watchlist_v1</code></td><td style="padding: 10px 12px;">Addresses, validators, and governance items you've starred.</td><td style="padding: 10px 12px;">So your watchlist follows you across sessions.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_discuss_session</code></td><td style="padding: 10px 12px;">Signed bearer tokens for posting on the discussion board, one per wallet account you have posted with, each with its expiry (7 days, matching the server-side session TTL). <strong>These are credentials</strong> - anyone with one can post as that address until it expires. Disconnect or Reset clears them and signs them out on the server.</td><td style="padding: 10px 12px;">So you don't have to re-sign for every post, or after switching accounts.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_tour_seen_v1</code></td><td style="padding: 10px 12px;">A boolean flag once you've completed the onboarding tour.</td><td style="padding: 10px 12px;">So we don't pop the tour up again every visit.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_banner_dismissed</code></td><td style="padding: 10px 12px;">A flag set when you dismiss the storage notice banner.</td><td style="padding: 10px 12px;">So we don't show it again.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wallet_address</code></td><td style="padding: 10px 12px;">Connected wallet address.</td><td style="padding: 10px 12px;">So the My Account page works without re-connecting on every reload.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_multisigs_v1</code></td><td style="padding: 10px 12px;">Saved multisig names, public signer addresses, and approval thresholds.</td><td style="padding: 10px 12px;">So imported multisigs remain available in My Accounts. Kept until you clear site storage; no private keys are stored.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_multisig_call:*</code></td><td style="padding: 10px 12px;">Reviewed call data and runtime version, keyed by network, multisig address, and call hash.</td><td style="padding: 10px 12px;">To review and complete pending multisig calls on this browser. Kept until you clear site storage.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_last_used_wallet_address</code></td><td style="padding: 10px 12px;">The most recently active address when your wallet has multiple accounts.</td><td style="padding: 10px 12px;">So we can default to the right account instead of always picking the first one.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wallet_source</code></td><td style="padding: 10px 12px;">Which wallet extension (for example <code>polkadot-js</code>, <code>talisman</code> or <code>subwallet-js</code>) the connected account was chosen from.</td><td style="padding: 10px 12px;">So a signing request goes to the extension you picked when the same account exists in more than one.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wallet_last_source</code></td><td style="padding: 10px 12px;">The wallet (for example <code>polkadot-js</code> or <code>talisman</code>) you last connected an account from. Removed when you click Disconnect.</td><td style="padding: 10px 12px;">So we only ever ask that wallet without a click, and never show another wallet's permission popup you did not ask for.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wallet_disconnected</code></td><td style="padding: 10px 12px;">A flag set when you click Disconnect and cleared when you connect an account.</td><td style="padding: 10px 12px;">So we do not reconnect an account for you on the next visit; you see the account picker instead.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wallet_session_rev</code></td><td style="padding: 10px 12px;">A number that goes up each time the connected account, its wallet extension or a Disconnect changes, in any tab.</td><td style="padding: 10px 12px;">So a signing request started before such a change is refused instead of being sent, even if you switch back to the same account.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_validate_enabled</code></td><td style="padding: 10px 12px;">A flag set when you open the explorer with <code>?validate=1</code> and removed with <code>?validate=0</code>. Only used while the Validate page is being tested.</td><td style="padding: 10px 12px;">So this browser shows the Validate page (validator status and the session keys checker) before it is switched on for everyone.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wc_enabled</code></td><td style="padding: 10px 12px;">Set to 0 if you open the explorer with <code>?wc=0</code> (1 with <code>?wc=1</code>). Absent for most visitors.</td><td style="padding: 10px 12px;">So this browser remembers that you switched the Phone wallet option (WalletConnect) off.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wc_debug</code></td><td style="padding: 10px 12px;">A flag set when you open the explorer with <code>?wcdebug=1</code> and removed with <code>?wcdebug=0</code>. Only used to diagnose WalletConnect signing problems.</td><td style="padding: 10px 12px;">So a failed phone-wallet signature shows support details (the transaction and signature, nothing secret) that you can copy and send to us.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wc_session</code></td><td style="padding: 10px 12px;">A flag set when you connect a phone wallet with WalletConnect, removed when the connection ends.</td><td style="padding: 10px 12px;">So the explorer reconnects to your phone wallet when you come back. Without it no WalletConnect code is loaded.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>wc@2:*</code></td><td style="padding: 10px 12px;">Written by the WalletConnect library, in IndexedDB or local storage, only after you choose the Phone wallet option: the encrypted pairing and session with your phone wallet and its keys for the relay. No private key of your account; that stays in your wallet.</td><td style="padding: 10px 12px;">So the connection to your phone wallet survives a reload. The library may keep some entries after the connection ends; clearing this site's data in your browser removes them ("Reset preferences" clears only the <code>pdex_</code> keys).</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_watchlist_v1</code></td><td style="padding: 10px 12px;">Addresses, validators, and governance items you've starred.</td><td style="padding: 10px 12px;">So your watchlist follows you across sessions.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_discuss_session</code></td><td style="padding: 10px 12px;">Signed bearer tokens for posting on the discussion board, one per wallet account you have posted with, each with its expiry (7 days, matching the server-side session TTL). <strong>These are credentials</strong> - anyone with one can post as that address until it expires. Disconnect or Reset clears them and signs them out on the server.</td><td style="padding: 10px 12px;">So you don't have to re-sign for every post, or after switching accounts.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_tour_seen_v1</code></td><td style="padding: 10px 12px;">A boolean flag once you've completed the onboarding tour.</td><td style="padding: 10px 12px;">So we don't pop the tour up again every visit.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_banner_dismissed</code></td><td style="padding: 10px 12px;">A flag set when you dismiss the storage notice banner.</td><td style="padding: 10px 12px;">So we don't show it again.</td></tr>
                                     
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_stake_filters_v1</code></td><td style="padding: 10px 12px;">The filters, past return window and sort order you last used in the Stake PDEX validator picker (no addresses, no amounts).</td><td style="padding: 10px 12px;">So the picker opens the way you left it.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_price_period</code></td><td style="padding: 10px 12px;">The time window you last picked on the full-screen <a href="/price" class="item-link">/price</a> chart (7 / 30 / 90 / 365 / 4000 days).</td><td style="padding: 10px 12px;">So your selection persists between visits.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_home_snapshot</code></td><td style="padding: 10px 12px;">A small JSON cache of the home-page stat values (price, market cap, total issuance, in-stake, AVG APY, era, validators, nominators, max active stake) plus a save timestamp.</td><td style="padding: 10px 12px;">So returning visitors see populated home-page cells instantly while live data loads in the background. Expires after 7 days.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_wallet_dashboard:&lt;address&gt;</code></td><td style="padding: 10px 12px;">One JSON snapshot of the My Account dashboard payload (balance, staking positions, recent activity, price history, reward history) per address you've viewed, plus a save timestamp.</td><td style="padding: 10px 12px;">So returning to the dashboard renders instantly while the live data refreshes in the background. Expires after 30 minutes.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_known_results</code></td><td style="padding: 10px 12px;">For a rewards payout you sent in the last 10 minutes: which reward entries (era and validator) it paid or is still checking, with your account address, the block number and the transaction hash.</td><td style="padding: 10px 12px;">So a reward that is already paid is not offered to you again, after a reload or in another tab, while the explorer catches up with the chain. Expires after 10 minutes.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_gov_seen_ref</code></td><td style="padding: 10px 12px;">The highest democracy referendum index you've been notified of.</td><td style="padding: 10px 12px;">So new-event banners and toasts only pop for referenda tabled after the last one you saw.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_gov_seen_proposal</code></td><td style="padding: 10px 12px;">The highest public-proposal index you've been notified of.</td><td style="padding: 10px 12px;">Same as above for democracy public proposals.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_gov_banner_dismissed_ref</code></td><td style="padding: 10px 12px;">Index of the most recent referendum banner you closed.</td><td style="padding: 10px 12px;">So a banner you dismissed stays dismissed for that specific event; a newer event still triggers a fresh one.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;"><code style="color: var(--brand-secondary);">pdex_gov_banner_dismissed_proposal</code></td><td style="padding: 10px 12px;">Index of the most recent proposal banner you closed.</td><td style="padding: 10px 12px;">Same as above for public proposals.</td></tr>
-                                    <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding: 10px 12px;" colspan="3" style="padding: 14px 12px; color: var(--text-secondary); font-size: 0.85rem; font-style: italic;">Email alerts (if you opted in) are NOT stored in your browser. Your email address and preferences live on our server only. See the <a href="/privacy" data-spa-link="true" class="item-link">privacy policy</a> section 5 for details.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_stake_filters_v1</code></td><td style="padding: 10px 12px;">The filters, past return window and sort order you last used in the Stake PDEX validator picker (no addresses, no amounts).</td><td style="padding: 10px 12px;">So the picker opens the way you left it.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_price_period</code></td><td style="padding: 10px 12px;">The time window you last picked on the full-screen <a href="/price" class="item-link">/price</a> chart (7 / 30 / 90 / 365 / 4000 days).</td><td style="padding: 10px 12px;">So your selection persists between visits.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_home_snapshot</code></td><td style="padding: 10px 12px;">A small JSON cache of the home-page stat values (price, market cap, total issuance, in-stake, AVG APY, era, validators, nominators, max active stake) plus a save timestamp.</td><td style="padding: 10px 12px;">So returning visitors see populated home-page cells instantly while live data loads in the background. Expires after 7 days.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_wallet_dashboard:&lt;address&gt;</code></td><td style="padding: 10px 12px;">One JSON snapshot of the My Account dashboard payload (balance, staking positions, recent activity, price history, reward history) per address you've viewed, plus a save timestamp.</td><td style="padding: 10px 12px;">So returning to the dashboard renders instantly while the live data refreshes in the background. Expires after 30 minutes.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_known_results</code></td><td style="padding: 10px 12px;">For a rewards payout you sent in the last 10 minutes: which reward entries (era and validator) it paid or is still checking, with your account address, the block number and the transaction hash.</td><td style="padding: 10px 12px;">So a reward that is already paid is not offered to you again, after a reload or in another tab, while the explorer catches up with the chain. Expires after 10 minutes.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_gov_seen_ref</code></td><td style="padding: 10px 12px;">The highest democracy referendum index you've been notified of.</td><td style="padding: 10px 12px;">So new-event banners and toasts only pop for referenda tabled after the last one you saw.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_gov_seen_proposal</code></td><td style="padding: 10px 12px;">The highest public-proposal index you've been notified of.</td><td style="padding: 10px 12px;">Same as above for democracy public proposals.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_gov_banner_dismissed_ref</code></td><td style="padding: 10px 12px;">Index of the most recent referendum banner you closed.</td><td style="padding: 10px 12px;">So a banner you dismissed stays dismissed for that specific event; a newer event still triggers a fresh one.</td></tr>
+                                    <tr><td style="padding: 10px 12px;"><code>pdex_gov_banner_dismissed_proposal</code></td><td style="padding: 10px 12px;">Index of the most recent proposal banner you closed.</td><td style="padding: 10px 12px;">Same as above for public proposals.</td></tr>
+                                    <tr><td colspan="3" class="legal-note">Email alerts (if you opted in) are NOT stored in your browser. Your email address and preferences live on our server only. See the <a href="/privacy" data-spa-link="true" class="item-link">privacy policy</a> section 5 for details.</td></tr>
                                 </tbody>
                             </table>
                         </div>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">What we do NOT store</h2>
+                        <h2>What we do NOT store</h2>
                         <p>We do not set any tracking cookies. We do not load Google Analytics, Mixpanel, Segment, advertising pixels, or any other analytics or tracking script. Every script runs from explorer.polkadex.ee; none is loaded from another site. The open-source libraries we bundle are listed under <a href="/THIRD-PARTY-NOTICES.txt" class="item-link">Licenses</a>. One of them, WalletConnect, contacts an outside server, and only if you connect a phone wallet. See the <a href="/privacy" data-spa-link="true" class="item-link">Privacy Policy</a>, section 4.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">Sessions</h2>
-                        <p>We do not use <code style="background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 3px; color: var(--brand-secondary);">sessionStorage</code> for wallet state. Whether you are connected, and whether you chose to disconnect, is remembered in the localStorage keys above until you switch or disconnect again.</p>
+                        <h2>Sessions</h2>
+                        <p>We do not use <code>sessionStorage</code> for wallet state. Whether you are connected, and whether you chose to disconnect, is remembered in the localStorage keys above until you switch or disconnect again.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">Reset everything</h2>
-                        <p>You can clear every <code style="color: var(--brand-secondary);">pdex_*</code> key in your browser at any time. The button below removes them all and reloads the page.</p>
-                        <button type="button" id="cookies-reset-btn" class="staking-download-btn" style="margin-top: 12px; padding: 10px 22px; background: var(--brand-primary); color: white; border-color: var(--brand-primary); cursor: pointer;">
+                        <h2>Reset everything</h2>
+                        <p>You can clear every <code>pdex_*</code> key in your browser at any time. The button below removes them all and reloads the page.</p>
+                        <button type="button" id="cookies-reset-btn" class="ui-action">
                             <i class='bx bx-refresh'></i> Reset all preferences
                         </button>
-                        <p style="margin-top: 8px; font-size: 0.82rem; color: var(--text-muted);">Equivalent to clearing site data in your browser's developer tools.</p>
+                        <p class="ui-caption legal-after-action">Equivalent to clearing site data in your browser's developer tools.</p>
 
-                        <h2 style="margin-top: 28px; color: var(--text-primary); font-size: 1.15rem;">Read more</h2>
+                        <h2>Read more</h2>
                         <p>See our <a href="/privacy" class="item-link">Privacy Policy</a> for the full picture, including server logs, third-party services we integrate with, and how to exercise your data-subject rights.</p>
                     </div>
                 </div>
@@ -1420,18 +1410,17 @@
             <!-- Search Page -->
             <div class="search-page page-section" data-page="search" style="display: none;">
                 <div class="list-container glass">
-                    <div class="list-header" style="border-bottom: 1px solid var(--border-color); padding: 20px;">
-                        <h2>Search Results for: <span id="search-query-display" style="color: var(--brand-primary);"></span></h2>
-                        <a id="search-close-btn" href="#" role="button" title="Edit query" aria-label="Edit query"
-                           style="color: var(--text-secondary); text-decoration: none; cursor: pointer; display: none; line-height: 0;">
+                    <div class="list-header is-ruled">
+                        <h2>Search Results for: <span id="search-query-display" class="ui-strong"></span></h2>
+                        <a id="search-close-btn" class="close-control" href="#" role="button" title="Edit query" aria-label="Edit query" style="display: none;">
                             <i class='bx bx-x' style="font-size: 26px;"></i>
                         </a>
                     </div>
                     <div id="search-results-container" style="padding: 20px;">
                         <!-- Results dynamically injected here -->
                     </div>
-                    <div style="text-align: center; padding: 20px; border-top: 1px solid var(--border-color);">
-                        <button id="deep-search-btn" class="glass" style="padding: 10px 20px; color: var(--text-primary); border: 1px solid var(--brand-primary); background: rgba(229,0,122,0.1); border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition-fast);">Deep Search Network</button>
+                    <div class="list-footer">
+                        <button id="deep-search-btn" class="ui-action"><i class='bx bx-globe' aria-hidden="true"></i>Deep Search Network</button>
                     </div>
                 </div>
             </div>
@@ -1510,16 +1499,16 @@
          consent gate — the explorer is read-only and storage is functional,
          not behavioural, so this is informational like an email signature.
          CSS in styles.css; show/hide logic in script.js. -->
-    <div id="storage-notice-banner" style="display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 1050; padding: 14px 22px; background: rgba(20, 16, 28, 0.96); border-top: 1px solid var(--brand-primary); backdrop-filter: blur(8px); box-shadow: 0 -6px 24px rgba(0,0,0,0.4);">
-        <div style="max-width: 1100px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-            <i class='bx bx-info-circle' style="font-size: 22px; color: var(--brand-secondary); flex-shrink: 0;"></i>
-            <p style="margin: 0; flex: 1; min-width: 260px; font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5;">
-                This site uses your browser's <strong style="color: var(--text-primary);">local storage</strong> (not tracking cookies) to remember your wallet, watchlist, and preferences. We do not run analytics, set advertising cookies, or share your data with third parties.
-                <a href="/cookies" style="color: var(--brand-secondary); text-decoration: underline;">See what we store</a>.
+    <div id="storage-notice-banner" class="storage-notice" style="display: none;">
+        <div class="storage-notice-row">
+            <i class='bx bx-info-circle ui-glyph is-blue' aria-hidden="true"></i>
+            <p class="ui-lede">
+                This site uses your browser's <strong class="ui-strong">local storage</strong> (not tracking cookies) to remember your wallet, watchlist, and preferences. We do not run analytics, set advertising cookies, or share your data with third parties.
+                <a href="/cookies" class="item-link is-inline">See what we store</a>.
             </p>
             <div style="display: flex; gap: 8px; flex-shrink: 0;">
-                <a href="/privacy" class="staking-download-btn" style="padding: 8px 14px; font-size: 0.82rem; text-decoration: none; color: var(--text-primary);">Learn more</a>
-                <button type="button" id="storage-notice-dismiss" class="staking-download-btn" style="padding: 8px 18px; font-size: 0.82rem; background: var(--brand-primary); color: white; border-color: var(--brand-primary); cursor: pointer;">OK, got it</button>
+                <a href="/privacy" class="validate-text-btn">Learn more</a>
+                <button type="button" id="storage-notice-dismiss" class="validate-secondary">OK, got it</button>
             </div>
         </div>
     </div>

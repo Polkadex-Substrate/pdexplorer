@@ -105,7 +105,7 @@ describe('copy link with a native-like clipboard', () => {
     test('writeText is called on the clipboard object and the link is copied', async () => {
         let copied = null;
         const clipboard = { writeText(s) { if (this !== clipboard) throw new TypeError('Illegal invocation'); copied = s; return Promise.resolve(); } };
-        const fb = { textContent: '', style: {} };
+        const fb = { textContent: '', style: {}, classList: { add() {}, remove() {} } };
         const btn = { listeners: [], getAttribute: () => '5', nextElementSibling: fb, addEventListener(_, fn) { this.listeners.push(fn); } };
         const root = { querySelectorAll: () => [btn] };
         // Timers as the page supplies them: none, so the module's own defaults are used.
